@@ -15,7 +15,7 @@ pub enum ApprovalResult {
 
 impl AgentEngine {
     /// Check if a tool requires approval before execution.
-    pub(super) fn needs_approval(&self, tool_name: &str) -> bool {
+    pub(crate) fn needs_approval(&self, tool_name: &str) -> bool {
         crate::agent::pipeline::dispatch::needs_approval(self.cfg().agent.approval.as_ref(), tool_name)
     }
 

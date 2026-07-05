@@ -42,3 +42,4 @@ pub mod behaviour;
 pub mod execute;
 pub mod tool_loop_helpers;
 pub mod media_background;
+pub mod sdk_stubs;

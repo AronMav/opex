@@ -21,11 +21,11 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::providers::{
-    CallOptions, LlmProvider, ModelOverride, ProviderOverrides, TimeoutsConfig,
+    CallOptions, HttpTransport, LlmProvider, ModelOverride, ProviderOverrides, TimeoutsConfig,
     build_provider_clients,
     cancellable_stream::{CancelSlot, stream_with_cancellation},
     error::{CancelReason, LlmCallError, PartialState},
-    http::{RETRYABLE_OPENAI, retry_http_post_custom, send_with_retry},
+    http::{RETRYABLE_OPENAI, SendError},
     timeouts::ProviderOptions,
 };
 use crate::secrets::SecretsManager;
@@ -41,8 +41,8 @@ const GENERATE_ENDPOINT: &str = "v1internal:generateContent";
 // ── Provider struct ───────────────────────────────────────────────────────────
 
 pub struct GeminiCloudCodeProvider {
-    client: reqwest::Client,
-    streaming_client: reqwest::Client,
+    client: Arc<dyn HttpTransport>,
+    streaming_client: Arc<dyn HttpTransport>,
     model: ModelOverride,
     temperature: f64,
     max_tokens: Option<u32>,
@@ -187,30 +187,31 @@ impl LlmProvider for GeminiCloudCodeProvider {
         // Per D10: clone token outside closure, borrow inside so the closure is Fn
         // (reusable across retries without moving the token).
         let token = access_token.clone();
-        let raw = retry_http_post_custom(
-            &self.client,
-            &url,
-            &body,
-            "gemini-cloudcode",
-            RETRYABLE_OPENAI,
-            self.max_retries,
-            |req| req.bearer_auth(&token),
-        )
-        .await
-        .map_err(|e| {
-            // Parse the error message to detect 429 quota exhaustion.
-            // retry_http_post_custom returns anyhow::Error with "gemini-cloudcode API error {status}: {body}".
-            let msg = e.to_string();
-            if msg.contains("429") {
-                let redacted = crate::redact::redact_oauth_str(&msg);
-                if redacted.contains("Quota exceeded") && redacted.contains("per-user-per-day") {
-                    return anyhow::Error::new(CodeAssistError::FreeTierQuotaExhausted {
-                        reset_at: None,
-                    });
+        let auth_headers = vec![("Authorization".to_string(), format!("Bearer {token}"))];
+        let raw = self.client
+            .post_json(
+                &url,
+                &body,
+                &auth_headers,
+                "gemini-cloudcode",
+                RETRYABLE_OPENAI,
+                self.max_retries,
+            )
+            .await
+            .map_err(|e| {
+                // Parse the error message to detect 429 quota exhaustion.
+                // post_json returns anyhow::Error with "gemini-cloudcode API error {status}: {body}".
+                let msg = e.to_string();
+                if msg.contains("429") {
+                    let redacted = crate::redact::redact_oauth_str(&msg);
+                    if redacted.contains("Quota exceeded") && redacted.contains("per-user-per-day") {
+                        return anyhow::Error::new(CodeAssistError::FreeTierQuotaExhausted {
+                            reset_at: None,
+                        });
+                    }
                 }
-            }
-            e
-        })?;
+                e
+            })?;
 
         let raw_value: serde_json::Value = serde_json::from_str(&raw)
             .map_err(|e| anyhow::anyhow!("gemini-cloudcode: invalid JSON response: {e}"))?;
@@ -242,6 +243,7 @@ impl LlmProvider for GeminiCloudCodeProvider {
         // Per D10: clone token outside the closure, borrow inside so the closure is FnMut
         // (reusable across retries without moving).
         let token = access_token.clone();
+        let auth_headers = vec![("Authorization".to_string(), format!("Bearer {token}"))];
 
         tracing::info!(
             provider = "gemini-cloudcode",
@@ -251,58 +253,56 @@ impl LlmProvider for GeminiCloudCodeProvider {
             "calling LLM API (streaming)"
         );
 
-        let resp = send_with_retry(
-            &self.streaming_client,
-            &url,
-            &body,
-            "gemini-cloudcode",
-            RETRYABLE_OPENAI,
-            self.max_retries,
-            |req| req.bearer_auth(&token),
-        )
-        .await
-        .map_err(|e| match e {
-            crate::agent::providers::http::SendError::Http { status, .. }
-                if status == 401 || status == 403 =>
-            {
-                anyhow::Error::new(LlmCallError::AuthError {
-                    provider: "gemini-cloudcode".to_string(),
-                    status,
-                })
-            }
-            crate::agent::providers::http::SendError::Http { status, body: b } => {
-                // Detect free-tier 429 quota error.
-                // Per D2/E5: FreeTierQuotaExhausted is a struct variant with reset_at field.
-                // Per D11/E13: redact body before including in any error message.
-                let redacted = crate::redact::redact_oauth_str(&b);
-                if status == 429
-                    && redacted.contains("Quota exceeded")
-                    && redacted.contains("per-user-per-day")
+        let resp = self.streaming_client
+            .post_json_stream(
+                &url,
+                &body,
+                &auth_headers,
+                "gemini-cloudcode",
+                RETRYABLE_OPENAI,
+                self.max_retries,
+            )
+            .await
+            .map_err(|e| match e {
+                SendError::Http { status, .. }
+                    if status == 401 || status == 403 =>
                 {
-                    return anyhow::Error::new(CodeAssistError::FreeTierQuotaExhausted {
-                        reset_at: None,
-                    });
+                    anyhow::Error::new(LlmCallError::AuthError {
+                        provider: "gemini-cloudcode".to_string(),
+                        status,
+                    })
                 }
-                tracing::debug!(
-                    provider = "gemini-cloudcode",
-                    status,
-                    body = %redacted,
-                    "HTTP error from Code Assist API"
-                );
-                anyhow::Error::new(LlmCallError::Server5xx {
-                    provider: "gemini-cloudcode".to_string(),
-                    status,
-                })
-            }
-            crate::agent::providers::http::SendError::Network(e) => {
-                anyhow::Error::new(crate::agent::providers::classify_reqwest_err(
-                    e,
-                    "gemini-cloudcode",
-                    self.timeouts.connect_secs,
-                    self.timeouts.request_secs,
-                ))
-            }
-        })?;
+                SendError::Http { status, body: b, retry_after } => {
+                    // Detect free-tier 429 quota error.
+                    let redacted = crate::redact::redact_oauth_str(&b);
+                    if status == 429
+                        && redacted.contains("Quota exceeded")
+                        && redacted.contains("per-user-per-day")
+                    {
+                        return anyhow::Error::new(CodeAssistError::FreeTierQuotaExhausted {
+                            reset_at: None,
+                        });
+                    }
+                    tracing::debug!(
+                        provider = "gemini-cloudcode",
+                        status,
+                        body = %redacted,
+                        "HTTP error from Code Assist API"
+                    );
+                    anyhow::Error::new(LlmCallError::Server5xx {
+                        provider: "gemini-cloudcode".to_string(),
+                        status,
+                    })
+                }
+                SendError::Network(e) => {
+                    anyhow::Error::new(crate::agent::providers::classify_reqwest_err(
+                        e,
+                        "gemini-cloudcode",
+                        self.timeouts.connect_secs,
+                        self.timeouts.request_secs,
+                    ))
+                }
+            })?;
 
         // SSE stream consumption — same pattern as openai/chat_stream.rs.
         let slot = CancelSlot::new();

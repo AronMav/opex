@@ -187,6 +187,8 @@ testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["postgres"] }
 rstest = "0.26.1"
 wiremock = "0.6.5"
+# CassetteTransport reconstructs reqwest::Response from stored bytes.
+http = "1"
 # Integration tests compile as separate crates — they need explicit deps even if the lib re-exports them.
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread", "time"] }
 anyhow = { workspace = true }

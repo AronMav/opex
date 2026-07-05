@@ -301,6 +301,16 @@ impl CodeSandbox {
         // internal infrastructure (postgres, toolgate, searxng, etc.).
         let network_mode = if base { Some("opex".to_string()) } else { None };
 
+        // Base agents get host.docker.internal → host-gateway so codemode
+        // (tools-as-code) scripts can reach core's loopback endpoints
+        // (/api/sandbox/tool-call). On Linux Docker, this DNS name is not
+        // defined by default; the extra_hosts entry maps it to the host.
+        let extra_hosts = if base {
+            Some(vec!["host.docker.internal:host-gateway".to_string()])
+        } else {
+            None
+        };
+
         self.docker.create_container(
             Some(CreateContainerOptions { name: name.to_string(), ..Default::default() }),
             Config {
@@ -315,6 +325,7 @@ impl CodeSandbox {
                     memory: Some(self.memory_bytes),
                     nano_cpus: if self.nano_cpus > 0 { Some(self.nano_cpus) } else { None },
                     network_mode,
+                    extra_hosts,
                     binds: Some(binds),
                     // Audit 2026-05-08 sandbox hardening:
                     // * pids_limit caps the number of processes inside the
@@ -451,6 +462,99 @@ impl CodeSandbox {
                 }
             }
             // If output was truncated, return exit code 1 without waiting for the process
+            let exit_code = if total_bytes > MAX_OUTPUT_BYTES {
+                1
+            } else {
+                let inspect = self.docker.inspect_exec(&exec.id).await?;
+                inspect.exit_code.unwrap_or(0)
+            };
+            Ok::<_, anyhow::Error>(ExecResult { stdout, stderr, exit_code })
+        };
+        match tokio::time::timeout(timeout, collect).await {
+            Ok(result) => result,
+            Err(_) => Ok(ExecResult {
+                stdout: String::new(),
+                stderr: format!("Execution timed out after {}s", self.timeout_secs),
+                exit_code: 124,
+            }),
+        }
+    }
+
+    /// Execute Python code with injected environment variables + SDK preamble.
+    ///
+    /// Used by `code_orchestrate` (codemode) to run a script that calls back
+    /// into core via the loopback `/api/sandbox/tool-call` endpoint. The `env`
+    /// pairs are set on the `docker exec` call (bollard `CreateExecOptions.env`).
+    pub async fn execute_with_sdk(
+        &self,
+        agent_id: &str,
+        code: &str,
+        language: &str,
+        env: &[(String, String)],
+        workspace_host_path: &str,
+        base: bool,
+    ) -> Result<ExecResult> {
+        let container_name = self
+            .ensure_container(agent_id, workspace_host_path, base, None)
+            .await?;
+
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, code.as_bytes());
+
+        let run_cmd = match language {
+            "bash" | "sh" | "shell" => format!("echo '{b64}' | base64 -d | bash"),
+            _ => format!("echo '{b64}' | base64 -d > /tmp/s.py && python3 /tmp/s.py"),
+        };
+
+        let env_vec: Vec<String> = env
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+        let env_refs: Vec<&str> = env_vec.iter().map(String::as_str).collect();
+
+        let exec = self
+            .docker
+            .create_exec(
+                &container_name,
+                CreateExecOptions {
+                    attach_stdout: Some(true),
+                    attach_stderr: Some(true),
+                    cmd: Some(vec!["sh", "-c", &run_cmd]),
+                    env: Some(env_refs),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        let timeout = std::time::Duration::from_secs(self.timeout_secs.max(5));
+        const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+        let collect = async {
+            let mut stdout = String::new();
+            let mut stderr = String::new();
+            let mut total_bytes: usize = 0;
+            let start_result = self.docker.start_exec(&exec.id, None).await?;
+            if let StartExecResults::Attached { mut output, .. } = start_result {
+                while let Some(msg) = output.next().await {
+                    match msg {
+                        Ok(LogOutput::StdOut { message }) => {
+                            total_bytes += message.len();
+                            if total_bytes > MAX_OUTPUT_BYTES {
+                                stderr.push_str("\n[output truncated at 1MB]");
+                                break;
+                            }
+                            stdout.push_str(&String::from_utf8_lossy(&message));
+                        }
+                        Ok(LogOutput::StdErr { message }) => {
+                            total_bytes += message.len();
+                            if total_bytes > MAX_OUTPUT_BYTES {
+                                stderr.push_str("\n[output truncated at 1MB]");
+                                break;
+                            }
+                            stderr.push_str(&String::from_utf8_lossy(&message));
+                        }
+                        _ => {}
+                    }
+                }
+            }
             let exit_code = if total_bytes > MAX_OUTPUT_BYTES {
                 1
             } else {

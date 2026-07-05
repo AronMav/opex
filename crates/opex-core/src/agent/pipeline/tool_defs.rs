@@ -1027,6 +1027,26 @@ Only available in interactive contexts (web UI or Telegram); returns an error in
         tools.extend(build_sandbox_tool_definitions());
     }
 
+    // code_orchestrate (codemode): tools-as-code for base agents with sandbox.
+    // The LLM writes a Python script that calls tools programmatically via
+    // the loopback /api/sandbox/tool-call endpoint. v1: base agents only.
+    if ctx.is_base && ctx.has_sandbox {
+        tools.push(ToolDefinition {
+            name: "code_orchestrate".to_string(),
+            description: "Run a Python script that calls tools programmatically (loops, parallel calls, aggregation in one turn). The script has access to a `tools` object with one method per available tool (e.g. tools.workspace_read(path='...')). Use tools_search(query) to discover tool signatures. Available to base agents only (v1).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Python script to execute. Use `tools.tool_name(...)` to call tools, `tools_search(query)` to discover signatures. The script runs in the Docker sandbox with network access to core's loopback endpoint."
+                    }
+                },
+                "required": ["code"]
+            }),
+        });
+    }
+
     if ctx.is_base {
         tools.push(ToolDefinition {
             name: "process".to_string(),

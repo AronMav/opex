@@ -39,6 +39,12 @@ impl BackoffPolicy {
 }
 
 /// Retry an HTTP POST request with exponential backoff + jitter.
+///
+/// Retained as a low-level helper for direct `reqwest::Client` callers that
+/// don't use the [`HttpTransport`](super::transport::HttpTransport) seam (e.g.
+/// ad-hoc internal probes). Provider call paths now go through
+/// `RealTransport::post_json` instead.
+#[allow(dead_code)]
 pub async fn retry_http_post(
     client: &reqwest::Client,
     url: &str,
@@ -77,7 +83,7 @@ pub async fn retry_http_post_custom(
         let resp = send_with_retry(client, url, body, provider_name, retryable_codes, max_retries, &customize)
             .await
             .map_err(|e| match e {
-                SendError::Http { status, body: b } =>
+                SendError::Http { status, body: b, .. } =>
                     anyhow::anyhow!("{provider_name} API error {status}: {b}"),
                 SendError::Network(e) =>
                     anyhow::anyhow!("{provider_name} request error: {e}"),
@@ -104,11 +110,27 @@ pub const RETRYABLE_OPENAI: &[u16] = &[429, 500, 502, 503];
 /// Retryable codes for Anthropic (includes 529 overloaded).
 pub const RETRYABLE_ANTHROPIC: &[u16] = &[429, 500, 502, 503, 529];
 
+/// Parse an HTTP `Retry-After` header value (RFC 7231 §7.1.3) into a Duration.
+/// Accepts both delta-seconds (e.g. "60") and HTTP-date (best-effort, falls
+/// back to a default if unparseable). Caps at 5 minutes to avoid stalling.
+fn parse_retry_after(value: &str) -> Duration {
+    // Try delta-seconds first.
+    if let Ok(secs) = value.trim().parse::<u64>() {
+        return Duration::from_secs(secs.min(300));
+    }
+    // HTTP-date is rarely used by LLM providers; fall back to a default 60s.
+    // (Parsing HTTP-date requires chrono's `DateTime::parse_from_rfc2822`,
+    // which would add a parse dependency for a marginal case.)
+    Duration::from_secs(60)
+}
+
 /// Typed error returned by [`send_with_retry`].
 #[derive(Debug)]
 pub enum SendError {
     /// Non-2xx HTTP response after all retry attempts, or a 400 (no retry).
-    Http { status: u16, body: String },
+    /// `retry_after` carries the `Retry-After` header value when present (e.g.
+    /// for 429 responses), so callers can surface it in error messages.
+    Http { status: u16, body: String, retry_after: Option<String> },
     /// Network / connection failure after all retry attempts.
     Network(reqwest::Error),
 }
@@ -116,7 +138,13 @@ pub enum SendError {
 impl std::fmt::Display for SendError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SendError::Http { status, body } => write!(f, "HTTP {status}: {body}"),
+            SendError::Http { status, body, retry_after } => {
+                if let Some(ra) = retry_after {
+                    write!(f, "HTTP {status} (retry-after: {ra}): {body}")
+                } else {
+                    write!(f, "HTTP {status}: {body}")
+                }
+            }
             SendError::Network(e) => write!(f, "network error: {e}"),
         }
     }
@@ -215,6 +243,11 @@ pub async fn send_with_retry(
                 }
 
                 let code = status.as_u16();
+                let retry_after = resp
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .map(String::from);
                 let err_text = resp.text().await.unwrap_or_default();
 
                 if code == 400 {
@@ -229,24 +262,53 @@ pub async fn send_with_retry(
                     let span = tracing::Span::current();
                     span.record("http.status_code", code);
                     span.record("retry_attempts", attempt);
-                    return Err(SendError::Http { status: code, body: err_text });
+                    return Err(SendError::Http { status: code, body: err_text, retry_after });
                 }
 
                 if !retryable_codes.contains(&code) || attempt == policy.max_retries - 1 {
                     let span = tracing::Span::current();
                     span.record("http.status_code", code);
                     span.record("retry_attempts", attempt);
-                    return Err(SendError::Http { status: code, body: err_text });
+                    return Err(SendError::Http { status: code, body: err_text, retry_after });
                 }
 
-                let backoff = policy.delay(attempt);
-                tracing::warn!(
-                    provider = %provider_name,
-                    status = %status,
-                    attempt,
-                    backoff_ms = backoff.as_millis() as u64,
-                    "retrying LLM request"
-                );
+                // Honor the server's retry-after header if present (RFC 7231
+                // §7.1.3). Use the larger of the policy backoff and the
+                // retry-after delay so we don't retry before the server is ready.
+                let backoff = if let Some(ref ra) = retry_after {
+                    let ra_dur = parse_retry_after(ra);
+                    let policy_dur = policy.delay(attempt);
+                    if ra_dur > policy_dur {
+                        tracing::warn!(
+                            provider = %provider_name,
+                            status = %status,
+                            attempt,
+                            retry_after = %ra,
+                            backoff_ms = ra_dur.as_millis() as u64,
+                            "retrying LLM request (honoring server retry-after)"
+                        );
+                        ra_dur
+                    } else {
+                        tracing::warn!(
+                            provider = %provider_name,
+                            status = %status,
+                            attempt,
+                            backoff_ms = policy_dur.as_millis() as u64,
+                            "retrying LLM request"
+                        );
+                        policy_dur
+                    }
+                } else {
+                    let backoff = policy.delay(attempt);
+                    tracing::warn!(
+                        provider = %provider_name,
+                        status = %status,
+                        attempt,
+                        backoff_ms = backoff.as_millis() as u64,
+                        "retrying LLM request"
+                    );
+                    backoff
+                };
                 tokio::time::sleep(backoff).await;
             }
             Err(e) => {

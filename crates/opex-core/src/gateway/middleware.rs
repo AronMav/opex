@@ -176,6 +176,31 @@ pub(crate) fn is_loopback(ip: &str) -> bool {
     ip == "127.0.0.1" || ip == "::1" || ip.starts_with("::ffff:127.")
 }
 
+/// Check if an IP is a Docker bridge gateway (host-gateway).
+///
+/// Docker bridge networks use the 172.16.0.0/12 range by default; the gateway
+/// is typically 172.17.0.1 or 172.18.0.1. `host.docker.internal:host-gateway`
+/// resolves to this IP from inside the container. These IPs are not loopback
+/// but are internal to the Docker host — safe enough for codemode endpoints
+/// which are additionally protected by the X-Codemode-Token HMAC.
+pub(crate) fn is_docker_gateway(ip: &str) -> bool {
+    // Strip IPv4-mapped IPv6 prefix.
+    let ip = ip.strip_prefix("::ffff:").unwrap_or(ip);
+    // Match 172.16.0.0/12 — exactly four dotted octets where the first is 172
+    // and the second is in [16, 31]. All four octets must be valid u8.
+    let mut parts = ip.split('.');
+    let (Some(a), Some(b), Some(c), Some(d)) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    a == "172"
+        && (16..=31).contains(&(b.parse::<u8>().unwrap_or(0)))
+        && c.parse::<u8>().is_ok()
+        && d.parse::<u8>().is_ok()
+        && parts.next().is_none()
+}
+
 pub(crate) async fn auth_middleware(
     req: Request<Body>,
     next: Next,
@@ -225,7 +250,18 @@ pub(crate) async fn auth_middleware(
     // fetches a one-time ticket via POST /api/auth/ws-ticket, so requiring
     // the ticket on loopback breaks nothing legitimate.
     if is_loopback(&client_ip) {
-        const LOOPBACK_EXACT: &[&str] = &["/health", "/api/channels/notify", "/api/media/upload", "/api/vision/analyze"];
+        const LOOPBACK_EXACT: &[&str] = &[
+            "/health",
+            "/api/channels/notify",
+            "/api/media/upload",
+            "/api/vision/analyze",
+            // Codemode (tools-as-code): sandbox scripts call back into core to
+            // invoke tools and search the tool catalog. Security boundary is
+            // the X-Codemode-Token HMAC (verified in the handler), not the
+            // bearer token — loopback-only so a remote attacker can't reach it.
+            "/api/sandbox/tool-call",
+            "/api/sandbox/tool-search",
+        ];
         const LOOPBACK_PREFIX: &[&str] = &["/api/uploads/"];
         let loopback_allowed = LOOPBACK_EXACT.contains(&path)
             || LOOPBACK_PREFIX.iter().any(|p| path.starts_with(p));
@@ -234,6 +270,17 @@ pub(crate) async fn auth_middleware(
         }
         // All other loopback requests must still provide a valid auth token
         // or (for /ws*) a valid one-time ticket.
+    }
+
+    // Codemode sandbox containers reach core via the Docker bridge gateway
+    // (host.docker.internal → host-gateway), which is NOT a loopback IP
+    // (typically 172.17.0.1 or 172.18.0.1). Allow these Docker-internal IPs
+    // for the codemode endpoints only — they are still protected by the
+    // X-Codemode-Token HMAC, and a remote attacker cannot reach them.
+    if is_docker_gateway(&client_ip)
+        && (path == "/api/sandbox/tool-call" || path == "/api/sandbox/tool-search")
+    {
+        return next.run(req).await;
     }
 
     let exempt_from_lockout = is_loopback(&client_ip);
@@ -470,6 +517,50 @@ mod tests {
     fn is_loopback_case_sensitive_rejects_uppercase() {
         // "::1" should match, but "::1" uppercase doesn't exist, so just verify exact match
         assert!(!is_loopback("::1::1")); // malformed but should not panic
+    }
+
+    // ── is_docker_gateway tests (C3: codemode loopback via Docker bridge) ──
+
+    #[test]
+    fn is_docker_gateway_accepts_default_bridge() {
+        assert!(is_docker_gateway("172.17.0.1"), "default Docker bridge gateway");
+        assert!(is_docker_gateway("172.18.0.1"), "custom bridge gateway");
+        assert!(is_docker_gateway("172.20.0.1"));
+        assert!(is_docker_gateway("172.31.0.1"), "upper bound of /12");
+    }
+
+    #[test]
+    fn is_docker_gateway_accepts_ipv4_mapped_ipv6() {
+        assert!(is_docker_gateway("::ffff:172.17.0.1"));
+    }
+
+    #[test]
+    fn is_docker_gateway_rejects_loopback() {
+        assert!(!is_docker_gateway("127.0.0.1"));
+    }
+
+    #[test]
+    fn is_docker_gateway_rejects_public_ip() {
+        assert!(!is_docker_gateway("8.8.8.8"));
+    }
+
+    #[test]
+    fn is_docker_gateway_rejects_other_private_ranges() {
+        assert!(!is_docker_gateway("10.0.0.1"));
+        assert!(!is_docker_gateway("192.168.1.1"));
+    }
+
+    #[test]
+    fn is_docker_gateway_rejects_outside_range() {
+        assert!(!is_docker_gateway("172.15.0.1"), "just below /12");
+        assert!(!is_docker_gateway("172.32.0.1"), "just above /12");
+    }
+
+    #[test]
+    fn is_docker_gateway_rejects_malformed() {
+        assert!(!is_docker_gateway("not-an-ip"));
+        assert!(!is_docker_gateway(""));
+        assert!(!is_docker_gateway("172.17"));
     }
 
     // ── extract_client_ip tests ─────────────────────────────────────────

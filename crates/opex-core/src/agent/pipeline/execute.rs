@@ -1096,7 +1096,7 @@ async fn extract_tool_result_events<S: EventSink>(
     tool_result: &str,
     sink: &mut S,
 ) -> ToolResultParts {
-    use crate::agent::engine::{FILE_PREFIX, RICH_CARD_PREFIX};
+    use crate::agent::engine::{FILE_PREFIX, RICH_CARD_PREFIX, TOOL_CALL_PREFIX};
 
     if let Some(json_str) = tool_result.strip_prefix(RICH_CARD_PREFIX) {
         if let Ok(data) = serde_json::from_str::<serde_json::Value>(json_str) {
@@ -1116,7 +1116,7 @@ async fn extract_tool_result_events<S: EventSink>(
             display_result: "Rich card displayed".to_string(),
             db_result: tool_result.to_string(),
         }
-    } else if tool_result.contains(FILE_PREFIX) {
+    } else if tool_result.contains(FILE_PREFIX) || tool_result.contains(TOOL_CALL_PREFIX) {
         let db_result = tool_result.to_string();
         let mut clean_lines: Vec<&str> = Vec::new();
         for line in tool_result.lines() {
@@ -1135,6 +1135,20 @@ async fn extract_tool_result_events<S: EventSink>(
                             }))
                             .await;
                     }
+                }
+            } else if let Some(json_str) = line.strip_prefix(TOOL_CALL_PREFIX) {
+                // Nested tool-call event from codemode. Emit as a
+                // ToolCallStart/ToolResult pair so the UI timeline shows the
+                // nested calls under the parent code_orchestrate tool call.
+                if let Ok(evt) = serde_json::from_str::<serde_json::Value>(json_str) {
+                    let _ = sink
+                        .emit(PipelineEvent::Stream(StreamEvent::ToolCallArgs {
+                            id: opex_types::ids::ToolCallId::new(
+                                evt.get("tool").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                            ),
+                            args_text: evt.get("input").map(|v| v.to_string()).unwrap_or_default(),
+                        }))
+                        .await;
                 }
             } else {
                 clean_lines.push(line);

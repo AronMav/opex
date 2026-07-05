@@ -301,6 +301,104 @@ pub fn verify_job_callback_token(key: &[u8; 32], job_id: uuid::Uuid, token: &str
     submitted.ct_eq(expected.as_slice()).into()
 }
 
+// ── Codemode capability tokens ────────────────────────────────────────────────
+
+/// Namespace for codemode capability tokens. Domain-separated from job tokens
+/// (`"jobcb"`) and upload/workspace-file signatures so a codemode token cannot
+/// be replayed on any other endpoint.
+const CODEMODE_NS: &str = "codemode";
+
+/// Mint a per-execution HMAC-SHA256 capability token for codemode (tools-as-code).
+///
+/// Token format: `"{exp}.{hex-HMAC}"` (same shape as `mint_job_callback_token`).
+/// HMAC payload: `"codemode:{session_id}:{agent_name}:{tools_hash}:{exp}"`.
+///
+/// The token is bound to:
+/// - `session_id` — the session the script runs in (replay protection).
+/// - `agent_name` — the agent that minted it (cross-agent replay protection).
+/// - `tools_hash` — a hash of the sorted allowed-tools list, so a token minted
+///   for one tool set cannot call tools outside that set even if the token is
+///   stolen.
+/// - `exp` — expiry (TTL scoped to one codemode run, typically sandbox.timeout * 3).
+///
+/// Reuses the upload HMAC key (HKDF-derived from `OPEX_MASTER_KEY`) — the
+/// `"codemode:"` namespace prefix provides domain separation.
+#[allow(dead_code)]
+pub fn mint_codemode_token(
+    key: &[u8; 32],
+    session_id: uuid::Uuid,
+    agent_name: &str,
+    tools_hash: u64,
+    ttl_secs: u64,
+) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before Unix epoch")
+        .as_secs();
+    let exp = now + ttl_secs;
+    let payload = format!("{CODEMODE_NS}:{session_id}:{agent_name}:{tools_hash}:{exp}");
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key)
+        .expect("HMAC-SHA256 accepts 32-byte key");
+    mac.update(payload.as_bytes());
+    let sig = hex::encode(mac.finalize().into_bytes());
+    format!("{exp}.{sig}")
+}
+
+/// Verify a codemode capability token. Returns `true` iff the token is
+/// structurally valid, not expired, and the HMAC matches the given
+/// `session_id` + `agent_name` + `tools_hash`.
+///
+/// Constant-time compare via `subtle::ConstantTimeEq`.
+pub fn verify_codemode_token(
+    key: &[u8; 32],
+    session_id: uuid::Uuid,
+    agent_name: &str,
+    tools_hash: u64,
+    token: &str,
+) -> bool {
+    let Some((exp_str, hex_sig)) = token.split_once('.') else {
+        return false;
+    };
+    let Ok(exp) = exp_str.parse::<u64>() else {
+        return false;
+    };
+    let Ok(submitted) = hex::decode(hex_sig) else {
+        return false;
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before Unix epoch")
+        .as_secs();
+    if now > exp {
+        return false;
+    }
+
+    let payload = format!("{CODEMODE_NS}:{session_id}:{agent_name}:{tools_hash}:{exp}");
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key)
+        .expect("HMAC-SHA256 accepts 32-byte key");
+    mac.update(payload.as_bytes());
+    let expected = mac.finalize().into_bytes();
+    submitted.ct_eq(expected.as_slice()).into()
+}
+
+/// Compute a stable hash of the sorted allowed-tools list for codemode token
+/// binding. Uses a simple FNV-1a hash (deterministic, no hash-randomization).
+pub fn codemode_tools_hash(allowed_tools: &[String]) -> u64 {
+    let mut sorted: Vec<&String> = allowed_tools.iter().collect();
+    sorted.sort_unstable();
+    let mut h: u64 = 0xcbf29ce484222325; // FNV-1a 64-bit offset basis
+    for tool in &sorted {
+        for &b in tool.as_bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3); // FNV-1a 64-bit prime
+        }
+        h ^= 0x2f; // '/' separator between tool names
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
 /// Guess MIME type from filename extension (no external dep).
 /// Used by handlers in the binary tree (`workspace_write/edit`, code-exec
 /// sandbox, `/workspace-files/` endpoint). The lib facade doesn't expose
@@ -586,6 +684,144 @@ mod tests {
         let token_exp: u64 = token.split('.').next().unwrap().parse().unwrap();
         let result = verify_uploads_url(id, &b64_sig, token_exp, &key);
         assert!(result.is_err(), "job token must not verify as upload URL sig");
+    }
+
+    // ── Codemode capability token tests ────────────────────────────────────────
+
+    #[test]
+    fn codemode_token_roundtrip() {
+        let key = [11u8; 32];
+        let session = uuid::Uuid::new_v4();
+        let agent = "base";
+        let tools_hash = codemode_tools_hash(&["workspace_read".into(), "workspace_write".into()]);
+        let token = mint_codemode_token(&key, session, agent, tools_hash, 300);
+        assert!(
+            verify_codemode_token(&key, session, agent, tools_hash, &token),
+            "valid token must verify"
+        );
+    }
+
+    #[test]
+    fn codemode_token_tampered_sig_rejected() {
+        let key = [22u8; 32];
+        let session = uuid::Uuid::new_v4();
+        let tools_hash = 12345;
+        let token = mint_codemode_token(&key, session, "base", tools_hash, 300);
+        let (exp_part, _sig) = token.split_once('.').unwrap();
+        let bogus = format!("{exp_part}.{}", "00".repeat(32));
+        assert!(
+            !verify_codemode_token(&key, session, "base", tools_hash, &bogus),
+            "tampered sig must be rejected"
+        );
+    }
+
+    #[test]
+    fn codemode_token_wrong_session_rejected() {
+        let key = [33u8; 32];
+        let s1 = uuid::Uuid::new_v4();
+        let s2 = uuid::Uuid::new_v4();
+        let tools_hash = 99;
+        let token = mint_codemode_token(&key, s1, "base", tools_hash, 300);
+        assert!(
+            !verify_codemode_token(&key, s2, "base", tools_hash, &token),
+            "token for session1 must not verify for session2"
+        );
+    }
+
+    #[test]
+    fn codemode_token_wrong_agent_rejected() {
+        let key = [44u8; 32];
+        let session = uuid::Uuid::new_v4();
+        let tools_hash = 99;
+        let token = mint_codemode_token(&key, session, "base", tools_hash, 300);
+        assert!(
+            !verify_codemode_token(&key, session, "other", tools_hash, &token),
+            "token for 'base' must not verify for 'other'"
+        );
+    }
+
+    #[test]
+    fn codemode_token_wrong_tools_hash_rejected() {
+        let key = [55u8; 32];
+        let session = uuid::Uuid::new_v4();
+        let token = mint_codemode_token(&key, session, "base", 100, 300);
+        assert!(
+            !verify_codemode_token(&key, session, "base", 200, &token),
+            "token with tools_hash=100 must not verify for tools_hash=200"
+        );
+    }
+
+    #[test]
+    fn codemode_token_expired_rejected() {
+        let key = [66u8; 32];
+        let session = uuid::Uuid::new_v4();
+        let tools_hash = 1;
+        // Mint with exp in the past.
+        let exp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .saturating_sub(1);
+        let payload = format!("{CODEMODE_NS}:{session}:base:{tools_hash}:{exp}");
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key).unwrap();
+        mac.update(payload.as_bytes());
+        let sig = hex::encode(mac.finalize().into_bytes());
+        let token = format!("{exp}.{sig}");
+        assert!(
+            !verify_codemode_token(&key, session, "base", tools_hash, &token),
+            "expired token must be rejected"
+        );
+    }
+
+    #[test]
+    fn codemode_token_cannot_forge_job_callback() {
+        // A codemode token must not accidentally verify as a job callback token
+        // (different namespaces: "codemode:" vs "jobcb:").
+        let key = [77u8; 32];
+        let session = uuid::Uuid::new_v4();
+        let tools_hash = codemode_tools_hash(&["workspace_read".into()]);
+        let token = mint_codemode_token(&key, session, "base", tools_hash, 300);
+        assert!(
+            !verify_job_callback_token(&key, session, &token),
+            "codemode token must not verify as job callback token"
+        );
+    }
+
+    #[test]
+    fn codemode_tools_hash_is_order_independent() {
+        let h1 = codemode_tools_hash(&["b".into(), "a".into(), "c".into()]);
+        let h2 = codemode_tools_hash(&["c".into(), "a".into(), "b".into()]);
+        assert_eq!(h1, h2, "tools hash must be order-independent");
+    }
+
+    #[test]
+    fn codemode_tools_hash_different_lists_differ() {
+        let h1 = codemode_tools_hash(&["workspace_read".into()]);
+        let h2 = codemode_tools_hash(&["workspace_read".into(), "workspace_write".into()]);
+        assert_ne!(h1, h2, "different tool lists must have different hashes");
+    }
+
+    #[test]
+    fn codemode_tools_hash_excluding_one_tool_differs() {
+        // Regression for C1-v2: mint/verify must use the SAME tool list. If
+        // one side includes `code_orchestrate` and the other excludes it, the
+        // hashes won't match and every tool call is rejected with 401.
+        let full = vec![
+            "workspace_read".to_string(),
+            "workspace_write".to_string(),
+            "code_orchestrate".to_string(),
+        ];
+        let filtered: Vec<String> = full
+            .iter()
+            .filter(|n| *n != "code_orchestrate")
+            .cloned()
+            .collect();
+        let h_full = codemode_tools_hash(&full);
+        let h_filtered = codemode_tools_hash(&filtered);
+        assert_ne!(
+            h_full, h_filtered,
+            "including vs excluding code_orchestrate must produce different hashes"
+        );
     }
 
     fn parse_url_qs(url: &str) -> (String, u64) {

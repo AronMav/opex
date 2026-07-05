@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "metadata": {
+    "name": "openai/tool-call-reasoning",
+    "recorded_at": "2026-07-05T00:00:00Z",
+    "tags": ["provider:openai", "tool", "reasoning"]
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"model\":\"deepseek-reasoner\",\"messages\":[{\"role\":\"user\",\"content\":\"What is the weather in Paris?\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Get weather\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"]}}}],\"stream\":true,\"stream_options\":{\"include_usage\":true}}"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "body": "data: {\"id\":\"chatcmpl-rc1\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"deepseek-reasoner\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"I need to call get_weather for Paris.\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-rc1\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"deepseek-reasoner\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-rc1\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"deepseek-reasoner\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_abc123\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-rc1\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"deepseek-reasoner\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\"\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-rc1\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"deepseek-reasoner\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\": \\\"Paris\\\"}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-rc1\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"deepseek-reasoner\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: {\"id\":\"chatcmpl-rc1\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"deepseek-reasoner\",\"choices\":[],\"usage\":{\"prompt_tokens\":50,\"completion_tokens\":30,\"total_tokens\":80,\"completion_tokens_details\":{\"reasoning_tokens\":15}}}\n\ndata: [DONE]\n\n",
+        "body_encoding": "text"
+      }
+    }
+  ]
+}

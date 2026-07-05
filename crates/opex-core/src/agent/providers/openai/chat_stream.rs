@@ -45,38 +45,48 @@ impl OpenAiCompatibleProvider {
         let start = std::time::Instant::now();
         let api_key = self.resolve_api_key().await;
         let effective_url = self.resolve_url().await;
-        let api_key_clone = api_key.clone();
-        let resp = crate::agent::providers::http::send_with_retry(
-            &self.streaming_client,
-            &effective_url,
-            &body,
-            &self.provider_name,
-            crate::agent::providers::http::RETRYABLE_OPENAI,
-            self.max_retries,
-            move |req| if api_key_clone.is_empty() { req } else { req.bearer_auth(&api_key_clone) },
-        )
-        .await
-        .map_err(|e| match e {
-            SendError::Http { status, .. } if status == 401 || status == 403 =>
-                anyhow::Error::new(LlmCallError::AuthError {
-                    provider: self.provider_name.clone(),
-                    status,
-                }),
-            SendError::Http { status, .. } if status >= 500 =>
-                anyhow::Error::new(LlmCallError::Server5xx {
-                    provider: self.provider_name.clone(),
-                    status,
-                }),
-            SendError::Http { status, body } =>
-                anyhow::anyhow!("{} API error {status}: {body}", self.provider_name),
-            SendError::Network(e) =>
-                anyhow::Error::new(crate::agent::providers::classify_reqwest_err(
-                    e,
-                    &self.provider_name,
-                    self.timeouts.connect_secs,
-                    self.timeouts.request_secs,
-                )),
-        })?;
+        let auth_headers: Vec<(String, String)> = if api_key.is_empty() {
+            Vec::new()
+        } else {
+            vec![("Authorization".to_string(), format!("Bearer {api_key}"))]
+        };
+        let resp = self.streaming_client
+            .post_json_stream(
+                &effective_url,
+                &body,
+                &auth_headers,
+                &self.provider_name,
+                crate::agent::providers::http::RETRYABLE_OPENAI,
+                self.max_retries,
+            )
+            .await
+            .map_err(|e| match e {
+                SendError::Http { status, .. } if status == 401 || status == 403 =>
+                    anyhow::Error::new(LlmCallError::AuthError {
+                        provider: self.provider_name.clone(),
+                        status,
+                    }),
+                SendError::Http { status, .. } if status >= 500 =>
+                    anyhow::Error::new(LlmCallError::Server5xx {
+                        provider: self.provider_name.clone(),
+                        status,
+                    }),
+                SendError::Http { status, body, retry_after } => {
+                    let msg = if let Some(ra) = retry_after {
+                        format!("{} API error {status} (retry-after: {ra}): {body}", self.provider_name)
+                    } else {
+                        format!("{} API error {status}: {body}", self.provider_name)
+                    };
+                    anyhow::anyhow!(msg)
+                }
+                SendError::Network(e) =>
+                    anyhow::Error::new(crate::agent::providers::classify_reqwest_err(
+                        e,
+                        &self.provider_name,
+                        self.timeouts.connect_secs,
+                        self.timeouts.request_secs,
+                    )),
+            })?;
 
         // Parse SSE stream: accumulate content (streamed) + tool calls (buffered)
         let mut full_content = String::new();
