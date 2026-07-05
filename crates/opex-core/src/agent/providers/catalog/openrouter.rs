@@ -38,7 +38,13 @@ pub fn load_into(cat: &mut ModelCatalog, json: &Value) -> usize {
         // OpenRouter `pricing` is USD per TOKEN (strings) — convert to per-1M to
         // match models.dev units.
         let cost = m.get("pricing").and_then(|p| {
-            let per_tok = |k: &str| p.get(k).and_then(Value::as_str).and_then(|s| s.parse::<f64>().ok());
+            // Non-negative per-token rate; ignore malformed/negative values.
+            let per_tok = |k: &str| {
+                p.get(k)
+                    .and_then(Value::as_str)
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .filter(|r| *r >= 0.0)
+            };
             match (per_tok("prompt"), per_tok("completion")) {
                 (Some(i), Some(o)) => Some(CostMeta { input: i * 1e6, output: o * 1e6 }),
                 _ => None,

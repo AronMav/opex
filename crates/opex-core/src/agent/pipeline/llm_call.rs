@@ -232,14 +232,20 @@ pub async fn resolve_context_limit(
 /// `default_context_for_model` when the model has not been resolved yet.
 ///
 /// Matches any cache entry whose key ends in `"::{model}"` (the key is
-/// `"{provider}::{model}"`), so callers need only the model id.
+/// `"{provider}::{model}"`), so callers need only the model id. When the same
+/// model id was resolved under multiple providers with different windows, the
+/// **smallest** is chosen — deterministic (HashMap order is arbitrary) and safe:
+/// under-budgeting truncates a bit more but never overflows the smaller model.
 pub fn context_limit_tokens(model: &str) -> u32 {
     let suffix = format!("::{model}");
     if let Ok(guard) = context_limit_cache().lock() {
-        for (key, c) in guard.iter() {
-            if key.ends_with(&suffix) {
-                return c.value;
-            }
+        let min = guard
+            .iter()
+            .filter(|(key, _)| key.ends_with(&suffix))
+            .map(|(_, c)| c.value)
+            .min();
+        if let Some(v) = min {
+            return v;
         }
     }
     default_context_for_model(model) as u32

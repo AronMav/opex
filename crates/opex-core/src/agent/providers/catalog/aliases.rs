@@ -62,6 +62,35 @@ fn raw(other: &str) -> &'static [&'static str] {
     &[]
 }
 
+/// Inverse of [`catalog_provider_ids`]: the OPEX `provider_type` to create when a
+/// user picks a catalog provider preset. Renamed catalog ids (`moonshotai`,
+/// `alibaba`, `zhipuai`, …) map to their native OPEX type so the preset doesn't
+/// downgrade them to `openai_compat`. Unknown ids default to `openai_compat`
+/// (works for any OpenAI-compatible endpoint).
+pub fn opex_provider_type(catalog_id: &str) -> &'static str {
+    match catalog_id.to_ascii_lowercase().as_str() {
+        "openai" => "openai",
+        "anthropic" => "anthropic",
+        "google" | "google-vertex" => "google",
+        "deepseek" => "deepseek",
+        "moonshotai" | "moonshot" => "moonshot",
+        "alibaba" | "dashscope" | "qwen" => "qwen",
+        "zhipuai" | "zhipu" | "z-ai" | "glm" => "glm",
+        "minimax" => "minimax",
+        "xai" => "xai",
+        "mistral" => "mistral",
+        "groq" => "groq",
+        "togetherai" | "together" => "together",
+        "perplexity" => "perplexity",
+        "nvidia" => "nvidia",
+        "openrouter" => "openrouter",
+        "huggingface" => "huggingface",
+        "xiaomi" => "xiaomi",
+        "cloudflare-workers-ai" | "cloudflare" => "cloudflare",
+        _ => "openai_compat",
+    }
+}
+
 /// Explicit `(normalized_model_id) -> (catalog_provider_id, catalog_model_id)`
 /// aliases for versioned/renamed ids whose bare form doesn't match a catalog
 /// slug. Kept small and additive.
@@ -82,6 +111,15 @@ mod tests {
         assert_eq!(normalize_model("Kimi-K2.6:cloud"), "kimi-k2.6");
         assert_eq!(normalize_model(" GPT-4o "), "gpt-4o");
         assert_eq!(normalize_model("moonshotai/kimi-k2"), "moonshotai/kimi-k2");
+    }
+
+    #[test]
+    fn opex_provider_type_inverts_renamed_catalog_ids() {
+        assert_eq!(opex_provider_type("moonshotai"), "moonshot");
+        assert_eq!(opex_provider_type("alibaba"), "qwen");
+        assert_eq!(opex_provider_type("zhipuai"), "glm");
+        assert_eq!(opex_provider_type("openai"), "openai");
+        assert_eq!(opex_provider_type("302ai"), "openai_compat"); // unknown → compat
     }
 
     #[test]

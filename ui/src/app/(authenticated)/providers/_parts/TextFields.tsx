@@ -81,11 +81,11 @@ export function TextFields({
   // → provider_type `openai_compat` + the catalog base_url; natively-supported
   // ids (openai/anthropic/google/…) use their own type.
   const applyPreset = (p: CatalogProvider) => {
-    const known = providerTypes.some((pt) => pt.id === p.id);
     setForm((f) => ({
       ...f,
       name: f.name?.trim() ? f.name : p.id,
-      provider_type: known ? p.id : "openai_compat",
+      // Backend-computed native type (moonshotai→moonshot, …) or openai_compat.
+      provider_type: p.provider_type || "openai_compat",
       base_url: p.api ?? f.base_url,
       default_model: f.default_model?.trim() ? f.default_model : (p.models[0] ?? ""),
     }));
