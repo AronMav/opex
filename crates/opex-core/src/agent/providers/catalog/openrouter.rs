@@ -51,7 +51,9 @@ pub fn load_into(cat: &mut ModelCatalog, json: &Value) -> usize {
         cat.insert(
             provider_id,
             model_id,
-            ModelMeta { context, output, cost, source: CatalogSource::OpenRouter },
+            // caps come from models.dev (primary); OpenRouter carries them in a
+            // different shape and is only a fallback for context/cost here.
+            ModelMeta { context, output, cost, caps: None, source: CatalogSource::OpenRouter },
         );
         n += 1;
     }

@@ -65,6 +65,11 @@ pub fn global_cost(provider_type: &str, model: &str) -> Option<CostMeta> {
     global().read().ok().and_then(|c| c.cost(provider_type, model))
 }
 
+/// Look up a model's capability flags in the process-global catalog.
+pub fn global_caps(provider_type: &str, model: &str) -> Option<Caps> {
+    global().read().ok().and_then(|c| c.caps(provider_type, model))
+}
+
 /// Which aggregator a `ModelMeta` came from. Lower `priority()` wins on conflict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CatalogSource {
@@ -94,6 +99,25 @@ pub struct CostMeta {
     pub output: f64,
 }
 
+/// Model capability flags (models.dev booleans). Absent fields default to the
+/// permissive value so the catalog never *disables* something spuriously.
+#[derive(Debug, Clone, Copy)]
+pub struct Caps {
+    /// Accepts file/image attachments (vision). Carried for the deferred
+    /// attachment/vision gate.
+    #[allow(dead_code)]
+    pub attachment: bool,
+    /// Extended reasoning / chain-of-thought. Carried for the deferred
+    /// reasoning-content gate.
+    #[allow(dead_code)]
+    pub reasoning: bool,
+    /// Function calling. Carried for future tool gating.
+    #[allow(dead_code)]
+    pub tool_call: bool,
+    /// Accepts a `temperature` parameter (false for e.g. o1-style models).
+    pub temperature: bool,
+}
+
 /// Metadata for one model.
 #[derive(Debug, Clone)]
 pub struct ModelMeta {
@@ -103,6 +127,8 @@ pub struct ModelMeta {
     pub output: Option<u32>,
     /// USD/1M-token cost, when the source reports it (Phase 3 $ usage).
     pub cost: Option<CostMeta>,
+    /// Capability flags, when the source reports them (Phase 3c gating).
+    pub caps: Option<Caps>,
     pub source: CatalogSource,
 }
 
@@ -200,6 +226,11 @@ impl ModelCatalog {
         self.lookup(provider_type, model).and_then(|m| m.cost)
     }
 
+    /// Resolve a model's capability flags, when the catalog reports them.
+    pub fn caps(&self, provider_type: &str, model: &str) -> Option<Caps> {
+        self.lookup(provider_type, model).and_then(|m| m.caps)
+    }
+
     fn lookup(&self, provider_type: &str, model: &str) -> Option<&ModelMeta> {
         let mid = normalize_model(model);
 
@@ -243,7 +274,7 @@ mod tests {
     use super::*;
 
     fn meta(context: u32, source: CatalogSource) -> ModelMeta {
-        ModelMeta { context, output: None, cost: None, source }
+        ModelMeta { context, output: None, cost: None, caps: None, source }
     }
 
     #[test]
