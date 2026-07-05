@@ -4,7 +4,7 @@
 //! `models{}` map; every model has `limit: { context, output }`. See
 //! `docs/architecture/2026-07-05-model-catalog-multicatalog.md`.
 
-use super::{CatalogSource, ModelCatalog, ModelMeta, ProviderMeta};
+use super::{CatalogSource, CostMeta, ModelCatalog, ModelMeta, ProviderMeta};
 use serde_json::Value;
 
 const OPENAI_COMPAT_NPM: &str = "@ai-sdk/openai-compatible";
@@ -32,10 +32,11 @@ pub fn load_into(cat: &mut ModelCatalog, json: &Value) -> usize {
                 continue;
             }
             let output = limit.get("output").and_then(as_u32);
+            let cost = parse_cost(mv.get("cost"));
             cat.insert(
                 provider_id,
                 model_id,
-                ModelMeta { context, output, source: CatalogSource::ModelsDev },
+                ModelMeta { context, output, cost, source: CatalogSource::ModelsDev },
             );
             model_ids.push(model_id.clone());
             n += 1;
@@ -71,6 +72,14 @@ fn as_u32(v: &Value) -> Option<u32> {
     v.as_u64()
         .and_then(|n| u32::try_from(n).ok())
         .or_else(|| v.as_f64().filter(|f| *f > 0.0).map(|f| f as u32))
+}
+
+/// Parse a `cost` object (`{input, output}` USD per 1M tokens). Requires both.
+pub(super) fn parse_cost(v: Option<&Value>) -> Option<CostMeta> {
+    let c = v?;
+    let input = c.get("input").and_then(Value::as_f64)?;
+    let output = c.get("output").and_then(Value::as_f64)?;
+    Some(CostMeta { input, output })
 }
 
 #[cfg(test)]

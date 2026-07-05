@@ -5,7 +5,7 @@
 //! Public, no auth. Best Chinese/frontier coverage (deepseek/qwen/glm/kimi/
 //! minimax/xiaomi/tencent). Lower priority than models.dev on conflict.
 
-use super::{CatalogSource, ModelCatalog, ModelMeta};
+use super::{CatalogSource, CostMeta, ModelCatalog, ModelMeta};
 use serde_json::Value;
 
 /// Merge a parsed OpenRouter models payload into `cat`. Returns models added.
@@ -35,13 +35,23 @@ pub fn load_into(cat: &mut ModelCatalog, json: &Value) -> usize {
             .and_then(|tp| tp.get("max_completion_tokens"))
             .and_then(as_u32);
 
+        // OpenRouter `pricing` is USD per TOKEN (strings) — convert to per-1M to
+        // match models.dev units.
+        let cost = m.get("pricing").and_then(|p| {
+            let per_tok = |k: &str| p.get(k).and_then(Value::as_str).and_then(|s| s.parse::<f64>().ok());
+            match (per_tok("prompt"), per_tok("completion")) {
+                (Some(i), Some(o)) => Some(CostMeta { input: i * 1e6, output: o * 1e6 }),
+                _ => None,
+            }
+        });
+
         // OpenRouter ids are `vendor/model`; the catalog derives provider from
         // the slug prefix (and also loose-indexes the bare model id).
         let (provider_id, model_id) = id.split_once('/').unwrap_or(("openrouter", id));
         cat.insert(
             provider_id,
             model_id,
-            ModelMeta { context, output, source: CatalogSource::OpenRouter },
+            ModelMeta { context, output, cost, source: CatalogSource::OpenRouter },
         );
         n += 1;
     }
