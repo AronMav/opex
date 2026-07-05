@@ -412,10 +412,10 @@ parameters:
               </div>
             </div>
             <div className="flex justify-end gap-3 pt-3 border-t border-border/50">
-              <Button type="button" variant="ghost" size="sm" onClick={cancelEdit}>
+              <Button type="button" variant="ghost" onClick={cancelEdit}>
                 {t("common.cancel")}
               </Button>
-              <Button type="submit" size="sm" disabled={formBusy}>
+              <Button type="submit" disabled={formBusy}>
                 <Save className="h-4 w-4" /> {formBusy ? t("common.saving") : isNew ? t("common.create") : t("common.save")}
               </Button>
             </div>
@@ -462,10 +462,10 @@ parameters:
                 />
               </Field>
               <div className="flex justify-end gap-3 pt-3 border-t border-border/50">
-                <Button type="button" variant="ghost" size="sm" onClick={cancelEdit}>
+                <Button type="button" variant="ghost" onClick={cancelEdit}>
                   {t("common.cancel")}
                 </Button>
-                <Button type="submit" size="sm" disabled={formBusy}>
+                <Button type="submit" disabled={formBusy}>
                   <Save className="h-4 w-4" /> {formBusy ? t("common.saving") : isNewYaml ? t("common.create") : t("common.save")}
                 </Button>
               </div>
@@ -708,14 +708,14 @@ parameters:
           description={t("tools.subtitle")}
           actions={
             <div className="flex flex-wrap items-center gap-2">
-              <Button variant="outline" size="sm" onClick={startCreateYaml}>
-                <Plus className="h-3.5 w-3.5" /> {t("tools.external_apis")}
+              <Button variant="outline" size="lg" onClick={startCreateYaml} className="w-full md:w-auto gap-2">
+                <Plus className="h-4 w-4" /> {t("tools.external_apis")}
               </Button>
-              <Button variant="outline" size="sm" onClick={startCreateMcp}>
-                <Plus className="h-3.5 w-3.5" /> {t("tools.add_mcp")}
+              <Button variant="outline" size="lg" onClick={startCreateMcp} className="w-full md:w-auto gap-2">
+                <Plus className="h-4 w-4" /> {t("tools.add_mcp")}
               </Button>
-              <Button variant="outline" size="sm" onClick={() => setHandlerEditorId("create")}>
-                <Plus className="h-3.5 w-3.5" /> {t("tools.handler_create")}
+              <Button variant="outline" size="lg" onClick={() => setHandlerEditorId("create")} className="w-full md:w-auto gap-2">
+                <Plus className="h-4 w-4" /> {t("tools.handler_create")}
               </Button>
               <Button variant="outline" size="sm" onClick={invalidateAll} disabled={loading} aria-label={t("common.refresh")}>
                 <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
