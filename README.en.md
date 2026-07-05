@@ -1,7 +1,8 @@
 # OPEX
 
 <p align="center">
-  <strong>Self-hosted AI gateway built to be changed.</strong>
+  <strong>A self-hosted AI gateway where everything is replaceable.</strong><br>
+  <em>Pronounced "O-REKH" (walnut)</em>
 </p>
 
 <p align="center">
@@ -12,13 +13,27 @@
   <a href="https://github.com/AronMav/opex/releases"><img src="https://img.shields.io/badge/platform-ARM64%20%7C%20x86__64-blue?logo=linux&logoColor=white&style=for-the-badge" alt="Platform"></a>
 </p>
 
-[Русская версия](README.md)
+<p align="center">
+  <a href="README.md">Русский</a> ·
+  <a href="docs/">Docs</a> ·
+  <a href="docs/ARCHITECTURE.md">Architecture</a> ·
+  <a href="docs/API.md">API</a> ·
+  <a href="SECURITY.md">Security</a>
+</p>
 
-OPEX is a self-hosted AI gateway designed around one idea: every layer should be replaceable without touching the core. Agent behavior lives in Markdown. Tools are YAML files. Providers swap with one config line. Channels are a separate process. Nothing is baked in that doesn't have to be.
+**OPEX is a self-hosted AI gateway in Rust, built around one idea: every layer is replaceable without touching the core.** Agent behavior lives in Markdown. Tools are YAML files. Providers swap with one line. Channels are a separate process. A single binary serves the HTTP API, agent lifecycle, LLM calls, tools, channels, memory and secrets — on a home server, ARM64 or x86_64, with no cloud lock-in. Talk to it from Telegram while it works on a remote machine.
 
-[Docs](docs/) · [API Reference](docs/API.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration](docs/CONFIGURATION.md) · [Security](SECURITY.md)
+Use any model — **150+ providers from the built-in catalog in one click**, any OpenAI-compatible endpoint, local Ollama/vLLM. Context windows for **5000+ models** are filled in automatically. Switching is one line of TOML — no code, no vendor lock-in.
 
-New install? Run `./setup.sh` — it handles everything.
+<table>
+<tr><td><b>Everything replaceable, nothing baked in</b></td><td>An agent's persona and memory are Markdown files. Tools are YAML. Skills are Markdown, loaded at runtime. Providers are a single registry editable from the UI. Channels are a separate process behind a protocol boundary. Change a file, change the behavior — no restart.</td></tr>
+<tr><td><b>Built-in model catalog</b></td><td>Context windows, output limits, pricing and capabilities for 5000+ models from <a href="https://models.dev">models.dev</a> + OpenRouter, refreshed in the background. Auto-detected window for any model, add 150+ providers by preset (URL/type/models auto-filled), $ accounting at real prices, capability-aware request parameters.</td></tr>
+<tr><td><b>Lives where you do</b></td><td>Telegram, Discord, Matrix, IRC, Slack — from a single gateway process. Voice-memo transcription, media handling, cross-platform conversation continuity.</td></tr>
+<tr><td><b>Multi-agent orchestration</b></td><td>Agents collaborate in shared sessions, routed by @-mentions. Pools of session-scoped agents with a run / async / message / status / kill lifecycle — parallel workstreams without shared state.</td></tr>
+<tr><td><b>Long-term memory</b></td><td>PostgreSQL + pgvector, hybrid search (semantic + FTS) with MMR reranking. Two tiers: raw with time decay, and pinned permanent. Key facts are extracted into memory during context compaction.</td></tr>
+<tr><td><b>Scheduling & automations</b></td><td>Agent-level cron scheduler with timezones and jitter. Daily reports, nightly backups, audits — in natural language, unattended, delivered to any channel.</td></tr>
+<tr><td><b>Extensible by standards</b></td><td>Any MCP server as an on-demand Docker container, tools auto-discovered. File handlers (STT / Vision / TTS / ImageGen / video) as self-describing Python plugins with hot-reload. LSP intelligence (pyright) for agents.</td></tr>
+</table>
 
 ---
 
@@ -30,60 +45,50 @@ cd opex
 ./setup.sh
 ```
 
-The installer handles Docker, Bun, Python 3, PostgreSQL, `.env` generation, and systemd services.
-Open `http://your-server:18789` when done.
+The installer sets up Docker, Bun, Python 3, PostgreSQL, generates `.env`, and creates systemd services. When done, open `http://your-server:18789`.
 
-Building from source: clone the repo and run `./setup.sh` — it detects missing toolchains and compiles.
+From source: clone the repo and run `./setup.sh` — it detects missing toolchains and compiles. Requires Rust 1.85+ (edition 2024), Node.js 22+, Docker, Bun 1.x, Python 3.
 
 ---
 
-## The Layers
+## Replaceable layers
 
-OPEX is organized into independent layers. Each layer can be changed, extended, or replaced without touching the others.
+OPEX is organized into independent layers — each can be changed, extended or replaced without affecting the others.
 
-**Agent behavior — TOML + Markdown files.**
-An agent is a TOML config and a folder of Markdown files. Personality, memory, tone, and background tasks are plain text files in `workspace/agents/{Name}/`. Change a file, change the agent — on the next request, no restart.
+**Agent behavior — TOML + Markdown.** An agent is a TOML config and a folder of Markdown files in `workspace/agents/{Name}/`. Persona, memory, tone, background tasks — plain text. Edit a file = new behavior, no restart.
 
-**Tools — YAML files.**
-Drop a YAML file in `workspace/tools/` and the tool is live immediately. Supports auth injection (Bearer, API key, header), JSONPath response transforms, binary responses (photos, voice), and SSRF protection. No code, no restart.
+**Tools — YAML.** Drop a YAML into `workspace/tools/` and the tool is available instantly. Auth injection (Bearer / API key / header), JSONPath response transforms, binary responses (photo, voice), SSRF protection. No code.
 
-**Skills — Markdown files loaded on demand.**
-Skills are behavioral instructions injected at inference time, not baked into the system prompt. Agents discover them via `skill_use(action="list")` and load them when needed. Add a skill file and agents start using it. Remove it and it's gone.
+**Skills — Markdown on demand.** Behavioral instructions injected at inference time rather than baked into the system prompt. The agent discovers them and loads on trigger match. Add a file — the skill appears; remove it — it's gone.
 
-**Providers — a unified registry.**
-All LLM backends and media services (STT, TTS, Vision, ImageGen, Embedding) go through a provider registry editable from the Web UI or API. Switching an agent to a different model is one line in a TOML file. Any OpenAI-compatible endpoint works out of the box.
+**Providers — a single registry + catalog.** All LLM and media services (STT, TTS, Vision, ImageGen, Embedding) go through a registry editable from the Web UI or API. Adding a provider = pick from 150+ catalog presets (URL, type and model list auto-filled). Any OpenAI-compatible endpoint works immediately.
 
-**Channels — a separate process.**
-Telegram, Discord, Matrix, IRC, and Slack adapters run as a TypeScript/Bun subprocess. The core doesn't know or care about messaging protocols — adapters send `IncomingMessage` objects over an internal WebSocket and get results back. Add a new adapter without touching Rust.
+**Channels — a separate process.** Telegram / Discord / Matrix / IRC / Slack adapters run as a TypeScript/Bun subprocess. The core knows no messaging protocol: adapters send `IncomingMessage` over an internal WebSocket. A new adapter needs no Rust changes.
 
 ---
 
 ## What changes without a restart
 
-| Layer                  | Takes effect              |
-| ---------------------- | ------------------------- |
-| SOUL.md / IDENTITY.md  | Next message              |
-| Skill files            | Next message              |
-| YAML tools             | Next request (30 s cache) |
-| Agent TOML config      | Hot-reload (file watcher) |
-| Provider settings      | Immediately via API       |
-| Channel configuration  | On adapter reconnect      |
+| Layer | Takes effect |
+| --- | --- |
+| SOUL.md / IDENTITY.md | Next message |
+| Skill files | Next message |
+| YAML tools | Next request (30s cache) |
+| Agent TOML config | Hot-reload (file watcher) |
+| Provider settings | Immediately via API |
+| Model catalog | Background refresh (24h default) |
+| Channel config | On adapter reconnect |
 
 ---
 
-## Highlights
+## Model catalog
 
-- **Multi-agent orchestration** — agents collaborate in shared sessions with @-mention routing; session-scoped pools with run/async/message/status/kill lifecycle
-- **Long-term memory** — PostgreSQL + pgvector hybrid search (semantic + FTS) with MMR reranking; two tiers: raw (time-decay) and pinned (permanent)
-- **MCP protocol** — any MCP server runs as an on-demand Docker container; tools are auto-discovered and injected into agent context
-- **Skills system** — Markdown-based instructions loaded at runtime; server-side trigger matching injects a hint into the system prompt when a user message matches a skill's keywords
-- **Cron scheduler** — per-agent scheduled tasks with timezone support and jitter; jobs are creatable via API at runtime
-- **Secrets vault** — ChaCha20Poly1305 encryption, per-agent scoping, env var fallback; credentials never touch config files
-- **Tool approval** — configurable human-in-the-loop before execution of sensitive operations
-- **Context compaction** — when conversation history exceeds the model window, the oldest turns are compressed and key facts are extracted to long-term memory
-- **Web UI** — Next.js 16 dashboard: multi-agent chat, agent/provider/tool management, workspace canvas, memory explorer, audit log
-- **Network discovery** — WAN IP, Tailscale status, LAN interfaces, mDNS (`opex.local`) for zero-config LAN access
-- **Doctor diagnostics** — `GET /api/doctor` with severity levels and actionable remediation hints
+OPEX pulls model metadata from external aggregators and makes it the single source of truth — instead of hardcoded tables.
+
+- **Auto context window.** Resolution chain: manual override → provider native self-report (`/api/show`, `/v1/models`, `inputTokenLimit`) → **catalog** (models.dev ∪ OpenRouter) → name heuristic. 5000+ models resolve accurately; local and custom models via native probing.
+- **150+ providers in one click.** The "add provider" picker fills base_url, type and model list. Most are OpenAI-compatible → added as `openai_compat` with no new code.
+- **$ accounting.** `/api/usage` computes cost from real catalog prices, not a tiny built-in table.
+- **Model capabilities.** `max_tokens` is clamped to the output limit; `temperature` is omitted for models that don't accept it (o1/reasoning).
 
 ---
 
@@ -93,42 +98,42 @@ Three Rust binaries + two managed child processes + Docker infrastructure.
 
 ```text
 opex-core       — HTTP API, agent lifecycle, LLM calls, tool dispatch,
-  │               memory, secrets, scheduler
-  ├── channels/ — chat adapters (TypeScript/Bun, managed child process)
+  │               memory, secrets, scheduler, model catalog
+  ├── channels/ — chat adapters (TypeScript/Bun, managed process)
   └── toolgate/ — media hub: STT, TTS, Vision, ImageGen, Embeddings
-                  (Python/FastAPI, managed child process)
+                  (Python/FastAPI, managed process)
 
 opex-watchdog        — external health monitor with channel alerting
-opex-memory-worker   — background embedding reindex via PostgreSQL task queue
+opex-memory-worker   — background reindex via a PostgreSQL task queue
 
-PostgreSQL 17 + pgvector — sessions, messages, memory, cron, secrets
-SearXNG                  — meta-search engine for web search tools
+PostgreSQL 17 + pgvector — sessions, messages, memory, cron, secrets, usage
+SearXNG                  — meta-search for web-search tools
 browser-renderer         — headless browser for automation
-MCP servers              — started on-demand via Docker API
-code sandbox             — isolated Docker containers for non-base agent code execution
+MCP servers              — on-demand via the Docker API
+code sandbox             — isolated containers for non-base agents' code
 ```
 
-The Rust core speaks no messaging protocol and has no provider SDK embedded. Every external surface — channels, media services, LLM backends, MCP tools — is connected through a defined protocol boundary. This is what makes individual layers swappable.
+The Rust core knows no messaging protocol and ships no built-in provider SDK. Every external surface — channels, media services, LLM backends, MCP tools — is wired through a defined protocol boundary. That's what makes the layers replaceable. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
 ## Security
 
-- **Workspace isolation** — path canonicalization guard with symlink resolution; agents cannot escape their directory or reach another agent's files
-- **SSRF protection** — DNS-level private IP blocking (RFC 1918, link-local, CGNAT, Teredo, 6to4, IPv4-mapped) on every outbound YAML tool request; internal service blocklist
-- **Sandbox** — non-base agents execute code in isolated Docker containers; base agents run on the host with explicit opt-in
-- **Tool approval** — per-tool human confirmation workflow; approval state persisted in PostgreSQL
-- **PII redaction** — automatic filtering of tokens, keys, passwords in code execution output
-- **Prompt injection detection** — inbound content scanned for override patterns; external content wrapped in boundary markers
+- **Workspace isolation** — path canonicalization and symlink resolution; an agent can't escape its directory.
+- **SSRF protection** — DNS-level private-IP blocking (RFC 1918, link-local, CGNAT, Teredo, 6to4, IPv4-mapped) for outgoing YAML-tool requests; internal-service block-list.
+- **Sandbox** — non-base agents run code in isolated Docker containers; base agents run on the host with explicit permission.
+- **Tool approval** — per-tool human-in-the-loop; state in PostgreSQL.
+- **Secrets** — ChaCha20Poly1305, per-agent scope, env fallback; credentials never touch config files.
+- **PII redaction** and **prompt-injection detection** — keys/tokens filtered from code output; external content wrapped in boundary markers.
 
 > [!IMPORTANT]
-> Back up `OPEX_MASTER_KEY`. It is required for vault decryption and cannot be recovered if lost.
+> Back up `OPEX_MASTER_KEY` — it decrypts the vault and cannot be recovered if lost.
 
 ---
 
 ## Configuration
 
-Three variables in `.env`. Everything else goes into the encrypted vault.
+Three variables in `.env`; everything else lives in the encrypted vault.
 
 ```bash
 OPEX_AUTH_TOKEN=...   # API authentication
@@ -136,7 +141,7 @@ OPEX_MASTER_KEY=...   # ChaCha20Poly1305 vault key
 DATABASE_URL=...      # PostgreSQL connection string
 ```
 
-Agent config lives in `config/agents/{Name}.toml` and hot-reloads on change:
+Agent config is `config/agents/{Name}.toml`, hot-reloaded on change:
 
 ```toml
 [agent]
@@ -156,42 +161,39 @@ detect_loops = true
 ## Development
 
 ```bash
-make check          # cargo check --all-targets
-make test           # cargo test
-make lint           # cargo clippy -- -D warnings
-make build-arm64    # cross-compile for Raspberry Pi / AWS Graviton
-make deploy         # binary + UI + migrations → remote server
-make doctor         # GET /api/doctor on remote
-make logs           # journalctl tail on remote
+make check           # cargo check --all-targets
+make test            # cargo test (skips sqlx::test without a DB)
+make lint            # cargo clippy --all-targets -- -D warnings
+make remote-deploy   # build on the server → atomic swap + restart
+make doctor          # GET /api/doctor
+make logs            # journalctl --user -u opex-core -f
 ```
-
-Requirements from source: Rust 1.85+ (edition 2024), Node.js 22+, Docker, Bun 1.x, Python 3, [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) (ARM64 only).
 
 ```text
 opex/
 ├── crates/
 │   ├── opex-core/          # Main binary
 │   ├── opex-watchdog/      # Health monitor
-│   ├── opex-memory-worker/ # Background tasks
+│   ├── opex-memory-worker/ # Background jobs
 │   └── opex-types/         # Shared types
 ├── channels/               # Channel adapters (TypeScript/Bun)
 ├── toolgate/               # Media hub (Python/FastAPI)
 ├── ui/                     # Web UI (Next.js 16)
 ├── workspace/              # Runtime: tools/, skills/, agents/
-├── config/                 # Agent + system TOML configs
-├── migrations/             # PostgreSQL migrations (auto-applied on start)
-└── docker/                 # Compose + Dockerfiles
+├── config/                 # Agent & system config (TOML)
+├── migrations/             # PostgreSQL migrations (auto on startup)
+└── docker/                 # Compose + Dockerfile
 ```
 
 ---
 
-## Updating
+## Update
 
 ```bash
 ~/opex/update.sh opex-v<VERSION>.tar.gz
 ```
 
-Preserves `.env`, `config/`, `workspace/`, and the database. Run `GET /api/doctor` after to verify.
+Preserves `.env`, `config/`, `workspace/` and the database. Then verify with `GET /api/doctor`.
 
 ---
 
