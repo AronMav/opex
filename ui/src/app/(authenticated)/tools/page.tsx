@@ -24,8 +24,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { ScrollableTabsList } from "@/components/ui/scrollable-tabs-list";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { FilterTabsList } from "@/components/ui/filter-tabs";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import {
@@ -733,23 +733,13 @@ parameters:
           </div>
         ) : (
           <Tabs defaultValue="external" className="mt-2">
-            <ScrollableTabsList>
-              <TabsTrigger value="external">
-                <ExternalLink className="h-3.5 w-3.5" />
-                {t("tools.external_apis")}
-                <Badge variant="secondary" size="xs" className="ml-1.5">{yamlTools.length}</Badge>
-              </TabsTrigger>
-              <TabsTrigger value="mcp">
-                <Activity className="h-3.5 w-3.5" />
-                {t("tools.mcp_servers")}
-                <Badge variant="secondary" size="xs" className="ml-1.5">{mcpServers.length}</Badge>
-              </TabsTrigger>
-              <TabsTrigger value="handlers">
-                <FileCog className="h-3.5 w-3.5" />
-                {t("tools.file_handlers")}
-                <Badge variant="secondary" size="xs" className="ml-1.5">{handlers.length}</Badge>
-              </TabsTrigger>
-            </ScrollableTabsList>
+            <FilterTabsList
+              items={[
+                { value: "external", label: t("tools.external_apis"), icon: <ExternalLink />, count: yamlTools.length },
+                { value: "mcp", label: t("tools.mcp_servers"), icon: <Activity />, count: mcpServers.length },
+                { value: "handlers", label: t("tools.file_handlers"), icon: <FileCog />, count: handlers.length },
+              ]}
+            />
 
             {/* ── External API tools (YAML) ── */}
             <TabsContent value="external" className="mt-6">

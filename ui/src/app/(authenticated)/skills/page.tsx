@@ -18,8 +18,8 @@ import { Card } from "@/components/ui/card";
 import { IconTile } from "@/components/ui/icon-tile";
 import { Chip } from "@/components/ui/chip";
 import { SearchInput } from "@/components/ui/search-input";
-import { Tabs, TabsTrigger } from "@/components/ui/tabs";
-import { ScrollableTabsList } from "@/components/ui/scrollable-tabs-list";
+import { Tabs } from "@/components/ui/tabs";
+import { FilterTabsList, type FilterTabItem } from "@/components/ui/filter-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
@@ -29,7 +29,7 @@ import {
 import {
   BookOpen, Wrench, Zap, Trash2, RefreshCw, Tag,
   Plus, Pencil, ArrowLeft, Save, FileText, History, Archive, ArchiveRestore,
-  Lock, LockOpen, Search,
+  Lock, LockOpen, Search, LayoutList, CircleCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -556,11 +556,26 @@ export default function SkillsPage() {
 
   // ── List view ──────────────────────────────────────────────────────────────
 
-  const STATE_FILTERS: { value: StateFilter; label: string }[] = [
-    { value: "all", label: t("skills.filter_all") },
-    { value: "active", label: t("skills.filter_active") },
-    { value: "stale", label: t("skills.filter_stale") },
-    { value: "archived", label: t("skills.filter_archived") },
+  const STATE_FILTERS: (FilterTabItem & { value: StateFilter })[] = [
+    { value: "all", label: t("skills.filter_all"), icon: <LayoutList /> },
+    {
+      value: "active",
+      label: t("skills.filter_active"),
+      icon: <CircleCheck />,
+      count: allSkills.filter((s) => s.state === "active").length,
+    },
+    {
+      value: "stale",
+      label: t("skills.filter_stale"),
+      icon: <History />,
+      count: allSkills.filter((s) => s.state === "stale").length,
+    },
+    {
+      value: "archived",
+      label: t("skills.filter_archived"),
+      icon: <Archive />,
+      count: allSkills.filter((s) => s.state === "archived").length,
+    },
   ];
 
   return (
@@ -590,18 +605,7 @@ export default function SkillsPage() {
 
       {/* State filter */}
       <Tabs value={stateFilter} onValueChange={(v) => setStateFilter(v as StateFilter)}>
-        <ScrollableTabsList className="h-9">
-          {STATE_FILTERS.map((f) => (
-            <TabsTrigger key={f.value} value={f.value} className="text-xs">
-              {f.label}
-              {f.value !== "all" && (
-                <span className="ml-1.5 text-3xs tabular-nums text-muted-foreground">
-                  {allSkills.filter((s) => s.state === f.value).length}
-                </span>
-              )}
-            </TabsTrigger>
-          ))}
-        </ScrollableTabsList>
+        <FilterTabsList items={STATE_FILTERS} />
       </Tabs>
 
       {/* Search */}

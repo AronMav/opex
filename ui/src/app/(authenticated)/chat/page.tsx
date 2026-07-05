@@ -49,7 +49,8 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs } from "@/components/ui/tabs";
+import { FilterTabsList } from "@/components/ui/filter-tabs";
 import { ChatThread } from "./ChatThread";
 import { ContextBar } from "./ContextBar";
 import { CanvasPanel } from "./CanvasPanel";
@@ -864,16 +865,13 @@ function ChatCanvasTabs() {
 
   return (
     <Tabs value={panelOpen ? "canvas" : "chat"} onValueChange={(v) => setPanelOpen(v === "canvas")}>
-      <TabsList className="h-8 bg-muted/30 border border-border/30 p-0.5">
-        <TabsTrigger value="chat" className="h-full px-1.5 md:px-3 text-xs font-medium">
-          <MessageSquare className="h-4 w-4" />
-          <span className="hidden md:inline">{t("nav.chat")}</span>
-        </TabsTrigger>
-        <TabsTrigger value="canvas" className="h-full px-1.5 md:px-3 text-xs font-medium">
-          <PanelRight className="h-4 w-4" />
-          <span className="hidden md:inline">{t("nav.canvas")}</span>
-        </TabsTrigger>
-      </TabsList>
+      <FilterTabsList
+        className="h-8"
+        items={[
+          { value: "chat", label: t("nav.chat"), icon: <MessageSquare /> },
+          { value: "canvas", label: t("nav.canvas"), icon: <PanelRight /> },
+        ]}
+      />
     </Tabs>
   );
 }
