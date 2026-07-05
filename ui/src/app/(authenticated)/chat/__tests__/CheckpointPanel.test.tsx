@@ -21,6 +21,9 @@ vi.mock("@/components/ui/sheet", () => ({
   SheetHeader: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="sheet-header">{children}</div>
   ),
+  SheetBody: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="sheet-body">{children}</div>
+  ),
   SheetTitle: ({ children }: { children: React.ReactNode }) => (
     <h2 data-testid="sheet-title">{children}</h2>
   ),
