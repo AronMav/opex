@@ -127,7 +127,7 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
           <img
             src={src}
             alt={alt}
-            className="max-h-[90dvh] max-w-[90vw] object-contain transition-transform duration-200"
+            className="max-h-[90dvh] max-w-[90dvw] object-contain transition-transform duration-200"
             style={{ transform: `scale(${zoom})` }}
             onClick={(e) => e.stopPropagation()}
           />

@@ -218,7 +218,7 @@ export function NotificationBell() {
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent       align="end"
-      className="w-80 max-w-[calc(100vw-0.5rem)] p-0" data-testid="notification-list">
+      className="w-80 max-w-[calc(100dvw-0.5rem)] p-0" data-testid="notification-list">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <span className="text-sm font-semibold">{t("notifications.title")}</span>

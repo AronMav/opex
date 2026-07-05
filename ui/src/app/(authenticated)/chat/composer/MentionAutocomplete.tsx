@@ -59,7 +59,7 @@ export function MentionAutocomplete({ query, agents, onSelect, onClose, onActive
     <div
       role="listbox"
       aria-label={t("chat.mentions_label")}
-      className="absolute bottom-full mb-1 left-0 max-h-[50dvh] overflow-y-auto bg-popover border border-border rounded-lg shadow-lg p-1 z-50 w-full max-w-[min(280px,calc(100vw-1.5rem))]"
+      className="absolute bottom-full mb-1 left-0 max-h-[50dvh] overflow-y-auto bg-popover border border-border rounded-lg shadow-lg p-1 z-50 w-full max-w-[min(280px,calc(100dvw-1.5rem))]"
     >
       {filtered.map((name, i) => (
         <button
