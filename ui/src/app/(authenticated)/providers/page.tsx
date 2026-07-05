@@ -241,7 +241,14 @@ export default function ProvidersPage() {
 
   const setCategory = (cat: ProviderCategory) => {
     if (!dialog.open) return;
-    setForm((f) => ({ ...f, type: cat, provider_type: "", default_model: "" }));
+    // Text providers default to `openai_compat` so the user doesn't have to pick
+    // a type up front — a catalog preset (or the Advanced tab) overrides it.
+    setForm((f) => ({
+      ...f,
+      type: cat,
+      provider_type: cat === "text" ? "openai_compat" : "",
+      default_model: "",
+    }));
     setDiscoveredModels([]);
     setDialog({ ...dialog, category: cat });
   };
