@@ -17,7 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Boxes, Check, Plus, RefreshCw, Settings2, SlidersHorizontal } from "lucide-react";
+import { Check, Plus, RefreshCw, Settings2, SlidersHorizontal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { CreateProviderInput, Provider, ProviderType, MediaDriverInfo } from "@/types/api";
 import type { TranslationKey } from "@/i18n/types";
@@ -26,11 +26,13 @@ import type { ProviderCategory } from "./_parts/constants";
 import { TextFields } from "./_parts/TextFields";
 import { MediaFields } from "./_parts/MediaFields";
 
-export type ProviderTab = "general" | "models" | "advanced";
+// Per-model context windows are resolved automatically from the model catalog
+// (models.dev/…), so the former "Models" tab (manual context-window table) was
+// removed; a config-level `context_windows` override remains as an escape hatch.
+export type ProviderTab = "general" | "advanced";
 
 const TAB_META: Record<ProviderTab, { labelKey: TranslationKey; icon: LucideIcon }> = {
   general: { labelKey: "providers.tab_general", icon: Settings2 },
-  models: { labelKey: "providers.tab_models", icon: Boxes },
   advanced: { labelKey: "providers.tab_advanced", icon: SlidersHorizontal },
 };
 
@@ -130,9 +132,8 @@ export function ProviderDialog(props: ProviderDialogProps) {
   // providers have nothing model-tabbable, so only General + Advanced.
   const tabs: ProviderTab[] = React.useMemo(() => {
     if (category === "") return [];
-    if (category === "text") return isCli ? ["general", "advanced"] : ["general", "models", "advanced"];
     return ["general", "advanced"];
-  }, [category, isCli]);
+  }, [category]);
 
   const [activeTab, setActiveTab] = React.useState<ProviderTab>("general");
   // Keep the active tab valid when the category (and thus the tab set) changes.

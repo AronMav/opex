@@ -48,7 +48,7 @@ interface TextFieldsProps {
   defaultUrlFor: (id: string) => string;
   typeId: string;
   modelId: string;
-  activeTab: "general" | "models" | "advanced";
+  activeTab: "general" | "advanced";
 }
 
 export function TextFields({
@@ -239,82 +239,6 @@ export function TextFields({
       )}
       </>)}
 
-      {/* Per-model context window overrides — hidden for CLI providers. Each
-          row: a model + tokens input. Empty = auto-detect via the provider API
-          (/api/show, /v1/models), then name heuristic. Set explicitly only for
-          models whose API doesn't report the window (e.g. MiMo). */}
-      {activeTab === "models" && !isCli && (() => {
-        const cw = (getOpts(form).context_windows ?? {}) as Record<string, number>;
-        const rows = Array.from(
-          new Set([
-            ...(form.default_model ? [form.default_model] : []),
-            ...discoveredModels,
-            ...Object.keys(cw),
-          ]),
-        ).filter(Boolean);
-        const setCw = (model: string, raw: string) => {
-          const v = raw.trim() === "" ? undefined : Number(raw);
-          setForm((f) => {
-            const opts = { ...getOpts(f) };
-            const map: Record<string, number> = { ...((opts.context_windows as Record<string, number>) ?? {}) };
-            if (v === undefined || Number.isNaN(v)) delete map[model];
-            else map[model] = v;
-            opts.context_windows = Object.keys(map).length ? map : undefined;
-            return { ...f, options: opts };
-          });
-        };
-        return (
-          <fieldset className="neu-inset rounded-lg p-3 space-y-2">
-            <legend className="text-sm font-medium">{t("providers.context_window_section")}</legend>
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs text-muted-foreground">{t("providers.context_window_hint")}</p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={onDiscoverModels}
-                disabled={modelsLoading}
-                className="shrink-0 h-8"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${modelsLoading ? "animate-spin" : ""}`} />
-                {t("providers.discover")}
-              </Button>
-            </div>
-            {rows.length === 0 ? (
-              <p className="text-2xs text-muted-foreground-subtle">{t("providers.context_window_no_models")}</p>
-            ) : (
-              <div className="max-h-56 overflow-y-auto divide-y divide-border/50">
-                {rows.map((model, i) => {
-                  const v = cw[model];
-                  const invalid = typeof v === "number" && v > 0 && v < 1000;
-                  const fid = `cw-${i}`;
-                  return (
-                    <label key={model} htmlFor={fid} className="flex items-center justify-between gap-3 py-1.5 min-w-0">
-                      <span className="text-sm truncate min-w-0" title={model}>{model}</span>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <Input
-                          id={fid}
-                          type="number"
-                          aria-label={`${model} ${t("providers.context_window_label")}`}
-                          placeholder={t("providers.context_window_auto")}
-                          value={cw[model] ?? ""}
-                          onChange={(e) => setCw(model, e.target.value)}
-                          className="w-32 text-sm h-8"
-                          min={1000}
-                          step={1000}
-                        />
-                        {invalid && (
-                          <span className="text-xs text-destructive">{t("providers.context_window_error")}</span>
-                        )}
-                      </div>
-                    </label>
-                  );
-                })}
-              </div>
-            )}
-          </fieldset>
-        );
-      })()}
 
       {/* Test Connection for CLI providers (Advanced tab) */}
       {isCli && isEditing && activeTab === "advanced" && (

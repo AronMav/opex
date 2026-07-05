@@ -608,6 +608,10 @@ pub struct ModelCatalogConfig {
     /// models.dev catalog endpoint (or a self-hosted mirror).
     #[serde(default = "default_models_dev_url")]
     pub models_dev_url: String,
+    /// OpenRouter models endpoint (public, no auth). Broadens Chinese/frontier
+    /// coverage. Empty string disables this source.
+    #[serde(default = "default_openrouter_url")]
+    pub openrouter_url: String,
 }
 
 impl Default for ModelCatalogConfig {
@@ -616,6 +620,7 @@ impl Default for ModelCatalogConfig {
             enabled: true,
             refresh_hours: default_catalog_refresh_hours(),
             models_dev_url: default_models_dev_url(),
+            openrouter_url: default_openrouter_url(),
         }
     }
 }
@@ -626,6 +631,10 @@ fn default_catalog_refresh_hours() -> u64 {
 
 fn default_models_dev_url() -> String {
     "https://models.dev/api.json".to_string()
+}
+
+fn default_openrouter_url() -> String {
+    "https://openrouter.ai/api/v1/models".to_string()
 }
 fn default_otel_sampling_ratio() -> f64 {
     1.0
