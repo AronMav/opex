@@ -594,9 +594,14 @@ function MonitorPageInner() {
 
   // ── Failures state ────────────────────────────────────────────────────────
 
-  const [failuresAgent, setFailuresAgent] = useState<string>("_all");
+  // The failures endpoint requires a specific agent (no cross-agent bulk list),
+  // so default to the first agent once the list loads instead of an "_all" option.
+  const [failuresAgent, setFailuresAgent] = useState<string>("");
   const [failuresExpandedId, setFailuresExpandedId] = useState<string | null>(null);
-  const failuresAgentParam = failuresAgent === "_all" ? null : failuresAgent;
+  useEffect(() => {
+    if (!failuresAgent && auditAgents.length > 0) setFailuresAgent(auditAgents[0]);
+  }, [failuresAgent, auditAgents]);
+  const failuresAgentParam = failuresAgent || null;
   const {
     data: failuresData,
     isFetching: failuresLoading,
@@ -1501,7 +1506,6 @@ function MonitorPageInner() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="_all" className="text-xs">{t("monitor.failures.agent_all")}</SelectItem>
                       {auditAgents.map((a) => (
                         <SelectItem key={a} value={a} className="text-xs">{a}</SelectItem>
                       ))}
