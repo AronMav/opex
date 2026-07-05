@@ -714,10 +714,10 @@ export function AgentEditDialog({
 
         <DialogFooter className="px-5 py-3 border-t border-border bg-muted/20">
           <div className="flex gap-3 w-full justify-end">
-            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => onOpenChange(false)}>
+            <Button variant="ghost" className="text-muted-foreground hover:text-foreground" onClick={() => onOpenChange(false)}>
               {t("common.cancel")}
             </Button>
-            <Button size="sm" onClick={onSave} disabled={saving || !canSave} className="px-5 font-semibold">
+            <Button onClick={onSave} disabled={saving || !canSave} className="px-5 font-semibold">
               {saving ? t("common.saving") : editName ? t("common.save") : t("common.create")}
             </Button>
           </div>
@@ -797,9 +797,8 @@ export function ChannelDialog({
         </DialogBody>
         <DialogFooter className="px-5 py-3 border-t border-border bg-muted/20">
           <div className="flex gap-3 w-full justify-end">
-            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
+            <Button variant="ghost" className="text-muted-foreground" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
             <Button
-              size="sm"
               onClick={onSave}
               disabled={channelSaving || !channelForm.display_name.trim() || !channelForm.bot_token.trim()}
               className="px-5 font-semibold"

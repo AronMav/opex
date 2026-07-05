@@ -344,7 +344,7 @@ export default function AccessPage() {
                               </span>
                               <Button
                                 variant="ghost"
-                                size="icon"
+                                size="icon-sm"
                                 aria-label={t("access.revoke")}
                                 className="tap-target text-muted-foreground hover:text-destructive hover:bg-destructive/10 opacity-70 group-hover:opacity-100 transition-opacity shrink-0"
                                 onClick={() => setRemoveTarget({ agent, userId: u.channel_user_id, name: u.display_name || u.channel_user_id })}

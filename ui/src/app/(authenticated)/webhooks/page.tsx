@@ -205,7 +205,7 @@ export default function WebhooksPage() {
                   />
                   <Button
                     variant="ghost"
-                    size="icon"
+                    size="icon-sm"
                     onClick={() => setRegenTarget(w)}
                     disabled={mutating}
                     className="text-muted-foreground hover:text-warning hover:bg-warning/10"
@@ -216,7 +216,7 @@ export default function WebhooksPage() {
                   </Button>
                   <Button
                     variant="ghost"
-                    size="icon"
+                    size="icon-sm"
                     onClick={() => openEdit(w)}
                     disabled={mutating}
                     className="text-muted-foreground hover:text-primary hover:bg-primary/10"
@@ -226,7 +226,7 @@ export default function WebhooksPage() {
                   </Button>
                   <Button
                     variant="ghost"
-                    size="icon"
+                    size="icon-sm"
                     onClick={() => setDeleteTarget(w)}
                     disabled={mutating}
                     className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
