@@ -226,13 +226,16 @@ via watchfiles). Each handler = an XML descriptor comment + `async def run(ctx, 
 `search`, `embed`, `http`, `result`, `progress`, `llm` (raw-LLM via
 `POST /api/llm/complete`). Per-job callback auth uses HMAC `X-Job-Token`.
 
-**Coexisting legacy path (KEPT, not migrated — see Phase 6/R2):** the in-core
-`agent/file_scenario/{dispatch,dispatch_seam,outcome,rewrite,sniff,owner_gate}.rs`
-shell + `agent/fse/allowlist*` + `gateway/handlers/file_scenarios/run.rs`
-(`run_scenario_and_persist`) + the `file_scenarios` table (m060/m061) + the
-skill-binding **agent tool** (`agent/tool_handlers/file_scenario.rs`) still power
-the post-send "file-scenario-chips" SSE affordance and the Telegram `fse:` callback.
-Migrating those onto the HandlerRegistry is a future follow-up.
+**Legacy FSE — RETIRED (2026-07-01).** The in-core dispatch/seam/sniffer/rewrite/
+owner-gate shell, `gateway/handlers/file_scenarios/run.rs`, the skill-binding
+`agent/tool_handlers/file_scenario.rs`, the post-send "file-scenario-chips" SSE
+affordance and the Telegram `fse:` callback were all removed. The `file_scenarios`
+table is deprecated, not dropped (m069, history-preserving). What survives under
+those historical names is **current** toolgate-handler infrastructure, NOT legacy:
+`agent/file_scenario/{mod,outcome}.rs` is just the `ScenarioOutcome`/`ScenarioStatus`
+wire type parsed by `gateway/handlers/files.rs`, and `agent/fse/allowlist*` is the
+GLOBAL builtin-handler allowlist consumed by `agent/handler_registry.rs`. Nothing
+here is pending migration.
 
 **Removed in Phase 6:** the in-core async **video** pipeline
 (`agent/file_scenario/video_summary.rs`, `video_worker.rs`), the `SummarizeVideo`
