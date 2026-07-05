@@ -10,6 +10,7 @@ import { SearchInput } from "@/components/ui/search-input";
 import { useAuthStore } from "@/stores/auth-store";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { PageContainer } from "@/components/ui/page-container";
 import { IconTile } from "@/components/ui/icon-tile";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { StatusDot } from "@/components/ui/status-dot";
@@ -552,7 +553,7 @@ export default function AgentsPage() {
   const isFiltered = agentSearch.trim() !== "";
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
+    <PageContainer>
       <PageHeader
         title={t("agents.title")}
         description={t("agents.subtitle")}
@@ -733,7 +734,7 @@ export default function AgentsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }
 

@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Card } from "@/components/ui/card";
+import { PageContainer } from "@/components/ui/page-container";
 import { SectionHeader } from "@/components/ui/section-header";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Switch } from "@/components/ui/switch";
@@ -288,7 +289,7 @@ export default function ConfigPage() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
+    <PageContainer>
         <PageHeader
           title={t("config.title")}
           description={t("config.subtitle")}
@@ -677,7 +678,7 @@ export default function ConfigPage() {
             </div>
           );
         })()}
-    </div>
+    </PageContainer>
   );
 }
 

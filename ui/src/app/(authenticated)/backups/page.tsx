@@ -9,6 +9,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { PageContainer } from "@/components/ui/page-container";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
@@ -272,7 +273,7 @@ export default function BackupsPage() {
     actionError;
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
+    <PageContainer>
         <PageHeader
           title={t("backups.title")}
           description={t("backups.subtitle")}
@@ -389,6 +390,6 @@ export default function BackupsPage() {
         title={t("backups.delete_title")}
         description={t("backups.delete_description", { filename: deleteTarget ?? "" })}
       />
-    </div>
+    </PageContainer>
   );
 }

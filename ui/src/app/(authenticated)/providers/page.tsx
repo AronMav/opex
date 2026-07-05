@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { useTranslation } from "@/hooks/use-translation";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
+import { PageContainer } from "@/components/ui/page-container";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -283,7 +284,7 @@ export default function ProvidersPage() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col gap-8 p-4 md:p-6 lg:p-8 min-w-0 selection:bg-primary/20">
+    <PageContainer className="flex flex-col gap-8 min-w-0">
       {/* Header */}
       <PageHeader
         title={t("providers.title")}
@@ -470,6 +471,6 @@ export default function ProvidersPage() {
         title={t("providers.delete_title")}
         description={t("providers.delete_description")}
       />
-    </div>
+    </PageContainer>
   );
 }

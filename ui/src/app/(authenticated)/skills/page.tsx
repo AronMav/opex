@@ -15,6 +15,7 @@ import { SectionHeader } from "@/components/ui/section-header";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Card } from "@/components/ui/card";
+import { PageContainer } from "@/components/ui/page-container";
 import { IconTile } from "@/components/ui/icon-tile";
 import { Chip } from "@/components/ui/chip";
 import { SearchInput } from "@/components/ui/search-input";
@@ -466,7 +467,7 @@ export default function SkillsPage() {
 
   if (showForm) {
     return (
-      <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
+      <PageContainer>
         <div className="mx-auto max-w-3xl">
           <div className="mb-8 flex items-center gap-3">
             <Button variant="outline" size="sm" onClick={() => setShowForm(false)}>
@@ -552,7 +553,7 @@ export default function SkillsPage() {
             </Button>
           </div>
         </div>
-      </div>
+      </PageContainer>
     );
   }
 
@@ -581,7 +582,7 @@ export default function SkillsPage() {
   ];
 
   return (
-    <div className="flex flex-col gap-6 p-4 md:p-6 lg:p-8 selection:bg-primary/20">
+    <PageContainer className="flex flex-col gap-6">
       {/* Header */}
       <PageHeader
         title={t("skills.title")}
@@ -818,6 +819,6 @@ export default function SkillsPage() {
       {historySkill && (
         <SkillHistorySheet skillName={historySkill} onClose={() => setHistorySkill(null)} />
       )}
-    </div>
+    </PageContainer>
   );
 }

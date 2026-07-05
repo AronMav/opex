@@ -14,6 +14,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { PageContainer } from "@/components/ui/page-container";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { IconTile } from "@/components/ui/icon-tile";
 import { DataRow } from "@/components/ui/data-row";
@@ -172,7 +173,7 @@ export default function SecretsPage() {
 
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
+    <PageContainer>
         <PageHeader
           title={t("secrets.title")}
           description={t("secrets.subtitle")}
@@ -384,6 +385,6 @@ export default function SecretsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageContainer>
   );
 }

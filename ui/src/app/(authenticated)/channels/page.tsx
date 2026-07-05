@@ -12,6 +12,7 @@ import { useWsSubscription } from "@/hooks/use-ws-subscription";
 import type { ChannelRow } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { PageContainer } from "@/components/ui/page-container";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { IconTile } from "@/components/ui/icon-tile";
 import { DataRow } from "@/components/ui/data-row";
@@ -274,7 +275,7 @@ export default function ChannelsPage() {
   const formValid = !!formAgent && !!formName.trim() && configValid;
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
+    <PageContainer>
         <PageHeader
           title={t("channels.title")}
           description={t("channels.subtitle")}
@@ -453,6 +454,6 @@ export default function ChannelsPage() {
           title={t("channels.delete_title")}
           description={t("channels.delete_confirm", { name: deleteTarget?.display_name ?? "" })}
         />
-    </div>
+    </PageContainer>
   );
 }

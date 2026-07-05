@@ -15,6 +15,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { PageContainer } from "@/components/ui/page-container";
 import { IconTile } from "@/components/ui/icon-tile";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -346,7 +347,7 @@ parameters:
   if (editView?.kind === "mcp") {
     const isNew = editView.id === "new";
     return (
-      <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
+      <PageContainer>
         <div className="mx-auto max-w-2xl">
           <div className="mb-8 flex items-center gap-3">
             <Button variant="ghost" size="sm" onClick={cancelEdit}>
@@ -421,7 +422,7 @@ parameters:
             </Card>
           </form>
         </div>
-      </div>
+      </PageContainer>
     );
   }
 
@@ -430,7 +431,7 @@ parameters:
   if (editView?.kind === "yaml") {
     const isNewYaml = editView.id === "new";
     return (
-      <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
+      <PageContainer>
         <div className="mx-auto max-w-3xl">
           <div className="mb-8 flex items-center gap-3">
             <Button variant="ghost" size="sm" onClick={cancelEdit}>
@@ -472,7 +473,7 @@ parameters:
             </form>
           )}
         </div>
-      </div>
+      </PageContainer>
     );
   }
 
@@ -699,7 +700,7 @@ parameters:
   /* ── Tabbed view ─────────────────────────────────────────────────── */
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
+    <PageContainer>
       <div>
         {/* Header */}
         <PageHeader
@@ -829,6 +830,6 @@ parameters:
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }
