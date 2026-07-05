@@ -260,6 +260,9 @@ export function useSessionFailures(agent: string | null, limit = 20) {
     queryKey: qk.sessionFailures(agent, limit),
     queryFn: () =>
       apiGet<SessionFailuresResponse>(`/api/sessions/failures?${params.toString()}`),
+    // The backend requires a specific ?agent= (it refuses a bulk cross-agent
+    // list with 400); don't fire until one is chosen.
+    enabled: !!agent,
     refetchInterval: 30_000,
   })
 }
