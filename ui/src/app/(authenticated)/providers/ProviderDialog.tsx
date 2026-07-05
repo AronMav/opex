@@ -3,6 +3,7 @@
 import React from "react";
 import { useTranslation } from "@/hooks/use-translation";
 import { Button } from "@/components/ui/button";
+import { DialogTabs } from "@/components/ui/dialog-tabs";
 import {
   Dialog,
   DialogContent,
@@ -173,32 +174,13 @@ export function ProviderDialog(props: ProviderDialogProps) {
             </Select>
           </div>
 
-          {/* Tab bar — icons only on mobile, icons+labels on sm+ (mirrors the
-              agent edit dialog). Horizontal-scrolls instead of overflowing. */}
+          {/* Tab bar — icon-only on mobile, icon+label for the active tab */}
           {tabs.length > 1 && (
-            <div className="flex gap-0.5 overflow-x-auto scrollbar-none -mx-5 px-5 pb-0">
-              {tabs.map((id) => {
-                const { labelKey, icon: Icon } = TAB_META[id];
-                const isActive = activeTab === id;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setActiveTab(id)}
-                    title={t(labelKey)}
-                    className={`relative flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-medium whitespace-nowrap transition-colors rounded-t-md shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${
-                      isActive
-                        ? "text-foreground bg-background border-t border-l border-r border-border"
-                        : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
-                    }`}
-                  >
-                    <Icon className="h-3.5 w-3.5 shrink-0 sm:h-3 sm:w-3" />
-                    <span className="hidden sm:inline">{t(labelKey)}</span>
-                    {isActive && <span className="absolute bottom-0 left-0 right-0 h-px bg-background" />}
-                  </button>
-                );
-              })}
-            </div>
+            <DialogTabs
+              items={tabs.map((id) => ({ value: id, label: t(TAB_META[id].labelKey), icon: TAB_META[id].icon }))}
+              value={activeTab}
+              onChange={setActiveTab}
+            />
           )}
         </DialogHeader>
         <div className="border-t border-border bg-muted/10" />
