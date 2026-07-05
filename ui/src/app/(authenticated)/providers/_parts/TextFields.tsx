@@ -107,24 +107,6 @@ export function TextFields({
         />
       </Field>
 
-      {/* Provider Type */}
-      <div className="space-y-1.5">
-        <label htmlFor={typeId} className="text-xs font-medium text-muted-foreground">
-          {t("providers.field_type")} <span className="text-destructive">*</span>
-        </label>
-        <Select value={form.provider_type} onValueChange={onSetProviderType}>
-          <SelectTrigger id={typeId} className="text-sm">
-            <SelectValue placeholder={t("providers.field_type_placeholder")} />
-          </SelectTrigger>
-          <SelectContent>
-            {providerTypes.map((pt) => (
-              <SelectItem key={pt.id} value={pt.id} className="text-sm">
-                {pt.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
 
       {/* API Key */}
       <Field
@@ -214,6 +196,26 @@ export function TextFields({
       </>)}
 
       {activeTab === "advanced" && (<>
+      {/* Provider Type — auto-set from the preset / defaults to openai_compat;
+          here for override only. */}
+      <div className="space-y-1.5">
+        <label htmlFor={typeId} className="text-xs font-medium text-muted-foreground">
+          {t("providers.field_type")}
+        </label>
+        <Select value={form.provider_type} onValueChange={onSetProviderType}>
+          <SelectTrigger id={typeId} className="text-sm">
+            <SelectValue placeholder={t("providers.field_type_placeholder")} />
+          </SelectTrigger>
+          <SelectContent>
+            {providerTypes.map((pt) => (
+              <SelectItem key={pt.id} value={pt.id} className="text-sm">
+                {pt.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
       {/* Timeouts — hidden for CLI providers */}
       {!isCli && (
         <TimeoutsSection
