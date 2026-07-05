@@ -290,7 +290,7 @@ export default function ProvidersPage() {
         title={t("providers.title")}
         description={t("providers.subtitle")}
         actions={
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
             <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-1.5">
               <RefreshCw className="h-4 w-4" />
               {t("common.refresh")}
