@@ -222,6 +222,42 @@ export async function addApprovalAllowlist(
   }
 }
 
+/** Create (or fetch existing) a read-only share link for a session. Returns the
+ *  token; the caller builds `${origin}/share/${token}`. */
+export async function shareSession(
+  sessionId: string,
+  agent: string,
+): Promise<{ ok: boolean; token?: string; error?: string }> {
+  try {
+    const resp = await apiFetch(
+      `/api/sessions/${sessionId}/share?agent=${encodeURIComponent(agent)}`,
+      { method: "POST" },
+    );
+    if (!resp.ok) return { ok: false, error: await extractError(resp) };
+    const data = (await resp.json()) as { token: string };
+    return { ok: true, token: data.token };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Unknown error" };
+  }
+}
+
+/** Revoke a session's share link. */
+export async function unshareSession(
+  sessionId: string,
+  agent: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const resp = await apiFetch(
+      `/api/sessions/${sessionId}/share?agent=${encodeURIComponent(agent)}`,
+      { method: "DELETE" },
+    );
+    if (!resp.ok) return { ok: false, error: await extractError(resp) };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Unknown error" };
+  }
+}
+
 export async function submitClarify(
   clarifyId: string,
   response: string,

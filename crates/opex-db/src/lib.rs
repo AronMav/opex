@@ -7,6 +7,7 @@ pub mod session_failures;
 pub mod session_status;
 pub mod session_timeline;
 pub mod sessions;
+pub mod shares;
 pub mod sys_flags;
 pub mod usage;
 pub use reentry_mode::ReentryMode;
