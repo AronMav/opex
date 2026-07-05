@@ -22,12 +22,39 @@ fn reject_dangerous_ports(url: &str) -> Result<()> {
     Ok(())
 }
 
-/// A discovered model from a provider.
-#[derive(Debug, Clone, Serialize)]
+/// A discovered model from a provider, enriched with catalog metadata.
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ModelInfo {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owned_by: Option<String>,
+    /// Catalog-resolved context window (tokens).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+    /// Accepts image/file attachments (vision).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
+    /// Extended reasoning / chain-of-thought.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<bool>,
+    /// Function calling.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<bool>,
+}
+
+/// Fill each model's catalog metadata (context window + capabilities) in place,
+/// looked up by `(provider_type, model_id)`. No-op fields when the catalog
+/// doesn't know the model.
+pub fn enrich_from_catalog(provider_type: &str, models: &mut [ModelInfo]) {
+    use crate::agent::providers::catalog;
+    for m in models.iter_mut() {
+        m.context_window = catalog::global_context(provider_type, &m.id);
+        if let Some(c) = catalog::global_caps(provider_type, &m.id) {
+            m.vision = Some(c.attachment);
+            m.reasoning = Some(c.reasoning);
+            m.tools = Some(c.tool_call);
+        }
+    }
 }
 
 // ── Discovery logic ──────────────────────────────────────────────────────────
@@ -79,7 +106,7 @@ async fn fetch_openai_models(url: &str, api_key: Option<&str>) -> Result<Vec<Mod
                 .filter_map(|m| {
                     let id = m["id"].as_str()?.to_string();
                     let owned_by = m["owned_by"].as_str().map(std::string::ToString::to_string);
-                    Some(ModelInfo { id, owned_by })
+                    Some(ModelInfo { id, owned_by, ..Default::default() })
                 })
                 .collect()
         })
@@ -117,7 +144,7 @@ async fn fetch_anthropic_models(api_key: Option<&str>, base_url: Option<&str>) -
                 .filter_map(|m| {
                     let id = m["id"].as_str()?.to_string();
                     let display = m["display_name"].as_str().map(std::string::ToString::to_string);
-                    Some(ModelInfo { id, owned_by: display.or(Some("anthropic".into())) })
+                    Some(ModelInfo { id, owned_by: display.or(Some("anthropic".into())), ..Default::default() })
                 })
                 .collect()
         })
@@ -154,7 +181,7 @@ async fn fetch_google_models(api_key: Option<&str>, base_url: Option<&str>) -> R
                     let name = m["name"].as_str()?;
                     let id = name.strip_prefix("models/").unwrap_or(name).to_string();
                     let display = m["displayName"].as_str().map(std::string::ToString::to_string);
-                    Some(ModelInfo { id, owned_by: display.or(Some("google".into())) })
+                    Some(ModelInfo { id, owned_by: display.or(Some("google".into())), ..Default::default() })
                 })
                 // Filter to generative models only (skip embedding models)
                 .filter(|m| m.id.starts_with("gemini"))

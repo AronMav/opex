@@ -475,24 +475,29 @@ pub(crate) async fn api_unified_provider_models(
     )
     .await;
 
-    match &models {
-        Ok(m) if !m.is_empty() => {
+    let pt = provider.provider_type.clone();
+    match models {
+        Ok(mut m) if !m.is_empty() => {
+            crate::agent::model_discovery::enrich_from_catalog(&pt, &mut m);
             (StatusCode::OK, Json(json!({ "models": m }))).into_response()
         }
-        _ => {
+        other => {
             // For CLI providers: return hardcoded fallback models from preset
-            if let Some(preset) = crate::agent::cli_backend::find_preset(&provider.provider_type) {
-                let fallback: Vec<crate::agent::model_discovery::ModelInfo> = preset.default_models
+            if let Some(preset) = crate::agent::cli_backend::find_preset(&pt) {
+                let mut fallback: Vec<crate::agent::model_discovery::ModelInfo> = preset.default_models
                     .iter()
                     .map(|id| crate::agent::model_discovery::ModelInfo {
                         id: (*id).to_string(),
                         owned_by: Some(preset.models_provider.to_string()),
+                        ..Default::default()
                     })
                     .collect();
+                crate::agent::model_discovery::enrich_from_catalog(&pt, &mut fallback);
                 (StatusCode::OK, Json(json!({ "models": fallback, "fallback": true }))).into_response()
             } else {
                 // Non-CLI providers: return whatever we got (empty list or error-default)
-                let m = models.unwrap_or_default();
+                let mut m = other.unwrap_or_default();
+                crate::agent::model_discovery::enrich_from_catalog(&pt, &mut m);
                 (StatusCode::OK, Json(json!({ "models": m }))).into_response()
             }
         }

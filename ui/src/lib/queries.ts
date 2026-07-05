@@ -217,6 +217,30 @@ export function useProviderModels(id: string | null) {
   })
 }
 
+/** A discovered model enriched with catalog metadata (context window + caps). */
+export interface ProviderModel {
+  id: string
+  owned_by?: string
+  context_window?: number
+  vision?: boolean
+  reasoning?: boolean
+  tools?: boolean
+}
+
+/** Same endpoint/queryKey as {@link useProviderModels} (shared fetch), but keeps
+ *  the full per-model objects so selectors can show context-window + capability
+ *  badges. */
+export function useProviderModelsDetailed(id: string | null) {
+  return useQuery({
+    queryKey: qk.providerModels(id ?? ""),
+    queryFn: () => apiGet<{ models: Array<string | ProviderModel> }>(`/api/providers/${id}/models`),
+    select: (d): ProviderModel[] => d.models.map((m) => (typeof m === "string" ? { id: m } : m)),
+    enabled: !!id,
+    retry: false,
+    staleTime: 60_000,
+  })
+}
+
 export function useApprovals() {
   return useQuery({
     queryKey: qk.approvals,

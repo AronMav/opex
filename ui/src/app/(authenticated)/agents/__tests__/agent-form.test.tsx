@@ -45,6 +45,7 @@ vi.mock("@/stores/auth-store", () => ({
 vi.mock("@/lib/queries", () => ({
   useProviders: () => ({ data: [] }),
   useProviderModels: () => ({ data: [], isLoading: false, refetch: vi.fn() }),
+  useProviderModelsDetailed: () => ({ data: [], isLoading: false, refetch: vi.fn() }),
 }));
 
 vi.mock("./RoutingRulesEditor", () => ({
