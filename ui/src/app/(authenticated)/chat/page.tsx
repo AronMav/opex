@@ -45,6 +45,7 @@ import {
   Search,
   Trash2,
   Pencil,
+  Share2,
   PanelRight,
   MessageSquare,
 } from "lucide-react";
@@ -59,7 +60,7 @@ import { CompactChainBanner } from "@/components/chat/CompactChainBanner";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { useSessions, useAgents, qk } from "@/lib/queries";
 import { queryClient } from "@/lib/query-client";
-import { assertToken } from "@/lib/api";
+import { assertToken, shareSession } from "@/lib/api";
 import type { SessionRow } from "@/types/api";
 import { TaskPlanPanel } from "@/components/TaskPlanPanel";
 
@@ -329,6 +330,7 @@ export default function ChatPage() {
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [sharingSessionId, setSharingSessionId] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState("");
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -410,6 +412,30 @@ export default function ChatPage() {
       setDeletingSessionId(null);
     }
   }, [t]);
+
+  const handleShareSession = useCallback(async (e: React.MouseEvent, sessionId: string) => {
+    e.stopPropagation();
+    setSharingSessionId(sessionId);
+    try {
+      const res = await shareSession(sessionId, currentAgent);
+      if (!res.ok || !res.token) {
+        toast.error(res.error ?? t("chat.share_error"));
+        return;
+      }
+      const url = `${window.location.origin}/share?token=${res.token}`;
+      try {
+        await navigator.clipboard.writeText(url);
+        toast.success(t("chat.share_copied"));
+      } catch {
+        // Clipboard blocked (non-HTTPS / permissions) — still surface the link.
+        toast.success(t("chat.share_created"), { description: url });
+      }
+    } catch {
+      toast.error(t("chat.share_error"));
+    } finally {
+      setSharingSessionId(null);
+    }
+  }, [currentAgent, t]);
 
   const handleNewChat = useCallback(() => {
     useChatStore.getState().newChat();
@@ -716,6 +742,16 @@ export default function ChatPage() {
                           title={t("chat.rename_hint")}
                         >
                           <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={(e) => handleShareSession(e, s.id)}
+                          disabled={sharingSessionId === s.id}
+                          className="text-muted-foreground/50 hover:text-foreground"
+                          title={t("chat.share_session")}
+                        >
+                          <Share2 className="h-3.5 w-3.5" />
                         </Button>
                         <Button
                           variant="ghost"

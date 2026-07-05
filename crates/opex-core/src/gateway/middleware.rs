@@ -201,7 +201,9 @@ pub(crate) async fn auth_middleware(
         "/api/triggers/email/push",
         "/api/csp-report",
     ];
-    const PUBLIC_PREFIX: &[&str] = &["/webhook/", "/api/uploads/", "/workspace-files/"];
+    // /api/shares/*         — read-only shared session snapshot; the unguessable
+    //                         token in the path is the security boundary
+    const PUBLIC_PREFIX: &[&str] = &["/webhook/", "/api/uploads/", "/workspace-files/", "/api/shares/"];
 
     if PUBLIC_EXACT.contains(&path) || PUBLIC_PREFIX.iter().any(|p| path.starts_with(p)) {
         return next.run(req).await;

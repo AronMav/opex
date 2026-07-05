@@ -22,6 +22,8 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/sessions/stuck", get(api_stuck_sessions))
         .route("/api/sessions/{id}", get(api_get_session).delete(api_delete_session).patch(api_patch_session))
         .route("/api/sessions/{id}/compact", post(api_compact_session))
+        .route("/api/sessions/{id}/share", post(api_share_session).delete(api_unshare_session))
+        .route("/api/shares/{token}", get(api_get_shared))
         .route("/api/sessions/{id}/export", get(api_export_session))
         .route("/api/sessions/{id}/invite", post(api_invite_to_session))
         .route("/api/sessions/{id}/messages", get(api_session_messages))
@@ -640,6 +642,112 @@ pub(crate) async fn api_compact_session(
             ApiError::Internal(e.to_string()).into_response()
         }
     }
+}
+
+// ── Session sharing (read-only public links) ────────────────────────────────
+
+/// POST /api/sessions/{id}/share?agent=xxx — create (or return existing)
+/// read-only share link. Returns the unguessable token; the caller builds the
+/// full URL. Ownership is verified via `?agent=` (same IDOR guard as the rest).
+pub(crate) async fn api_share_session(
+    State(infra): State<InfraServices>,
+    Path(id): Path<uuid::Uuid>,
+    Query(q): Query<SessionsQuery>,
+) -> impl IntoResponse {
+    let agent = match q.agent.as_deref() {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
+    if let Err(resp) = verify_session_agent(&infra.db, id, agent).await {
+        return resp;
+    }
+    // 256-bit unguessable token — the security boundary for the public read.
+    let token = format!("{:032x}{:032x}", rand::random::<u128>(), rand::random::<u128>());
+    match crate::db::shares::create_or_get_share(&infra.db, id, &token, agent).await {
+        Ok(tok) => Json(json!({ "token": tok, "path": format!("/share?token={tok}") })).into_response(),
+        Err(e) => ApiError::Internal(e.to_string()).into_response(),
+    }
+}
+
+/// DELETE /api/sessions/{id}/share?agent=xxx — revoke the share link.
+pub(crate) async fn api_unshare_session(
+    State(infra): State<InfraServices>,
+    Path(id): Path<uuid::Uuid>,
+    Query(q): Query<SessionsQuery>,
+) -> impl IntoResponse {
+    let agent = match q.agent.as_deref() {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
+    if let Err(resp) = verify_session_agent(&infra.db, id, agent).await {
+        return resp;
+    }
+    match crate::db::shares::delete_share_for_session(&infra.db, id).await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => ApiError::Internal(e.to_string()).into_response(),
+    }
+}
+
+/// GET /api/shares/{token} — PUBLIC read-only snapshot (auth-exempt; the token
+/// is the security boundary). Returns a sanitized transcript: user/assistant/
+/// tool turns with text + tool *names* only (no args, no system prompts, no
+/// reasoning) so a shared link can't leak internal context or secrets.
+pub(crate) async fn api_get_shared(
+    State(infra): State<InfraServices>,
+    Path(token): Path<String>,
+) -> impl IntoResponse {
+    let session_id = match crate::db::shares::session_for_token(&infra.db, &token).await {
+        Ok(Some(sid)) => sid,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(json!({"error": "share not found"}))).into_response(),
+        Err(e) => return ApiError::Internal(e.to_string()).into_response(),
+    };
+    let session = match sessions::get_session(&infra.db, session_id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(json!({"error": "session not found"}))).into_response(),
+        Err(e) => return ApiError::Internal(e.to_string()).into_response(),
+    };
+    let rows = match sessions::load_messages(&infra.db, session_id, Some(500)).await {
+        Ok(r) => r,
+        Err(e) => return ApiError::Internal(e.to_string()).into_response(),
+    };
+
+    let messages: Vec<Value> = rows
+        .iter()
+        .filter(|m| m.role != "system") // never expose system prompts
+        .map(|m| {
+            // Tool *names* only — args may carry data/secrets the sharer didn't
+            // intend to publish.
+            let tools: Vec<String> = m
+                .tool_calls
+                .as_ref()
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|c| {
+                            c.get("function")
+                                .and_then(|f| f.get("name"))
+                                .or_else(|| c.get("name"))
+                                .and_then(|n| n.as_str())
+                                .map(String::from)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            json!({
+                "role": m.role,
+                "content": m.content,
+                "tools": tools,
+                "created_at": m.created_at,
+            })
+        })
+        .collect();
+
+    Json(json!({
+        "title": session.title,
+        "agent": session.agent_id,
+        "messages": messages,
+    }))
+    .into_response()
 }
 
 // ── Session Patch (rename) ──

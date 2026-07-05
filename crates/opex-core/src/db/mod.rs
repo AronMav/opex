@@ -5,6 +5,7 @@ pub use opex_db::notifications;
 pub use opex_db::session_failures;
 pub use opex_db::session_timeline;
 pub use opex_db::sessions;
+pub use opex_db::shares;
 pub use opex_db::usage;
 
 // ── Remaining modules (not extracted) ───────────────────────────────────
