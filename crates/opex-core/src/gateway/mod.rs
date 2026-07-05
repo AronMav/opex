@@ -130,7 +130,8 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(handlers::files::routes())           // /api/files/{upload_id}/actions + /run
         .merge(handlers::handlers_admin::routes())  // /api/handlers, /api/handlers/allowlist (File Handlers tab)
         .merge(handlers::llm::routes())              // /api/llm/complete (raw LLM, auth-required)
-        .merge(handlers::internal_creds::routes());  // /api/internal/its-credentials (ITS 1C login, auth-required)
+        .merge(handlers::internal_creds::routes())    // /api/internal/its-credentials (ITS 1C login, auth-required)
+        .merge(handlers::sandbox::routes());          // /api/sandbox/tool-call, /api/sandbox/tool-search (codemode, loopback + HMAC)
 
     #[cfg(feature = "gemini-cloudcode")]
     let app = app.merge(handlers::google_auth::routes()); // /api/auth/google/*

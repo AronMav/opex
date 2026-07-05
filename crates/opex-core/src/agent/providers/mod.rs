@@ -48,6 +48,18 @@ pub(crate) use claude_cli::ClaudeCliProvider;
 // Shared HTTP retry/backoff helpers used by openai/anthropic/google impls.
 pub(crate) mod http;
 
+// HTTP transport seam (Real + Cassette). Used by all HTTP providers.
+pub(crate) mod transport;
+pub(crate) use transport::{HttpTransport, RealTransport};
+
+// Cassette format (record/replay) + secret redaction for offline provider tests.
+#[cfg(test)]
+pub(crate) mod cassette;
+#[cfg(test)]
+pub(crate) mod redaction;
+#[cfg(test)]
+pub(crate) mod cassette_transport;
+
 pub mod timeouts;
 pub use timeouts::TimeoutsConfig;
 
@@ -336,14 +348,20 @@ pub(crate) async fn resolve_credential(
     None
 }
 
-/// Build request + streaming HTTP clients from the timeout config.
-/// Request client has both `connect_timeout` and `request_timeout`.
-/// Streaming client has only `connect_timeout` — request body is governed by
-/// `stream_inactivity_secs` / `stream_max_duration_secs` (spec §4.2.1).
+/// Build request + streaming HTTP transports from the timeout config.
+///
+/// Returns a pair of [`HttpTransport`] impls backed by [`RealTransport`]:
+/// - **request transport**: `connect_timeout` + `request_timeout` — for
+///   non-streaming `post_json` calls.
+/// - **streaming transport**: `connect_timeout` only — the body timeout is
+///   governed by `stream_inactivity_secs` / `stream_max_duration_secs` via
+///   `stream_with_cancellation` (above the seam).
 ///
 /// Consumed by `*::new_from_row` in each provider impl — threaded from
 /// `build_provider(row, timeouts, ...)`.
-pub(crate) fn build_provider_clients(timeouts: &TimeoutsConfig) -> (reqwest::Client, reqwest::Client) {
+pub(crate) fn build_provider_clients(
+    timeouts: &TimeoutsConfig,
+) -> (Arc<dyn HttpTransport>, Arc<dyn HttpTransport>) {
     let connect = std::time::Duration::from_secs(timeouts.connect_secs);
     let request_timeout = if timeouts.request_secs == 0 {
         // 0 = no limit (legacy convention preserved)
@@ -360,7 +378,10 @@ pub(crate) fn build_provider_clients(timeouts: &TimeoutsConfig) -> (reqwest::Cli
         .connect_timeout(connect)
         .build()
         .expect("streaming client builds");
-    (request_client, streaming_client)
+    (
+        Arc::new(RealTransport::new(request_client)),
+        Arc::new(RealTransport::new(streaming_client)),
+    )
 }
 
 // ── OpenAI wire format helpers ──────────────────────────────────────────────
@@ -979,5 +1000,262 @@ mod call_options_tests {
     fn call_options_default_thinking_level_is_zero() {
         let opts = CallOptions::default();
         assert_eq!(opts.thinking_level, 0);
+    }
+}
+
+// ── Cassette-based provider tests ────────────────────────────────────────────
+//
+// Replay real recorded HTTP traffic through the provider SSE parsers, asserting
+// stream parsing, tool-call accumulation, reasoning_content, usage breakdown,
+// and error classification — all offline. Cassettes live under
+// `tests/cassettes/{provider}/{scenario}.json` and are committed.
+//
+// In CI (`CI=true`), replay is forced and a missing cassette fails. To refresh:
+// `OPEX_CASSETTE=record cargo test -p opex-core --bin opex-core cassette_provider_tests -- <name>`
+// (requires real provider API keys in env — the recorder redacts them).
+
+#[cfg(test)]
+mod cassette_provider_tests {
+    use super::*;
+    use super::cassette_transport::CassetteTransport;
+    use opex_types::ToolDefinition;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    fn cassettes_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/cassettes")
+    }
+
+    fn cassette_path(provider: &str, scenario: &str) -> std::path::PathBuf {
+        cassettes_dir().join(provider).join(format!("{scenario}.json"))
+    }
+
+    fn make_openai_row(model: &str) -> crate::db::providers::ProviderRow {
+        crate::db::providers::ProviderRow {
+            id: Uuid::nil(),
+            name: "test-openai".into(),
+            category: "text".into(),
+            provider_type: "openai".into(),
+            base_url: Some("https://api.openai.com".into()),
+            default_model: Some(model.into()),
+            enabled: true,
+            options: json!({}),
+            notes: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn make_anthropic_row(model: &str) -> crate::db::providers::ProviderRow {
+        crate::db::providers::ProviderRow {
+            id: Uuid::nil(),
+            name: "test-anthropic".into(),
+            category: "text".into(),
+            provider_type: "anthropic".into(),
+            base_url: Some("https://api.anthropic.com".into()),
+            default_model: Some(model.into()),
+            enabled: true,
+            options: json!({}),
+            notes: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn user_msg(content: &str) -> opex_types::Message {
+        opex_types::Message {
+            role: opex_types::MessageRole::User,
+            content: content.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }
+    }
+
+    // ── OpenAI: simple streaming completion ───────────────────────────────────
+
+    #[tokio::test]
+    #[serial_test::serial(cassette_mode)]
+    async fn openai_simple_completion_replay() {
+        let cassette = cassette_path("openai", "simple-completion");
+        let transport = Arc::new(
+            CassetteTransport::new(&cassette)
+                .expect("cassette loads (run OPEX_CASSETTE=record to refresh)"),
+        );
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let provider = OpenAiCompatibleProvider::new_from_row(
+            &make_openai_row("gpt-4o-mini"),
+            secrets,
+            TimeoutsConfig::default(),
+            cancel,
+            timeouts::ProviderOptions::default(),
+            ProviderOverrides::default(),
+        )
+        .unwrap()
+        .with_transports(transport.clone(), transport.clone());
+
+        let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel(1024);
+        let msgs = vec![user_msg("Say hello in one word.")];
+        let resp = provider
+            .chat_stream(&msgs, &[], chunk_tx, Default::default())
+            .await
+            .expect("chat_stream succeeds");
+
+        let mut streamed = String::new();
+        while let Ok(chunk) = chunk_rx.try_recv() {
+            streamed.push_str(&chunk);
+        }
+        assert_eq!(streamed, "Hello!");
+
+        assert_eq!(resp.content, "Hello!");
+        assert!(resp.tool_calls.is_empty(), "no tool calls expected");
+        let usage = resp.usage.expect("usage present");
+        assert_eq!(usage.input_tokens, 8);
+        assert_eq!(usage.output_tokens, 2);
+
+        transport.finalize().await.expect("all interactions consumed");
+    }
+
+    // ── OpenAI: tool-call with reasoning_content (DeepSeek/mimo style) ────────
+
+    #[tokio::test]
+    #[serial_test::serial(cassette_mode)]
+    async fn openai_tool_call_with_reasoning_replay() {
+        let cassette = cassette_path("openai", "tool-call-reasoning");
+        let transport = Arc::new(
+            CassetteTransport::new(&cassette)
+                .expect("cassette loads (run OPEX_CASSETTE=record to refresh)"),
+        );
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let provider = OpenAiCompatibleProvider::new_from_row(
+            &make_openai_row("deepseek-reasoner"),
+            secrets,
+            TimeoutsConfig::default(),
+            cancel,
+            timeouts::ProviderOptions::default(),
+            ProviderOverrides::default(),
+        )
+        .unwrap()
+        .with_transports(transport.clone(), transport.clone());
+
+        let tools = vec![ToolDefinition {
+            name: "get_weather".into(),
+            description: "Get weather".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"]
+            }),
+        }];
+
+        let (chunk_tx, _chunk_rx) = tokio::sync::mpsc::channel(1024);
+        let msgs = vec![user_msg("What is the weather in Paris?")];
+        let resp = provider
+            .chat_stream(&msgs, &tools, chunk_tx, Default::default())
+            .await
+            .expect("chat_stream succeeds");
+
+        assert_eq!(resp.tool_calls.len(), 1, "one tool call expected");
+        let tc = &resp.tool_calls[0];
+        assert_eq!(tc.name, "get_weather");
+        assert_eq!(tc.arguments, json!({"city": "Paris"}));
+
+        assert!(
+            !resp.thinking_blocks.is_empty(),
+            "reasoning_content should produce thinking blocks"
+        );
+        let reasoning: String = resp
+            .thinking_blocks
+            .iter()
+            .map(|tb| tb.thinking.as_str())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            reasoning.contains("get_weather"),
+            "reasoning should mention the tool: {reasoning}"
+        );
+
+        let usage = resp.usage.expect("usage present");
+        assert_eq!(usage.input_tokens, 50);
+        assert_eq!(usage.output_tokens, 30);
+        assert_eq!(usage.reasoning_tokens, Some(15));
+
+        transport.finalize().await.expect("all interactions consumed");
+    }
+
+    // ── Anthropic: 400 context overflow → error classification ───────────────
+
+    #[tokio::test]
+    #[serial_test::serial(cassette_mode)]
+    async fn anthropic_context_overflow_400_replay() {
+        let cassette = cassette_path("anthropic", "error-400-context-overflow");
+        let transport = Arc::new(
+            CassetteTransport::new(&cassette)
+                .expect("cassette loads (run OPEX_CASSETTE=record to refresh)"),
+        );
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let provider = AnthropicProvider::new_from_row(
+            &make_anthropic_row("claude-3-5-sonnet"),
+            secrets,
+            TimeoutsConfig::default(),
+            cancel,
+            timeouts::ProviderOptions::default(),
+            ProviderOverrides::default(),
+        )
+        .unwrap()
+        .with_transports(transport.clone(), transport.clone());
+
+        let msgs = vec![user_msg("too long context")];
+        let result = provider.chat(&msgs, &[], Default::default()).await;
+
+        let err = result.expect_err("400 should produce an error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("400") || msg.contains("API error"),
+            "expected HTTP 400 in error, got: {msg}"
+        );
+
+        transport.finalize().await.expect("all interactions consumed");
+    }
+
+    // ── Anthropic: 429 then 200 (retry through unified seam) ─────────────────
+
+    #[tokio::test(start_paused = true)]
+    #[serial_test::serial(cassette_mode)]
+    async fn anthropic_429_retries_then_succeeds_replay() {
+        let cassette = cassette_path("anthropic", "error-429-rate-limit");
+        let transport = Arc::new(
+            CassetteTransport::new(&cassette)
+                .expect("cassette loads (run OPEX_CASSETTE=record to refresh)"),
+        );
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let provider = AnthropicProvider::new_from_row(
+            &make_anthropic_row("claude-3-5-sonnet"),
+            secrets,
+            TimeoutsConfig::default(),
+            cancel,
+            timeouts::ProviderOptions::default(),
+            ProviderOverrides::default(),
+        )
+        .unwrap()
+        .with_transports(transport.clone(), transport.clone());
+
+        let msgs = vec![user_msg("hi")];
+        let resp = provider
+            .chat(&msgs, &[], Default::default())
+            .await
+            .expect("should succeed after retry");
+
+        assert_eq!(resp.content, "Hello!");
+        assert_eq!(resp.usage.as_ref().unwrap().input_tokens, 5);
+        assert_eq!(resp.usage.as_ref().unwrap().output_tokens, 3);
+
+        transport.finalize().await.expect("all interactions consumed");
     }
 }

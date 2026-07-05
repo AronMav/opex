@@ -45,15 +45,21 @@ impl OpenAiCompatibleProvider {
 
         let api_key = self.resolve_api_key().await;
         let effective_url = self.resolve_url().await;
-        let body_text = crate::agent::providers::http::retry_http_post(
-            &self.client,
-            &effective_url,
-            &body,
-            &api_key,
-            &self.provider_name,
-            crate::agent::providers::http::RETRYABLE_OPENAI,
-            self.max_retries,
-        ).await?;
+        let auth_headers: Vec<(String, String)> = if api_key.is_empty() {
+            Vec::new()
+        } else {
+            vec![("Authorization".to_string(), format!("Bearer {api_key}"))]
+        };
+        let body_text = self.client
+            .post_json(
+                &effective_url,
+                &body,
+                &auth_headers,
+                &self.provider_name,
+                crate::agent::providers::http::RETRYABLE_OPENAI,
+                self.max_retries,
+            )
+            .await?;
         let api_resp: ChatCompletionResponse = serde_json::from_str(&body_text)
             .map_err(|e| {
                 let preview_len = body_text.len().min(500);
@@ -86,20 +92,30 @@ impl OpenAiCompatibleProvider {
                 );
                 tokio::time::sleep(std::time::Duration::from_secs(*delay)).await;
 
-                let mut req = self.client.post(&effective_url).json(&body);
-                if !retry_key.is_empty() {
-                    req = req.bearer_auth(&retry_key);
-                }
-                match req.send().await {
-                    Ok(resp) => {
-                        if let Ok(text) = resp.text().await {
-                            if let Ok(parsed) = serde_json::from_str::<ChatCompletionResponse>(&text)
-                                && let Some(c) = parsed.choices.into_iter().next() {
-                                    found = Some(c);
-                                    break;
-                                }
-                            last_err = format!("empty choices (attempt {})", attempt + 1);
-                        }
+                // Route through the transport (and cassette) instead of
+                // discovery_client — this preserves retry semantics, tracing,
+                // and cassette replay (Provider Issue 4/5). max_retries=1 means
+                // one HTTP attempt per empty-choices retry (no nested retry).
+                let retry_auth: Vec<(String, String)> = if retry_key.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![("Authorization".to_string(), format!("Bearer {retry_key}"))]
+                };
+                match self.client.post_json(
+                    &effective_url,
+                    &body,
+                    &retry_auth,
+                    &self.provider_name,
+                    crate::agent::providers::http::RETRYABLE_OPENAI,
+                    1, // single attempt — no nested retry
+                ).await {
+                    Ok(text) => {
+                        if let Ok(parsed) = serde_json::from_str::<ChatCompletionResponse>(&text)
+                            && let Some(c) = parsed.choices.into_iter().next() {
+                                found = Some(c);
+                                break;
+                            }
+                        last_err = format!("empty choices (attempt {})", attempt + 1);
                     }
                     Err(e) => { last_err = e.to_string(); }
                 }

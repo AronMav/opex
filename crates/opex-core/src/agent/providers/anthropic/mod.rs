@@ -1,7 +1,7 @@
 //! Anthropic Messages API provider —
 //! extracted from providers.rs for readability.
 
-use super::{async_trait, Arc, SecretsManager, ModelOverride, Message, ToolDefinition, MessageRole, LlmProvider, LlmResponse, Result, mpsc, CallOptions};
+use super::{async_trait, Arc, SecretsManager, ModelOverride, Message, ToolDefinition, MessageRole, LlmProvider, LlmResponse, Result, mpsc, CallOptions, HttpTransport};
 
 mod thinking;
 
@@ -20,8 +20,8 @@ mod request;
 // ── Anthropic Messages API Provider ──────────────────────────────────────────
 
 pub struct AnthropicProvider {
-    client: reqwest::Client,
-    streaming_client: reqwest::Client,
+    client: Arc<dyn HttpTransport>,
+    streaming_client: Arc<dyn HttpTransport>,
     base_url: String,
     api_key_name: String,
     /// Vault scope for `LLM_CREDENTIALS` (provider UUID). When set, checked first.
@@ -108,6 +108,19 @@ impl AnthropicProvider {
         self
     }
 
+    /// Test-only: replace both HTTP transports (e.g. with a `CassetteTransport`
+    /// for offline provider tests). Not compiled in production.
+    #[cfg(test)]
+    pub(crate) fn with_transports(
+        mut self,
+        client: Arc<dyn super::HttpTransport>,
+        streaming_client: Arc<dyn super::HttpTransport>,
+    ) -> Self {
+        self.client = client;
+        self.streaming_client = streaming_client;
+        self
+    }
+
     /// Minimal constructor for unit tests only — avoids depending on the
     /// deleted `new()` / `with_options()` paths. Not compiled in production.
     #[cfg(test)]
@@ -167,19 +180,22 @@ impl LlmProvider for AnthropicProvider {
 
         let api_key = self.resolve_api_key().await;
 
-        let body_text = crate::agent::providers::http::retry_http_post_custom(
-            &self.client, &url, &body, "anthropic",
-            crate::agent::providers::http::RETRYABLE_ANTHROPIC,
-            self.max_retries,
-            |req| {
-                let req = req.header("anthropic-version", "2023-06-01");
-                if let Some(ref key) = api_key
-                    && !key.is_empty() {
-                        return req.header("x-api-key", key.as_str());
-                    }
-                req
-            },
-        ).await?;
+        let mut auth_headers = vec![("anthropic-version".to_string(), "2023-06-01".to_string())];
+        if let Some(ref key) = api_key
+            && !key.is_empty() {
+                auth_headers.push(("x-api-key".to_string(), key.clone()));
+            }
+
+        let body_text = self.client
+            .post_json(
+                &url,
+                &body,
+                &auth_headers,
+                "anthropic",
+                crate::agent::providers::http::RETRYABLE_ANTHROPIC,
+                self.max_retries,
+            )
+            .await?;
 
         let api_resp: AnthropicResponse = serde_json::from_str(&body_text).map_err(|e| {
             let preview_len = body_text.len().min(500);
@@ -230,19 +246,25 @@ impl LlmProvider for AnthropicProvider {
         tracing::info!(provider = "anthropic", model = %self.model, "calling Anthropic API (streaming)");
 
         let start = std::time::Instant::now();
-        let mut req = self.streaming_client
-            .post(&url)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&body);
-        if let Some(key) = self.resolve_api_key().await
-            && !key.is_empty()
+        let api_key = self.resolve_api_key().await;
+        let mut auth_headers = vec![("anthropic-version".to_string(), "2023-06-01".to_string())];
+        if let Some(ref key) = api_key
+            && !key.is_empty() {
+                auth_headers.push(("x-api-key".to_string(), key.clone()));
+            }
+        let resp = match self.streaming_client
+            .post_json_stream(
+                &url,
+                &body,
+                &auth_headers,
+                "anthropic",
+                crate::agent::providers::http::RETRYABLE_ANTHROPIC,
+                self.max_retries,
+            )
+            .await
         {
-            req = req.header("x-api-key", key.as_str());
-        }
-        let resp = match req.send().await {
             Ok(r) => r,
-            Err(e) => {
+            Err(super::http::SendError::Network(e)) => {
                 return Err(anyhow::Error::new(super::classify_reqwest_err(
                     e,
                     "anthropic",
@@ -250,33 +272,25 @@ impl LlmProvider for AnthropicProvider {
                     self.timeouts.request_secs,
                 )));
             }
+            Err(super::http::SendError::Http { status: code, body: err_text, retry_after }) => {
+                if code == 401 || code == 403 {
+                    return Err(anyhow::Error::new(crate::agent::providers::LlmCallError::AuthError {
+                        provider: "anthropic".to_string(),
+                        status: code,
+                    }));
+                }
+                if code >= 500 {
+                    return Err(anyhow::Error::new(crate::agent::providers::LlmCallError::Server5xx {
+                        provider: "anthropic".to_string(),
+                        status: code,
+                    }));
+                }
+                if let Some(ra) = retry_after {
+                    anyhow::bail!("anthropic API error (retry-after: {ra}): {err_text}");
+                }
+                anyhow::bail!("anthropic API error: {err_text}");
+            }
         };
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let code = status.as_u16();
-            let retry_after = resp.headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .map(std::string::ToString::to_string);
-            let err_text = resp.text().await.unwrap_or_default();
-            if code == 401 || code == 403 {
-                return Err(anyhow::Error::new(crate::agent::providers::LlmCallError::AuthError {
-                    provider: "anthropic".to_string(),
-                    status: code,
-                }));
-            }
-            if code >= 500 {
-                return Err(anyhow::Error::new(crate::agent::providers::LlmCallError::Server5xx {
-                    provider: "anthropic".to_string(),
-                    status: code,
-                }));
-            }
-            if let Some(ra) = retry_after {
-                anyhow::bail!("anthropic API error (retry-after: {ra}): {err_text}");
-            }
-            anyhow::bail!("anthropic API error: {err_text}");
-        }
 
         let mut full_content = String::new();
         let mut buffer = String::new();
@@ -408,6 +422,7 @@ impl LlmProvider for AnthropicProvider {
         );
         let api_key = self.resolve_api_key().await;
         let mut req = self.client
+            .discovery_client()
             .get(&url)
             .timeout(std::time::Duration::from_secs(5))
             .header("anthropic-version", "2023-06-01");

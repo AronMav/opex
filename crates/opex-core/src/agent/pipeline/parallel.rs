@@ -166,8 +166,8 @@ async fn maybe_wrap_untrusted_result(
     mcp: Option<&crate::mcp::McpRegistry>,
     yaml_tools: &HashMap<String, YamlToolDef>,
 ) -> String {
-    use crate::agent::engine::{FILE_PREFIX, RICH_CARD_PREFIX};
-    if result.contains(FILE_PREFIX) || result.starts_with(RICH_CARD_PREFIX) {
+    use crate::agent::engine::{FILE_PREFIX, RICH_CARD_PREFIX, TOOL_CALL_PREFIX};
+    if result.contains(FILE_PREFIX) || result.starts_with(RICH_CARD_PREFIX) || result.contains(TOOL_CALL_PREFIX) {
         return result;
     }
     if yaml_tools

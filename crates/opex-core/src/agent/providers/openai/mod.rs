@@ -1,7 +1,7 @@
 //! OpenAI-compatible LLM provider (`MiniMax`, `OpenAI`, Ollama, etc.) —
 //! extracted from providers.rs for readability.
 
-use super::{async_trait, Arc, SecretsManager, ModelOverride, LlmProvider, Message, ToolDefinition, Result, LlmResponse, messages_to_openai_format, mpsc};
+use super::{async_trait, Arc, SecretsManager, ModelOverride, LlmProvider, Message, ToolDefinition, Result, LlmResponse, messages_to_openai_format, mpsc, HttpTransport};
 
 mod chat;
 mod chat_stream;
@@ -14,8 +14,8 @@ mod stream;
 
 pub struct OpenAiCompatibleProvider {
     provider_name: String,
-    client: reqwest::Client,
-    streaming_client: reqwest::Client,
+    client: Arc<dyn HttpTransport>,
+    streaming_client: Arc<dyn HttpTransport>,
     url: String,
     /// Raw base URL (before appending chat path), used for provider-specific API calls
     /// such as Ollama's /api/show for context-limit discovery.
@@ -165,6 +165,19 @@ impl OpenAiCompatibleProvider {
         self
     }
 
+    /// Test-only: replace both HTTP transports (e.g. with a `CassetteTransport`
+    /// for offline provider tests). Not compiled in production.
+    #[cfg(test)]
+    pub(crate) fn with_transports(
+        mut self,
+        client: Arc<dyn super::HttpTransport>,
+        streaming_client: Arc<dyn super::HttpTransport>,
+    ) -> Self {
+        self.client = client;
+        self.streaming_client = streaming_client;
+        self
+    }
+
     /// Resolve the effective URL: dynamic from secrets or static.
     async fn resolve_url(&self) -> String {
         if let Some(ref env_name) = self.base_url_env
@@ -297,7 +310,7 @@ impl OpenAiCompatibleProvider {
     /// Query Ollama's /api/show for the real context window.
     async fn ollama_context_limit(&self, model: &str) -> Option<u32> {
         let url = format!("{}/api/show", self.api_base_url.trim_end_matches('/'));
-        let resp = self.client
+        let resp = self.client.discovery_client()
             .post(&url)
             .timeout(std::time::Duration::from_secs(5))
             .json(&serde_json::json!({ "model": model }))
@@ -357,7 +370,7 @@ impl OpenAiCompatibleProvider {
 
         // 1. Try individual model endpoint (faster, lower bandwidth).
         let single_url = format!("{}/v1/models/{}", base, model);
-        if let Ok(resp) = auth(self.client.get(&single_url).timeout(std::time::Duration::from_secs(5)))
+        if let Ok(resp) = auth(self.client.discovery_client().get(&single_url).timeout(std::time::Duration::from_secs(5)))
             .send().await
             && let Ok(resp) = resp.error_for_status()
                 && let Ok(obj) = resp.json::<serde_json::Value>().await
@@ -368,7 +381,7 @@ impl OpenAiCompatibleProvider {
 
         // 2. Fall back to full list and filter by id.
         let list_url = format!("{}/v1/models", base);
-        let resp = auth(self.client.get(&list_url).timeout(std::time::Duration::from_secs(5)))
+        let resp = auth(self.client.discovery_client().get(&list_url).timeout(std::time::Duration::from_secs(5)))
             .send().await.ok()?
             .error_for_status().ok()?
             .json::<serde_json::Value>().await.ok()?;

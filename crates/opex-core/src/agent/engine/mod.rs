@@ -76,6 +76,14 @@ pub(crate) const RICH_CARD_PREFIX: &str = "__rich_card__:";
 /// Format: `__file__:{"url":"...","mediaType":"image/png"}`
 pub(crate) const FILE_PREFIX: &str = "__file__:";
 
+/// In-band marker prefix for nested tool-call events from codemode
+/// (`code_orchestrate`). The SDK in the sandbox prints these lines to stdout
+/// when dispatching tool calls through the loopback endpoint; the pipeline
+/// parses them and emits `StreamEvent::ToolCallStart` / `ToolResult` so the
+/// UI/timeline shows nested tool calls as a subtree.
+/// Format: `__tool_call__:{"index":0,"tool":"workspace_read","status":"start","input":{"path":"foo"}}`
+pub(crate) const TOOL_CALL_PREFIX: &str = "__tool_call__:";
+
 
 use crate::agent::session_manager::SessionManager;
 
@@ -261,6 +269,64 @@ impl AgentEngine {
     #[inline]
     pub(crate) fn sse_event_tx(&self) -> &Arc<tokio::sync::Mutex<Option<crate::agent::engine_event_sender::EngineEventSender>>> {
         &self.tex().sse_event_tx
+    }
+
+    // ── Codemode (tools-as-code) helpers ──────────────────────────────────────
+    //
+    // Used by the /api/sandbox/tool-call + /api/sandbox/tool-search loopback
+    // endpoints (gateway/handlers/sandbox.rs) to resolve an agent's visible
+    // tool set and dispatch tool calls from sandbox scripts.
+
+    /// System tool registry accessor (for codemode dispatch).
+    #[inline]
+    pub(crate) fn tool_registry(&self) -> &std::sync::Arc<crate::agent::tool_registry::SystemToolRegistry> {
+        &self.tool_registry
+    }
+
+    /// Return the agent's available system tool names (filtered by the agent's
+    /// tool policy). Used by the codemode endpoint to build the allow-list for
+    /// the capability token + enforce per-call policy.
+    pub(crate) fn codemode_available_tool_names(&self) -> std::collections::HashSet<String> {
+        let cfg = self.cfg();
+        let groups = crate::agent::pipeline::tool_defs::resolve_tool_groups(cfg.agent.tools.as_ref());
+        let browser_url = crate::agent::pipeline::canvas::browser_renderer_url();
+        let ctx = crate::agent::pipeline::tool_defs::ToolDefsContext {
+            is_base: cfg.agent.base,
+            groups,
+            default_timezone: &cfg.default_timezone,
+            has_sandbox: self.sandbox().is_some(),
+            browser_renderer_url: &browser_url,
+        };
+        let defs = crate::agent::pipeline::tool_defs::build_internal_tool_definitions(&ctx);
+        crate::agent::pipeline::dispatch::filter_tools_by_policy(
+            defs,
+            cfg.agent.tools.as_ref(),
+            cfg.memory_store.is_available(),
+        )
+        .into_iter()
+        .map(|d| d.name)
+        .collect()
+    }
+
+    /// Return the agent's full tool definitions (system + YAML + MCP) for
+    /// codemode `tools.search`. These are the same definitions the LLM sees.
+    pub(crate) fn tool_definitions_for_search(&self) -> Vec<opex_types::ToolDefinition> {
+        let cfg = self.cfg();
+        let groups = crate::agent::pipeline::tool_defs::resolve_tool_groups(cfg.agent.tools.as_ref());
+        let browser_url = crate::agent::pipeline::canvas::browser_renderer_url();
+        let ctx = crate::agent::pipeline::tool_defs::ToolDefsContext {
+            is_base: cfg.agent.base,
+            groups,
+            default_timezone: &cfg.default_timezone,
+            has_sandbox: self.sandbox().is_some(),
+            browser_renderer_url: &browser_url,
+        };
+        let defs = crate::agent::pipeline::tool_defs::build_internal_tool_definitions(&ctx);
+        crate::agent::pipeline::dispatch::filter_tools_by_policy(
+            defs,
+            cfg.agent.tools.as_ref(),
+            cfg.memory_store.is_available(),
+        )
     }
 
     /// Check if an enabled tool exists: capability-tools check active provider,

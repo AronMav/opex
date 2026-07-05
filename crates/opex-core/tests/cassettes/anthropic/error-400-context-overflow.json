@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "metadata": {
+    "name": "anthropic/error-400-context-overflow",
+    "recorded_at": "2026-07-05T00:00:00Z",
+    "tags": ["provider:anthropic", "error", "context-overflow"]
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "headers": {
+          "content-type": "application/json",
+          "anthropic-version": "2023-06-01"
+        },
+        "body": "{\"model\":\"claude-3-5-sonnet\",\"max_tokens\":1024,\"messages\":[{\"role\":\"user\",\"content\":\"too long context\"}]}"
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long: 200000 tokens > 200000 maximum\"}}",
+        "body_encoding": "text"
+      }
+    }
+  ]
+}

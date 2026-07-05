@@ -1,7 +1,7 @@
 //! Google Gemini API provider —
 //! extracted from providers.rs for readability.
 
-use super::{async_trait, Arc, SecretsManager, ModelOverride, Message, LlmProvider, ToolDefinition, Result, LlmResponse, mpsc};
+use super::{async_trait, Arc, SecretsManager, ModelOverride, Message, LlmProvider, ToolDefinition, Result, LlmResponse, mpsc, HttpTransport};
 
 mod request;
 pub(super) use request::{messages_to_gemini_format, strip_empty_required};
@@ -12,8 +12,8 @@ use response::GeminiResponse;
 // ── Google Gemini API Provider ──────────────────────────────────────────────
 
 pub struct GoogleProvider {
-    client: reqwest::Client,
-    streaming_client: reqwest::Client,
+    client: Arc<dyn HttpTransport>,
+    streaming_client: Arc<dyn HttpTransport>,
     base_url: String,
     api_key_name: String,
     /// Vault scope for `LLM_CREDENTIALS` (provider UUID). When set, checked first.
@@ -182,11 +182,16 @@ impl LlmProvider for GoogleProvider {
         );
 
         // Google uses ?key= in URL, no auth header needed
-        let body_text = crate::agent::providers::http::retry_http_post(
-            &self.client, &url, &body, "",
-            "google", crate::agent::providers::http::RETRYABLE_OPENAI,
-            self.max_retries,
-        ).await?;
+        let body_text = self.client
+            .post_json(
+                &url,
+                &body,
+                &[],
+                "google",
+                crate::agent::providers::http::RETRYABLE_OPENAI,
+                self.max_retries,
+            )
+            .await?;
 
         let api_resp: GeminiResponse = serde_json::from_str(&body_text).map_err(|e| {
             let preview_len = body_text.len().min(500);
@@ -305,10 +310,19 @@ impl LlmProvider for GoogleProvider {
         tracing::info!(provider = "google", model = %self.model, "calling Google Gemini API (streaming)");
 
         let start = std::time::Instant::now();
-        let req = self.streaming_client.post(&url).json(&body);
-        let resp = match req.send().await {
+        let resp = match self.streaming_client
+            .post_json_stream(
+                &url,
+                &body,
+                &[],
+                "google",
+                crate::agent::providers::http::RETRYABLE_OPENAI,
+                self.max_retries,
+            )
+            .await
+        {
             Ok(r) => r,
-            Err(e) => {
+            Err(super::http::SendError::Network(e)) => {
                 return Err(anyhow::Error::new(super::classify_reqwest_err(
                     e,
                     "google",
@@ -316,33 +330,25 @@ impl LlmProvider for GoogleProvider {
                     self.timeouts.request_secs,
                 )));
             }
+            Err(super::http::SendError::Http { status: code, body: err_text, retry_after }) => {
+                if code == 401 || code == 403 {
+                    return Err(anyhow::Error::new(crate::agent::providers::LlmCallError::AuthError {
+                        provider: "google".to_string(),
+                        status: code,
+                    }));
+                }
+                if code >= 500 {
+                    return Err(anyhow::Error::new(crate::agent::providers::LlmCallError::Server5xx {
+                        provider: "google".to_string(),
+                        status: code,
+                    }));
+                }
+                if let Some(ra) = retry_after {
+                    anyhow::bail!("google API error (retry-after: {ra}): {err_text}");
+                }
+                anyhow::bail!("google API error: {err_text}");
+            }
         };
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let code = status.as_u16();
-            let retry_after = resp.headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .map(std::string::ToString::to_string);
-            let err_text = resp.text().await.unwrap_or_default();
-            if code == 401 || code == 403 {
-                return Err(anyhow::Error::new(crate::agent::providers::LlmCallError::AuthError {
-                    provider: "google".to_string(),
-                    status: code,
-                }));
-            }
-            if code >= 500 {
-                return Err(anyhow::Error::new(crate::agent::providers::LlmCallError::Server5xx {
-                    provider: "google".to_string(),
-                    status: code,
-                }));
-            }
-            if let Some(ra) = retry_after {
-                anyhow::bail!("google API error (retry-after: {ra}): {err_text}");
-            }
-            anyhow::bail!("google API error: {err_text}");
-        }
 
         let mut full_content = String::new();
         let mut buffer = String::new();
@@ -477,6 +483,7 @@ impl LlmProvider for GoogleProvider {
             api_key,
         );
         let resp = self.client
+            .discovery_client()
             .get(&url)
             .timeout(std::time::Duration::from_secs(5))
             .send().await.ok()?

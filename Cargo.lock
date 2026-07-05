@@ -2088,6 +2088,7 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac",
+ "http",
  "if-addrs 0.14.0",
  "infer",
  "insta",
