@@ -224,6 +224,8 @@ export interface ProviderModel {
   context_window?: number
   vision?: boolean
   reasoning?: boolean
+  /** Uses a `reasoning_content` field (DeepSeek-R1, Kimi-thinking, …). */
+  reasoning_content?: boolean
   tools?: boolean
 }
 
