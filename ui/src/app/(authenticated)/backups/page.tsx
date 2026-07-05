@@ -278,7 +278,7 @@ export default function BackupsPage() {
           title={t("backups.title")}
           description={t("backups.subtitle")}
           actions={
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
               <Button
                 variant="outline"
                 size="sm"

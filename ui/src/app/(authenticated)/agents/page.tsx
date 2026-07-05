@@ -558,7 +558,7 @@ export default function AgentsPage() {
         title={t("agents.title")}
         description={t("agents.subtitle")}
         actions={
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
             <SearchInput
               value={agentSearch}
               onChange={setAgentSearch}

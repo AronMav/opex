@@ -588,7 +588,7 @@ export default function SkillsPage() {
         title={t("skills.title")}
         description={t("skills.subtitle")}
         actions={
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
             <Button
               variant="outline"
               size="sm"
