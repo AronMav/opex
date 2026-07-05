@@ -3,7 +3,8 @@
 import { useState, useCallback } from "react";
 import { useTranslation } from "@/hooks/use-translation";
 import type { ApprovalPart } from "@/stores/chat-store";
-import { decideApproval } from "@/lib/api";
+import { useChatStore } from "@/stores/chat-store";
+import { decideApproval, addApprovalAllowlist } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { ChevronRight, Loader2 } from "lucide-react";
@@ -16,6 +17,7 @@ interface ApprovalCardProps {
 
 export function ApprovalCard({ part }: ApprovalCardProps) {
   const { t } = useTranslation();
+  const currentAgent = useChatStore((s) => s.currentAgent);
   const [isEditing, setIsEditing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +37,30 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
       setIsSubmitting(false);
     }
   }, [part.approvalId, t]);
+
+  const handleAlwaysAllow = useCallback(async () => {
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      // Persist the durable grant first; only approve if it stuck, so the user
+      // isn't misled into thinking future calls are whitelisted when they aren't.
+      if (currentAgent) {
+        const grant = await addApprovalAllowlist(currentAgent, part.toolName);
+        if (!grant.ok) {
+          setError(grant.error ?? t("chat.approval_error"));
+          return;
+        }
+      }
+      const result = await decideApproval(part.approvalId, "approved");
+      if (!result.ok) {
+        setError(result.error ?? t("chat.approval_error"));
+      }
+    } catch {
+      setError(t("chat.approval_error"));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [part.approvalId, part.toolName, currentAgent, t]);
 
   const handleReject = useCallback(async () => {
     setIsSubmitting(true);
@@ -194,6 +220,19 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
           >
             {t("chat.approval_edit_args")}
           </Button>
+          {currentAgent && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground text-xs w-full sm:w-auto justify-start sm:justify-center"
+              title={t("chat.approval_always_allow_tooltip")}
+              aria-label={`${t("chat.approval_always_allow")} ${part.toolName}`}
+              onClick={handleAlwaysAllow}
+              disabled={isSubmitting}
+            >
+              {t("chat.approval_always_allow")}
+            </Button>
+          )}
           <div className="flex items-center gap-2 sm:ml-auto">
             <Button
               variant="outline"
