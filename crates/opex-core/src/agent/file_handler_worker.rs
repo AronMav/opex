@@ -77,7 +77,7 @@ pub async fn dispatch_async_job(
     };
 
     let mut form = reqwest::multipart::Form::new()
-        .text("mime", mime.clone())
+        .text("mime", if mime.is_empty() { "application/octet-stream".to_string() } else { mime.clone() })
         .text("filename", filename)
         .text("params", params_str)
         .text("language", language)
