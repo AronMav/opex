@@ -3,7 +3,7 @@ import { renderDescriptorBlock, spliceDescriptor } from "../handler-descriptor";
 
 const FIELDS = {
   id: "my_ocr", labels: { en: "OCR", ru: "ОЦР" }, descriptions: {},
-  icon: "file", mime: ["image/*"], max_size_mb: 20, execution: "sync" as const,
+  icon: "file", mime: ["image/*"], domains: [], max_size_mb: 20, execution: "sync" as const,
   order: 100, enabled: true,
 };
 
@@ -65,5 +65,16 @@ describe("descriptor block", () => {
   it("omits params block when params array is empty", () => {
     const block = renderDescriptorBlock({ ...FIELDS, params: [] });
     expect(block).not.toContain("<params>");
+  });
+
+  it("renders <domain> elements inside <match> when domains are set", () => {
+    const block = renderDescriptorBlock({ ...FIELDS, domains: ["youtube.com", "youtu.be"] });
+    expect(block).toContain("#     <domain>youtube.com</domain>");
+    expect(block).toContain("#     <domain>youtu.be</domain>");
+  });
+
+  it("omits <domain> elements when domains array is empty", () => {
+    const block = renderDescriptorBlock({ ...FIELDS, domains: [] });
+    expect(block).not.toContain("<domain>");
   });
 });

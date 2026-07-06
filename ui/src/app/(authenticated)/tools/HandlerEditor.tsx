@@ -58,6 +58,7 @@ function defaultFields(id?: string): DescriptorFields {
     descriptions: { en: "", ru: "" },
     icon: "",
     mime: [],
+    domains: [],
     max_size_mb: null,
     execution: "sync",
     order: 100,
@@ -69,18 +70,18 @@ function defaultFields(id?: string): DescriptorFields {
 }
 
 function parseDescriptorFromApi(desc: Record<string, unknown>): DescriptorFields {
+  const match = (desc.match as { mime?: string[]; domains?: string[]; max_size_mb?: number | null } | undefined);
   return {
     id: (desc.id as string) ?? "",
     labels: (desc.labels as Record<string, string>) ?? {},
     descriptions: (desc.descriptions as Record<string, string>) ?? {},
     icon: (desc.icon as string) ?? "",
-    mime: ((desc.match as { mime?: string[] } | undefined)?.mime) ?? [],
-    max_size_mb: ((desc.match as { max_size_mb?: number | null } | undefined)?.max_size_mb) ?? null,
+    mime: match?.mime ?? [],
+    domains: match?.domains ?? [],
+    max_size_mb: match?.max_size_mb ?? null,
     execution: (desc.execution as "sync" | "async") ?? "sync",
     order: (desc.order as number) ?? 100,
     enabled: (desc.enabled as boolean) ?? true,
-    // Passthrough fields — not form-editable in v1 but must round-trip so
-    // editing a builtin's label doesn't strip <capability>/<output>/<params>.
     capability: (desc.capability as string | null | undefined) ?? null,
     output: (desc.output as string | null | undefined) ?? "text",
     params: (desc.params as ParamDescriptor[] | undefined) ?? [],
@@ -327,6 +328,17 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
                   value={mimeStr}
                   placeholder="image/*, application/pdf"
                   onChange={(e) => handleMimeChange(e.target.value)}
+                />
+              </Field>
+
+              <Field label="Домены (URL sources)">
+                <Input
+                  value={fields.domains.join(", ")}
+                  placeholder="youtube.com, youtu.be"
+                  onChange={(e) => {
+                    const parsed = e.target.value.split(",").map((s) => s.trim()).filter(Boolean);
+                    updateField("domains", parsed);
+                  }}
                 />
               </Field>
 

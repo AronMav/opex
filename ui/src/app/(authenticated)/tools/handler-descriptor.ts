@@ -11,6 +11,7 @@ export interface DescriptorFields {
   descriptions: Record<string, string>;
   icon: string;
   mime: string[];
+  domains: string[];
   max_size_mb: number | null;
   execution: "sync" | "async";
   order: number;
@@ -33,6 +34,7 @@ export function renderDescriptorBlock(f: DescriptorFields): string {
   L.push("#   <match>");
   for (const m of f.mime) L.push(`#     <mime>${esc(m)}</mime>`);
   if (f.max_size_mb != null) L.push(`#     <max_size_mb>${f.max_size_mb}</max_size_mb>`);
+  for (const d of f.domains) L.push(`#     <domain>${esc(d)}</domain>`);
   L.push("#   </match>");
   if (f.capability) L.push(`#   <capability>${esc(f.capability)}</capability>`);
   L.push(`#   <execution>${f.execution}</execution>`);

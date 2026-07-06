@@ -9,6 +9,8 @@
 #     <mime>audio/*</mime>
 #     <mime>video/*</mime>
 #     <max_size_mb>200</max_size_mb>
+#     <domain>youtube.com</domain>
+#     <domain>youtu.be</domain>
 #   </match>
 #   <capability>stt</capability>
 #   <execution>sync</execution>
