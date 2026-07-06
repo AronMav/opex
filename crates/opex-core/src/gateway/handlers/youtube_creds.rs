@@ -18,10 +18,10 @@
 
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{header, StatusCode},
     response::IntoResponse,
     routing::get,
-    Router,
+    Json, Router,
 };
 use serde::Serialize;
 
@@ -52,13 +52,17 @@ async fn get_youtube_cookies(State(auth): State<AuthServices>) -> impl IntoRespo
                 )
                     .into_response();
             }
-            Json(YoutubeCookiesResponse { cookies }).into_response()
+            // no-store: cookies contain session tokens — never cache.
+            (
+                StatusCode::OK,
+                [(header::CACHE_CONTROL, "no-store")],
+                Json(YoutubeCookiesResponse { cookies }),
+            )
+                .into_response()
         }
         None => (StatusCode::NOT_FOUND, "YOUTUBE_COOKIES not set").into_response(),
     }
 }
-
-use axum::Json;
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new().route("/api/internal/youtube-cookies", get(get_youtube_cookies))

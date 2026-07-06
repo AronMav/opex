@@ -3,10 +3,13 @@ video-summary pipeline. System ffmpeg is required (already used by audio_trim)."
 
 import asyncio
 import glob
+import logging
 import os
 import sys
 import tempfile
 from helpers import validate_url_ssrf
+
+log = logging.getLogger("toolgate.video_helpers")
 
 
 async def _run(*args: str) -> tuple[int, bytes, bytes]:
@@ -41,6 +44,7 @@ async def _fetch_cookies_from_vault() -> str | None:
     import httpx
     token = os.environ.get("OPEX_AUTH_TOKEN") or os.environ.get("AUTH_TOKEN", "")
     if not token:
+        log.debug("youtube cookies: no auth token, skipping vault fetch")
         return None
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -53,8 +57,13 @@ async def _fetch_cookies_from_vault() -> str | None:
                 content = data.get("cookies", "")
                 if content and content.strip():
                     return content
-    except Exception:
-        pass
+                log.debug("youtube cookies: vault returned empty cookies")
+            elif resp.status_code == 404:
+                log.debug("youtube cookies: not set in vault (404)")
+            else:
+                log.warning("youtube cookies: vault returned HTTP %d", resp.status_code)
+    except Exception as e:
+        log.warning("youtube cookies: vault fetch failed: %s", e)
     return None
 
 
@@ -117,7 +126,7 @@ async def _cookie_args_async() -> list[str]:
     # 1. Vault
     vault_cookies = await _fetch_cookies_from_vault()
     if vault_cookies:
-        working = _write_working_copy(vault_cookies.encode())
+        working = _write_working_copy(vault_cookies.encode("utf-8"))
         if working:
             return ["--cookies", working]
 
