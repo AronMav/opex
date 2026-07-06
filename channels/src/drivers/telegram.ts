@@ -466,15 +466,28 @@ export function createTelegramDriver(
       return;
     }
 
-    // ── URL action buttons (ua:{videoId}:{handlerId}:{agentName}) ────────
+    // ── URL action buttons (ua:{videoId}:{handlerId}) ────────────────────
+    // Access check: only the owner (paired user) may trigger handler actions.
+    // This mirrors the approval callback security model (audit 2026-05-08).
     if (data.startsWith("ua:")) {
+      const access = await bridge.checkAccess(userId);
+      if (!access.allowed && !access.isOwner) {
+        await ctx.answerCallbackQuery({ text: "Доступ запрещён" }).catch(() => { });
+        return;
+      }
       const parts = data.split(":");
       if (parts.length >= 3) {
-        const [, videoId, handlerId, agentName] = parts;
+        const [, videoId, handlerId] = parts;
+        // Validate videoId format (YouTube IDs are [A-Za-z0-9_-]{11})
+        if (!/^[A-Za-z0-9_-]{6,20}$/.test(videoId)) {
+          await ctx.answerCallbackQuery({ text: "Неверный ID" }).catch(() => { });
+          return;
+        }
         const sourceUrl = `https://www.youtube.com/watch?v=${videoId}`;
+        // Always use the bridge's agent name — never trust callback_data for agent identity
+        const agentName = bridge.getAgentName();
         await ctx.answerCallbackQuery({ text: "⏳ Запускаю..." }).catch(() => { });
 
-        // Disable the keyboard after click
         if (chatId && msgId) {
           const origText = ctx.callbackQuery.message?.text || "🎬 Обнаружено видео.";
           await retryTg(() => bot.api.editMessageText(chatId, msgId, `${origText}\n⏳ Выполняю: ${handlerId}`))
@@ -489,14 +502,13 @@ export function createTelegramDriver(
             body: JSON.stringify({
               source_url: sourceUrl,
               handler_id: handlerId,
-              agent_name: agentName || bridge.getAgentName(),
+              agent_name: agentName,
               session_id: "00000000-0000-0000-0000-000000000000",
               params: { language: "ru" },
             }),
             signal: AbortSignal.timeout(10000),
           });
           if (resp.ok) {
-            const result = await resp.json() as { job_id?: string };
             if (chatId && msgId) {
               const origText = ctx.callbackQuery.message?.text?.split("\n")[0] || "🎬 Обнаружено видео.";
               await retryTg(() => bot.api.editMessageText(chatId, msgId, `${origText}\n✅ Задача запущена`))
@@ -515,14 +527,20 @@ export function createTelegramDriver(
       }
     }
 
-    // ── File action buttons (fa:{uploadId}:{handlerId}:{agentName}) ──────
+    // ── File action buttons (fa:{uploadId}:{handlerId}) ───────────────────
     if (data.startsWith("fa:")) {
+      const access = await bridge.checkAccess(userId);
+      if (!access.allowed && !access.isOwner) {
+        await ctx.answerCallbackQuery({ text: "Доступ запрещён" }).catch(() => { });
+        return;
+      }
       const parts = data.split(":");
       if (parts.length >= 3) {
-        const [, uploadId, handlerId, agentName] = parts;
+        const [, uploadId, handlerId] = parts;
+        // Always use the bridge's agent name — never trust callback_data
+        const agentName = bridge.getAgentName();
         await ctx.answerCallbackQuery({ text: "⏳ Запускаю..." }).catch(() => { });
 
-        // Disable the keyboard after click
         if (chatId && msgId) {
           const origText = ctx.callbackQuery.message?.text || "📎 Выберите действие.";
           await retryTg(() => bot.api.editMessageText(chatId, msgId, `${origText}\n⏳ Выполняю: ${handlerId}`))
@@ -536,7 +554,7 @@ export function createTelegramDriver(
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${coreAuthToken()}` },
             body: JSON.stringify({
               handler_id: handlerId,
-              agent: agentName || bridge.getAgentName(),
+              agent: agentName,
               params: { language: "ru" },
             }),
             signal: AbortSignal.timeout(10000),
@@ -687,9 +705,10 @@ async function dispatchOrQueue(
 
 // ── Inline action buttons for file attachments / video links ────────────────
 
-/** Core HTTP base URL (derived from WS config). */
+/** Core HTTP base URL (derived from WS config). Handles ws:// and wss://. */
 function coreHttpBase(): string {
-  return (process.env.OPEX_CORE_WS || "ws://localhost:18789").replace("ws://", "http://");
+  const ws = process.env.OPEX_CORE_WS || "ws://localhost:18789";
+  return ws.replace(/^wss?:\/\//, "http://").replace(/^http:/, ws.startsWith("wss") ? "https:" : "http:");
 }
 
 /** Core auth token for API calls. */
@@ -748,7 +767,6 @@ function buildActionKeyboard(
   buttons: HandlerButton[],
   prefix: "ua" | "fa",
   sourceId: string,
-  agentName: string,
 ): InlineKeyboard {
   const kb = new InlineKeyboard();
   const iconMap: Record<string, string> = {
@@ -756,8 +774,9 @@ function buildActionKeyboard(
   };
   for (const btn of buttons) {
     const icon = iconMap[btn.icon] ?? "▶";
-    // callback_data limit: 64 bytes. Format: {prefix}:{sourceId}:{handlerId}:{agent}
-    const data = `${prefix}:${sourceId}:${btn.id}:${agentName}`;
+    // callback_data limit: 64 bytes. Format: {prefix}:{sourceId}:{handlerId}
+    // agentName is NOT included — resolved from bridge on callback.
+    const data = `${prefix}:${sourceId}:${btn.id}`;
     kb.text(`${icon} ${btn.label}`, data.slice(0, 64));
   }
   return kb;
@@ -776,7 +795,7 @@ async function sendUrlActionButtons(
   if (handlers.length === 0) return;
   // Use the video ID as a compact source identifier (fits 64-byte callback_data limit).
   const videoId = url.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]+)/)?.[1] ?? "url";
-  const kb = buildActionKeyboard(handlers, "ua", videoId, agentName);
+  const kb = buildActionKeyboard(handlers, "ua", videoId);
   await bot.api.sendMessage(chatId, "🎬 Обнаружено видео. Выберите действие:", {
     reply_parameters: safeReplyParams(replyToMsgId),
     reply_markup: kb,
@@ -798,7 +817,7 @@ async function sendFileActionButtons(
   if (!uploadId) return;
   const handlers = await queryFileActions(uploadId, agentName);
   if (handlers.length === 0) return;
-  const kb = buildActionKeyboard(handlers, "fa", uploadId, agentName);
+  const kb = buildActionKeyboard(handlers, "fa", uploadId);
   await bot.api.sendMessage(chatId, "📎 Выберите действие:", {
     reply_parameters: safeReplyParams(replyToMsgId),
     reply_markup: kb,

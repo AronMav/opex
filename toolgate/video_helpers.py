@@ -104,7 +104,10 @@ def _write_working_copy(data: bytes) -> str | None:
 
 
 def _cookie_working_copy() -> str:
-    """Owner-only working-copy path in a private per-user temp dir (0o700)."""
+    """Owner-only working-copy path in a private per-user temp dir (0o700).
+
+    Uses a unique filename per call to avoid race conditions between concurrent
+    yt-dlp invocations overwriting each other's cookies file."""
     uid = getattr(os, "getuid", lambda: 0)()
     d = os.path.join(tempfile.gettempdir(), f"opex_ytdlp_{uid}")
     os.makedirs(d, exist_ok=True)
@@ -112,7 +115,10 @@ def _cookie_working_copy() -> str:
         os.chmod(d, 0o700)
     except OSError:
         pass
-    return os.path.join(d, "cookies.txt")
+    # Unique filename per call — avoids race when two coroutines write
+    # simultaneously to the same fixed path.
+    import uuid
+    return os.path.join(d, f"cookies_{uuid.uuid4().hex[:8]}.txt")
 
 
 async def _cookie_args_async() -> list[str]:
