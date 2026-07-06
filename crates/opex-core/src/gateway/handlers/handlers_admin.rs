@@ -246,6 +246,8 @@ async fn api_match_url_handlers(
     };
     let lang = params.get("lang").map(|s| s.as_str()).unwrap_or("ru");
 
+    // Refresh the handler registry to pick up new manifests with domains.
+    state.handlers.refresh().await;
     let manifests = state.handlers.manifests().await;
     let enabled_allowlist = crate::agent::fse::get_enabled_allowlist(&state.infra.db).await;
 
