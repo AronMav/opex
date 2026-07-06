@@ -84,13 +84,25 @@ fi
 
 # ── 4. Check cookies are not expired ──────────────────────────────────────────
 NOW=$(date +%s)
-EXPIRED_COUNT=$(awk -F'\t' -v now="$NOW" '
-    /youtube\.com/ && NF >= 7 {
-        exp = $5 + 0
-        if (exp > 0 && exp < now) expired++
-    }
-    END { print expired + 0 }
-' "$COOKIES_FILE" || echo 0)
+EXPIRED_COUNT=$(python3 -c "
+import sys
+now = $NOW
+expired = 0
+total = 0
+for line in open('$COOKIES_FILE'):
+    if 'youtube.com' not in line:
+        continue
+    total += 1
+    parts = line.strip().split('\t')
+    if len(parts) >= 5:
+        try:
+            exp = int(parts[4])
+            if 0 < exp < now:
+                expired += 1
+        except ValueError:
+            pass
+print(expired)
+" 2>/dev/null || echo 0)
 
 TOTAL_YT=$(grep "youtube.com" "$COOKIES_FILE" | wc -l)
 if [ "$EXPIRED_COUNT" -gt 0 ] && [ "$EXPIRED_COUNT" -ge "$((TOTAL_YT / 2))" ]; then
