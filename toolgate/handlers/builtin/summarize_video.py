@@ -10,6 +10,12 @@
 #     <max_size_mb>2000</max_size_mb>
 #     <domain>youtube.com</domain>
 #     <domain>youtu.be</domain>
+#     <domain>yadi.sk</domain>
+#     <domain>disk.yandex.ru</domain>
+#     <domain>disk.yandex.com</domain>
+#     <domain>disk.yandex.kz</domain>
+#     <domain>disk.yandex.by</domain>
+#     <domain>disk.yandex.uz</domain>
 #   </match>
 #   <capability>stt</capability>
 #   <execution>async</execution>
