@@ -194,18 +194,21 @@ pub struct EnrichResult {
     pub video_accepted: bool,
 }
 
-/// Enrich user text: auto-fetch URLs (max 2), add attachment hints, and enqueue a
-/// `summarize_video` handler job for any detected video link. Returns an
-/// `EnrichResult` carrying the enriched LLM text + the async-video short-circuit flag.
+/// Enrich user text: auto-fetch URLs (max 2), add attachment hints, and detect
+/// video links. Returns an `EnrichResult` carrying the enriched LLM text.
+///
+/// When a video link is detected, a context hint is added for the LLM:
+/// "Action buttons were shown to the user. Wait for their choice."
+/// The adapter shows inline buttons; the LLM must NOT auto-process.
 #[allow(clippy::too_many_arguments)]
 pub async fn enrich_message_text(
     http_client: &reqwest::Client,
     gateway_listen: &str,
     toolgate_url: &str,
-    agent_language: &str,
-    db: &sqlx::PgPool,
-    session_id: uuid::Uuid,
-    agent_name: &str,
+    _agent_language: &str,
+    _db: &sqlx::PgPool,
+    _session_id: uuid::Uuid,
+    _agent_name: &str,
     user_text: &str,
     attachments: &[opex_types::MediaAttachment],
 ) -> EnrichResult {
@@ -232,33 +235,19 @@ pub async fn enrich_message_text(
     }
     enrich_with_attachments(&mut enriched, attachments);
 
-    // Enqueue a `summarize_video` handler job for each video link detected in the
-    // original (pre-PII-redacted) user text so the job stores the real URL.
-    // A successful enqueue marks `video_accepted` so the caller short-circuits the
-    // LLM loop — the agent must NOT also try to fetch/transcribe the YouTube link.
-    let mut video_accepted = false;
-    let params = serde_json::json!({ "language": agent_language });
-    for link in detect_video_links(user_text) {
-        match opex_db::handler_jobs::insert_handler_job(
-            db,
-            None,
-            Some(link.as_str()),
-            "summarize_video",
-            agent_name,
-            session_id,
-            &params,
-        )
-        .await
-        {
-            Ok(_) => {
-                enriched.push_str("\n\n🎬 Видео по ссылке принято, готовлю сводку.");
-                video_accepted = true;
-            }
-            Err(e) => tracing::warn!(error = %e, link = %link, "video url enqueue failed"),
-        }
+    // Detect video links and add a context hint for the LLM.
+    // DO NOT auto-enqueue handler jobs — the adapter shows inline buttons
+    // and the user chooses the action. The LLM must NOT auto-process.
+    let detected = detect_video_links(user_text);
+    if !detected.is_empty() {
+        let links: Vec<&str> = detected.iter().map(|s| s.as_str()).collect();
+        enriched.push_str(&format!(
+            "\n\n[Видео-ссылка обнаружена: {} — пользователю показаны кнопки действий. Ожидайте выбор пользователя, не обрабатывайте автоматически.]",
+            links.join(", ")
+        ));
     }
 
-    EnrichResult { text: enriched, video_accepted }
+    EnrichResult { text: enriched, video_accepted: false }
 }
 
 /// v1 video-URL allowlist: YouTube only (SSRF surface — see spec §9).
@@ -951,16 +940,17 @@ mod tests {
 
     // ── enrich_message_text → EnrichResult ──────────────────────────────────
 
-    /// A YouTube link in the user text enqueues a handler job (summarize_video) and
-    /// marks the EnrichResult `video_accepted=true` so the pipeline short-circuits the LLM loop.
+    /// A YouTube link in the user text adds a context hint for the LLM and
+    /// does NOT auto-enqueue a handler job. The adapter shows inline buttons;
+    /// the LLM presents options and waits for the user's choice.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn enrich_youtube_link_sets_video_accepted(pool: sqlx::PgPool) {
+    async fn enrich_youtube_link_adds_hint_no_auto_dispatch(pool: sqlx::PgPool) {
         let client = reqwest::Client::new();
         let session_id = uuid::Uuid::new_v4();
         let result = enrich_message_text(
             &client,
             "127.0.0.1:18789",
-            "http://localhost:9011", // unreachable toolgate is irrelevant: the link path enqueues directly
+            "http://localhost:9011",
             "ru",
             &pool,
             session_id,
@@ -970,25 +960,29 @@ mod tests {
         )
         .await;
 
+        // video_accepted must be false — the LLM loop runs normally.
         assert!(
-            result.video_accepted,
-            "YouTube link enqueue must set video_accepted=true"
+            !result.video_accepted,
+            "YouTube link must NOT set video_accepted (no auto-dispatch)"
         );
-        // Exactly one handler_jobs row was enqueued for this session with the expected fields.
-        let row: (i64, Option<String>, String) = sqlx::query_as(
-            "SELECT COUNT(*), MIN(source_ref), MIN(handler_id) \
-             FROM handler_jobs WHERE session_id=$1"
+        // The hint text should be in the enriched text.
+        assert!(
+            result.text.contains("Видео-ссылка обнаружена"),
+            "enriched text must contain video hint: {:?}", result.text
+        );
+        assert!(
+            result.text.contains("youtube.com"),
+            "enriched text must contain the URL: {:?}", result.text
+        );
+        // No handler jobs should be enqueued.
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM handler_jobs WHERE session_id=$1"
         )
         .bind(session_id)
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(row.0, 1, "one handler job enqueued for the YouTube link");
-        assert!(
-            row.1.as_deref().unwrap_or("").contains("youtube.com"),
-            "source_ref must be the YouTube URL, got: {:?}", row.1
-        );
-        assert_eq!(row.2, "summarize_video", "handler_id must be 'summarize_video'");
+        assert_eq!(row.0, 0, "no handler jobs should be enqueued for auto-dispatch");
     }
 
     /// A plain-text message with no video link / no attachments leaves

@@ -466,6 +466,103 @@ export function createTelegramDriver(
       return;
     }
 
+    // ── URL action buttons (ua:{videoId}:{handlerId}:{agentName}) ────────
+    if (data.startsWith("ua:")) {
+      const parts = data.split(":");
+      if (parts.length >= 3) {
+        const [, videoId, handlerId, agentName] = parts;
+        const sourceUrl = `https://www.youtube.com/watch?v=${videoId}`;
+        await ctx.answerCallbackQuery({ text: "⏳ Запускаю..." }).catch(() => { });
+
+        // Disable the keyboard after click
+        if (chatId && msgId) {
+          const origText = ctx.callbackQuery.message?.text || "🎬 Обнаружено видео.";
+          await retryTg(() => bot.api.editMessageText(chatId, msgId, `${origText}\n⏳ Выполняю: ${handlerId}`))
+            .catch(() => { });
+        }
+
+        const coreUrl = coreHttpBase();
+        try {
+          const resp = await fetch(`${coreUrl}/api/handlers/enqueue`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${coreAuthToken()}` },
+            body: JSON.stringify({
+              source_url: sourceUrl,
+              handler_id: handlerId,
+              agent_name: agentName || bridge.getAgentName(),
+              session_id: "00000000-0000-0000-0000-000000000000",
+              params: { language: "ru" },
+            }),
+            signal: AbortSignal.timeout(10000),
+          });
+          if (resp.ok) {
+            const result = await resp.json() as { job_id?: string };
+            if (chatId && msgId) {
+              const origText = ctx.callbackQuery.message?.text?.split("\n")[0] || "🎬 Обнаружено видео.";
+              await retryTg(() => bot.api.editMessageText(chatId, msgId, `${origText}\n✅ Задача запущена`))
+                .catch(() => { });
+            }
+          } else {
+            const err = await resp.text().catch(() => "unknown");
+            console.error(`[tg] handler enqueue failed: ${resp.status} ${err}`);
+            await ctx.answerCallbackQuery({ text: `Ошибка: ${resp.status}` }).catch(() => { });
+          }
+        } catch (err) {
+          console.error("[tg] handler enqueue error:", err);
+          await ctx.answerCallbackQuery({ text: "Ошибка сети" }).catch(() => { });
+        }
+        return;
+      }
+    }
+
+    // ── File action buttons (fa:{uploadId}:{handlerId}:{agentName}) ──────
+    if (data.startsWith("fa:")) {
+      const parts = data.split(":");
+      if (parts.length >= 3) {
+        const [, uploadId, handlerId, agentName] = parts;
+        await ctx.answerCallbackQuery({ text: "⏳ Запускаю..." }).catch(() => { });
+
+        // Disable the keyboard after click
+        if (chatId && msgId) {
+          const origText = ctx.callbackQuery.message?.text || "📎 Выберите действие.";
+          await retryTg(() => bot.api.editMessageText(chatId, msgId, `${origText}\n⏳ Выполняю: ${handlerId}`))
+            .catch(() => { });
+        }
+
+        const coreUrl = coreHttpBase();
+        try {
+          const resp = await fetch(`${coreUrl}/api/files/${uploadId}/run`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${coreAuthToken()}` },
+            body: JSON.stringify({
+              handler_id: handlerId,
+              agent: agentName || bridge.getAgentName(),
+              params: { language: "ru" },
+            }),
+            signal: AbortSignal.timeout(10000),
+          });
+          if (resp.ok) {
+            const result = await resp.json() as { accepted?: boolean; job_id?: string };
+            const isAsync = result?.accepted === true && result?.job_id;
+            if (chatId && msgId) {
+              const origText = ctx.callbackQuery.message?.text?.split("\n")[0] || "📎 Выберите действие.";
+              const statusText = isAsync ? "✅ Задача запущена" : "✅ Обработано";
+              await retryTg(() => bot.api.editMessageText(chatId, msgId, `${origText}\n${statusText}`))
+                .catch(() => { });
+            }
+          } else {
+            const err = await resp.text().catch(() => "unknown");
+            console.error(`[tg] file run failed: ${resp.status} ${err}`);
+            await ctx.answerCallbackQuery({ text: `Ошибка: ${resp.status}` }).catch(() => { });
+          }
+        } catch (err) {
+          console.error("[tg] file run error:", err);
+          await ctx.answerCallbackQuery({ text: "Ошибка сети" }).catch(() => { });
+        }
+        return;
+      }
+    }
+
     // Non-approval callbacks — access check required before forwarding.
     const { allowed, isOwner } = await bridge.checkAccess(userId);
     if (!allowed && !isOwner) {
@@ -588,6 +685,128 @@ async function dispatchOrQueue(
   await processMessage(bot, msg, userId, chatId, text, attachments, bridge, strings, state, errorCooldownMs, errorPolicy);
 }
 
+// ── Inline action buttons for file attachments / video links ────────────────
+
+/** Core HTTP base URL (derived from WS config). */
+function coreHttpBase(): string {
+  return (process.env.OPEX_CORE_WS || "ws://localhost:18789").replace("ws://", "http://");
+}
+
+/** Core auth token for API calls. */
+function coreAuthToken(): string {
+  return process.env.OPEX_AUTH_TOKEN || "";
+}
+
+/** Detect the first YouTube / Yandex Disk video URL in text. Returns null if none. */
+function detectVideoUrl(text: string): string | null {
+  const m = text.match(/https?:\/\/[^\s,)]+(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]+)/i);
+  return m ? m[0] : null;
+}
+
+/** Extract upload UUID from a `/api/uploads/{uuid}` URL. Returns null if absent. */
+function extractUploadId(url: string): string | null {
+  const m = url.match(/\/api\/uploads\/([0-9a-f-]+)/i);
+  return m ? m[1] : null;
+}
+
+/** Handler button returned by the core API. */
+interface HandlerButton {
+  id: string;
+  label: string;
+  icon: string;
+}
+
+/** Query core for handlers matching a URL's domain. */
+async function queryUrlHandlers(url: string, lang = "ru"): Promise<HandlerButton[]> {
+  try {
+    const resp = await fetch(
+      `${coreHttpBase()}/api/handlers/match-url?url=${encodeURIComponent(url)}&lang=${lang}`,
+      { headers: { Authorization: `Bearer ${coreAuthToken()}` }, signal: AbortSignal.timeout(5000) },
+    );
+    if (!resp.ok) return [];
+    const data = await resp.json() as { buttons?: HandlerButton[] };
+    return data.buttons ?? [];
+  } catch { return []; }
+}
+
+/** Query core for file handlers matching an upload. */
+async function queryFileActions(uploadId: string, agent: string, lang = "ru"): Promise<HandlerButton[]> {
+  try {
+    const resp = await fetch(
+      `${coreHttpBase()}/api/files/${encodeURIComponent(uploadId)}/actions?agent=${encodeURIComponent(agent)}&lang=${lang}`,
+      { headers: { Authorization: `Bearer ${coreAuthToken()}` }, signal: AbortSignal.timeout(5000) },
+    );
+    if (!resp.ok) return [];
+    const data = await resp.json() as { buttons?: HandlerButton[] };
+    return data.buttons ?? [];
+  } catch { return []; }
+}
+
+/** Build an InlineKeyboard from handler buttons. Each button's callback_data
+ *  encodes the handler ID, source ID (URL or upload), and agent name. */
+function buildActionKeyboard(
+  buttons: HandlerButton[],
+  prefix: "ua" | "fa",
+  sourceId: string,
+  agentName: string,
+): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  const iconMap: Record<string, string> = {
+    video: "📹", mic: "🎙", document: "📄", save: "💾", image: "🖼", file: "📁",
+  };
+  for (const btn of buttons) {
+    const icon = iconMap[btn.icon] ?? "▶";
+    // callback_data limit: 64 bytes. Format: {prefix}:{sourceId}:{handlerId}:{agent}
+    const data = `${prefix}:${sourceId}:${btn.id}:${agentName}`;
+    kb.text(`${icon} ${btn.label}`, data.slice(0, 64));
+  }
+  return kb;
+}
+
+/** Send inline action buttons for a video URL. Reply to the user's message. */
+async function sendUrlActionButtons(
+  bot: Bot,
+  chatId: number,
+  replyToMsgId: number,
+  url: string,
+  agentName: string,
+  strings: Strings,
+): Promise<void> {
+  const handlers = await queryUrlHandlers(url);
+  if (handlers.length === 0) return;
+  // Use the video ID as a compact source identifier (fits 64-byte callback_data limit).
+  const videoId = url.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]+)/)?.[1] ?? "url";
+  const kb = buildActionKeyboard(handlers, "ua", videoId, agentName);
+  await bot.api.sendMessage(chatId, "🎬 Обнаружено видео. Выберите действие:", {
+    reply_parameters: safeReplyParams(replyToMsgId),
+    reply_markup: kb,
+  }).catch((err: unknown) => {
+    console.error("[tg] sendUrlActionButtons failed:", err);
+  });
+}
+
+/** Send inline action buttons for a file attachment. Reply to the user's message. */
+async function sendFileActionButtons(
+  bot: Bot,
+  chatId: number,
+  replyToMsgId: number,
+  uploadUrl: string,
+  agentName: string,
+  strings: Strings,
+): Promise<void> {
+  const uploadId = extractUploadId(uploadUrl);
+  if (!uploadId) return;
+  const handlers = await queryFileActions(uploadId, agentName);
+  if (handlers.length === 0) return;
+  const kb = buildActionKeyboard(handlers, "fa", uploadId, agentName);
+  await bot.api.sendMessage(chatId, "📎 Выберите действие:", {
+    reply_parameters: safeReplyParams(replyToMsgId),
+    reply_markup: kb,
+  }).catch((err: unknown) => {
+    console.error("[tg] sendFileActionButtons failed:", err);
+  });
+}
+
 // ── Process message ─────────────────────────────────────────────────────
 
 async function processMessage(
@@ -626,6 +845,26 @@ async function processMessage(
 
   // Re-upload media for stable URLs
   const stableAttachments = await reUploadAttachments(bridge, attachments);
+
+  // ── Show inline action buttons for video links and file attachments ────────
+  // Sent as a separate reply BEFORE the message goes to core, so the user
+  // sees action buttons immediately. The LLM enrichment hint tells it to
+  // wait for the user's choice rather than auto-processing.
+  const agentName = bridge.getAgentName();
+
+  // 1) Video links in text (YouTube / Yandex Disk)
+  const videoUrl = detectVideoUrl(text);
+  if (videoUrl) {
+    // fire-and-forget: don't block the message flow
+    sendUrlActionButtons(bot, chatId, msg.message_id, videoUrl, agentName, strings).catch(() => {});
+  }
+
+  // 2) File attachments with stable upload URLs
+  for (const att of stableAttachments) {
+    if (att.media_type === "video" || att.media_type === "audio" || att.media_type === "document") {
+      sendFileActionButtons(bot, chatId, msg.message_id, att.url, agentName, strings).catch(() => {});
+    }
+  }
 
   // Parse directives
   const { text: cleanText, directives } = parseDirectives(text);

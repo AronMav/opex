@@ -206,6 +206,14 @@ pub(crate) fn routes() -> Router<AppState> {
         // Literal "/validate" beats the "/{id}" capture in axum 0.8 — same
         // precedence rule as "/allowlist" above. No write: validate-only proxy.
         .route("/api/handlers/validate", post(api_validate_handler))
+        // URL-to-handlers matching: returns handlers whose declared domains
+        // match the given URL's host. Used by channel adapters (Telegram) to
+        // show inline action buttons when a URL is sent.
+        .route("/api/handlers/match-url", get(api_match_url_handlers))
+        // Enqueue a handler job for a URL-based source (no upload file).
+        // Used by channel adapters when the user clicks an action button
+        // for a video link.
+        .route("/api/handlers/enqueue", post(api_enqueue_handler))
         .route("/api/handlers/{id}/source", get(api_get_handler_source))
         .route(
             "/api/handlers/{id}",
@@ -214,6 +222,118 @@ pub(crate) fn routes() -> Router<AppState> {
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
+
+/// `GET /api/handlers/match-url?url=...&lang=ru` — find handlers whose declared
+/// domains match the given URL's host. Returns a list of `HandlerButton` items
+/// (same shape as `GET /api/files/{id}/actions`). Used by channel adapters to
+/// show inline action buttons when a URL is detected in user text.
+///
+/// Query params:
+/// - `url` (required): the URL to match against handler domains
+/// - `lang` (optional, default "ru"): language for label localization
+async fn api_match_url_handlers(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let url = match params.get("url") {
+        Some(u) if !u.is_empty() => u.as_str(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "missing required 'url' query parameter"})),
+            );
+        }
+    };
+    let lang = params.get("lang").map(|s| s.as_str()).unwrap_or("ru");
+
+    let manifests = state.handlers.manifests().await;
+    let enabled_allowlist = crate::agent::fse::get_enabled_allowlist(&state.infra.db).await;
+
+    let buttons = crate::agent::handler_registry::match_url_handlers(
+        &manifests,
+        url,
+        &enabled_allowlist,
+        lang,
+    );
+
+    (StatusCode::OK, Json(serde_json::json!({ "buttons": buttons })))
+}
+
+/// `POST /api/handlers/enqueue` — enqueue a handler job for a URL-based source
+/// (no upload file). Used by channel adapters when the user clicks an action
+/// button for a video link (YouTube, Yandex Disk).
+///
+/// Body: `{ source_url, handler_id, agent_name, session_id, params }`
+/// Returns: `{ accepted: true, job_id: "..." }`
+async fn api_enqueue_handler(
+    State(state): State<AppState>,
+    Json(req): Json<EnqueueRequest>,
+) -> impl IntoResponse {
+    if req.source_url.is_empty() || req.handler_id.is_empty() || req.agent_name.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "source_url, handler_id, agent_name required"}))).into_response();
+    }
+
+    // Verify the handler exists and is allowed for URL-based dispatch.
+    let manifests = state.handlers.manifests().await;
+    let enabled = crate::agent::fse::get_enabled_allowlist(&state.infra.db).await;
+    let manifest = manifests.iter().find(|m| m.id == req.handler_id);
+    let Some(m) = manifest else {
+        return (StatusCode::NOT_FOUND, Json(json!({"error": "handler not found"}))).into_response();
+    };
+    // Trust gate: builtin must be in allowlist
+    if m.tier == "builtin"
+        && (!FSE_DEFAULT_ALLOWLIST.contains(&m.id.as_str())
+            || !enabled.iter().any(|x| x == &m.id))
+    {
+        return (StatusCode::FORBIDDEN, Json(json!({"error": "handler not permitted"}))).into_response();
+    }
+    if m.execution != "async" {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "only async handlers can be enqueued"}))).into_response();
+    }
+
+    // Verify the URL matches the handler's declared domains.
+    let buttons = crate::agent::handler_registry::match_url_handlers(
+        &manifests,
+        &req.source_url,
+        &enabled,
+        "en",
+    );
+    if !buttons.iter().any(|b| b.id == req.handler_id) {
+        return (StatusCode::FORBIDDEN, Json(json!({"error": "handler does not match this URL domain"}))).into_response();
+    }
+
+    let params = req.params.unwrap_or(serde_json::json!({}));
+    let job_id = match opex_db::handler_jobs::insert_handler_job(
+        &state.infra.db,
+        None,
+        Some(req.source_url.as_str()),
+        &req.handler_id,
+        &req.agent_name,
+        req.session_id,
+        &params,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(error = %e, "handler enqueue failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "enqueue failed"}))).into_response();
+        }
+    };
+
+    tracing::info!(job_id = %job_id, handler = %req.handler_id, url = %req.source_url, "handler enqueued for URL");
+    (StatusCode::ACCEPTED, Json(json!({"accepted": true, "job_id": job_id.to_string()}))).into_response()
+}
+
+#[derive(Deserialize)]
+struct EnqueueRequest {
+    source_url: String,
+    handler_id: String,
+    agent_name: String,
+    session_id: uuid::Uuid,
+    #[serde(default)]
+    params: Option<serde_json::Value>,
+}
 
 /// `POST /api/handlers/validate` — proxy to toolgate's exec-free validation
 /// endpoint. Returns the full verdict JSON (`{ok, descriptor, errors}`) so the

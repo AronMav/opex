@@ -8,14 +8,18 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
+use url::Url;
 
 use crate::agent::fse::allowlist::FSE_DEFAULT_ALLOWLIST;
 
-/// Inner `"match"` object of a manifest: mime globs + an optional size cap.
+/// Inner `"match"` object of a manifest: mime globs + an optional size cap
+/// + domain patterns for URL-based handler matching.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct HandlerMatch {
     #[serde(default)]
     pub mime: Vec<String>,
+    #[serde(default)]
+    pub domains: Vec<String>,
     #[serde(default)]
     pub max_size_mb: Option<u64>,
 }
@@ -111,6 +115,73 @@ pub fn match_buttons(
                     && enabled_allowlist.iter().any(|x| x == &m.id)
             }
             // workspace (and any future tier) → default-on for v1 trusted authors
+            _ => true,
+        })
+        .collect();
+
+    matched.sort_by(|a, b| a.order.cmp(&b.order).then_with(|| a.id.cmp(&b.id)));
+
+    matched
+        .into_iter()
+        .map(|m| HandlerButton {
+            id: m.id.clone(),
+            label: localize(m, lang),
+            icon: m.icon.clone(),
+            params: m.params.clone(),
+        })
+        .collect()
+}
+
+/// True if `url`'s host matches a domain pattern from a handler manifest.
+///
+/// Pattern matching rules:
+/// - `"*"` matches any host (universal wildcard)
+/// - `"youtube.com"` matches `youtube.com` and any subdomain (`www.youtube.com`)
+/// - `"youtu.be"` matches `youtu.be` exactly (no subdomain matching for short domains)
+/// - Case-insensitive
+fn domain_matches(pattern: &str, host: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    let p = pattern.to_lowercase();
+    let h = host.to_lowercase();
+    if p == h {
+        return true;
+    }
+    // Pattern without leading dot → match subdomains too
+    if h.ends_with(&format!(".{p}")) {
+        return true;
+    }
+    false
+}
+
+/// Match handlers that declare domains matching the given URL's host.
+/// Same trust gate as `match_buttons`: builtin must be in allowlist,
+/// workspace is default-on. Returns matching buttons sorted by order, id.
+pub fn match_url_handlers(
+    manifests: &[HandlerManifest],
+    url: &str,
+    enabled_allowlist: &[String],
+    lang: &str,
+) -> Vec<HandlerButton> {
+    let parsed = match Url::parse(url) {
+        Ok(u) => u,
+        Err(_) => return vec![],
+    };
+    let host = match parsed.host_str() {
+        Some(h) => h,
+        None => return vec![],
+    };
+
+    let mut matched: Vec<&HandlerManifest> = manifests
+        .iter()
+        .filter(|m| !m.match_.domains.is_empty())
+        .filter(|m| m.match_.domains.iter().any(|d| domain_matches(d, host)))
+        .filter(|m| match m.tier.as_str() {
+            "builtin" => {
+                FSE_DEFAULT_ALLOWLIST.contains(&m.id.as_str())
+                    && enabled_allowlist.iter().any(|x| x == &m.id)
+            }
             _ => true,
         })
         .collect();
@@ -226,6 +297,7 @@ mod tests {
             icon: "mic".to_string(),
             match_: HandlerMatch {
                 mime: mimes.iter().map(|s| s.to_string()).collect(),
+                domains: vec![],
                 max_size_mb: max_mb,
             },
             capability: None,
@@ -409,5 +481,113 @@ mod tests {
         // never loaded; a failing refresh must not panic and leaves empty cache
         reg.refresh().await;
         assert!(reg.manifests().await.is_empty());
+    }
+
+    // ── domain_matches tests ────────────────────────────────────────────────
+
+    #[test]
+    fn domain_matches_exact_host() {
+        assert!(domain_matches("youtube.com", "youtube.com"));
+        assert!(domain_matches("youtu.be", "youtu.be"));
+    }
+
+    #[test]
+    fn domain_matches_subdomain() {
+        assert!(domain_matches("youtube.com", "www.youtube.com"));
+        assert!(domain_matches("youtube.com", "m.youtube.com"));
+        assert!(domain_matches("youtube.com", "sub.domain.youtube.com"));
+    }
+
+    #[test]
+    fn domain_matches_case_insensitive() {
+        assert!(domain_matches("youtube.com", "YouTube.com"));
+        assert!(domain_matches("YouTube.com", "youtube.com"));
+    }
+
+    #[test]
+    fn domain_rejects_non_subdomain() {
+        assert!(!domain_matches("youtube.com", "notyoutube.com"));
+        assert!(!domain_matches("youtube.com", "youtube.com.evil.com"));
+        assert!(!domain_matches("youtu.be", "youtu.bad"));
+    }
+
+    #[test]
+    fn domain_rejects_empty() {
+        assert!(!domain_matches("youtube.com", ""));
+        assert!(!domain_matches("", "youtube.com"));
+    }
+
+    #[test]
+    fn domain_wildcard_matches_anything() {
+        assert!(domain_matches("*", "youtube.com"));
+        assert!(domain_matches("*", "www.youtube.com"));
+        assert!(domain_matches("*", "example.org"));
+    }
+
+    // ── match_url_handlers tests ────────────────────────────────────────────
+
+    fn full_allowlist() -> Vec<String> {
+        FSE_DEFAULT_ALLOWLIST.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn manifest_with_domains(id: &str, domains: &[&str], tier: &str) -> HandlerManifest {
+        HandlerManifest {
+            id: id.to_string(),
+            labels: [("en".to_string(), id.to_string())].into_iter().collect(),
+            descriptions: HashMap::new(),
+            icon: "video".to_string(),
+            match_: HandlerMatch {
+                mime: vec!["video/*".into()],
+                domains: domains.iter().map(|s| s.to_string()).collect(),
+                max_size_mb: Some(2000),
+            },
+            capability: None,
+            provider: None,
+            execution: "async".into(),
+            output: "text".into(),
+            params: serde_json::json!([]),
+            order: 10,
+            tier: tier.into(),
+            source: String::new(),
+        }
+    }
+
+    #[test]
+    fn match_url_handlers_finds_youtube_handler() {
+        let manifests = vec![
+            manifest_with_domains("summarize_video", &["youtube.com", "youtu.be"], "builtin"),
+            manifest_with_domains("transcribe", &["*"], "builtin"),
+        ];
+        let allowlist = full_allowlist();
+        let buttons = match_url_handlers(&manifests, "https://www.youtube.com/watch?v=abc", &allowlist, "en");
+        assert_eq!(buttons.len(), 2, "both handlers should match youtube URL");
+        assert_eq!(buttons[0].id, "summarize_video");
+    }
+
+    #[test]
+    fn match_url_handlers_no_match_for_random_url() {
+        let manifests = vec![
+            manifest_with_domains("summarize_video", &["youtube.com"], "builtin"),
+        ];
+        let allowlist = full_allowlist();
+        let buttons = match_url_handlers(&manifests, "https://example.com/page", &allowlist, "en");
+        assert!(buttons.is_empty());
+    }
+
+    #[test]
+    fn match_url_handlers_respects_trust_gate() {
+        let manifests = vec![
+            manifest_with_domains("summarize_video", &["youtube.com"], "builtin"),
+        ];
+        // Empty allowlist → builtin handler filtered out
+        let buttons = match_url_handlers(&manifests, "https://youtube.com/watch?v=abc", &[], "en");
+        assert!(buttons.is_empty(), "empty allowlist should reject builtin");
+    }
+
+    #[test]
+    fn match_url_handlers_invalid_url_returns_empty() {
+        let manifests = vec![];
+        let buttons = match_url_handlers(&manifests, "not-a-url", &[], "en");
+        assert!(buttons.is_empty());
     }
 }

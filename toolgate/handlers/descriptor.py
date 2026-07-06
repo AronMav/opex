@@ -23,6 +23,7 @@ class HandlerDescriptor:
     descriptions: dict[str, str]
     icon: str
     match_mimes: list[str]
+    match_domains: list[str]  # youtube.com, youtu.be, etc.
     max_size_mb: int | None
     capability: str | None
     execution: str  # "sync" | "async"
@@ -92,11 +93,15 @@ def parse_descriptor(source: str, tier: str) -> HandlerDescriptor:
 
     match_el = root.find("match")
     match_mimes: list[str] = []
+    match_domains: list[str] = []
     max_size_mb: int | None = None
     if match_el is not None:
         for m in match_el.findall("mime"):
             if m.text:
                 match_mimes.append(m.text.strip())
+        for d in match_el.findall("domain"):
+            if d.text:
+                match_domains.append(d.text.strip().lower())
         size_txt = _text(match_el, "max_size_mb")
         if size_txt is not None:
             try:
@@ -133,9 +138,9 @@ def parse_descriptor(source: str, tier: str) -> HandlerDescriptor:
         )
     if not labels:
         raise DescriptorError(f"descriptor '{hid}' missing required <label>")
-    if not match_mimes:
+    if not match_mimes and not match_domains:
         raise DescriptorError(
-            f"descriptor '{hid}' must declare at least one <mime>"
+            f"descriptor '{hid}' must declare at least one <mime> or <domain>"
         )
     if execution not in _VALID_EXECUTION:
         raise DescriptorError(
@@ -148,6 +153,7 @@ def parse_descriptor(source: str, tier: str) -> HandlerDescriptor:
         descriptions=descriptions,
         icon=_text(root, "icon", "file") or "file",
         match_mimes=match_mimes,
+        match_domains=match_domains,
         max_size_mb=max_size_mb,
         capability=_text(root, "capability"),
         execution=execution,

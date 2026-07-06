@@ -18,6 +18,7 @@ def test_handler_descriptor_holds_all_fields():
         descriptions={"ru": "Речь в текст", "en": "Speech to text"},
         icon="mic",
         match_mimes=["audio/*", "video/*"],
+        match_domains=[],
         max_size_mb=200,
         capability="stt",
         execution="sync",
@@ -30,6 +31,7 @@ def test_handler_descriptor_holds_all_fields():
     assert d.id == "transcribe"
     assert d.labels["ru"] == "Транскрибировать"
     assert d.match_mimes == ["audio/*", "video/*"]
+    assert d.match_domains == []
     assert d.max_size_mb == 200
     assert d.capability == "stt"
     assert d.execution == "sync"
@@ -47,6 +49,7 @@ def test_handler_descriptor_optional_fields_default_to_none():
         descriptions={},
         icon="save",
         match_mimes=["*/*"],
+        match_domains=[],
         max_size_mb=None,
         capability=None,
         execution="sync",
@@ -180,6 +183,42 @@ def test_parse_descriptor_rejects_no_mime():
 '''
     with pytest.raises(DescriptorError, match="mime"):
         parse_descriptor(src, tier="builtin")
+
+
+def test_parse_descriptor_accepts_domains_only():
+    """Handler with domains but no mime should be accepted (URL-only handler)."""
+    src = '''\
+# <handler>
+#   <id>url_handler</id>
+#   <label lang="en">URL Handler</label>
+#   <match>
+#     <domain>example.com</domain>
+#   </match>
+#   <execution>sync</execution>
+# </handler>
+'''
+    d = parse_descriptor(src, tier="builtin")
+    assert d.match_mimes == []
+    assert d.match_domains == ["example.com"]
+
+
+def test_parse_descriptor_accepts_mime_and_domains():
+    """Handler with both mime and domains."""
+    src = '''\
+# <handler>
+#   <id>video_handler</id>
+#   <label lang="en">Video</label>
+#   <match>
+#     <mime>video/*</mime>
+#     <domain>youtube.com</domain>
+#     <domain>youtu.be</domain>
+#   </match>
+#   <execution>async</execution>
+# </handler>
+'''
+    d = parse_descriptor(src, tier="builtin")
+    assert d.match_mimes == ["video/*"]
+    assert d.match_domains == ["youtube.com", "youtu.be"]
 
 
 def test_parse_descriptor_rejects_missing_match_element():

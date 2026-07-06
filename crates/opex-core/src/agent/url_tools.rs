@@ -32,16 +32,29 @@ pub(crate) fn uploads_local_url(att_url: &str, gateway_listen: &str) -> String {
 }
 
 /// Append media attachment hints to the enriched text for LLM.
+///
+/// For video, audio, and document attachments, the hint includes a note that
+/// action buttons are shown to the user — the LLM must NOT auto-process these
+/// files. The user clicks a button to choose the action.
 pub(crate) fn enrich_with_attachments(text: &mut String, attachments: &[opex_types::MediaAttachment]) {
     use opex_types::MediaType;
     for att in attachments {
         let hint = match att.media_type {
             MediaType::Image => format!("[User attached an image: {}]", att.url),
-            MediaType::Audio => format!("[User sent a voice message: {}]", att.url),
-            MediaType::Video => format!("[User sent a video: {}]", att.url),
+            MediaType::Audio => format!(
+                "[User sent a voice message: {} — action buttons are shown to the user. Wait for their choice.]",
+                att.url
+            ),
+            MediaType::Video => format!(
+                "[User sent a video: {} — action buttons are shown to the user. Wait for their choice.]",
+                att.url
+            ),
             MediaType::Document => {
                 let name = att.file_name.as_deref().unwrap_or("file");
-                format!("[User attached a document \"{}\": {}]", name, att.url)
+                format!(
+                    "[User attached a document \"{}\": {} — action buttons are shown to the user. Wait for their choice.]",
+                    name, att.url
+                )
             }
         };
         if text.is_empty() {
@@ -139,9 +152,17 @@ mod tests {
             file_size: None,
         };
         enrich_with_attachments(&mut text, &[att1, att2]);
-        assert_eq!(
-            text,
-            "look at this\n[User attached an image: https://example.com/img.jpg]\n[User sent a voice message: https://example.com/audio.ogg]"
+        assert!(
+            text.contains("[User attached an image: https://example.com/img.jpg]"),
+            "image hint unchanged: {text}"
+        );
+        assert!(
+            text.contains("[User sent a voice message: https://example.com/audio.ogg"),
+            "audio hint present: {text}"
+        );
+        assert!(
+            text.contains("action buttons are shown"),
+            "audio hint includes action button note: {text}"
         );
     }
 
@@ -156,6 +177,13 @@ mod tests {
             file_size: None,
         };
         enrich_with_attachments(&mut text, &[att]);
-        assert_eq!(text, "[User attached a document \"report.pdf\": https://example.com/doc.pdf]");
+        assert!(
+            text.contains("[User attached a document \"report.pdf\": https://example.com/doc.pdf"),
+            "document hint present: {text}"
+        );
+        assert!(
+            text.contains("action buttons are shown"),
+            "document hint includes action button note: {text}"
+        );
     }
 }

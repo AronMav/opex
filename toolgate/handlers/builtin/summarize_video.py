@@ -8,6 +8,8 @@
 #   <match>
 #     <mime>video/*</mime>
 #     <max_size_mb>2000</max_size_mb>
+#     <domain>youtube.com</domain>
+#     <domain>youtu.be</domain>
 #   </match>
 #   <capability>stt</capability>
 #   <execution>async</execution>

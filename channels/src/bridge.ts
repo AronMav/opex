@@ -69,6 +69,11 @@ export class BridgeHandle {
     this.ownerId = id;
   }
 
+  /** Return the agent name this bridge is connected to. */
+  getAgentName(): string {
+    return this.agentName;
+  }
+
   /** Send a message to core. Returns requestId, chunk/phase listeners, and result promise. */
   sendMessage(msg: IncomingMessageDto): {
     requestId: string;

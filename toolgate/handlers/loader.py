@@ -167,7 +167,7 @@ class HandlerRegistry:
             "labels": d.labels,
             "descriptions": d.descriptions,
             "icon": d.icon,
-            "match": {"mime": d.match_mimes, "max_size_mb": d.max_size_mb},
+            "match": {"mime": d.match_mimes, "domains": d.match_domains, "max_size_mb": d.max_size_mb},
             "capability": d.capability,
             "provider": None,  # filled by the router from the active provider (R5)
             "execution": d.execution,
