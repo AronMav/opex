@@ -12,6 +12,7 @@ import { SlashMenu } from "../parts/SlashMenu";
 import { MentionAutocomplete } from "./MentionAutocomplete";
 import { ModelDropdown } from "./ModelDropdown";
 import { FileActionButtons } from "./FileActionButtons";
+import { UrlActionButtons } from "./UrlActionButtons";
 import { useVoiceRecorder } from "../hooks/use-voice-recorder";
 import { useProviderActive } from "@/lib/queries";
 import {
@@ -140,6 +141,7 @@ export function ChatComposer() {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [hasInput, setHasInput] = useState(false);
+  const [composerText, setComposerText] = useState("");
   const [uploadingCount, setUploadingCount] = useState(0);
   const isUploading = uploadingCount > 0;
 
@@ -390,6 +392,7 @@ export function ChatComposer() {
     const ta = e.target instanceof HTMLTextAreaElement ? e.target : null;
     if (!ta) return;
     setHasInput(!!ta.value.trim());
+    setComposerText(ta.value);
     saveDraft(currentAgent, ta.value);
     autoResize();
     const val = ta.value;
@@ -504,6 +507,7 @@ export function ChatComposer() {
     clearDraft(useChatStore.getState().currentAgent);
     setAttachments([]);
     setHasInput(false);
+    setComposerText("");
     if (textareaRef.current) {
       textareaRef.current.value = "";
       textareaRef.current.style.height = "auto";
@@ -536,6 +540,7 @@ export function ChatComposer() {
         clearDraft(useChatStore.getState().currentAgent);
         setAttachments([]);
         setHasInput(false);
+        setComposerText("");
         if (textareaRef.current) {
           textareaRef.current.value = "";
           textareaRef.current.style.height = "auto";
@@ -694,6 +699,11 @@ export function ChatComposer() {
               />
             </div>
           ))}
+          <UrlActionButtons
+            text={composerText}
+            agent={currentAgent}
+            sessionId={activeSessionId}
+          />
           {pendingMessage && (
             <div className="flex items-center gap-2 px-4 pt-2 pb-1 text-xs text-muted-foreground border-b border-border/30">
               <span className="flex-1 min-w-0 truncate">
