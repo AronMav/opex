@@ -67,17 +67,16 @@ echo "  synced $(ls "${SRC_DIR}"/migrations/*.sql | wc -l) files (latest: $(base
 # or code changes (e.g. video pipeline) silently never apply. (.env / venv stay.)
 echo "==> sync toolgate sources to runtime"
 cp -f "${SRC_DIR}"/toolgate/*.py "${RUN_DIR}/toolgate/" 2>/dev/null || true
-# Sync every toolgate package subdir (routers/, providers/, …), not just the
-# top level — a missed subdir silently ships stale provider code (the verbose_json
-# STT change once shipped only after a manual scp because providers/ was skipped).
+# Sync every toolgate package subdir (routers/, providers/, handlers/, …),
+# including nested dirs like handlers/builtin/. The old cp glob only synced
+# top-level children — a missed nested subdir (e.g. builtin/summarize_video.py)
+# silently shipped stale handler code.
 for sub in "${SRC_DIR}"/toolgate/*/; do
-  case "$(basename "$sub")" in
+  subname="$(basename "$sub")"
+  case "$subname" in
     .venv|__pycache__|tests) continue ;;
   esac
-  if compgen -G "${sub}*.py" >/dev/null; then
-    mkdir -p "${RUN_DIR}/toolgate/$(basename "$sub")"
-    cp -f "${sub}"*.py "${RUN_DIR}/toolgate/$(basename "$sub")/" 2>/dev/null || true
-  fi
+  rsync -a --include='*.py' --include='*/' --exclude='*' "${sub}" "${RUN_DIR}/toolgate/${subname}/" 2>/dev/null || true
 done
 echo "  synced toolgate .py incl. subpackages (core restart re-spawns toolgate)"
 
