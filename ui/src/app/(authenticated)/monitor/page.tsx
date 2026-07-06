@@ -615,7 +615,7 @@ function MonitorPageInner() {
   return (
     <div className="flex h-full flex-col">
       <Tabs value={activeTab} onValueChange={handleTabChange} className="flex flex-col flex-1 min-h-0 min-w-0">
-        <div className="border-b border-border/50 bg-background px-4 md:px-6 pt-4 shrink-0 min-w-0">
+        <div className="relative z-20 border-b border-border/50 bg-background px-4 md:px-6 pt-4 shrink-0 min-w-0">
           <FilterTabsList
             items={[
               { value: "watchdog", label: t("monitor.tab_watchdog"), icon: <ShieldCheck /> },
@@ -935,7 +935,7 @@ function MonitorPageInner() {
         >
           {/* Logs section */}
           <div className="flex h-full flex-col bg-background selection:bg-primary/20 min-h-0">
-            <div className="z-10 flex flex-col md:flex-row md:items-center gap-4 border-b border-border/50 bg-background px-4 py-3 md:px-6 md:h-16 shrink-0">
+            <div className="flex flex-col md:flex-row md:items-center gap-4 border-b border-border/50 bg-background px-4 py-3 md:px-6 md:h-16 shrink-0">
               <div className="flex flex-col gap-0.5 md:mr-4">
                 <h2 className="font-display text-lg font-bold tracking-tight text-foreground">{t("logs.title")}</h2>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -1064,7 +1064,7 @@ function MonitorPageInner() {
           className={activeTab !== "audit" ? "hidden" : "flex-1 overflow-hidden min-h-0"}
         >
           <div className="flex h-full flex-col bg-background selection:bg-primary/20 min-h-0">
-            <div className="z-10 flex flex-col md:flex-row md:items-center gap-4 border-b border-border/50 bg-background px-4 py-3 md:px-6 md:h-16 shrink-0">
+            <div className="flex flex-col md:flex-row md:items-center gap-4 border-b border-border/50 bg-background px-4 py-3 md:px-6 md:h-16 shrink-0">
               <div className="flex flex-col gap-0.5 md:mr-4">
                 <h2 className="font-display text-lg font-bold tracking-tight text-foreground">{t("audit.title")}</h2>
                 <p className="text-sm text-muted-foreground">{t("audit.subtitle")}</p>

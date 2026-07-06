@@ -546,3 +546,119 @@ async def test_vision_scoring_json_parse_fallback(monkeypatch):
     assert len(body["frames"]) == MAX_FRAMES
     # Degraded vision flag must NOT be set — vision responded, just with garbage.
     assert body["degraded"]["vision"] is False
+
+
+# ── Vault-based cookies resolution unit tests ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cookie_args_vault_first_then_file_fallback(monkeypatch):
+    """When vault has cookies, file fallback is never touched."""
+    import video_helpers as vh
+
+    vault_content = "# Netscape\n.youtube.com\tTRUE\t/\tTRUE\t9999\tsid\tABC\n"
+
+    async def fake_vault():
+        return vault_content
+
+    file_called = {"yes": False}
+
+    def fake_read_file(path):
+        file_called["yes"] = True
+        return b"file cookies"
+
+    monkeypatch.setattr(vh, "_fetch_cookies_from_vault", fake_vault)
+    monkeypatch.setattr(vh, "_read_cookies_file", fake_read_file)
+
+    args = await vh._cookie_args_async()
+
+    assert file_called["yes"] is False, "file fallback must not be called when vault has cookies"
+    assert len(args) == 2, "expected [--cookies, <path>]"
+    assert args[0] == "--cookies"
+    # Verify the working copy was actually written with vault content.
+    with open(args[1]) as f:
+        assert "youtube.com" in f.read()
+
+
+@pytest.mark.asyncio
+async def test_cookie_args_falls_back_to_file_when_vault_empty(monkeypatch):
+    """When vault returns None, file fallback is used."""
+    import video_helpers as vh
+
+    async def fake_vault():
+        return None
+
+    monkeypatch.setattr(vh, "_fetch_cookies_from_vault", fake_vault)
+
+    # Create a temp cookies file.
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        f.write("# Netscape\n.youtube.com\tTRUE\t/\tTRUE\t9999\tsid\tXYZ\n")
+        cookies_path = f.name
+
+    monkeypatch.setenv("YTDLP_COOKIES_FILE", cookies_path)
+
+    try:
+        args = await vh._cookie_args_async()
+        assert len(args) == 2, "expected [--cookies, <path>]"
+        with open(args[1]) as f:
+            assert "XYZ" in f.read()
+    finally:
+        os.unlink(cookies_path)
+
+
+@pytest.mark.asyncio
+async def test_cookie_args_returns_empty_when_no_source(monkeypatch):
+    """When neither vault nor file has cookies, returns []."""
+    import video_helpers as vh
+
+    async def fake_vault():
+        return None
+
+    monkeypatch.setattr(vh, "_fetch_cookies_from_vault", fake_vault)
+    monkeypatch.setattr(vh, "_read_cookies_file", lambda path: None)
+
+    args = await vh._cookie_args_async()
+    assert args == [], "expected empty args when no cookies source available"
+
+
+@pytest.mark.asyncio
+async def test_fetch_cookies_from_vault_returns_none_without_token(monkeypatch):
+    """No auth token → no vault fetch (returns None)."""
+    import video_helpers as vh
+
+    monkeypatch.delenv("OPEX_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("AUTH_TOKEN", raising=False)
+
+    result = await vh._fetch_cookies_from_vault()
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_cookies_from_vault_returns_content_on_success(monkeypatch):
+    """Successful vault fetch returns cookies content."""
+    import video_helpers as vh
+
+    monkeypatch.setenv("OPEX_AUTH_TOKEN", "test-token")
+    monkeypatch.setattr(vh, "_CORE_URL", "http://fake-core:18789")
+
+    fake_content = "# Netscape\n.youtube.com\tTRUE\t/\tTRUE\t9999\tsid\tABC\n"
+
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            return {"cookies": fake_content}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            pass
+        async def get(self, url, headers=None):
+            assert "Bearer test-token" in (headers or {}).get("Authorization", "")
+            return FakeResp()
+
+    import httpx as _httpx_mod
+    monkeypatch.setattr(_httpx_mod, "AsyncClient", lambda **kw: FakeClient())
+
+    result = await vh._fetch_cookies_from_vault()
+    assert result == fake_content

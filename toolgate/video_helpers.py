@@ -6,7 +6,6 @@ import glob
 import os
 import sys
 import tempfile
-
 from helpers import validate_url_ssrf
 
 
@@ -18,16 +17,86 @@ async def _run(*args: str) -> tuple[int, bytes, bytes]:
     return proc.returncode or 0, out, err
 
 
-# Default to the cookies jar that MeTube maintains on the deploy server; override
-# with YTDLP_COOKIES_FILE. YouTube serves a bot-check ("Sign in to confirm you're
-# not a bot") to the datacenter/proxy IP for media-stream downloads — a valid
-# cookies file authenticates the request and passes the check.
+# ── cookies source: vault-first, file fallback ────────────────────────────────
+#
+# YouTube cookies are fetched from the OPEX secrets vault via a loopback
+# call-back to Core (`GET /api/internal/youtube-cookies`). The vault provides
+# encrypted-at-rest storage, audited access, and operator-managed updates via
+# the `/secrets` UI — no SSH or manual file placement required.
+#
+# Fallback: if the vault has no `YOUTUBE_COOKIES` secret, we fall back to the
+# legacy `YTDLP_COOKIES_FILE` env var (default: MeTube's shared cookie jar on
+# the deploy server). This preserves backward compatibility.
+
 _DEFAULT_COOKIES = os.path.expanduser("~/docker/metube/.metube/cookies.txt")
+_CORE_URL = os.environ.get("CORE_API_URL", "http://127.0.0.1:18789")
+
+
+async def _fetch_cookies_from_vault() -> str | None:
+    """Fetch YouTube cookies content from the OPEX secrets vault.
+
+    Returns the raw Netscape cookies file content, or None if the secret is
+    not set or the vault endpoint is unreachable.
+    """
+    import httpx
+    token = os.environ.get("OPEX_AUTH_TOKEN") or os.environ.get("AUTH_TOKEN", "")
+    if not token:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{_CORE_URL}/api/internal/youtube-cookies",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                content = data.get("cookies", "")
+                if content and content.strip():
+                    return content
+    except Exception:
+        pass
+    return None
+
+
+def _read_cookies_file(path: str) -> bytes | None:
+    """Read cookies from a file path (legacy fallback). Returns None if missing."""
+    if not (path and os.path.isfile(path)):
+        return None
+    try:
+        with open(path, "rb") as src:
+            return src.read()
+    except OSError:
+        return None
+
+
+def _write_working_copy(data: bytes) -> str | None:
+    """Write cookies data to a per-uid owner-only working file.
+
+    yt-dlp REWRITES the cookies file it is handed (saves post-request session
+    back). We write to a throwaway working file so the source is never mutated.
+
+    Returns the path to the working file, or None on failure.
+    """
+    copy = _cookie_working_copy()
+    try:
+        os.unlink(copy)
+    except FileNotFoundError:
+        pass
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(copy, flags, 0o600)
+        try:
+            os.write(fd, data)
+        finally:
+            os.close(fd)
+        return copy
+    except OSError:
+        return None
 
 
 def _cookie_working_copy() -> str:
     """Owner-only working-copy path in a private per-user temp dir (0o700)."""
-    uid = getattr(os, "getuid", lambda: 0)()  # Windows (dev/tests) has no getuid
+    uid = getattr(os, "getuid", lambda: 0)()
     d = os.path.join(tempfile.gettempdir(), f"opex_ytdlp_{uid}")
     os.makedirs(d, exist_ok=True)
     try:
@@ -37,40 +106,31 @@ def _cookie_working_copy() -> str:
     return os.path.join(d, "cookies.txt")
 
 
-def _cookie_args() -> list[str]:
-    """`["--cookies", <copy>]` if a cookies file is configured and exists, else `[]`.
+async def _cookie_args_async() -> list[str]:
+    """Return `["--cookies", <working_copy_path>]` or `[]`.
 
-    yt-dlp REWRITES the cookies file it is handed (it saves the post-request
-    session back). Pointing it at MeTube's shared jar means a bot-checked /
-    logged-out response overwrites and DEGRADES that jar — each failed attempt
-    makes the next one worse. So copy the jar to a throwaway working file every
-    call and give yt-dlp the copy; the source jar is never mutated by us.
+    Resolution order:
+    1. OPEX secrets vault (`GET /api/internal/youtube-cookies`) — preferred.
+    2. `YTDLP_COOKIES_FILE` file on disk — legacy fallback.
+    3. No cookies (yt-dlp runs without auth — will likely hit bot-check).
+    """
+    # 1. Vault
+    vault_cookies = await _fetch_cookies_from_vault()
+    if vault_cookies:
+        working = _write_working_copy(vault_cookies.encode())
+        if working:
+            return ["--cookies", working]
 
-    The copy holds session credentials, so it is written owner-only (0o600) in a
-    private per-user dir, and created with O_NOFOLLOW after unlinking any existing
-    path so a planted symlink can't redirect the write or leak the cookies."""
+    # 2. File fallback
     path = os.environ.get("YTDLP_COOKIES_FILE", _DEFAULT_COOKIES)
-    if not (path and os.path.isfile(path)):
-        return []
-    try:
-        with open(path, "rb") as src:
-            data = src.read()
-        copy = _cookie_working_copy()
-        try:
-            os.unlink(copy)
-        except FileNotFoundError:
-            pass
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(copy, flags, 0o600)
-        try:
-            os.write(fd, data)
-        finally:
-            os.close(fd)
-        return ["--cookies", copy]
-    except OSError:
-        # Copy failed (disk/perms). Run WITHOUT cookies rather than handing yt-dlp
-        # the shared MeTube jar directly — it would rewrite and degrade that jar.
-        return []
+    file_data = _read_cookies_file(path)
+    if file_data:
+        working = _write_working_copy(file_data)
+        if working:
+            return ["--cookies", working]
+
+    # 3. No cookies
+    return []
 
 
 async def extract_audio(video_path: str) -> bytes:
@@ -283,7 +343,7 @@ async def download_video(url: str, dest_dir: str) -> str:
         sys.executable, "-m", "yt_dlp",
         "--js-runtimes", "deno",
         "--remote-components", "ejs:github",
-        *_cookie_args(),
+        *(await _cookie_args_async()),
         "-f", "best[ext=mp4]/best", "-o", out_tmpl, "--no-playlist", "--", url
     )
     if code != 0:
