@@ -275,8 +275,15 @@ async def download_video(url: str, dest_dir: str) -> str:
     # produces an invalid signature -> media URL returns HTTP 403 / YouTube
     # serves a bot-check ("Sign in to confirm you're not a bot"). Deno must be on
     # toolgate's PATH (~/.local/bin/deno -> ~/.deno/bin/deno on the server).
+    # `--remote-components ejs:github`: yt-dlp >=2026.6 requires downloading the
+    # "remote components" JS solver from GitHub on first use. Without this flag,
+    # yt-dlp warns the solver was "skipped" and extraction fails on newer
+    # YouTube player versions.
     code, _, err = await _run(
-        sys.executable, "-m", "yt_dlp", "--js-runtimes", "deno", *_cookie_args(),
+        sys.executable, "-m", "yt_dlp",
+        "--js-runtimes", "deno",
+        "--remote-components", "ejs:github",
+        *_cookie_args(),
         "-f", "best[ext=mp4]/best", "-o", out_tmpl, "--no-playlist", "--", url
     )
     if code != 0:
