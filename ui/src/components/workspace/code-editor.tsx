@@ -67,6 +67,10 @@ export function CodeEditor({ value, onChange, onSave, language }: CodeEditorProp
 
   const onSaveRef = useRef(onSave);
   useEffect(() => { onSaveRef.current = onSave; }, [onSave]);
+  // The `run` callback only fires on user keypress (never during render), so
+  // reading onSaveRef.current here is the intended ref pattern — the lint
+  // heuristic cannot prove that and would false-positive without the disable.
+  // eslint-disable-next-line react-hooks/refs
   const saveKeymap = useMemo(() => keymap.of([{
     key: "Mod-s",
     run: () => { onSaveRef.current?.(); return true; },

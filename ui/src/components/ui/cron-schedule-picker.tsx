@@ -115,7 +115,7 @@ export function CronSchedulePicker({
 
       {/* Row 3: Human-readable description */}
       {showDescription && description && (
-        <p className="mt-1.5 font-mono text-[11px] text-muted-foreground-subtle">{description}</p>
+        <p className="mt-1.5 font-mono text-2xs text-muted-foreground-subtle">{description}</p>
       )}
     </div>
   );

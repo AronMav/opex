@@ -11,7 +11,7 @@ export function createComposerActions(deps: ActionDeps) {
 
   // ── Internal helper (mirroring store-level update) ──────────────────────
   function update(agent: string, patch: Partial<AgentState>) {
-    set((draft: any) => {
+    set((draft) => {
       if (!draft.agents[agent]) draft.agents[agent] = emptyAgentState();
       Object.assign(draft.agents[agent], patch);
     });

@@ -3,6 +3,7 @@
 import { cn } from "@/lib/utils"
 import { marked } from "marked"
 import { memo, useEffect, useId, useMemo, useState } from "react"
+import type { Pluggable } from "unified"
 import ReactMarkdown, { Components } from "react-markdown"
 import remarkBreaks from "remark-breaks"
 import remarkGfm from "remark-gfm"
@@ -173,7 +174,7 @@ const MemoizedMathBlock = memo(
     content: string
     components?: Partial<Components>
   }) {
-    const [mathPlugins, setMathPlugins] = useState<{ remarkMath: any; rehypeKatex: any } | null>(null)
+    const [mathPlugins, setMathPlugins] = useState<{ remarkMath: Pluggable; rehypeKatex: Pluggable } | null>(null)
 
     useEffect(() => {
       let cancelled = false

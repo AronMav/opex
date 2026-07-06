@@ -16,20 +16,22 @@ import {
 import type {
   ChatMessage,
   MessagePart,
+  MessageAttachment,
   AgentState,
+  ChatStore,
 } from "./chat-types";
 import { getCachedRawMessages, resolveActivePath } from "./chat-history";
 import { streamSessionManager } from "./stream-session";
 import type { StreamSession } from "./stream-session";
 
 // ── Store access interface ─────────────────────────────────────────────────
-// Uses `any` for store shape to avoid circular dependency with ChatStore.
+// Typed against the ChatStore shape (type-only import — erased at runtime, so
+// there is no circular module dependency with chat-store.ts).
 
-interface StoreAccess {
-  get: () => any;
-  set: (fn: (draft: any) => void) => void;
+export interface StoreAccess {
+  get: () => ChatStore;
+  set: (fn: (draft: ChatStore) => void) => void;
 }
-
 // ── Reconnect constants (SSE-02) ─────────────────────────────────────────────
 const RECONNECT_DELAY_BASE_MS = 1000;
 
@@ -69,7 +71,7 @@ export function createStreamingRenderer(store: StoreAccess) {
   // ── Internal helpers ────────────────────────────────────────────────────
 
   function update(agent: string, patch: Partial<AgentState>) {
-    store.set((draft: any) => {
+    store.set((draft) => {
       if (!draft.agents[agent]) draft.agents[agent] = emptyAgentState();
       Object.assign(draft.agents[agent], patch);
     });
@@ -285,7 +287,7 @@ export function createStreamingRenderer(store: StoreAccess) {
     // never sees a stuck "reconnecting" badge after pressing Stop.
     const st = store.get().agents[agent];
     if (st && (st.connectionPhase === "reconnecting" || st.connectionPhase === "submitted" || st.connectionPhase === "streaming")) {
-      store.set((draft: any) => {
+      store.set((draft) => {
         const a = draft.agents[agent];
         if (!a) return;
         a.connectionPhase = "idle";
@@ -328,7 +330,7 @@ export function createStreamingRenderer(store: StoreAccess) {
   // ── SSE stream handler ──────────────────────────────────────────────────
   // Reconnect policy is in stream/stream-reconnect.ts (SSE-02).
 
-  function startStream(agent: string, sessionId: string | null, messages: ChatMessage[], userText: string, attachments?: Array<any>, userMessageId?: string) {
+  function startStream(agent: string, sessionId: string | null, messages: ChatMessage[], userText: string, attachments?: Array<MessageAttachment>, userMessageId?: string) {
     // Local-only cleanup for the same reason documented in resumeStream.
     abortLocalOnly(agent);
 
@@ -348,7 +350,12 @@ export function createStreamingRenderer(store: StoreAccess) {
     const userParts: MessagePart[] = [];
     if (userText) userParts.push({ type: "text", text: userText });
 
-    const apiAttachments: any[] = [];
+    const apiAttachments: Array<{
+      url: string;
+      media_type: string;
+      file_name: string;
+      mime_type: string;
+    }> = [];
     if (attachments && attachments.length > 0) {
       for (const att of attachments) {
         for (const content of att.content) {
@@ -487,7 +494,7 @@ export function createStreamingRenderer(store: StoreAccess) {
         // SSE-03: Mark the optimistic user message as failed so the UI shows an error indicator.
         session.writeDraft((agentDraft: AgentState) => {
           if (agentDraft.messageSource.mode !== "live") return;
-          const msgs = (agentDraft.messageSource as any).messages as ChatMessage[];
+          const msgs = agentDraft.messageSource.messages;
           for (let i = msgs.length - 1; i >= 0; i--) {
             if (msgs[i].role === "user" && msgs[i].status === "sending") {
               msgs[i].status = "failed";

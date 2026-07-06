@@ -63,9 +63,9 @@ export const useChatStore = create<ChatStore>()(
     ...composerActions,
 
     setVideoProgress: (sessionId: string, phase: string, text: string) =>
-      set((s: any) => { s.videoProgress[sessionId] = { phase, text }; }),
+      set((s) => { s.videoProgress[sessionId] = { phase, text }; }),
     clearVideoProgress: (sessionId: string) =>
-      set((s: any) => { delete s.videoProgress[sessionId]; }),
+      set((s) => { delete s.videoProgress[sessionId]; }),
   };
     }),
     { name: "ChatStore", enabled: process.env.NODE_ENV !== "production" },

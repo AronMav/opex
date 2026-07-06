@@ -10,7 +10,9 @@ export function useWsSubscription<T extends WsEventType>(
 ) {
   const ws = useWsStore((s) => s.ws);
   const handlerRef = useRef(handler);
-  handlerRef.current = handler;
+  useEffect(() => {
+    handlerRef.current = handler;
+  });
 
   useEffect(() => {
     if (!ws) return;

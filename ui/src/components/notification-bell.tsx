@@ -211,7 +211,7 @@ export function NotificationBell() {
             }`}
           />
           {unread_count > 0 && (
-            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground leading-none">
+            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-3xs font-bold text-primary-foreground leading-none">
               {unread_count > 99 ? "99+" : unread_count}
             </span>
           )}
@@ -274,7 +274,7 @@ export function NotificationBell() {
                   )}
                 </div>
                 <MediaNotificationBody notification={n} />
-                <span className="text-[11px] text-muted-foreground-subtle">
+                <span className="text-2xs text-muted-foreground-subtle">
                   {new Date(n.created_at).toLocaleString()}
                 </span>
               </button>

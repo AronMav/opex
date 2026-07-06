@@ -20,7 +20,9 @@ export function useSmoothedText(rawText: string, isStreaming: boolean) {
   const queueRef = useRef("");
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const streamingRef = useRef(isStreaming);
-  streamingRef.current = isStreaming;
+  useEffect(() => {
+    streamingRef.current = isStreaming;
+  });
 
   // Синхронизируем очередь при получении новых данных
   useEffect(() => {

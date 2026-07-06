@@ -78,12 +78,12 @@ function HighlightedOutput({ code, language }: { code: string; language?: string
   }, [code, language]);
 
   if (!html) {
-    return <pre className="max-h-[300px] overflow-auto px-3 pb-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{code}</pre>;
+    return <pre className="max-h-[300px] overflow-auto px-3 pb-2.5 font-mono text-2xs leading-relaxed whitespace-pre-wrap">{code}</pre>;
   }
 
   return (
     <div
-      className="max-h-[300px] overflow-auto px-3 pb-2.5 [&>pre]:bg-transparent [&>pre]:px-0 [&>pre]:py-0 [&>pre]:text-[11px] [&>pre]:leading-relaxed"
+      className="max-h-[300px] overflow-auto px-3 pb-2.5 [&>pre]:bg-transparent [&>pre]:px-0 [&>pre]:py-0 [&>pre]:text-2xs [&>pre]:leading-relaxed"
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
@@ -146,20 +146,20 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
           <span className="text-muted-foreground/50"><ToolIcon toolName={toolName} /></span>
 
           {/* tool name */}
-          <span className="font-mono text-[11px] font-semibold min-w-0 truncate text-foreground/80">
+          <span className="font-mono text-2xs font-semibold min-w-0 truncate text-foreground/80">
             {toolName}
           </span>
 
           {/* file / detail */}
           {detail && (
-            <span className="text-[10px] text-muted-foreground-subtle flex-1 min-w-0 truncate">
+            <span className="text-3xs text-muted-foreground-subtle flex-1 min-w-0 truncate">
               {detail}
             </span>
           )}
 
           {/* elapsed time */}
           {isRunning && elapsed > 0 && (
-            <span className="text-[10px] text-muted-foreground-subtle font-mono tabular-nums shrink-0">
+            <span className="text-3xs text-muted-foreground-subtle font-mono tabular-nums shrink-0">
               {formatElapsed(elapsed)}
             </span>
           )}
@@ -187,11 +187,11 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
           {inputDisplay && (
             <div className={hasContent ? "border-b border-border/30" : ""}>
               <div className="px-3 pt-2.5 pb-1">
-                <span className="font-mono text-[9px] font-bold uppercase tracking-widest text-primary/50">
+                <span className="font-mono text-3xs font-bold uppercase tracking-widest text-primary/50">
                   {t("chat.tool_input")}
                 </span>
               </div>
-              <pre className="max-h-[150px] overflow-auto px-3 pb-2.5 font-mono text-[11px] leading-relaxed text-foreground/80 whitespace-pre-wrap">
+              <pre className="max-h-[150px] overflow-auto px-3 pb-2.5 font-mono text-2xs leading-relaxed text-foreground/80 whitespace-pre-wrap">
                 {inputDisplay}
               </pre>
             </div>
@@ -200,7 +200,7 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
           {hasContent && (
             <div>
               <div className="flex items-center justify-between px-3 pt-2.5 pb-1">
-                <span className={`font-mono text-[9px] font-bold uppercase tracking-widest ${
+                <span className={`font-mono text-3xs font-bold uppercase tracking-widest ${
                   hasError || isDenied ? "text-destructive/70" : "text-success/70"
                 }`}>
                   {hasError ? t("chat.tool_error") : isDenied ? t("chat.tool_denied") : t("chat.tool_result")}
@@ -209,14 +209,14 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
                   <button
                     type="button"
                     onClick={() => setShowFullOutput(true)}
-                    className="text-[10px] text-primary/50 hover:text-primary underline underline-offset-2"
+                    className="text-3xs text-primary/50 hover:text-primary underline underline-offset-2"
                   >
                     {t("chat.tool_show_full", { chars: Math.round(resultHiddenChars / 1000) })}
                   </button>
                 )}
               </div>
               {hasError || isDenied ? (
-                <pre className="max-h-[300px] overflow-auto px-3 pb-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-destructive/80">
+                <pre className="max-h-[300px] overflow-auto px-3 pb-2.5 font-mono text-2xs leading-relaxed whitespace-pre-wrap text-destructive/80">
                   {resultDisplay}
                 </pre>
               ) : (

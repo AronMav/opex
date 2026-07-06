@@ -1,6 +1,6 @@
 "use client"
 
-import React, { Component } from "react";
+import React, { createElement, Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { TableCard, MetricCard } from "@/components/ui/rich-card";
 
@@ -72,7 +72,10 @@ export function GenerativeUISlot({ cardType, data }: GenerativeUISlotProps) {
     <div style={{ contentVisibility: "auto", containIntrinsicSize: "0 200px" }}>
       {CardComp ? (
         <CardErrorBoundary resetKey={cardType}>
-          <CardComp data={data} />
+          {/* createElement avoids the react-hooks/static-components heuristic,
+              which mis-flags registry lookups (`Map.get`) as render-time
+              component creation. CardComp is a stable module-level reference. */}
+          {createElement(CardComp, { data })}
         </CardErrorBoundary>
       ) : (
         <pre className="rounded-lg border bg-muted/30 p-4 text-sm font-mono whitespace-pre-wrap overflow-auto">

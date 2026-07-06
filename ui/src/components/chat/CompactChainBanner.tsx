@@ -65,14 +65,14 @@ export function CompactChainBanner({ activeSessionId, onNavigate }: CompactChain
                 <span className="truncate flex-1 min-w-0">
                   {entry.title ?? `session ${entry.id.slice(0, 8)}`}
                 </span>
-                <span className="text-[10px] text-muted-foreground shrink-0">
+                <span className="text-3xs text-muted-foreground shrink-0">
                   {new Date(entry.started_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                 </span>
                 {entry.end_reason === "compression" && (
-                  <span className="text-[10px] text-cron shrink-0">↩</span>
+                  <span className="text-3xs text-cron shrink-0">↩</span>
                 )}
                 {isCurrent && (
-                  <span className="text-[10px] text-primary shrink-0">←</span>
+                  <span className="text-3xs text-primary shrink-0">←</span>
                 )}
               </button>
             );

@@ -10,6 +10,7 @@ const css = readFileSync(
 test.each([
   "--text-2xs",
   "--text-3xs",
+  "--text-code",
   "--text-message",
   "--sidebar-w",
   "--toolbar-h",

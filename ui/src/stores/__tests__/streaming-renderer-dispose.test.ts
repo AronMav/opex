@@ -1,9 +1,13 @@
 import { test, expect, vi, beforeEach, afterEach } from "vitest";
 import { createStreamingRenderer } from "../streaming-renderer";
+import type { StoreAccess } from "../streaming-renderer";
 
 // Minimal StoreAccess — construction only reads .agents (none) and wires the
 // visibilitychange listener; no network calls happen at build time.
-const store = { get: () => ({ agents: {} }), set: () => {} };
+const store = {
+  get: () => ({ agents: {} }),
+  set: () => {},
+} as unknown as StoreAccess;
 
 let addSpy: ReturnType<typeof vi.spyOn>;
 let removeSpy: ReturnType<typeof vi.spyOn>;

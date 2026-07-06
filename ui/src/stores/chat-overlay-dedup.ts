@@ -20,7 +20,7 @@
  * sees a coherent assistant turn, not a stack of half-empty bubbles.
  */
 
-import type { ChatMessage, MessagePart, ToolPart } from "./chat-types";
+import type { ChatMessage, ToolPart } from "./chat-types";
 
 interface HistoryIndex {
   ids: Set<string>;

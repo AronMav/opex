@@ -3,7 +3,10 @@ import type { WsEventType, WsEventOf } from "@/types/ws";
 /** Generic handler type: narrows payload based on event type. */
 export type WsHandler<T extends WsEventType = WsEventType> = (msg: WsEventOf<T>) => void;
 
-type AnyWsHandler = (msg: any) => void;
+/** Shape of a parsed inbound WebSocket message. */
+export type WsMessage = { type: string; [key: string]: unknown };
+
+type AnyWsHandler = (msg: WsMessage) => void;
 type ConnectionListener = (connected: boolean) => void;
 
 export class WsManager {
@@ -14,7 +17,7 @@ export class WsManager {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private delay = 1000;
   private disposed = false;
-  private earlyMessages: Array<{ type: string; [key: string]: unknown }> = [];
+  private earlyMessages: Array<WsMessage> = [];
   private visibilityHandler: (() => void) | null = null;
   /** Timestamp of last received message (for stale detection on wake). */
   private lastMessageAt = 0;
@@ -69,7 +72,7 @@ export class WsManager {
       };
       this.ws.onmessage = (ev) => {
         this.lastMessageAt = Date.now();
-        let msg: { type: string; [key: string]: unknown };
+        let msg: WsMessage;
         try {
           msg = JSON.parse(ev.data);
         } catch {
@@ -125,13 +128,13 @@ export class WsManager {
 
   on<T extends WsEventType>(type: T, handler: WsHandler<T>) {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
-    this.handlers.get(type)!.add(handler as AnyWsHandler);
+    this.handlers.get(type)!.add(handler as unknown as AnyWsHandler);
     // Replay any buffered messages for this type
     if (this.earlyMessages.length > 0) {
       const remaining: typeof this.earlyMessages = [];
       for (const msg of this.earlyMessages) {
         if (msg.type === type) {
-          (handler as AnyWsHandler)(msg);
+          (handler as unknown as AnyWsHandler)(msg);
         } else {
           remaining.push(msg);
         }
@@ -141,7 +144,7 @@ export class WsManager {
   }
 
   off<T extends WsEventType>(type: T, handler: WsHandler<T>) {
-    this.handlers.get(type)?.delete(handler as AnyWsHandler);
+    this.handlers.get(type)?.delete(handler as unknown as AnyWsHandler);
   }
 
   addConnectionListener(fn: ConnectionListener) {
@@ -152,12 +155,12 @@ export class WsManager {
     this.connListeners.delete(fn);
   }
 
-  private dispatch(type: string, msg: unknown) {
+  private dispatch(type: string, msg: WsMessage) {
     const handlers = this.handlers.get(type);
     if (handlers && handlers.size > 0) {
       handlers.forEach((h) => h(msg));
     } else if (this.earlyMessages.length < 100) {
-      this.earlyMessages.push(msg as { type: string; [key: string]: unknown });
+      this.earlyMessages.push(msg);
     }
   }
 

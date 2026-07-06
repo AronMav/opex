@@ -20,6 +20,23 @@ export const MAX_INPUT_LENGTH = 32_000;
 export const STREAM_THROTTLE_MS = 50;
 export const MAX_RECONNECT_ATTEMPTS = 6;
 
+// ── Composer attachment (structural — ChatComposer's AttachmentEntry satisfies it) ─
+
+/**
+ * Attachment payload accepted by the composer actions. Only the fields the
+ * streaming layer actually reads are required; ChatComposer.AttachmentEntry
+ * (which also carries `id`, `file`, `uploadId`) is structurally assignable.
+ */
+export interface MessageAttachment {
+  name: string;
+  content: Array<{
+    type: string;
+    data: string;
+    mimeType: string;
+    filename?: string;
+  }>;
+}
+
 // ── Message types (replaces AI SDK UIMessage dependency) ────────────────────
 
 export interface TextPart {
@@ -119,8 +136,17 @@ export interface ChatMessage {
   createdAt?: string;
   /** Per-message agent identity (for multi-agent sessions). */
   agentId?: string;
-  /** Optimistic send status (SSE-03). Undefined means confirmed (from history/sync). */
-  status?: "sending" | "confirmed" | "failed" | "aborted";
+  /**
+   * Lifecycle status of this message in the UI store.
+   * - "sending" | "confirmed" | "failed": optimistic send status for the user
+   *   message (SSE-03). "confirmed" lands once `data-session-id` acks it.
+   * - "aborted": the assistant turn ended early (DB row status='aborted').
+   * - "complete" | "streaming": set by the live `sync` SSE handler to mirror the
+   *   backend run status for the assistant message (read by refetch logic, e.g.
+   *   queries.ts uses "streaming" to poll). convertHistory does NOT set these —
+   *   history rows map only "aborted" → "aborted".
+   */
+  status?: "sending" | "confirmed" | "failed" | "aborted" | "complete" | "streaming";
   /** Parent message ID in the tree (null for root/trunk messages). */
   parentMessageId?: string;
   /** The message this branch was forked from (set on fork-created user messages). */
@@ -212,7 +238,7 @@ export interface AgentState {
    * the message is stored here. A useEffect in ChatThread drains it when
    * connectionPhase transitions to idle (clean success only).
    */
-  pendingMessage: { content: string; attachments?: Array<any> } | null;
+  pendingMessage: { content: string; attachments?: Array<MessageAttachment> } | null;
   /**
    * Input token count from the most recent LLM response (from the "usage" SSE event).
    * Only inputTokens is stored — outputTokens do not consume context window for display.
@@ -260,9 +286,9 @@ export interface ChatStore {
   refreshHistory: (sessionId: string, agentName?: string) => void;
   clearError: () => void;
 
-  sendMessage: (text: string, attachments?: Array<any>) => void;
-  interruptAndSend: (text: string, attachments?: Array<any>) => Promise<void>;
-  queueMessage: (text: string, attachments?: Array<any>) => void;
+  sendMessage: (text: string, attachments?: Array<MessageAttachment>) => void;
+  interruptAndSend: (text: string, attachments?: Array<MessageAttachment>) => Promise<void>;
+  queueMessage: (text: string, attachments?: Array<MessageAttachment>) => void;
   clearPending: (agent?: string) => void;
   stopStream: () => void;
   regenerate: () => void;

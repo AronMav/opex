@@ -152,7 +152,7 @@ export default function AuthenticatedLayout({
 
           <Badge variant={connected ? "outline-success" : "outline-destructive"} className="gap-1.5">
             <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-success" : "bg-destructive"}`} />
-            <span className="font-mono text-[10px] font-bold uppercase tracking-tight leading-none">
+            <span className="font-mono text-3xs font-bold uppercase tracking-tight leading-none">
               {connected ? t("common.live") : t("common.offline")}
             </span>
           </Badge>

@@ -306,7 +306,7 @@ export function AudioPlayer({ src }: { src: string }) {
 
         {/* Time */}
         <span
-          className="flex-shrink-0 text-[11px] tabular-nums leading-none"
+          className="flex-shrink-0 text-2xs tabular-nums leading-none"
           style={{
             color: "var(--muted-foreground)",
             fontFamily: "var(--font-mono, monospace)",
@@ -319,7 +319,7 @@ export function AudioPlayer({ src }: { src: string }) {
       </div>
 
       {error && (
-        <p className="mt-1 text-[11px]" style={{ color: "var(--destructive)" }}>
+        <p className="mt-1 text-2xs" style={{ color: "var(--destructive)" }}>
           {t("chat.audio_play_error")}
         </p>
       )}

@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useChatStore } from "@/stores/chat-store";
 import { selectRenderMessages } from "@/stores/chat-selectors";
-import type { ChatMessage } from "@/stores/chat-types";
+import type { ChatMessage, ChatState } from "@/stores/chat-types";
 import { qk } from "@/lib/queries";
 
 /**
@@ -55,7 +55,11 @@ export function useRenderMessages(agent: string): ChatMessage[] {
           activeSessionId,
         },
       },
-    } as any;
+    } as unknown as ChatState;
+    // Reference dataUpdatedAt so the dependency is genuinely "used" — it is
+    // an intentional re-render trigger (RQ bumps it when the session cache is
+    // filled by ChatThread's useSessionMessages).
+    void dataUpdatedAt;
     return selectRenderMessages(fakeState, agent);
     // messageSource, selectedBranches, activeSessionId are the only
     // inputs that can influence the result. All three have stable

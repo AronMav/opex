@@ -1,8 +1,7 @@
 "use client";
 
 import { useChatStore } from "./chat-store";
-import type { AgentState, ConnectionPhase } from "./chat-types";
-import type { ChatMessage } from "./chat-types";
+import type { AgentState, ConnectionPhase, MessageSource } from "./chat-types";
 import { StreamBuffer } from "./stream/stream-buffer";
 import { STREAM_THROTTLE_MS } from "./chat-types";
 
@@ -50,7 +49,6 @@ export class StreamSession {
   write(patch: Partial<AgentState>): void {
     if (!this.isCurrent) {
       if (process.env.NODE_ENV !== "production") {
-        // eslint-disable-next-line no-console
         console.debug(
           `[StreamSession] dropped write for agent=${this.agent} gen=${this.generation}`,
           patch,
@@ -58,7 +56,7 @@ export class StreamSession {
       }
       return;
     }
-    useChatStore.setState((draft: any) => {
+    useChatStore.setState((draft) => {
       const st = draft.agents[this.agent];
       if (!st) return;
       Object.assign(st, patch);
@@ -68,14 +66,13 @@ export class StreamSession {
   writeDraft(mutator: (agentDraft: AgentState) => void): void {
     if (!this.isCurrent) {
       if (process.env.NODE_ENV !== "production") {
-        // eslint-disable-next-line no-console
         console.debug(
           `[StreamSession] dropped writeDraft for agent=${this.agent} gen=${this.generation}`,
         );
       }
       return;
     }
-    useChatStore.setState((draft: any) => {
+    useChatStore.setState((draft) => {
       const st = draft.agents[this.agent];
       if (!st) return;
       mutator(st);
@@ -85,15 +82,17 @@ export class StreamSession {
   commit(phase?: ConnectionPhase): void {
     if (!this.isCurrent) return;
     this.writeDraft((agentDraft: AgentState) => {
-      if ((agentDraft as any).streamGeneration !== this.generation) return;
-      if (agentDraft.messageSource.mode !== "live") {
-        (agentDraft as any).messageSource = { mode: "live", messages: [] };
-      }
-      const liveMessages = (agentDraft.messageSource as any).messages as ChatMessage[];
+      if (agentDraft.streamGeneration !== this.generation) return;
+      // Resolve the live messages array, switching into a fresh live source
+      // when the current mode isn't already live (preserves the original
+      // switch-when-not-live semantics without `any` casts).
+      const liveSrc: Extract<MessageSource, { mode: "live" }> =
+        agentDraft.messageSource.mode === "live"
+          ? agentDraft.messageSource
+          : { mode: "live", messages: [] };
+      const liveMessages = liveSrc.messages;
       const allParts = this.buffer.snapshot();
-      const existingIdx = liveMessages.findIndex(
-        (m: ChatMessage) => m.id === this.buffer.assistantId,
-      );
+      const existingIdx = liveMessages.findIndex((m) => m.id === this.buffer.assistantId);
       if (existingIdx >= 0) {
         liveMessages[existingIdx].parts = allParts;
         liveMessages[existingIdx].agentId =
@@ -107,6 +106,7 @@ export class StreamSession {
           agentId: this.buffer.currentRespondingAgent ?? undefined,
         });
       }
+      agentDraft.messageSource = liveSrc;
       const targetPhase = phase ?? "streaming";
       if (agentDraft.connectionPhase !== "error") {
         agentDraft.connectionPhase = targetPhase;
@@ -137,7 +137,7 @@ export class StreamSession {
     this.#disposed = true;
     this.cancelScheduledCommit();
     this.#controller.abort();
-    useChatStore.setState((draft: any) => {
+    useChatStore.setState((draft) => {
       const st = draft.agents[this.agent];
       if (!st) return;
       st.connectionPhase = "idle";
@@ -154,7 +154,7 @@ export const streamSessionManager = {
     if (previous) {
       previous.dispose();
     } else {
-      useChatStore.setState((draft: any) => {
+      useChatStore.setState((draft) => {
         const st = draft.agents[agent];
         if (!st) return;
         st.streamGeneration = (st.streamGeneration ?? 0) + 1;

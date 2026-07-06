@@ -11,7 +11,6 @@ import { qk } from "@/lib/queries";
 import { apiDelete, apiPatch, getToken } from "@/lib/api";
 import { saveLastSession } from "../../chat-persistence";
 import { getCachedHistoryMessages, convertHistory } from "../../chat-history";
-import { selectIsReplayingHistory } from "../../chat-selectors";
 
 function insertCompressionDividers(
   messages: ChatMessage[],
@@ -46,7 +45,7 @@ export function createSessionCrudActions(deps: ActionDeps) {
   // ── Internal helpers (mirroring store-level update) ─────────────────────
 
   function update(agent: string, patch: Partial<AgentState>) {
-    set((draft: any) => {
+    set((draft) => {
       if (!draft.agents[agent]) draft.agents[agent] = emptyAgentState();
       Object.assign(draft.agents[agent], patch);
     });
@@ -56,7 +55,7 @@ export function createSessionCrudActions(deps: ActionDeps) {
 
   return {
     updateSessionParticipants: (sessionId: string, participants: string[]) => {
-      set((draft: any) => {
+      set((draft) => {
         draft.sessionParticipants[sessionId] = participants;
       });
     },
@@ -174,7 +173,7 @@ export function createSessionCrudActions(deps: ActionDeps) {
       const firstMsg = liveMessages.find((m) => !m.id.startsWith("compression-divider-"));
       if (!firstMsg) return;
 
-      set((draft: any) => { draft.agents[agentName].isLoadingHistory = true; });
+      set((draft) => { draft.agents[agentName].isLoadingHistory = true; });
 
       try {
         // ?agent= is required server-side (audit 2026-05-08, IDOR fix).
@@ -189,8 +188,10 @@ export function createSessionCrudActions(deps: ActionDeps) {
         ).then((r) => r.json());
 
         const converted = convertHistory(res.messages ?? []);
-        // segment_count comes from the session record; fall back to 1
-        const totalSegments = (get().agents[agentName] as any).sessionSegmentCount ?? 1;
+        // segment_count comes from the session record; fall back to 1.
+        // (sessionSegmentCount is an optional, currently-unset extension field
+        // on AgentState — read defensively rather than via `any`.)
+        const totalSegments = (get().agents[agentName] as AgentState & { sessionSegmentCount?: number })?.sessionSegmentCount ?? 1;
         const withDividers = insertCompressionDividers(converted, res.compression_events ?? [], totalSegments);
 
         const currentLive = getLiveMessages(get().agents[agentName]?.messageSource ?? { mode: "new-chat" });
@@ -202,7 +203,7 @@ export function createSessionCrudActions(deps: ActionDeps) {
       } catch (_e) {
         const { toast } = await import("sonner");
         toast.error("Не удалось загрузить историю сообщений");
-        set((draft: any) => { draft.agents[agentName].isLoadingHistory = false; });
+        set((draft) => { draft.agents[agentName].isLoadingHistory = false; });
       }
     },
   };

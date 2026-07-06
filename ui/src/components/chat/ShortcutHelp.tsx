@@ -34,7 +34,7 @@ const SHORTCUT_GROUPS: Array<{
 
 function KeyBadge({ children }: { children: React.ReactNode }) {
   return (
-    <kbd className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5 rounded border border-border bg-muted text-[11px] font-mono font-medium text-muted-foreground">
+    <kbd className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5 rounded border border-border bg-muted text-2xs font-mono font-medium text-muted-foreground">
       {children}
     </kbd>
   );
@@ -62,7 +62,7 @@ export function ShortcutHelp({ open, onOpenChange }: ShortcutHelpProps) {
                     <div className="flex items-center gap-1">
                       {s.keys.map((k, i) => (
                         <span key={i} className="flex items-center gap-1">
-                          {i > 0 && <span className="text-[10px] text-muted-foreground/50">+</span>}
+                          {i > 0 && <span className="text-3xs text-muted-foreground/50">+</span>}
                           <KeyBadge>{k}</KeyBadge>
                         </span>
                       ))}

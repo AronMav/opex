@@ -57,7 +57,7 @@ export function ClarifyCard({ part }: ClarifyCardProps) {
           <p className="text-xs text-muted-foreground leading-relaxed">{part.question}</p>
           <p className="text-xs font-medium mt-1 truncate">{submitted}</p>
         </div>
-        <span className="ml-auto font-mono text-[10px] font-bold uppercase tracking-widest text-success shrink-0">
+        <span className="ml-auto font-mono text-3xs font-bold uppercase tracking-widest text-success shrink-0">
           {t("chat.clarify_answered")}
         </span>
       </div>
@@ -79,7 +79,7 @@ export function ClarifyCard({ part }: ClarifyCardProps) {
           aria-hidden="true"
         />
         <p className="text-sm leading-relaxed flex-1">{part.question}</p>
-        <span className="ml-auto font-mono text-[10px] font-bold uppercase tracking-widest text-primary shrink-0">
+        <span className="ml-auto font-mono text-3xs font-bold uppercase tracking-widest text-primary shrink-0">
           {t("chat.clarify_awaiting")}
         </span>
       </div>

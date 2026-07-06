@@ -102,6 +102,10 @@ function PythonEditor({
   const onSaveRef = useRef(onSave);
   useEffect(() => { onSaveRef.current = onSave; }, [onSave]);
 
+  // The `run` callback only fires on user keypress (never during render), so
+  // reading onSaveRef.current here is the intended ref pattern — the lint
+  // heuristic cannot prove that and would false-positive without the disable.
+  /* eslint-disable react-hooks/refs */
   const saveKeymap = useMemo(
     () =>
       keymap.of([
@@ -109,6 +113,7 @@ function PythonEditor({
       ]),
     [],
   );
+  /* eslint-enable react-hooks/refs */
 
   const handleChange = useCallback((val: string) => onChange(val), [onChange]);
 

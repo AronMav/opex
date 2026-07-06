@@ -122,48 +122,70 @@ export function CitationSection({
 
 // ── Component Overrides for react-markdown ────────────────────────────────
 
+// Minimal structural shape of a hast node — avoids importing the full hast
+// type tree while keeping the override components fully type-safe.
+type HastElement = {
+  type?: string;
+  tagName?: string;
+  value?: string;
+  properties?: Record<string, unknown>;
+  children?: HastElement[];
+};
+
+type OverrideProps = {
+  children?: React.ReactNode;
+  node?: HastElement;
+  id?: string;
+  href?: string;
+  className?: string;
+  [key: string]: unknown;
+};
+
+type OverrideComponent = React.ComponentType<OverrideProps>;
+
 /**
  * Returns react-markdown component overrides for footnote elements.
  * - `sup`: wraps footnote refs in CitationRef (checks data-footnote-ref)
  * - `section`: wraps footnote defs in CitationSection (checks data-footnotes)
  */
-export function createFootnoteComponents(): Record<string, React.ComponentType<any>> {
-  return {
-    sup: function SupOverride({ children, node, ...props }: any) {
-      // Check if this sup contains a footnote ref anchor
-      const firstChild = node?.children?.[0]
-      const isFootnoteRef =
-        firstChild?.tagName === "a" &&
-        firstChild?.properties?.["dataFootnoteRef"] !== undefined
+export function createFootnoteComponents(): Record<string, OverrideComponent> {
+  const SupOverride: OverrideComponent = ({ children, node, ...props }: OverrideProps) => {
+    // Check if this sup contains a footnote ref anchor
+    const firstChild = node?.children?.[0];
+    const isFootnoteRef =
+      firstChild?.tagName === "a" &&
+      firstChild?.properties?.["dataFootnoteRef"] !== undefined;
 
-      if (isFootnoteRef) {
-        const anchor = firstChild.properties
-        return (
-          <CitationRef
-            href={anchor.href}
-            id={props.id}
-            data-footnote-ref
-          >
-            {children}
-          </CitationRef>
-        )
-      }
+    if (isFootnoteRef) {
+      const anchor = firstChild.properties as { href?: string };
+      return (
+        <CitationRef
+          href={anchor.href}
+          id={props.id as string | undefined}
+          data-footnote-ref
+        >
+          {children}
+        </CitationRef>
+      );
+    }
 
-      return <sup {...props}>{children}</sup>
-    },
-    section: function SectionOverride({ children, node, ...props }: any) {
-      const isFootnotes =
-        node?.properties?.["dataFootnotes"] !== undefined
+    return <sup {...props}>{children}</sup>;
+  };
 
-      if (isFootnotes) {
-        return (
-          <CitationSection data-footnotes>
-            {children}
-          </CitationSection>
-        )
-      }
+  const SectionOverride: OverrideComponent = ({ children, node, ...props }: OverrideProps) => {
+    const isFootnotes =
+      node?.properties?.["dataFootnotes"] !== undefined;
 
-      return <section {...props}>{children}</section>
-    },
-  }
+    if (isFootnotes) {
+      return (
+        <CitationSection data-footnotes>
+          {children}
+        </CitationSection>
+      );
+    }
+
+    return <section {...props}>{children}</section>;
+  };
+
+  return { sup: SupOverride, section: SectionOverride };
 }

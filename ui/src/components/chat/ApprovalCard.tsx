@@ -123,7 +123,7 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
             {t("chat.approval_modified")}
           </span>
         )}
-        <span className={`ml-auto font-mono text-[10px] font-bold uppercase tracking-widest ${statusColor}`}>
+        <span className={`ml-auto font-mono text-3xs font-bold uppercase tracking-widest ${statusColor}`}>
           {statusLabel}
         </span>
       </div>
@@ -143,7 +143,7 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
           <span className="font-mono text-xs font-semibold tracking-tight text-foreground truncate">
             {part.toolName}
           </span>
-          <span className="ml-auto font-mono text-[10px] font-bold uppercase tracking-widest text-warning">
+          <span className="ml-auto font-mono text-3xs font-bold uppercase tracking-widest text-warning">
             {t("chat.approval_awaiting")}
           </span>
           <CollapsibleTrigger asChild>
@@ -161,7 +161,7 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
             Hidden while expanded to avoid showing the same JSON twice. */}
         {!payloadExpanded && (
           <div className="mt-2">
-            <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-primary/80">
+            <span className="font-mono text-3xs font-bold uppercase tracking-wider text-primary/80">
               {t("chat.approval_input")}
             </span>
             <pre className="bg-muted/30 rounded p-2 text-xs font-mono overflow-x-auto line-clamp-3 mt-1 whitespace-pre-wrap">
@@ -173,7 +173,7 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
         {/* Collapsible: full, unclamped INPUT section */}
         <CollapsibleContent>
           <div className="mt-2">
-            <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-primary/80">
+            <span className="font-mono text-3xs font-bold uppercase tracking-wider text-primary/80">
               {t("chat.approval_input")}
             </span>
             <pre className="bg-muted/30 rounded p-2 text-xs font-mono overflow-x-auto max-h-[200px] mt-1 whitespace-pre-wrap">

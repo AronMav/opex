@@ -135,7 +135,7 @@ export async function processSSEStream(
               // SSE-03: Confirm the optimistic user message
               session.writeDraft((agentDraft: AgentState) => {
                 if (agentDraft.messageSource.mode !== "live") return;
-                const msgs = (agentDraft.messageSource as any).messages as ChatMessage[];
+                const msgs = agentDraft.messageSource.messages;
                 for (let i = msgs.length - 1; i >= 0; i--) {
                   if (msgs[i].role === "user" && msgs[i].status === "sending") {
                     msgs[i].status = "confirmed";
@@ -389,30 +389,39 @@ export async function processSSEStream(
               // Only skip the live-mode switch when we're in "history" mode for the same session.
               // For "new-chat" mode we always need to switch, even if session IDs match.
               // "finishing" mode must also be preserved — its frozen messages must not be discarded.
-              const isHistoryMode = agentDraft.messageSource.mode === "history";
-              const isLiveOrFinishing = agentDraft.messageSource.mode === "live" || agentDraft.messageSource.mode === "finishing";
+              const src = agentDraft.messageSource;
+              const isHistoryMode = src.mode === "history";
+              const isLiveOrFinishing = src.mode === "live" || src.mode === "finishing";
               if (!isLiveOrFinishing && !(isHistoryMode && isSameSession)) {
-                (agentDraft as any).messageSource = { mode: "live", messages: [] };
+                agentDraft.messageSource = { mode: "live", messages: [] };
               }
 
-              const liveMessages = (agentDraft.messageSource as any).messages as any[];
-              const existingIdx = liveMessages.findIndex((m: any) => m.id === session.buffer.assistantId);
+              // After the possible switch, pull the live messages array. Only
+              // live/finishing carry messages; the preserved history-same-session
+              // branch has none, so liveMessages is empty there (matching the
+              // previous `as any[]` read which yielded undefined → findIndex -1).
+              const resolvedSrc = agentDraft.messageSource;
+              const liveMessages: ChatMessage[] =
+                resolvedSrc.mode === "live" || resolvedSrc.mode === "finishing"
+                  ? resolvedSrc.messages
+                  : [];
+              const existingIdx = liveMessages.findIndex((m) => m.id === session.buffer.assistantId);
 
               if (existingIdx >= 0) {
                 const existingMsg = liveMessages[existingIdx];
-                const localTextLen = (existingMsg.parts as MessagePart[])
-                  .filter((p: MessagePart): p is TextPart => p.type === "text")
-                  .reduce((acc: number, p: TextPart) => acc + (p.text?.length ?? 0), 0);
+                const localTextLen = existingMsg.parts
+                  .filter((p): p is TextPart => p.type === "text")
+                  .reduce((acc, p) => acc + (p.text?.length ?? 0), 0);
                 const syncTextLen = syncParts
-                  .filter((p: MessagePart): p is TextPart => p.type === "text")
-                  .reduce((acc: number, p: TextPart) => acc + (p.text?.length ?? 0), 0);
+                  .filter((p): p is TextPart => p.type === "text")
+                  .reduce((acc, p) => acc + (p.text?.length ?? 0), 0);
                 if (syncTextLen > localTextLen || Math.abs(syncTextLen - localTextLen) > 50) {
                   // H2: syncParts carries only text/reasoning — preserve tool, approval, file parts
-                  const preserved = (existingMsg.parts as MessagePart[]).filter(
-                    (p: MessagePart) => p.type !== "text" && p.type !== "reasoning"
+                  const preserved = existingMsg.parts.filter(
+                    (p) => p.type !== "text" && p.type !== "reasoning"
                   );
                   existingMsg.parts = [...syncParts, ...preserved];
-                  sseLog(agent, "sync-replaced-parts", { reason: "text-len-diff", localLen: localTextLen, syncLen: syncTextLen, partsBrief: partsBrief(existingMsg.parts as MessagePart[]) });
+                  sseLog(agent, "sync-replaced-parts", { reason: "text-len-diff", localLen: localTextLen, syncLen: syncTextLen, partsBrief: partsBrief(existingMsg.parts) });
                 } else {
                   sseLog(agent, "sync-noop", { localLen: localTextLen, syncLen: syncTextLen });
                 }

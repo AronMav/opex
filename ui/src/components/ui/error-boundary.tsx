@@ -37,7 +37,7 @@ export class ErrorBoundary extends Component<Props, State> {
         <div className="flex flex-col items-center justify-center p-4 border border-destructive/20 bg-destructive/5 rounded-lg text-destructive text-sm my-2">
           <AlertCircle className="h-5 w-5 mb-2" />
           <p className="font-medium text-center">Failed to render content</p>
-          <pre className="mt-2 text-[10px] overflow-auto max-w-full opacity-70">
+          <pre className="mt-2 text-3xs overflow-auto max-w-full opacity-70">
             {this.state.error?.message}
           </pre>
         </div>

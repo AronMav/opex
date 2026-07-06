@@ -25,12 +25,12 @@ export function createNavigationActions(deps: ActionDeps) {
       const stored = localStorage.getItem(`ctx_limit:${agent}`);
       if (stored) fresh.modelContextLimit = Number(stored) || null;
     } catch {}
-    set((draft: any) => { draft.agents[agent] = fresh; });
+    set((draft) => { draft.agents[agent] = fresh; });
     return fresh;
   }
 
   function update(agent: string, patch: Partial<AgentState>) {
-    set((draft: any) => {
+    set((draft) => {
       if (!draft.agents[agent]) draft.agents[agent] = emptyAgentState();
       Object.assign(draft.agents[agent], patch);
     });
@@ -220,7 +220,7 @@ export function createNavigationActions(deps: ActionDeps) {
     markSessionActive: (agent: string, sessionId: string) => {
       ensure(agent);
       let shouldResume = false;
-      set((draft: any) => {
+      set((draft) => {
         const st = draft.agents[agent];
         if (!st) return;
         if (!st.activeSessionIds.includes(sessionId)) {
@@ -240,7 +240,7 @@ export function createNavigationActions(deps: ActionDeps) {
 
     markSessionInactive: (agent: string, sessionId: string) => {
       ensure(agent);
-      set((draft: any) => {
+      set((draft) => {
         const st = draft.agents[agent];
         if (!st) return;
         st.activeSessionIds = st.activeSessionIds.filter((id: string) => id !== sessionId);
@@ -252,7 +252,7 @@ export function createNavigationActions(deps: ActionDeps) {
       const st = get().agents[agent];
       if (!st) return;
 
-      set((draft: any) => {
+      set((draft) => {
         const s = draft.agents[agent];
         if (s) s.selectedBranches[parentMessageId] = selectedChildId;
       });

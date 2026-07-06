@@ -51,8 +51,8 @@ export function MarkdownEditor({ value, onChange, onSave }: MarkdownEditorProps)
           "[&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:mb-2 " +
           "[&_li]:mb-0.5 " +
           "[&_blockquote]:border-l-2 [&_blockquote]:border-primary/50 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-muted-foreground " +
-          "[&_code]:rounded [&_code]:bg-muted [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[13px] " +
-          "[&_pre]:rounded-md [&_pre]:bg-muted [&_pre]:p-3 [&_pre]:font-mono [&_pre]:text-[13px] [&_pre]:overflow-x-auto [&_pre]:mb-3 " +
+          "[&_code]:rounded [&_code]:bg-muted [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-code " +
+          "[&_pre]:rounded-md [&_pre]:bg-muted [&_pre]:p-3 [&_pre]:font-mono [&_pre]:text-code [&_pre]:overflow-x-auto [&_pre]:mb-3 " +
           "[&_hr]:border-border [&_hr]:my-4 " +
           "[&_strong]:font-bold [&_em]:italic " +
           "[&_.is-editor-empty:first-child::before]:text-muted-foreground [&_.is-editor-empty:first-child::before]:float-left [&_.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.is-editor-empty:first-child::before]:pointer-events-none [&_.is-editor-empty:first-child::before]:h-0",

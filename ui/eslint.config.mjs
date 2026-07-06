@@ -4,6 +4,7 @@ import nextTs from "eslint-config-next/typescript";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const noRawDesignValues = require("./eslint-rules/no-raw-design-values.js");
+const noRawFontSizes = require("./eslint-rules/no-raw-font-sizes.js");
 
 const eslintConfig = defineConfig([
   ...nextVitals,
@@ -25,6 +26,19 @@ const eslintConfig = defineConfig([
       "react-hooks/globals": "off",
       "react-hooks/preserve-manual-memoization": "off",
       "react-hooks/refs": "off",
+    },
+  },
+  // Local design-system rules. The "local" plugin is registered ONCE here
+  // (flat config forbids redefining the same plugin name across blocks); the
+  // individual rules are activated with different file scopes below.
+  {
+    plugins: {
+      local: {
+        rules: {
+          "no-raw-design-values": noRawDesignValues,
+          "no-raw-font-sizes": noRawFontSizes,
+        },
+      },
     },
   },
   // Design-system guard — enforced ONLY on migrated pages. Add globs here as
@@ -53,8 +67,15 @@ const eslintConfig = defineConfig([
       "src/app/(authenticated)/workspace/**/*.{ts,tsx}",
       "src/app/(authenticated)/canvas/**/*.{ts,tsx}",
     ],
-    plugins: { local: { rules: { "no-raw-design-values": noRawDesignValues } } },
     rules: { "local/no-raw-design-values": "error" },
+  },
+  // Font-size token guard — applies app-wide (primitives, feature components,
+  // pages). The font-size token scale is established in globals.css
+  // (text-3xs / text-2xs / text-code / text-message + the Tailwind scale), so
+  // arbitrary `text-[Npx]` / `text-[Nrem]` values are always a regression.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    rules: { "local/no-raw-font-sizes": "error" },
   },
   // Override default ignores of eslint-config-next.
   globalIgnores([

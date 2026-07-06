@@ -5,7 +5,7 @@
 
 import type { ActionDeps } from "../../chat-store";
 import { isActivePhase, emptyAgentState, getLiveMessages, uuid } from "../../chat-types";
-import type { ChatMessage, TextPart } from "../../chat-types";
+import type { ChatMessage, MessageAttachment, TextPart } from "../../chat-types";
 import { getCachedHistoryMessages } from "../../chat-history";
 import { apiPost } from "@/lib/api";
 
@@ -15,7 +15,7 @@ export function createStreamActions(deps: ActionDeps) {
   // ── Stream-control actions ───────────────────────────────────────────────
 
   return {
-    sendMessage: (text: string, attachments?: Array<any>) => {
+    sendMessage: (text: string, attachments?: Array<MessageAttachment>) => {
       const store = get();
       const agent = store.currentAgent;
       const st = store.agents[agent] ?? emptyAgentState();
@@ -29,7 +29,7 @@ export function createStreamActions(deps: ActionDeps) {
         return;
       }
 
-      let sessionId = st.activeSessionId;
+      const sessionId = st.activeSessionId;
       let seedMessages: ChatMessage[] = [];
 
       if (st.messageSource.mode === "history") {
@@ -44,10 +44,9 @@ export function createStreamActions(deps: ActionDeps) {
       renderer.startStream(agent, sessionId, seedMessages, text, attachments, uuid());
     },
 
-    interruptAndSend: async (text: string, attachments?: Array<any>) => {
+    interruptAndSend: async (text: string, attachments?: Array<MessageAttachment>) => {
       const store = get();
       const agent = store.currentAgent;
-      const st = store.agents[agent] ?? emptyAgentState();
 
       // Abort the current stream (POST /abort + local teardown).
       renderer.abortActiveStream(agent);
@@ -77,9 +76,9 @@ export function createStreamActions(deps: ActionDeps) {
       renderer.startStream(agent, sessionId, seedMessages, text, attachments, uuid());
     },
 
-    queueMessage: (text: string, attachments?: Array<any>) => {
+    queueMessage: (text: string, attachments?: Array<MessageAttachment>) => {
       const agent = get().currentAgent;
-      set((draft: any) => {
+      set((draft) => {
         if (!draft.agents[agent]) draft.agents[agent] = emptyAgentState();
         draft.agents[agent].pendingMessage = { content: text, attachments };
       });
@@ -87,7 +86,7 @@ export function createStreamActions(deps: ActionDeps) {
 
     clearPending: (agent?: string) => {
       const targetAgent = agent ?? get().currentAgent;
-      set((draft: any) => {
+      set((draft) => {
         if (draft.agents[targetAgent]) {
           draft.agents[targetAgent].pendingMessage = null;
         }
@@ -115,7 +114,7 @@ export function createStreamActions(deps: ActionDeps) {
         renderer.abortActiveStream(agent);
       }
 
-      let sessionId = st.activeSessionId;
+      const sessionId = st.activeSessionId;
       let messages: ChatMessage[];
 
       if (st.messageSource.mode === "history") {
@@ -153,7 +152,7 @@ export function createStreamActions(deps: ActionDeps) {
         renderer.abortActiveStream(agent);
       }
 
-      let sessionId = st.activeSessionId;
+      const sessionId = st.activeSessionId;
       let messages: ChatMessage[];
 
       if (st.messageSource.mode === "history") {
@@ -216,7 +215,7 @@ export function createStreamActions(deps: ActionDeps) {
         const forkIdx = messages.findIndex((m) => m.id === messageId);
         const seedMessages = forkIdx >= 0 ? messages.slice(0, forkIdx) : messages;
 
-        set((draft: any) => {
+        set((draft) => {
           const s = draft.agents[agent];
           if (s && resp.parent_message_id) {
             s.selectedBranches[resp.parent_message_id] = resp.message_id;
