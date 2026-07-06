@@ -593,6 +593,11 @@ async fn job_complete(
             tracing::info!(%job_id, "job_complete: already terminal — skipping duplicate failed event");
             return StatusCode::NO_CONTENT;
         }
+        // Surface the failure IN the chat (not just a transient WS event) so the
+        // user isn't left staring at "…готовлю сводку" with no trace on reload.
+        // Must run BEFORE the terminal WS event below — the UI refetches session
+        // messages on `status=="failed"`, so the row has to exist first.
+        deliver_async_failure(&state, &job, &reason).await;
     }
 
     let ev = file_job_progress_event(
@@ -646,6 +651,35 @@ async fn deliver_async_outcome(
     // 3. Generic post-action: the handler may request an MCP vault write via a
     //    `post_action` object in the result JSON.
     run_post_action(state, job, outcome).await;
+}
+
+/// Persist a chat message announcing that an async handler job FAILED, so the
+/// failure is visible in the conversation (and survives reload) instead of being
+/// a transient WS event the user may miss. The reason is handler/source-derived
+/// (e.g. a yt-dlp / YouTube anti-bot error) — provenance-wrapped with the same
+/// untrusted posture as the success path so it can't inject into the next LLM
+/// turn — and length-capped. Mirrors `deliver_async_outcome`'s persist step; the
+/// terminal `file_job_progress` WS event (emitted by the caller afterwards) makes
+/// the UI refetch and render this row.
+async fn deliver_async_failure(state: &AppState, job: &handler_jobs::HandlerJob, reason: &str) {
+    let upload_id = job.upload_id.map(|u| u.to_string()).unwrap_or_default();
+    // Cap on char boundaries (yt-dlp errors can be long / contain multi-byte).
+    let reason_capped: String = reason.chars().take(600).collect();
+    let wrapped =
+        crate::agent::provenance::wrap_file_output(&job.handler_id, &upload_id, &reason_capped);
+    let content = format!("⚠️ Обработка не удалась ({}).\n{}", job.handler_id, wrapped);
+    if let Err(e) = sqlx::query(
+        "INSERT INTO messages (session_id, agent_id, role, content, is_mirror, source) \
+         VALUES ($1, $2, 'assistant', $3, true, 'file_handler')",
+    )
+    .bind(job.session_id)
+    .bind(&job.agent_name)
+    .bind(&content)
+    .execute(&state.infra.db)
+    .await
+    {
+        tracing::error!(error = %e, job_id = %job.id, "deliver_async_failure: persist failed");
+    }
 }
 
 /// Run the optional `post_action` carried in the outcome JSON. v1 supports the
