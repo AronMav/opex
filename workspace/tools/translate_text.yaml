@@ -29,4 +29,9 @@ parameters:
     default: "t"
 auth:
   type: none
-response_transform: "$[0][0][0]"
+# Google returns per-sentence segments: [[["seg1_tr","seg1_orig",…],["seg2_tr",…]],…].
+# Project the translated text of EVERY segment ($[0][*][0]) then join them, so a
+# multi-sentence translation isn't truncated to its first sentence.
+response_transform: "$[0][*][0]"
+response_pipeline:
+  - join: ""

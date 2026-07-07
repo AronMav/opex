@@ -100,7 +100,11 @@ fn default_string_type() -> String {
 #[derive(Debug, Clone, Deserialize)]
 pub struct YamlAuth {
     /// `bearer_env` | `basic_env` | `api_key_header` | `api_key_query` | custom | `oauth_refresh` | `oauth_provider` | none
-    #[serde(rename = "type")]
+    ///
+    /// Canonical YAML key is `type`; `auth_type` is accepted as an alias so a
+    /// tool authored (e.g. via `tool_create`) with `auth_type:` isn't silently
+    /// parsed as no-auth (the whole `auth` block would deserialize to `None`).
+    #[serde(rename = "type", alias = "auth_type")]
     pub auth_type: String,
     /// Env var name containing the token/key (or refresh token for `oauth_refresh`).
     pub key: Option<String>,
@@ -325,6 +329,8 @@ pub enum ResponsePipelineStep {
     PickFields(Vec<String>),
     SortBy { field: String, desc: bool },
     Limit(usize),
+    /// Join an array of scalars into a single string with the given separator.
+    Join(String),
 }
 
 /// Intermediate struct for YAML deserialization of pipeline steps.
@@ -335,6 +341,7 @@ struct RawPipelineStep {
     pick_fields: Option<Vec<String>>,
     sort_by: Option<RawSortBy>,
     limit: Option<usize>,
+    join: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -361,9 +368,11 @@ impl<'de> Deserialize<'de> for ResponsePipelineStep {
             })
         } else if let Some(count) = raw.limit {
             Ok(ResponsePipelineStep::Limit(count))
+        } else if let Some(sep) = raw.join {
+            Ok(ResponsePipelineStep::Join(sep))
         } else {
             Err(serde::de::Error::custom(
-                "pipeline step must have exactly one key: jsonpath, pick_fields, sort_by, or limit",
+                "pipeline step must have exactly one key: jsonpath, pick_fields, sort_by, limit, or join",
             ))
         }
     }
@@ -427,6 +436,25 @@ fn apply_pipeline(
             ResponsePipelineStep::Limit(count) => {
                 if let Some(arr) = current.as_array() {
                     serde_json::Value::Array(arr.iter().take(*count).cloned().collect())
+                } else {
+                    current
+                }
+            }
+            ResponsePipelineStep::Join(sep) => {
+                if let Some(arr) = current.as_array() {
+                    // Join scalar elements; a string stays verbatim, numbers/bools
+                    // stringify, and anything non-scalar is JSON-encoded so nothing
+                    // is silently dropped.
+                    let joined = arr
+                        .iter()
+                        .map(|v| match v {
+                            serde_json::Value::String(s) => s.clone(),
+                            serde_json::Value::Null => String::new(),
+                            other => other.to_string(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(sep);
+                    serde_json::Value::String(joined)
                 } else {
                     current
                 }
@@ -1395,57 +1423,95 @@ impl YamlToolDef {
 /// `JSONPath` resolver supporting "$.key", "$.key.nested", "$.arr[0]", "$.arr[*]", "$.arr[-1]", "$.arr[0:3]".
 // reviewed: offsets from find('[') + ASCII bracket — char boundaries
 #[allow(clippy::string_slice)]
+/// One step of a parsed JSONPath: an object key, an array index (possibly
+/// negative), a `[start:end]` slice, or a `[*]` wildcard projection.
+#[derive(Debug, Clone)]
+enum PathToken {
+    Key(String),
+    Index(isize),
+    Slice(Option<usize>, Option<usize>),
+    Wildcard,
+}
+
+/// Tokenize a `$`-stripped path into [`PathToken`]s. Supports keys (`a.b`),
+/// consecutive brackets in one hop (`[0][0][0]` — Google-Translate-style nested
+/// arrays), `[*]`, `[-1]`, and `[start:end]`. Returns `None` on a malformed
+/// bracket so the caller falls back to the untransformed value.
+fn tokenize_jsonpath(path: &str) -> Option<Vec<PathToken>> {
+    let mut toks = Vec::new();
+    let mut rest = path;
+    loop {
+        rest = rest.trim_start_matches('.');
+        if rest.is_empty() {
+            break;
+        }
+        if let Some(after) = rest.strip_prefix('[') {
+            let end = after.find(']')?;
+            toks.push(parse_bracket_token(&after[..end])?);
+            rest = &after[end + 1..];
+        } else {
+            // Object key up to the next '.' or '['.
+            let end = rest.find(['.', '[']).unwrap_or(rest.len());
+            toks.push(PathToken::Key(rest[..end].to_string()));
+            rest = &rest[end..];
+        }
+    }
+    Some(toks)
+}
+
+fn parse_bracket_token(inner: &str) -> Option<PathToken> {
+    if inner == "*" {
+        Some(PathToken::Wildcard)
+    } else if let Some((a, b)) = inner.split_once(':') {
+        let start = if a.is_empty() { None } else { Some(a.parse().ok()?) };
+        let end = if b.is_empty() { None } else { Some(b.parse().ok()?) };
+        Some(PathToken::Slice(start, end))
+    } else {
+        Some(PathToken::Index(inner.parse().ok()?))
+    }
+}
+
+/// Walk `value` along `toks`. `Wildcard` projects the REMAINING tokens over each
+/// element of the current array and collects the matches (dropping misses) — so
+/// `$[0][*][0]` over `[[["a",..],["b",..]]]` yields `["a","b"]`.
+fn walk_jsonpath(value: &serde_json::Value, toks: &[PathToken]) -> Option<serde_json::Value> {
+    let Some((first, rest)) = toks.split_first() else {
+        return Some(value.clone());
+    };
+    match first {
+        PathToken::Key(k) => walk_jsonpath(value.get(k.as_str())?, rest),
+        PathToken::Index(i) => {
+            let arr = value.as_array()?;
+            let idx: usize = if *i < 0 {
+                (arr.len() as isize + *i).try_into().ok()?
+            } else {
+                *i as usize
+            };
+            walk_jsonpath(arr.get(idx)?, rest)
+        }
+        PathToken::Slice(start, end) => {
+            let arr = value.as_array()?;
+            let s = start.unwrap_or(0).min(arr.len());
+            let e = end.unwrap_or(arr.len()).min(arr.len());
+            let sub = if s <= e { arr[s..e].to_vec() } else { Vec::new() };
+            walk_jsonpath(&serde_json::Value::Array(sub), rest)
+        }
+        PathToken::Wildcard => {
+            let arr = value.as_array()?;
+            let out: Vec<serde_json::Value> =
+                arr.iter().filter_map(|el| walk_jsonpath(el, rest)).collect();
+            Some(serde_json::Value::Array(out))
+        }
+    }
+}
+
 fn apply_jsonpath(value: &serde_json::Value, path: &str) -> Option<serde_json::Value> {
     let path = path.trim_start_matches("$.").trim_start_matches('$');
     if path.is_empty() {
         return Some(value.clone());
     }
-    let mut current = value.clone();
-    for segment in path.split('.') {
-        if segment.is_empty() {
-            continue;
-        }
-        // Handle array index: "items[0]", "items[*]", "items[-1]", "items[0:3]"
-        if let Some(bracket) = segment.find('[') {
-            let key = &segment[..bracket];
-            let idx_str = segment[bracket + 1..].trim_end_matches(']');
-            if !key.is_empty() {
-                current = current.get(key)?.clone();
-            }
-
-            if idx_str == "*" {
-                // Return all elements as-is (already an array)
-                if !current.is_array() {
-                    return None;
-                }
-                // Continue processing — current is the array
-            } else if idx_str.contains(':') {
-                // Slice: [start:end]
-                let arr = current.as_array()?;
-                let parts: Vec<&str> = idx_str.splitn(2, ':').collect();
-                let start: usize = parts[0].parse().unwrap_or(0);
-                let end: usize = parts
-                    .get(1)
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(arr.len());
-                let end = end.min(arr.len());
-                return Some(serde_json::Value::Array(arr[start..end].to_vec()));
-            } else if idx_str.starts_with('-') {
-                // Negative index
-                let arr = current.as_array()?;
-                let neg: isize = idx_str.parse().ok()?;
-                let real_idx = (arr.len() as isize + neg) as usize;
-                current = arr.get(real_idx)?.clone();
-            } else {
-                // Positive index
-                let idx: usize = idx_str.parse().ok()?;
-                current = current.get(idx)?.clone();
-            }
-        } else {
-            current = current.get(segment)?.clone();
-        }
-    }
-    Some(current)
+    let toks = tokenize_jsonpath(path)?;
+    walk_jsonpath(value, &toks)
 }
 
 /// Process conditional blocks: {{#if param}}...{{/if}} and {{#unless param}}...{{/unless}}.
@@ -1982,6 +2048,52 @@ mod tests {
             apply_jsonpath(&val, "$.key.deep.nested"),
             Some(serde_json::json!(true))
         );
+    }
+
+    #[test]
+    fn apply_jsonpath_consecutive_brackets() {
+        // Google-Translate-style nested arrays: previously `[0][0][0]` failed to
+        // parse (one bracket per dot-segment) and the transform silently no-op'd.
+        let val = serde_json::json!([[["Hello. ", "Привет. "]], null, "ru"]);
+        assert_eq!(
+            apply_jsonpath(&val, "$[0][0][0]"),
+            Some(serde_json::json!("Hello. "))
+        );
+    }
+
+    #[test]
+    fn apply_jsonpath_wildcard_projects_remaining_path() {
+        // `$[0][*][0]` projects [0] over every segment → array of translations.
+        let val = serde_json::json!([
+            [["Hello. ", "Привет. "], ["How are you?", "Как дела?"]],
+            null, "ru"
+        ]);
+        assert_eq!(
+            apply_jsonpath(&val, "$[0][*][0]"),
+            Some(serde_json::json!(["Hello. ", "How are you?"]))
+        );
+    }
+
+    #[test]
+    fn translate_pipeline_joins_all_segments() {
+        // End-to-end: the real Google response shape → transform → join → one string.
+        let resp = serde_json::json!([
+            [["Hello. ", "Привет. "], ["How are you today?", "Как дела сегодня?"]],
+            null, "ru"
+        ]);
+        let extracted = apply_jsonpath(&resp, "$[0][*][0]").unwrap();
+        let joined = apply_pipeline(extracted, &[ResponsePipelineStep::Join(String::new())]);
+        assert_eq!(joined, serde_json::json!("Hello. How are you today?"));
+    }
+
+    #[test]
+    fn yaml_auth_accepts_type_and_auth_type_alias() {
+        // Canonical `type:` and the `auth_type:` alias both populate auth_type,
+        // so a tool authored with `auth_type:` isn't silently parsed as no-auth.
+        let canonical: YamlAuth = serde_yaml::from_str("type: bearer_env\nkey: X").unwrap();
+        assert_eq!(canonical.auth_type, "bearer_env");
+        let aliased: YamlAuth = serde_yaml::from_str("auth_type: bearer_env\nkey: X").unwrap();
+        assert_eq!(aliased.auth_type, "bearer_env");
     }
 
     // ── resolve_env_template ─────────────────────────────────────────────────
