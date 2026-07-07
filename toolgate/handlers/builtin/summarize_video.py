@@ -24,7 +24,8 @@
 #     <param name="language" type="string" default="ru" required="false"/>
 #   </params>
 #   <config>
-#     <field name="summary_folder" type="string" default="Summary" label="Папка заметок" description="Каталог в Obsidian-хранилище, куда сохраняются конспекты видео"/>
+#     <field name="output_dir" type="string" default="" label="Полный путь к каталогу" description="Абсолютный путь к папке для конспектов (напр. /home/user/Notes). Если пусто — папка внутри workspace/zettelkasten (см. Папка в хранилище)"/>
+#     <field name="summary_folder" type="string" default="Summary" label="Папка в хранилище" description="Подпапка внутри workspace/zettelkasten, используется когда полный путь не задан"/>
 #     <field name="include_transcript" type="bool" default="true" label="Вставлять транскрипт" description="Добавлять полный транскрипт в свёрнутом блоке в конце заметки"/>
 #   </config>
 #   <order>20</order>
@@ -573,14 +574,18 @@ async def run(ctx, file, params):
     # Extract short summary text from the LLM body for the status message
     summary_text = _extract_short_summary(llm_body)
 
-    # Operator-configurable target folder (per-agent valve); falls back to the
-    # descriptor default when unset. Core validates it against its path allowlist.
+    # Operator-configurable output location (per-agent valves). `output_dir` is a
+    # full absolute path; when empty core falls back to
+    # workspace/zettelkasten/<summary_folder>. Core writes the file DIRECTLY (no
+    # mcp-obsidian dependency) — see run_post_action.
+    output_dir = str(ctx.config.get("output_dir") or "").strip()
     folder = str(ctx.config.get("summary_folder") or "Summary").strip() or "Summary"
 
     result = ctx.result.text(summary_text)
     result.post_action = {
-        "kind": "obsidian_note",
-        "folder": folder,
+        "kind": "write_file",
+        "dir": output_dir,
+        "subfolder": folder,
         "filename": f"{slug}.md",
         "content": note,
     }

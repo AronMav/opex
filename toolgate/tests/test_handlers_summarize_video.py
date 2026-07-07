@@ -175,8 +175,9 @@ async def test_short_transcript_has_obsidian_note_post_action():
     assert hasattr(result, "post_action"), "HandlerResult must have post_action"
     pa = result.post_action
     assert pa is not None, "post_action must be set"
-    assert pa["kind"] == "obsidian_note", f"kind={pa['kind']!r}"
-    assert pa["folder"] == "Summary"
+    assert pa["kind"] == "write_file", f"kind={pa['kind']!r}"
+    assert pa["subfolder"] == "Summary"
+    assert pa["dir"] == ""  # no full path set → core uses vault/<subfolder>
     fn = pa["filename"]
     assert fn.endswith(".md"), f"filename must end with .md: {fn!r}"
 
@@ -191,7 +192,22 @@ async def test_summary_folder_valve_overrides_default_folder():
     with patch.object(sv_mod, "extract_audio_from_file", _fake_extract_audio):
         result = await sv_mod.run(ctx, file, {"language": "ru"})
 
-    assert result.post_action["folder"] == "Videos"
+    assert result.post_action["subfolder"] == "Videos"
+    assert result.post_action["dir"] == ""
+
+
+@pytest.mark.asyncio
+async def test_output_dir_valve_sets_full_path():
+    """The output_dir valve puts a full absolute path in post_action.dir."""
+    ctx = _make_ctx()
+    ctx.config = {"output_dir": "/home/user/Notes"}
+    file = _video_file()
+
+    with patch.object(sv_mod, "extract_audio_from_file", _fake_extract_audio):
+        result = await sv_mod.run(ctx, file, {"language": "ru"})
+
+    assert result.post_action["kind"] == "write_file"
+    assert result.post_action["dir"] == "/home/user/Notes"
 
 
 def test_build_note_include_transcript_valve():
@@ -257,7 +273,7 @@ async def test_post_action_included_in_to_dict():
 
     d = result.to_dict()
     assert "post_action" in d, "to_dict() must include post_action"
-    assert d["post_action"]["kind"] == "obsidian_note"
+    assert d["post_action"]["kind"] == "write_file"
 
 
 # ── (c) long transcript → map-reduce ─────────────────────────────────────────
@@ -326,7 +342,7 @@ async def test_long_transcript_has_obsidian_note_post_action():
 
     assert hasattr(result, "post_action")
     pa = result.post_action
-    assert pa["kind"] == "obsidian_note"
+    assert pa["kind"] == "write_file"
     fn = pa["filename"]
     assert fn.endswith(".md")
 

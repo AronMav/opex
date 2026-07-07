@@ -656,9 +656,9 @@ async fn deliver_async_outcome(
         tracing::error!(error = %e, job_id = %job.id, "deliver_async_outcome: persist failed");
     }
 
-    // 3. Generic post-action: the handler may request an MCP vault write via a
-    //    `post_action` object in the result JSON.
-    run_post_action(state, job, outcome).await;
+    // 3. Generic post-action: the handler may request a direct note write via a
+    //    `post_action` object in the result JSON (no mcp-obsidian dependency).
+    run_post_action(job, outcome).await;
 }
 
 /// Persist a chat message announcing that an async handler job FAILED, so the
@@ -690,80 +690,110 @@ async fn deliver_async_failure(state: &AppState, job: &handler_jobs::HandlerJob,
     }
 }
 
-/// Run the optional `post_action` carried in the outcome JSON. v1 supports the
-/// Obsidian vault note write (`post_action.kind == "obsidian_note"`), reusing
-/// the existing core MCP plumbing (R17). Any other kind is a safe no-op.
+/// Resolve the note target directory for `run_post_action`.
+///
+/// - `dir` non-empty + absolute → used as-is (operator-configured full path,
+///   e.g. `/home/user/Notes`).
+/// - `dir` non-empty + relative → joined under `workspace_root`.
+/// - `dir` empty → `<workspace_root>/zettelkasten/<subfolder>` (historical vault
+///   default), with `subfolder` validated as a single safe path component.
+///
+/// Returns `None` when the result would be unsafe: any `..` component in `dir`,
+/// or an unsafe `subfolder`. The `filename` is validated separately by the caller.
+fn resolve_note_dir(
+    workspace_root: &std::path::Path,
+    dir: &str,
+    subfolder: &str,
+) -> Option<std::path::PathBuf> {
+    let dir = dir.trim();
+    if !dir.is_empty() {
+        let p = std::path::Path::new(dir);
+        // Footgun guard: reject parent-dir traversal even for operator paths.
+        if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            return None;
+        }
+        return Some(if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            workspace_root.join(p)
+        });
+    }
+    if !is_safe_path_component(subfolder) {
+        return None;
+    }
+    Some(workspace_root.join("zettelkasten").join(subfolder))
+}
+
+/// Run the optional `post_action` carried in the outcome JSON. Supports a direct
+/// note write (`kind == "write_file"`, plus the legacy `"obsidian_note"` alias).
+///
+/// The note is written STRAIGHT TO THE FILESYSTEM — there is NO dependency on the
+/// mcp-obsidian server, so the handler is self-contained/independent. The target
+/// directory is operator-configured: `post_action.dir` (the `output_dir` valve,
+/// a full absolute path) wins; when empty it falls back to
+/// `<workspace>/zettelkasten/<subfolder>` (the historical default location).
+/// mcp-obsidian remains available for agents to call directly as a tool; only
+/// this auto note-write is decoupled from it.
 ///
 /// FIX 3: uses the in-hand `outcome` directly (no DB re-read) so post_action is
 /// not silently skipped when mark_handler_job_done failed.
-/// FIX 2: validates `folder` and `filename` against a strict allowlist before
-/// passing to MCP to prevent path traversal.
-async fn run_post_action(
-    state: &AppState,
-    job: &handler_jobs::HandlerJob,
-    outcome: &ScenarioOutcome,
-) {
-    // FIX 3: read post_action directly from the in-hand outcome (avoids DB
-    // re-read and decouples post_action from the mark_done write succeeding).
+/// Security: `filename` is validated as a single safe path component; `dir` is
+/// rejected if it contains a `..` component (see `resolve_note_dir`).
+async fn run_post_action(job: &handler_jobs::HandlerJob, outcome: &ScenarioOutcome) {
     let outcome_value = serde_json::to_value(outcome).unwrap_or_else(|_| serde_json::json!({}));
     let action = match outcome_value.get("post_action") {
         Some(a) if !a.is_null() => a.clone(),
         _ => return,
     };
-    if action.get("kind").and_then(|k| k.as_str()) != Some("obsidian_note") {
+    let kind = action.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+    if kind != "write_file" && kind != "obsidian_note" {
         return;
     }
-    // R17: state.agents.get_engine(&str) -> Option<Arc<AgentEngine>>.
-    let engine = match state.agents.get_engine(&job.agent_name).await {
-        Some(e) => e,
-        None => return,
-    };
-    // R17: engine.mcp() -> &Option<Arc<McpRegistry>>.
-    let mcp = match engine.mcp() {
-        Some(m) => m.clone(),
-        None => {
-            tracing::warn!(job_id = %job.id, "run_post_action: MCP disabled — skipping vault write");
-            return;
-        }
-    };
-    let folder = action.get("folder").and_then(|v| v.as_str()).unwrap_or("Summary");
-    let filename = action.get("filename").and_then(|v| v.as_str()).unwrap_or("note.md");
 
-    // FIX 2: path traversal allowlist — reject folder or filename that contain
-    // slashes, backslashes, or '..' sequences. Only [A-Za-z0-9 _.-]{1,128}.
-    if !is_safe_path_component(folder) || !is_safe_path_component(filename) {
+    let filename = action.get("filename").and_then(|v| v.as_str()).unwrap_or("note.md");
+    if !is_safe_path_component(filename) {
         tracing::warn!(
-            job_id = %job.id,
-            folder = %folder,
-            filename = %filename,
-            "run_post_action: folder or filename failed allowlist — skipping MCP call"
+            job_id = %job.id, filename = %filename,
+            "run_post_action: filename failed allowlist — skipping write"
         );
         return;
     }
-
     let content = action
         .get("content")
         .and_then(|v| v.as_str())
         .unwrap_or(&outcome.summary_text);
-    // R17: McpRegistry::call_tool(&self, mcp_name, tool_name, &serde_json::Value).
-    if let Err(e) = mcp
-        .call_tool(
-            "mcp-obsidian",
-            "create_note",
-            &serde_json::json!({ "folder": folder, "filename": filename, "content": content }),
-        )
+
+    // Operator-configured full path (`output_dir` valve) or the vault subfolder
+    // (legacy `folder` field is accepted as an alias of `subfolder`).
+    let dir = action.get("dir").and_then(|v| v.as_str()).unwrap_or("");
+    let subfolder = action
+        .get("subfolder")
+        .or_else(|| action.get("folder"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Summary");
+
+    let workspace_root = tokio::fs::canonicalize(crate::config::WORKSPACE_DIR)
         .await
-    {
-        tracing::warn!(error = %e, job_id = %job.id, "run_post_action: create_note failed");
-    } else if let Err(e) = mcp
-        .call_tool(
-            "mcp-obsidian",
-            "commit_vault",
-            &serde_json::json!({ "message": format!("file-handler note: {filename}") }),
-        )
-        .await
-    {
-        tracing::warn!(error = %e, job_id = %job.id, "run_post_action: commit_vault failed");
+        .unwrap_or_else(|_| std::path::PathBuf::from(crate::config::WORKSPACE_DIR));
+    let target_dir = match resolve_note_dir(&workspace_root, dir, subfolder) {
+        Some(d) => d,
+        None => {
+            tracing::warn!(
+                job_id = %job.id, dir = %dir, subfolder = %subfolder,
+                "run_post_action: unsafe note directory — skipping write"
+            );
+            return;
+        }
+    };
+
+    if let Err(e) = tokio::fs::create_dir_all(&target_dir).await {
+        tracing::warn!(error = %e, job_id = %job.id, dir = %target_dir.display(), "run_post_action: create_dir_all failed");
+        return;
+    }
+    let path = target_dir.join(filename);
+    match tokio::fs::write(&path, content).await {
+        Ok(()) => tracing::info!(job_id = %job.id, path = %path.display(), "run_post_action: note written"),
+        Err(e) => tracing::warn!(error = %e, job_id = %job.id, path = %path.display(), "run_post_action: write failed"),
     }
 }
 
@@ -858,6 +888,36 @@ mod tests {
     }
 
     // ── Job-callback token gate tests (non-DB, unit) ─────────────────────────
+
+    #[test]
+    fn resolve_note_dir_cases() {
+        use std::path::{Path, PathBuf};
+        let ws = Path::new("/ws");
+        // Empty dir → vault/<subfolder> (historical default).
+        assert_eq!(
+            resolve_note_dir(ws, "", "Summary"),
+            Some(PathBuf::from("/ws/zettelkasten/Summary"))
+        );
+        assert_eq!(
+            resolve_note_dir(ws, "   ", "Videos"),
+            Some(PathBuf::from("/ws/zettelkasten/Videos"))
+        );
+        // Absolute operator path used verbatim (full-path valve).
+        assert_eq!(
+            resolve_note_dir(ws, "/home/u/Notes", "Summary"),
+            Some(PathBuf::from("/home/u/Notes"))
+        );
+        // Relative dir joined under the workspace root.
+        assert_eq!(
+            resolve_note_dir(ws, "Custom/Notes", "Summary"),
+            Some(PathBuf::from("/ws/Custom/Notes"))
+        );
+        // Traversal rejected in dir and in subfolder.
+        assert_eq!(resolve_note_dir(ws, "/home/../etc", "Summary"), None);
+        assert_eq!(resolve_note_dir(ws, "a/../b", "Summary"), None);
+        assert_eq!(resolve_note_dir(ws, "", "../evil"), None);
+        assert_eq!(resolve_note_dir(ws, "", "a/b"), None);
+    }
 
     #[test]
     fn verify_job_callback_token_accepts_valid() {
