@@ -41,11 +41,19 @@ def _load(handler_id):
 def test_all_four_builtins_parse_and_register():
     reg = HandlerRegistry()
     reg.load_all(os.path.abspath(BUILTIN_DIR), None)
-    for hid in ("save", "transcribe", "describe", "extract_document"):
+    # save/describe/extract_document run inline (sync); transcribe is async so it
+    # can also handle URL sources (download + transcribe) like summarize_video.
+    expected_exec = {
+        "save": "sync",
+        "describe": "sync",
+        "extract_document": "sync",
+        "transcribe": "async",
+    }
+    for hid, execu in expected_exec.items():
         lh = reg.get(hid)
         assert lh is not None
         assert lh.tier == "builtin"
-        assert lh.descriptor.execution == "sync"
+        assert lh.descriptor.execution == execu, hid
 
 
 @pytest.mark.asyncio
