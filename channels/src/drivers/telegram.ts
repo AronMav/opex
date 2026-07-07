@@ -476,6 +476,36 @@ export function createTelegramDriver(
       return;
     }
 
+    // Handler-menu button: hm:<token>:<handler_id> → run the chosen handler via
+    // Core (deterministic, no LLM round-trip). Token maps to the stashed
+    // source/session/agent on the Core side (POST /api/files/menu-run).
+    if (data.startsWith("hm:")) {
+      const parts = data.split(":");
+      const token = parts[1];
+      const handlerId = parts.slice(2).join(":");
+      const coreUrl = (process.env.OPEX_CORE_WS || "ws://localhost:18789").replace("ws://", "http://");
+      const authToken = process.env.OPEX_AUTH_TOKEN || "";
+      try {
+        const resp = await fetch(`${coreUrl}/api/files/menu-run`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${authToken}` },
+          body: JSON.stringify({ token, handler_id: handlerId }),
+          signal: AbortSignal.timeout(5000),
+        });
+        if (resp.ok) {
+          await ctx.answerCallbackQuery({ text: "Запускаю…" }).catch(() => { });
+          // Remove the keyboard so it can't be double-clicked.
+          await ctx.editMessageReplyMarkup().catch(() => { });
+        } else {
+          await ctx.answerCallbackQuery({ text: "Не удалось запустить" }).catch(() => { });
+        }
+      } catch (err) {
+        console.error("[tg] menu-run HTTP error:", err);
+        await ctx.answerCallbackQuery({ text: "Ошибка связи" }).catch(() => { });
+      }
+      return;
+    }
+
     await ctx.answerCallbackQuery().catch(() => { });
     bridge.sendMessage({
       user_id: userId,

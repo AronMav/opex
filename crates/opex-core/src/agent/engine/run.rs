@@ -449,6 +449,37 @@ impl AgentEngine {
         );
         let result =
             finalize::finalize(fin_ctx, fin_outcome, &mut s, &mut lifecycle_guard).await;
+
+        // Channel handler-menu → clickable inline buttons on channels that render
+        // them (e.g. Telegram). Reuses the existing `send_buttons` action; the
+        // button `data` carries only `hm:<token>:<handler_id>` (Telegram's
+        // callback_data ≤64 bytes), with the source/session/agent stashed under
+        // the token and recovered by POST /api/files/menu-run on click.
+        if let Some(menu) = s.menu.take()
+            && let Some(router) = self.channel_router_ref()
+            && let Some(handlers) = menu.get("handlers").and_then(|v| v.as_array())
+            && !handlers.is_empty()
+        {
+            let token = crate::gateway::handlers::files::store_menu_ctx(menu.clone());
+            let buttons: Vec<serde_json::Value> = handlers
+                .iter()
+                .map(|h| {
+                    let id = h.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    let label = h.get("label").and_then(|v| v.as_str()).unwrap_or(id);
+                    serde_json::json!({ "text": label, "data": format!("hm:{token}:{id}") })
+                })
+                .collect();
+            let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+            let action = crate::agent::channel_actions::ChannelAction {
+                name: "send_buttons".to_string(),
+                params: serde_json::json!({ "text": "Выберите действие:", "buttons": buttons }),
+                context: msg.context.clone(),
+                reply: reply_tx,
+                target_channel: Some(msg.channel.clone()),
+            };
+            let _ = router.send(action).await;
+        }
+
         self.maybe_trim_session(session_id).await;
         if let Ok(ref final_text) = result {
             self.maybe_auto_tts(msg, final_text).await;

@@ -113,13 +113,17 @@ pub struct ChannelStatusSink {
     status_tx: Option<tokio::sync::mpsc::UnboundedSender<ProcessingPhase>>,
     chunk_tx:  Option<tokio::sync::mpsc::Sender<String>>,
     pub buffer: String,
+    /// Captured `handler_menu` rich-card data (if the turn emitted one). After
+    /// the pipeline, `handle_with_status` turns this into a `send_menu` channel
+    /// action so channels (Telegram) can render clickable buttons.
+    pub menu: Option<serde_json::Value>,
 }
 
 impl ChannelStatusSink {
     pub fn new(
         status_tx: Option<tokio::sync::mpsc::UnboundedSender<ProcessingPhase>>,
         chunk_tx:  Option<tokio::sync::mpsc::Sender<String>>,
-    ) -> Self { Self { status_tx, chunk_tx, buffer: String::new() } }
+    ) -> Self { Self { status_tx, chunk_tx, buffer: String::new(), menu: None } }
 }
 
 impl EventSink for ChannelStatusSink {
@@ -135,7 +139,14 @@ impl EventSink for ChannelStatusSink {
                     tx.send(s).await.map_err(|_| SinkError::Closed)
                 } else { Ok(()) }
             }
-            _ => Ok(()), // tool/file/card events not relevant to channel transport
+            PipelineEvent::Stream(StreamEvent::RichCard { card_type, data }) => {
+                // Capture the handler-selection menu for channel rendering.
+                if card_type == "handler_menu" {
+                    self.menu = Some(data);
+                }
+                Ok(())
+            }
+            _ => Ok(()), // other tool/file events not relevant to channel transport
         }
     }
 }

@@ -78,6 +78,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/files/{upload_id}/actions", get(get_file_actions))
         .route("/api/files/{upload_id}/run", post(run_file_handler))
         .route("/api/files/run", post(run_menu_handler))
+        .route("/api/files/menu-run", post(run_menu_token_handler))
         .route("/api/files/jobs/{job_id}/progress", post(job_progress))
         .route("/api/files/jobs/{job_id}/complete", post(job_complete))
 }
@@ -96,27 +97,29 @@ struct MenuRunRequest {
     agent: String,
 }
 
-/// `POST /api/files/run` — enqueue a handler for a source picked from the menu
-/// card. Mirrors the `file_handler` tool's `run` security check: the handler
-/// MUST be in the domain/mime + trust-gated matched set for the source.
-async fn run_menu_handler(
-    State(infra): State<InfraServices>,
-    State(handlers): State<HandlerRegistry>,
-    Json(req): Json<MenuRunRequest>,
-) -> impl IntoResponse {
-    // Ownership guard: the target session must belong to the calling agent.
-    // Prevents a caller from injecting a job/result into another agent's session
-    // (mirrors the session-tool IDOR scoping). OPEX is single-token, so this is
-    // the relevant boundary rather than a per-user one.
+/// Shared validate+enqueue for a menu run (web card `/api/files/run` and the
+/// Telegram callback `/api/files/menu-run`). Ownership guard + matched-set check
+/// (the same security boundary as the `file_handler` tool's `run`), then enqueue.
+async fn menu_run_core(
+    infra: &InfraServices,
+    handlers: &HandlerRegistry,
+    source_url: Option<&str>,
+    upload_id_req: Option<Uuid>,
+    session_id: Uuid,
+    agent: &str,
+    handler_id: &str,
+) -> axum::response::Response {
+    // Ownership guard: the target session must belong to the calling agent
+    // (mirrors the session-tool IDOR scoping; OPEX is single-token).
     let session_owner: Option<String> =
         sqlx::query_scalar("SELECT agent_id FROM sessions WHERE id = $1")
-            .bind(req.session_id)
+            .bind(session_id)
             .fetch_optional(&infra.db)
             .await
             .ok()
             .flatten();
     match session_owner {
-        Some(a) if a == req.agent => {}
+        Some(a) if a == agent => {}
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -129,14 +132,12 @@ async fn run_menu_handler(
     handlers.refresh().await;
     let manifests = handlers.manifests().await;
     let enabled = crate::agent::fse::get_enabled_allowlist(&infra.db).await;
-    // Label localization only; handler matching is language-agnostic.
-    let lang = "ru";
+    let lang = "ru"; // label localization only; matching is language-agnostic
 
-    let source_url = req.source_url.as_deref().filter(|s| !s.is_empty());
+    let source_url = source_url.filter(|s| !s.is_empty());
     let (buttons, upload_id) = if let Some(url) = source_url {
         (match_url_handlers(&manifests, url, &enabled, lang), None)
-    } else if let Some(uid) = req.upload_id {
-        // Owner-gate the upload (same check as run_file_handler).
+    } else if let Some(uid) = upload_id_req {
         match assert_upload_accessible(&infra.db, uid).await {
             Ok(meta) => (match_buttons(&manifests, &meta.mime, meta.size, &enabled, lang), Some(uid)),
             Err((status, body)) => return (status, body).into_response(),
@@ -149,7 +150,7 @@ async fn run_menu_handler(
             .into_response();
     };
 
-    if !buttons.iter().any(|b| b.id == req.handler_id) {
+    if !buttons.iter().any(|b| b.id == handler_id) {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({ "error": "handler not available for this source" })),
@@ -159,13 +160,7 @@ async fn run_menu_handler(
 
     let params = json!({ "language": lang });
     match handler_jobs::insert_handler_job(
-        &infra.db,
-        upload_id,
-        source_url,
-        &req.handler_id,
-        &req.agent,
-        req.session_id,
-        &params,
+        &infra.db, upload_id, source_url, handler_id, agent, session_id, &params,
     )
     .await
     {
@@ -176,6 +171,93 @@ async fn run_menu_handler(
         )
             .into_response(),
     }
+}
+
+/// `POST /api/files/run` — the web `handler_menu` card button click.
+async fn run_menu_handler(
+    State(infra): State<InfraServices>,
+    State(handlers): State<HandlerRegistry>,
+    Json(req): Json<MenuRunRequest>,
+) -> impl IntoResponse {
+    menu_run_core(
+        &infra,
+        &handlers,
+        req.source_url.as_deref(),
+        req.upload_id,
+        req.session_id,
+        &req.agent,
+        &req.handler_id,
+    )
+    .await
+}
+
+// ── Menu context store (Telegram callback_data is ≤64 bytes) ──────────────────
+
+/// Short-lived `token → handler_menu params`. A Telegram inline button can only
+/// carry `hm:<token>:<handler_id>` (callback_data limit), so the
+/// source_url/upload_id/session/agent are stashed here when the menu is sent and
+/// recovered on the callback via `/api/files/menu-run`.
+type MenuCtxMap = std::collections::HashMap<String, (serde_json::Value, std::time::Instant)>;
+static MENU_CTX: std::sync::OnceLock<std::sync::Mutex<MenuCtxMap>> = std::sync::OnceLock::new();
+
+fn menu_ctx() -> &'static std::sync::Mutex<MenuCtxMap> {
+    MENU_CTX.get_or_init(|| std::sync::Mutex::new(MenuCtxMap::new()))
+}
+
+/// Stash `handler_menu` params under a fresh short token (prunes entries older
+/// than 30 min). Called from the channel path when a menu is sent to Telegram.
+pub(crate) fn store_menu_ctx(params: serde_json::Value) -> String {
+    let token: String = uuid::Uuid::new_v4().simple().to_string().chars().take(10).collect();
+    if let Ok(mut map) = menu_ctx().lock() {
+        let now = std::time::Instant::now();
+        map.retain(|_, (_, t)| now.duration_since(*t) < std::time::Duration::from_secs(1800));
+        map.insert(token.clone(), (params, now));
+    }
+    token
+}
+
+#[derive(Deserialize)]
+struct MenuTokenRunRequest {
+    token: String,
+    handler_id: String,
+}
+
+/// `POST /api/files/menu-run` — the Telegram inline-button callback. Recovers the
+/// menu params by token, then runs exactly like `/api/files/run`.
+async fn run_menu_token_handler(
+    State(infra): State<InfraServices>,
+    State(handlers): State<HandlerRegistry>,
+    Json(req): Json<MenuTokenRunRequest>,
+) -> impl IntoResponse {
+    let params = menu_ctx()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&req.token).map(|(v, _)| v.clone()));
+    let Some(params) = params else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "menu expired or unknown" })),
+        )
+            .into_response();
+    };
+    let source_url = params.get("source_url").and_then(|v| v.as_str());
+    let upload_id = params
+        .get("upload_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok());
+    let Some(session_id) = params
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "stored menu missing session" })),
+        )
+            .into_response();
+    };
+    let agent = params.get("agent").and_then(|v| v.as_str()).unwrap_or("");
+    menu_run_core(&infra, &handlers, source_url, upload_id, session_id, agent, &req.handler_id).await
 }
 
 // ── Request / query types ─────────────────────────────────────────────────────
