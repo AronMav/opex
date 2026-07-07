@@ -249,10 +249,16 @@ pub async fn enrich_message_text(
     if let Some(first) = detected.first() {
         enriched.push_str(&format!(
             "\n\n[Пользователь прислал ссылку, которую можно обработать: {}. \
-             НЕ обрабатывай её сам и не пересказывай содержимое. Вызови инструмент \
-             file_handler с action=\"list\" и source_url=\"{}\", покажи пользователю \
-             доступные обработчики и по его выбору вызови file_handler с action=\"run\", \
-             тем же source_url и выбранным handler_id.]",
+             ВАЖНО: обрабатывай эту ссылку ТОЛЬКО через инструмент file_handler. \
+             НЕ используй get_transcript, fetch, browser_action, search или любые другие \
+             инструменты для этой ссылки и не пересказывай её содержимое сам. \
+             Сначала вызови file_handler с action=\"list\" и source_url=\"{}\". \
+             Если пользователь ЯВНО написал, что нужно сделать (например «конспект», \
+             «саммари», «summary» → summarize_video; «транскрипт», «расшифровка», «текст» → \
+             transcribe), сразу вызови file_handler с action=\"run\", тем же source_url и \
+             нужным handler_id. Если же пользователь прислал только ссылку без указаний — \
+             покажи ему список доступных обработчиков и СПРОСИ, что выполнить; \
+             НЕ запускай никакой обработчик, пока пользователь не выбрал.]",
             detected.join(", "),
             first,
         ));
@@ -978,6 +984,16 @@ mod tests {
         assert!(
             result.text.contains("youtube.com"),
             "hint must contain the URL: {:?}", result.text
+        );
+        // Must steer away from competing tools and require asking when intent
+        // is unspecified (the reported bug: model grabbed get_transcript).
+        assert!(
+            result.text.contains("get_transcript"),
+            "hint must forbid the competing get_transcript tool: {:?}", result.text
+        );
+        assert!(
+            result.text.contains("СПРОСИ"),
+            "hint must instruct to ask when the user gave no intent: {:?}", result.text
         );
     }
 
