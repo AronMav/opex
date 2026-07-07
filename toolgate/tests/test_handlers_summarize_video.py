@@ -57,6 +57,10 @@ def _make_ctx(llm_side_effect=None):
         side_effect=lambda r: HandlerResult(status="failed", reason=r)
     )
 
+    # Real dict so ctx.config.get(...) returns None (not a truthy MagicMock) and
+    # handlers fall back to their descriptor defaults.
+    ctx.config = {}
+
     ctx.log = MagicMock()
     return ctx
 
@@ -175,6 +179,19 @@ async def test_short_transcript_has_obsidian_note_post_action():
     assert pa["folder"] == "Summary"
     fn = pa["filename"]
     assert fn.endswith(".md"), f"filename must end with .md: {fn!r}"
+
+
+@pytest.mark.asyncio
+async def test_summary_folder_valve_overrides_default_folder():
+    """An operator-set ctx.config['summary_folder'] overrides the default folder."""
+    ctx = _make_ctx()
+    ctx.config = {"summary_folder": "Videos"}
+    file = _video_file()
+
+    with patch.object(sv_mod, "extract_audio_from_file", _fake_extract_audio):
+        result = await sv_mod.run(ctx, file, {"language": "ru"})
+
+    assert result.post_action["folder"] == "Videos"
 
 
 @pytest.mark.asyncio
