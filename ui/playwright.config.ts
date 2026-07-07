@@ -21,10 +21,13 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  // Start the dev server before running tests (optional)
-  // webServer: {
-  //   command: 'npm run dev',
-  //   url: 'http://localhost:3000',
-  //   reuseExistingServer: !process.env.CI,
-  // },
+  // Static server for the self-contained overflow guard. `serve` (no -s) serves
+  // the Next static export as-is so /__overflow_check resolves to its export
+  // html. Existing live-backend e2e use absolute :18789 URLs and ignore this.
+  webServer: {
+    command: 'npx --yes serve out -l 4321 -n',
+    url: 'http://localhost:4321/overflow-check',
+    reuseExistingServer: !process.env.CI,
+    timeout: 120_000,
+  },
 });
