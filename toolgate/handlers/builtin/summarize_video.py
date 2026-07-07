@@ -56,6 +56,12 @@ DIGEST_CHUNK_THRESHOLD_MIN: int = 150
 DIGEST_CHUNK_MINUTES: int = 45
 """Width of each transcript time-window (minutes) in the chunked digest."""
 
+MIN_TRANSCRIPT_CHARS: int = 24
+"""Transcripts shorter than this (after stripping timecodes + whitespace) are
+treated as EMPTY. STT returns nothing for a music-only video (no discernible
+speech) or on a language mismatch; digesting an empty transcript makes the LLM
+HALLUCINATE a fabricated summary. Below this bound we fail loudly instead."""
+
 # ── Cyrillic → Latin transliteration table ────────────────────────────────────
 # Only the most common Cyrillic letters; unmapped chars are dropped by latin_slug.
 _TRANSLIT: dict[str, str] = {
@@ -454,6 +460,7 @@ async def run(ctx, file, params):
       4. assemble Obsidian note + return with obsidian_note post_action
     """
     language = params.get("language", "ru")
+    url_title: Optional[str] = None
 
     # ── 1. fetch ─────────────────────────────────────────────────────────────
     await ctx.progress("fetch", 10)
@@ -467,10 +474,17 @@ async def run(ctx, file, params):
         if tg_root not in _sys.path:
             _sys.path.insert(0, tg_root)
         try:
-            from video_helpers import download_video, extract_audio  # type: ignore[import]
+            from video_helpers import (  # type: ignore[import]
+                download_video, extract_audio, read_info_title,
+            )
             with _tf.TemporaryDirectory() as d:
                 path = await download_video(file.source_url, d)
                 audio = await extract_audio(path)
+                # Recover the REAL video title for a unique, human-readable note
+                # filename. Without this, every youtube /watch?v=… URL collides
+                # on the path segment "watch" → one shared "watch.md" that each
+                # new video silently overwrites (create_note "already exists").
+                url_title = read_info_title(d)
         except Exception as exc:
             return ctx.result.failed(f"source_url fetch failed: {exc}")
     else:
@@ -486,6 +500,18 @@ async def run(ctx, file, params):
         filename=audio_filename,
         language=language,
     )
+
+    # Guard: an empty / near-empty transcript means STT produced no usable
+    # speech (music-only video, or a language mismatch). Feeding it to the
+    # digest LLM makes the model HALLUCINATE a completely fabricated summary
+    # (it invents a plausible tutorial), which is then delivered to the user as
+    # if it were real. Fail loudly with a clear reason instead of hallucinating.
+    if len(strip_transcript_timecodes(transcript).strip()) < MIN_TRANSCRIPT_CHARS:
+        return ctx.result.failed(
+            "не удалось распознать речь в видео (пустой транскрипт): "
+            "возможно, в видео нет разборчивой речи (только музыка) "
+            "или язык распознавания не совпадает с языком видео"
+        )
 
     # ── 3. digest ─────────────────────────────────────────────────────────────
     await ctx.progress("digest", 50)
@@ -519,7 +545,9 @@ async def run(ctx, file, params):
     # ── 4. assemble note + return ─────────────────────────────────────────────
     await ctx.progress("saving", 90)
 
-    title = _extract_title(file.filename or "video.mp4")
+    # Prefer the real video title (url jobs) so the note filename is unique per
+    # video; fall back to the upload filename for byte-based jobs.
+    title = url_title or _extract_title(file.filename or "video.mp4")
     # Build Latin-safe slug for the filename (core path guard rejects Cyrillic)
     content_hash = hashlib.sha256(transcript.encode()).hexdigest()[:8]
     slug = latin_slug(title, content_hash)

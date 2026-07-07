@@ -53,6 +53,9 @@ def _make_ctx(llm_side_effect=None):
     ctx.result.text = MagicMock(
         side_effect=lambda s: HandlerResult(status="ok", summary_text=s)
     )
+    ctx.result.failed = MagicMock(
+        side_effect=lambda r: HandlerResult(status="failed", reason=r)
+    )
 
     ctx.log = MagicMock()
     return ctx
@@ -116,6 +119,40 @@ async def test_short_transcript_single_pass_llm_called_once():
     assert ctx.llm.complete.call_count == 1, (
         f"Expected 1 llm call, got {ctx.llm.complete.call_count}"
     )
+
+
+@pytest.mark.asyncio
+async def test_empty_transcript_fails_without_hallucinating():
+    """Empty STT transcript → failed result; the digest LLM is NEVER called.
+
+    Regression guard: a music-only video (or language mismatch) yields an empty
+    transcript. Previously the handler digested it and the LLM hallucinated a
+    fabricated summary that was delivered as if real."""
+    ctx = _make_ctx()
+    ctx.stt.transcribe = AsyncMock(return_value="")
+    file = _video_file()
+
+    with patch.object(sv_mod, "extract_audio_from_file", _fake_extract_audio):
+        result = await sv_mod.run(ctx, file, {"language": "ru"})
+
+    assert result.status == "failed", f"expected failed, got {result.status!r}"
+    assert ctx.llm.complete.call_count == 0, (
+        "digest LLM must not run on an empty transcript (hallucination guard)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_whitespace_and_timecode_only_transcript_fails():
+    """A transcript that is only timecodes/whitespace is treated as empty."""
+    ctx = _make_ctx()
+    ctx.stt.transcribe = AsyncMock(return_value="[00:00]   \n[00:05]  \n")
+    file = _video_file()
+
+    with patch.object(sv_mod, "extract_audio_from_file", _fake_extract_audio):
+        result = await sv_mod.run(ctx, file, {"language": "ru"})
+
+    assert result.status == "failed", f"expected failed, got {result.status!r}"
+    assert ctx.llm.complete.call_count == 0
 
 
 @pytest.mark.asyncio

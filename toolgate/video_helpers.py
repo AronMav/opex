@@ -375,6 +375,11 @@ async def download_video(url: str, dest_dir: str) -> str:
             sys.executable, "-m", "yt_dlp",
             "--js-runtimes", "deno",
             "--remote-components", "ejs:github",
+            # Write the metadata sidecar (`dl.info.json`) so callers can recover
+            # the REAL video title via read_info_title(). Without it the only
+            # title available is the URL's last path segment ("watch" for every
+            # youtube /watch?v=… URL) → all notes collide on one filename.
+            "--write-info-json",
             *cookie_args,
             "-f", "best[ext=mp4]/best", "-o", out_tmpl, "--no-playlist", "--", url
         )
@@ -382,7 +387,30 @@ async def download_video(url: str, dest_dir: str) -> str:
         _cleanup_cookie_args(cookie_args)
     if code != 0:
         raise RuntimeError(f"yt-dlp failed: {err.decode(errors='ignore')[:400]}")
-    files = glob.glob(os.path.join(dest_dir, "dl.*"))
+    # Exclude the `.info.json` sidecar — we want the media file, not metadata.
+    files = [
+        f for f in glob.glob(os.path.join(dest_dir, "dl.*"))
+        if not f.endswith(".info.json")
+    ]
     if not files:
         raise RuntimeError("yt-dlp produced no file")
     return files[0]
+
+
+def read_info_title(dest_dir: str) -> str | None:
+    """Return the video title from yt-dlp's `dl.info.json` sidecar, or None.
+
+    `download_video` runs yt-dlp with `--write-info-json`, which drops a
+    `dl.info.json` next to the media file. Reading its `title` field gives the
+    real human-readable video title (e.g. "Rick Astley - Never Gonna Give You
+    Up") so the note filename is unique per video instead of the useless URL
+    path segment "watch"."""
+    import json
+    p = os.path.join(dest_dir, "dl.info.json")
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            info = json.load(f)
+    except (OSError, ValueError):
+        return None
+    title = (info.get("title") or "").strip()
+    return title or None

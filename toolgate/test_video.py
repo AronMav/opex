@@ -271,6 +271,54 @@ async def test_download_video_ssrf_guard_called_before_ytdlp(monkeypatch):
         "yt-dlp (_run) was called despite SSRF guard rejecting the URL"
 
 
+# ── read_info_title (unique note filenames — Bug A fix) ──────────────────────
+
+def test_read_info_title_reads_title_from_sidecar():
+    from video_helpers import read_info_title
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "dl.info.json"), "w", encoding="utf-8") as f:
+            json.dump({"title": "Rick Astley - Never Gonna Give You Up"}, f)
+        assert read_info_title(d) == "Rick Astley - Never Gonna Give You Up"
+
+
+def test_read_info_title_missing_or_empty_returns_none():
+    from video_helpers import read_info_title
+    with tempfile.TemporaryDirectory() as d:
+        # No sidecar at all.
+        assert read_info_title(d) is None
+        # Sidecar present but title empty/whitespace.
+        with open(os.path.join(d, "dl.info.json"), "w", encoding="utf-8") as f:
+            json.dump({"title": "   "}, f)
+        assert read_info_title(d) is None
+
+
+@pytest.mark.asyncio
+async def test_download_video_returns_media_not_info_json(monkeypatch):
+    """download_video must return the media file, never the .info.json sidecar.
+
+    Regression: adding --write-info-json drops a `dl.info.json` next to the
+    media file; the glob that picks the result must exclude it."""
+    import video_helpers as vh
+
+    async def fake_run(*args):
+        return 0, b"", b""
+
+    monkeypatch.setattr(vh, "_run", fake_run)
+    monkeypatch.setattr(vh, "validate_url_ssrf", lambda u: None)
+
+    async def fake_cookie_args():
+        return []
+    monkeypatch.setattr(vh, "_cookie_args_async", fake_cookie_args)
+
+    with tempfile.TemporaryDirectory() as d:
+        # Simulate yt-dlp having written both the media file and the sidecar.
+        open(os.path.join(d, "dl.mp4"), "wb").close()
+        open(os.path.join(d, "dl.info.json"), "w").close()
+        path = await vh.download_video("https://youtube.com/watch?v=x", d)
+
+    assert path.endswith("dl.mp4"), f"expected the media file, got {path!r}"
+
+
 # ── SSRF loopback guard for video_url ───────────────────────────────────────
 
 @pytest.mark.asyncio
