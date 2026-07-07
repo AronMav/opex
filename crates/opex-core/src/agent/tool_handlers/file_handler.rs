@@ -68,9 +68,9 @@ async fn handle_file_handler(deps: ToolDeps<'_>, args: &Value) -> String {
             if buttons.is_empty() {
                 return "No handlers are available for this source.".to_string();
             }
-            // Readable list (what the model sees + text-only channels show) plus a
-            // structured handler list for the clickable menu card.
-            let mut out = String::from("Available handlers:\n");
+            // Bullet list of handlers (id + label + description) — the raw material
+            // for both the model context and text-only channels.
+            let mut list_body = String::new();
             let mut items: Vec<Value> = Vec::new();
             for b in &buttons {
                 let desc = manifests
@@ -79,26 +79,34 @@ async fn handle_file_handler(deps: ToolDeps<'_>, args: &Value) -> String {
                     .and_then(|m| m.descriptions.get(lang).or_else(|| m.descriptions.get("en")))
                     .cloned()
                     .unwrap_or_default();
-                out.push_str(&format!("- {} ({})", b.id, b.label));
+                list_body.push_str(&format!("- {} ({})", b.id, b.label));
                 if !desc.is_empty() {
-                    out.push_str(&format!(" — {desc}"));
+                    list_body.push_str(&format!(" — {desc}"));
                 }
-                out.push('\n');
+                list_body.push('\n');
                 items.push(json!({ "id": b.id, "label": b.label, "description": desc }));
             }
-            out.push_str(
-                "\nTo run one, call file_handler again with action=\"run\", the chosen handler_id, and the same source_url/upload_id.",
-            );
 
-            // Emit a clickable menu card. Channels that render rich cards (web;
-            // Telegram in a later step) show buttons wired to POST /api/files/run;
-            // the `text` field is what the model + text-only channels see. Needs a
-            // session to attach the click-run to — otherwise fall back to text.
+            // Emit a clickable menu card. Channels that render rich cards (web) or
+            // inline buttons (Telegram) show the menu VISUALLY — so the model must
+            // NOT re-list the handlers as text (that duplicates the menu). The
+            // card's `text` field is what the model sees, so we phrase it as an
+            // instruction, not user-facing content. Without a session there is no
+            // card: fall back to a plain list the model presents itself.
             match deps.session_id {
                 Some(session_id) => {
+                    let instruction = format!(
+                        "An interactive selection menu with these handlers has ALREADY been \
+                         shown to the user (as clickable buttons):\n{list_body}\n\
+                         Do NOT repeat, reformat, or tabulate this list in your reply — the \
+                         user already sees and can click the options. Reply with nothing, or at \
+                         most one short line, then wait. When the user picks one, call \
+                         file_handler again with action=\"run\", the chosen handler_id, and the \
+                         same source_url/upload_id."
+                    );
                     let card = json!({
                         "card_type": "handler_menu",
-                        "text": out,
+                        "text": instruction,
                         "handlers": items,
                         "source_url": source_url,
                         "upload_id": upload_id.map(|u| u.to_string()),
@@ -107,7 +115,10 @@ async fn handle_file_handler(deps: ToolDeps<'_>, args: &Value) -> String {
                     });
                     format!("{}{}", crate::agent::engine::RICH_CARD_PREFIX, card)
                 }
-                None => out,
+                None => format!(
+                    "Available handlers:\n{list_body}\nTo run one, call file_handler again with \
+                     action=\"run\", the chosen handler_id, and the same source_url/upload_id."
+                ),
             }
         }
         "run" => {
