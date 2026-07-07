@@ -31,7 +31,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::agent::file_scenario::outcome::{ScenarioOutcome, ScenarioStatus};
-use crate::agent::handler_registry::{HandlerRegistry, match_buttons};
+use crate::agent::handler_registry::{HandlerRegistry, match_buttons, match_url_handlers};
 use crate::gateway::AppState;
 use crate::gateway::clusters::{ChannelBus, ConfigServices, InfraServices};
 use opex_db::handler_jobs;
@@ -77,8 +77,88 @@ pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/files/{upload_id}/actions", get(get_file_actions))
         .route("/api/files/{upload_id}/run", post(run_file_handler))
+        .route("/api/files/run", post(run_menu_handler))
         .route("/api/files/jobs/{job_id}/progress", post(job_progress))
         .route("/api/files/jobs/{job_id}/complete", post(job_complete))
+}
+
+/// Request body for `POST /api/files/run` — the click-run from a `handler_menu`
+/// card button. Deterministic (no LLM round-trip): validates the chosen handler
+/// against the matched set for the source, then enqueues a `handler_jobs` row.
+#[derive(Deserialize)]
+struct MenuRunRequest {
+    handler_id: String,
+    #[serde(default)]
+    source_url: Option<String>,
+    #[serde(default)]
+    upload_id: Option<Uuid>,
+    session_id: Uuid,
+    agent: String,
+}
+
+/// `POST /api/files/run` — enqueue a handler for a source picked from the menu
+/// card. Mirrors the `file_handler` tool's `run` security check: the handler
+/// MUST be in the domain/mime + trust-gated matched set for the source.
+async fn run_menu_handler(
+    State(infra): State<InfraServices>,
+    State(handlers): State<HandlerRegistry>,
+    Json(req): Json<MenuRunRequest>,
+) -> impl IntoResponse {
+    handlers.refresh().await;
+    let manifests = handlers.manifests().await;
+    let enabled = crate::agent::fse::get_enabled_allowlist(&infra.db).await;
+    // Label localization only; handler matching is language-agnostic.
+    let lang = "ru";
+
+    let source_url = req.source_url.as_deref().filter(|s| !s.is_empty());
+    let (buttons, upload_id) = if let Some(url) = source_url {
+        (match_url_handlers(&manifests, url, &enabled, lang), None)
+    } else if let Some(uid) = req.upload_id {
+        match crate::db::uploads::get_by_id(&infra.db, uid).await.ok().flatten() {
+            Some(row) => {
+                let size = u64::try_from(row.size_bytes).unwrap_or(0);
+                (match_buttons(&manifests, &row.mime, size, &enabled, lang), Some(uid))
+            }
+            None => {
+                return (StatusCode::NOT_FOUND, Json(json!({ "error": "upload not found" })))
+                    .into_response();
+            }
+        }
+    } else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "provide source_url or upload_id" })),
+        )
+            .into_response();
+    };
+
+    if !buttons.iter().any(|b| b.id == req.handler_id) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "handler not available for this source" })),
+        )
+            .into_response();
+    }
+
+    let params = json!({ "language": lang });
+    match handler_jobs::insert_handler_job(
+        &infra.db,
+        upload_id,
+        source_url,
+        &req.handler_id,
+        &req.agent,
+        req.session_id,
+        &params,
+    )
+    .await
+    {
+        Ok(job_id) => Json(json!({ "ok": true, "job_id": job_id })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 // ── Request / query types ─────────────────────────────────────────────────────

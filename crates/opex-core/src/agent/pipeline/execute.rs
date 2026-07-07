@@ -1095,12 +1095,18 @@ async fn extract_tool_result_events<S: EventSink>(
     use crate::agent::engine::{FILE_PREFIX, RICH_CARD_PREFIX, TOOL_CALL_PREFIX};
 
     if let Some(json_str) = tool_result.strip_prefix(RICH_CARD_PREFIX) {
+        // A card may carry a `text` field — the readable version shown to the
+        // model (and text-only channels). Falls back to a generic note.
+        let mut display = "Rich card displayed".to_string();
         if let Ok(data) = serde_json::from_str::<serde_json::Value>(json_str) {
             let card_type = data
                 .get("card_type")
                 .and_then(|v| v.as_str())
                 .unwrap_or("table")
                 .to_string();
+            if let Some(t) = data.get("text").and_then(|v| v.as_str()) {
+                display = t.to_string();
+            }
             let _ = sink
                 .emit(PipelineEvent::Stream(StreamEvent::RichCard {
                     card_type,
@@ -1109,7 +1115,7 @@ async fn extract_tool_result_events<S: EventSink>(
                 .await;
         }
         ToolResultParts {
-            display_result: "Rich card displayed".to_string(),
+            display_result: display,
             db_result: tool_result.to_string(),
         }
     } else if tool_result.contains(FILE_PREFIX) || tool_result.contains(TOOL_CALL_PREFIX) {

@@ -3,6 +3,7 @@
 import React, { createElement, Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { TableCard, MetricCard } from "@/components/ui/rich-card";
+import { HandlerMenuCard } from "@/components/ui/handler-menu-card";
 
 // ── Card component type ────────────────────────────────────────────────────
 
@@ -13,6 +14,7 @@ export type CardComponent = React.ComponentType<{ data: Record<string, unknown> 
 export const CARD_REGISTRY = new Map<string, CardComponent>([
   ["table", TableCard],
   ["metric", MetricCard],
+  ["handler_menu", HandlerMenuCard],
 ]);
 
 // ── Error boundary ─────────────────────────────────────────────────────────

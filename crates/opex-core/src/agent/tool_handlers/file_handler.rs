@@ -68,7 +68,10 @@ async fn handle_file_handler(deps: ToolDeps<'_>, args: &Value) -> String {
             if buttons.is_empty() {
                 return "No handlers are available for this source.".to_string();
             }
+            // Readable list (what the model sees + text-only channels show) plus a
+            // structured handler list for the clickable menu card.
             let mut out = String::from("Available handlers:\n");
+            let mut items: Vec<Value> = Vec::new();
             for b in &buttons {
                 let desc = manifests
                     .iter()
@@ -81,11 +84,31 @@ async fn handle_file_handler(deps: ToolDeps<'_>, args: &Value) -> String {
                     out.push_str(&format!(" — {desc}"));
                 }
                 out.push('\n');
+                items.push(json!({ "id": b.id, "label": b.label, "description": desc }));
             }
             out.push_str(
                 "\nTo run one, call file_handler again with action=\"run\", the chosen handler_id, and the same source_url/upload_id.",
             );
-            out
+
+            // Emit a clickable menu card. Channels that render rich cards (web;
+            // Telegram in a later step) show buttons wired to POST /api/files/run;
+            // the `text` field is what the model + text-only channels see. Needs a
+            // session to attach the click-run to — otherwise fall back to text.
+            match deps.session_id {
+                Some(session_id) => {
+                    let card = json!({
+                        "card_type": "handler_menu",
+                        "text": out,
+                        "handlers": items,
+                        "source_url": source_url,
+                        "upload_id": upload_id.map(|u| u.to_string()),
+                        "session_id": session_id.to_string(),
+                        "agent": deps.agent_name,
+                    });
+                    format!("{}{}", crate::agent::engine::RICH_CARD_PREFIX, card)
+                }
+                None => out,
+            }
         }
         "run" => {
             let handler_id = args.get("handler_id").and_then(Value::as_str).unwrap_or("");
