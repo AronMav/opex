@@ -104,6 +104,28 @@ async fn run_menu_handler(
     State(handlers): State<HandlerRegistry>,
     Json(req): Json<MenuRunRequest>,
 ) -> impl IntoResponse {
+    // Ownership guard: the target session must belong to the calling agent.
+    // Prevents a caller from injecting a job/result into another agent's session
+    // (mirrors the session-tool IDOR scoping). OPEX is single-token, so this is
+    // the relevant boundary rather than a per-user one.
+    let session_owner: Option<String> =
+        sqlx::query_scalar("SELECT agent_id FROM sessions WHERE id = $1")
+            .bind(req.session_id)
+            .fetch_optional(&infra.db)
+            .await
+            .ok()
+            .flatten();
+    match session_owner {
+        Some(a) if a == req.agent => {}
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "session does not belong to this agent" })),
+            )
+                .into_response();
+        }
+    }
+
     handlers.refresh().await;
     let manifests = handlers.manifests().await;
     let enabled = crate::agent::fse::get_enabled_allowlist(&infra.db).await;
@@ -114,15 +136,10 @@ async fn run_menu_handler(
     let (buttons, upload_id) = if let Some(url) = source_url {
         (match_url_handlers(&manifests, url, &enabled, lang), None)
     } else if let Some(uid) = req.upload_id {
-        match crate::db::uploads::get_by_id(&infra.db, uid).await.ok().flatten() {
-            Some(row) => {
-                let size = u64::try_from(row.size_bytes).unwrap_or(0);
-                (match_buttons(&manifests, &row.mime, size, &enabled, lang), Some(uid))
-            }
-            None => {
-                return (StatusCode::NOT_FOUND, Json(json!({ "error": "upload not found" })))
-                    .into_response();
-            }
+        // Owner-gate the upload (same check as run_file_handler).
+        match assert_upload_accessible(&infra.db, uid).await {
+            Ok(meta) => (match_buttons(&manifests, &meta.mime, meta.size, &enabled, lang), Some(uid)),
+            Err((status, body)) => return (status, body).into_response(),
         }
     } else {
         return (
