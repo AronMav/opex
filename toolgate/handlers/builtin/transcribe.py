@@ -58,7 +58,9 @@ async def run(ctx, file, params):
         try:
             from video_helpers import download_video, extract_audio  # type: ignore[import]
             with _tf.TemporaryDirectory() as d:
-                path = await download_video(file.source_url, d)
+                # audio_only: transcription never needs the video track — grab the
+                # audio stream (~10-30× smaller than the full 1080p container).
+                path = await download_video(file.source_url, d, audio_only=True)
                 audio = await extract_audio(path)
             filename = "audio.ogg"
         except Exception as exc:

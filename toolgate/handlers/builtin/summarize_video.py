@@ -485,7 +485,9 @@ async def run(ctx, file, params):
                 download_video, extract_audio, read_info_title,
             )
             with _tf.TemporaryDirectory() as d:
-                path = await download_video(file.source_url, d)
+                # audio_only: we only transcribe (extract_audio below); pulling the
+                # full 1080p video would be ~10-30× the bytes for zero benefit.
+                path = await download_video(file.source_url, d, audio_only=True)
                 audio = await extract_audio(path)
                 # Recover the REAL video title for a unique, human-readable note
                 # filename. Without this, every youtube /watch?v=… URL collides

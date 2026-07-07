@@ -339,8 +339,16 @@ async def extract_uniform_frames(video_path: str, count: int) -> list[tuple[floa
     return sorted(frames, key=lambda x: x[0])
 
 
-async def download_video(url: str, dest_dir: str) -> str:
+async def download_video(url: str, dest_dir: str, audio_only: bool = False) -> str:
     """Download `url` via yt-dlp to a single file under dest_dir. Returns the path.
+
+    `audio_only=True` fetches the best AUDIO-only stream (`bestaudio/best`)
+    instead of the full 1080p video. Transcription/summary handlers only ever
+    feed the file to extract_audio() (ffmpeg → 16 kHz mono ogg), so pulling a
+    ~1.5 GB 1080p container just to throw away the video track is pure waste —
+    a 107-min lecture is ~50-100 MB of audio vs ~1.5 GB of video, i.e. 10-30×
+    less to download over a throttled egress. The legacy frame-extraction video
+    router keeps the default (audio_only=False) since it needs the picture.
 
     Security: only http/https URLs are accepted (rejects `file:`, `-`-prefixed
     flag-smuggling, etc.), and `--` terminates option parsing so the URL can
@@ -381,7 +389,8 @@ async def download_video(url: str, dest_dir: str) -> str:
             # youtube /watch?v=… URL) → all notes collide on one filename.
             "--write-info-json",
             *cookie_args,
-            "-f", "best[ext=mp4]/best", "-o", out_tmpl, "--no-playlist", "--", url
+            "-f", ("bestaudio/best" if audio_only else "best[ext=mp4]/best"),
+            "-o", out_tmpl, "--no-playlist", "--", url
         )
     finally:
         _cleanup_cookie_args(cookie_args)
