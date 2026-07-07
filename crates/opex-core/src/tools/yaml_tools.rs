@@ -1421,8 +1421,6 @@ impl YamlToolDef {
 }
 
 /// `JSONPath` resolver supporting "$.key", "$.key.nested", "$.arr[0]", "$.arr[*]", "$.arr[-1]", "$.arr[0:3]".
-// reviewed: offsets from find('[') + ASCII bracket — char boundaries
-#[allow(clippy::string_slice)]
 /// One step of a parsed JSONPath: an object key, an array index (possibly
 /// negative), a `[start:end]` slice, or a `[*]` wildcard projection.
 #[derive(Debug, Clone)]
@@ -1437,6 +1435,9 @@ enum PathToken {
 /// consecutive brackets in one hop (`[0][0][0]` — Google-Translate-style nested
 /// arrays), `[*]`, `[-1]`, and `[start:end]`. Returns `None` on a malformed
 /// bracket so the caller falls back to the untransformed value.
+// reviewed: every slice offset comes from find(']' / '.' / '[') or strip_prefix
+// on ASCII delimiters, so it always lands on a char boundary — char-safe.
+#[allow(clippy::string_slice)]
 fn tokenize_jsonpath(path: &str) -> Option<Vec<PathToken>> {
     let mut toks = Vec::new();
     let mut rest = path;
