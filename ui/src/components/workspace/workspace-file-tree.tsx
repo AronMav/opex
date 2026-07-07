@@ -231,7 +231,7 @@ export function WorkspaceFileTree({
                       }`}
                     >
                       {f.is_dir ? <Folder className="h-4 w-4 shrink-0" /> : <FileIcon className="h-4 w-4 shrink-0" />}
-                      <span className="truncate flex-1" title={f.name}>{f.name}</span>
+                      <span className="truncate flex-1 min-w-0" title={f.name}>{f.name}</span>
                     </button>
 
                     {/* Touch-accessible actions dropdown — always visible, not hover-gated */}

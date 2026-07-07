@@ -72,7 +72,7 @@ function TaskCard({ task }: { task: AgentTask }) {
         ) : (
           <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         )}
-        <span className="flex-1 truncate">{task.title}</span>
+        <span className="flex-1 truncate min-w-0">{task.title}</span>
         {totalCount > 0 && (
           <span className="shrink-0 text-xs text-muted-foreground-subtle">
             {doneCount}/{totalCount}
@@ -85,7 +85,7 @@ function TaskCard({ task }: { task: AgentTask }) {
           {task.steps.map((step) => (
             <li key={step.id} className="flex flex-col gap-0.5">
               <div className="flex items-center gap-2">
-                <span className="flex-1 text-xs text-muted-foreground truncate">
+                <span className="flex-1 text-xs text-muted-foreground truncate min-w-0">
                   {step.title}
                 </span>
                 <StepBadge step={step} />

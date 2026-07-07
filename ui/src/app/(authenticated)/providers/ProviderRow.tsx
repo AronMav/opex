@@ -84,7 +84,7 @@ export const ProviderRow = forwardRef<HTMLDivElement, ProviderRowProps>(function
           <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
             <Badge variant="secondary" size="sm" className="font-mono">{typeLabel}</Badge>
             {provider.default_model && (
-              <span className="text-2xs text-muted-foreground font-mono truncate">{provider.default_model}</span>
+              <span className="text-2xs text-muted-foreground font-mono truncate min-w-0">{provider.default_model}</span>
             )}
           </div>
         </div>
@@ -95,12 +95,12 @@ export const ProviderRow = forwardRef<HTMLDivElement, ProviderRowProps>(function
         {provider.base_url && (
           <span className="flex max-w-full items-center gap-1.5 text-xs text-muted-foreground-subtle font-mono truncate min-w-0">
             <Globe className="h-4 w-4 shrink-0" />
-            <span className="truncate">{provider.base_url}</span>
+            <span className="truncate min-w-0">{provider.base_url}</span>
           </span>
         )}
         <span className="flex max-w-full items-center gap-1.5 text-xs text-muted-foreground min-w-0">
           <Key className="h-4 w-4 shrink-0" />
-          <span className="font-mono truncate">
+          <span className="font-mono truncate min-w-0">
             {provider.api_key ?? (provider.has_api_key ? t("providers.api_key_configured") : t("providers.api_key_not_set"))}
           </span>
         </span>

@@ -246,6 +246,15 @@
   }
 }
 
+/* Fade the right edge of a horizontal scroll region so overflow reads as
+   "scroll for more" instead of a hard clip. With justify-start content the fade
+   sits over empty space when nothing overflows (invisible) and over the last
+   item when it does. Both mask properties for Safari/WebKit. */
+@utility scroll-fade-x {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+}
+
 @utility shadow-elev-1 { box-shadow: var(--elevation-1); }
 @utility shadow-elev-2 { box-shadow: var(--elevation-2); }
 @utility shadow-elev-3 { box-shadow: var(--elevation-3); }

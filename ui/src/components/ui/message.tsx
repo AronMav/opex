@@ -23,7 +23,7 @@ export function MessageContent({
 }: MessageContentProps) {
   const { t } = useTranslation()
   const classNames = cn(
-    "rounded-lg p-2 text-foreground bg-secondary prose break-words whitespace-normal",
+    "rounded-lg p-2 text-foreground bg-secondary prose break-words whitespace-normal [&_a]:break-all",
     className
   )
 
