@@ -31,30 +31,48 @@ pub(crate) fn uploads_local_url(att_url: &str, gateway_listen: &str) -> String {
     format!("http://localhost:{port}{path}")
 }
 
-/// Append media attachment hints to the enriched text for LLM.
+/// Extract the upload UUID from an attachment URL shaped like
+/// `…/api/uploads/{uuid}?sig=…`. Returns `None` when the URL isn't an uploads
+/// link — used to point the model's `file_handler` tool at an uploaded file.
+// reviewed: split on ASCII markers, byte-length check — char boundaries safe
+pub(crate) fn extract_upload_id(att_url: &str) -> Option<&str> {
+    let rest = att_url.split("/api/uploads/").nth(1)?;
+    let id = rest.split(['?', '/', '&']).next()?;
+    if id.len() == 36 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+        Some(id)
+    } else {
+        None
+    }
+}
+
+/// Append media attachment hints to the enriched text for the LLM.
 ///
-/// For video, audio, and document attachments, the hint includes a note that
-/// action buttons are shown to the user — the LLM must NOT auto-process these
-/// files. The user clicks a button to choose the action.
+/// For audio/video/document attachments the hint points the model at the
+/// `file_handler` tool (action=list to fetch the applicable handlers, action=run
+/// to execute the user's choice) — the same model-driven menu used for links.
+/// Images are just described inline.
 pub(crate) fn enrich_with_attachments(text: &mut String, attachments: &[opex_types::MediaAttachment]) {
     use opex_types::MediaType;
+    // Model-driven handler menu for a handleable upload (audio/video/document).
+    let menu = |kind: &str, extra: &str, url: &str| -> String {
+        match extract_upload_id(url) {
+            Some(id) => format!(
+                "[Пользователь прислал {kind}{extra} (upload_id: {id}). НЕ обрабатывай сам. \
+                 Вызови инструмент file_handler с action=\"list\" и upload_id=\"{id}\", покажи \
+                 доступные обработчики и по выбору пользователя вызови file_handler с \
+                 action=\"run\", тем же upload_id и выбранным handler_id.]"
+            ),
+            None => format!("[User sent a {kind}{extra}: {url}]"),
+        }
+    };
     for att in attachments {
         let hint = match att.media_type {
             MediaType::Image => format!("[User attached an image: {}]", att.url),
-            MediaType::Audio => format!(
-                "[User sent a voice message: {} — action buttons are shown to the user. Wait for their choice.]",
-                att.url
-            ),
-            MediaType::Video => format!(
-                "[User sent a video: {} — action buttons are shown to the user. Wait for their choice.]",
-                att.url
-            ),
+            MediaType::Audio => menu("голосовое сообщение", "", &att.url),
+            MediaType::Video => menu("видео", "", &att.url),
             MediaType::Document => {
                 let name = att.file_name.as_deref().unwrap_or("file");
-                format!(
-                    "[User attached a document \"{}\": {} — action buttons are shown to the user. Wait for their choice.]",
-                    name, att.url
-                )
+                menu("документ", &format!(" «{name}»"), &att.url)
             }
         };
         if text.is_empty() {
@@ -145,7 +163,7 @@ mod tests {
             file_size: None,
         };
         let att2 = opex_types::MediaAttachment {
-            url: "https://example.com/audio.ogg".to_string(),
+            url: "https://host/api/uploads/11111111-1111-4111-8111-111111111111?sig=x&exp=1".to_string(),
             media_type: opex_types::MediaType::Audio,
             file_name: None,
             mime_type: None,
@@ -156,13 +174,11 @@ mod tests {
             text.contains("[User attached an image: https://example.com/img.jpg]"),
             "image hint unchanged: {text}"
         );
+        // Audio upload → file_handler menu with the extracted upload_id.
+        assert!(text.contains("file_handler"), "audio hint points at file_handler: {text}");
         assert!(
-            text.contains("[User sent a voice message: https://example.com/audio.ogg"),
-            "audio hint present: {text}"
-        );
-        assert!(
-            text.contains("action buttons are shown"),
-            "audio hint includes action button note: {text}"
+            text.contains("11111111-1111-4111-8111-111111111111"),
+            "audio hint carries the upload_id: {text}"
         );
     }
 
@@ -170,20 +186,27 @@ mod tests {
     fn enrich_with_attachments_document_with_filename() {
         let mut text = String::new();
         let att = opex_types::MediaAttachment {
-            url: "https://example.com/doc.pdf".to_string(),
+            url: "https://host/api/uploads/22222222-2222-4222-8222-222222222222?sig=x".to_string(),
             media_type: opex_types::MediaType::Document,
             file_name: Some("report.pdf".to_string()),
             mime_type: None,
             file_size: None,
         };
         enrich_with_attachments(&mut text, &[att]);
+        assert!(text.contains("file_handler"), "document hint points at file_handler: {text}");
+        assert!(text.contains("report.pdf"), "document hint keeps the filename: {text}");
         assert!(
-            text.contains("[User attached a document \"report.pdf\": https://example.com/doc.pdf"),
-            "document hint present: {text}"
+            text.contains("22222222-2222-4222-8222-222222222222"),
+            "document hint carries the upload_id: {text}"
         );
-        assert!(
-            text.contains("action buttons are shown"),
-            "document hint includes action button note: {text}"
+    }
+
+    #[test]
+    fn extract_upload_id_parses_uploads_url() {
+        assert_eq!(
+            extract_upload_id("https://h/api/uploads/33333333-3333-4333-8333-333333333333?sig=a&exp=b"),
+            Some("33333333-3333-4333-8333-333333333333")
         );
+        assert_eq!(extract_upload_id("https://example.com/not-an-upload.mp4"), None);
     }
 }

@@ -29,11 +29,6 @@ vi.mock("../ModelDropdown", () => ({
   ModelDropdown: () => null,
 }));
 
-// ChatComposer now renders FileActionButtons per attachment — stub it to avoid
-// pulling in useLanguageStore and the real API fetch in this focused test.
-vi.mock("../FileActionButtons", () => ({
-  FileActionButtons: () => null,
-}));
 
 // Mock @/lib/queries providing ALL hooks ChatComposer's subtree calls.
 vi.mock("@/lib/queries", () => ({

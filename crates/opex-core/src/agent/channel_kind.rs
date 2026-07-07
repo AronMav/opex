@@ -17,16 +17,6 @@ pub mod channel {
     pub fn is_automated(ch: &str) -> bool {
         matches!(ch, CRON | HEARTBEAT | SYSTEM | INTER_AGENT)
     }
-
-    /// Whether this channel's client renders inline action buttons for detected
-    /// video/file links (the web composer via `UrlActionButtons` and the Telegram
-    /// adapter via `buildActionKeyboard`). On these surfaces the user picks the
-    /// action, so the engine must NOT auto-enqueue a `summarize_video` job. On
-    /// every other surface (Discord/Matrix/IRC/Slack/…, and automated channels)
-    /// there is no button UI, so the engine keeps the auto-enqueue fallback.
-    pub fn shows_action_buttons(ch: &str) -> bool {
-        matches!(ch, UI | TELEGRAM)
-    }
 }
 
 /// Tool execution categories for approval system.

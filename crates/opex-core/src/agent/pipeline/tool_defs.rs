@@ -289,6 +289,33 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
             }),
         },
         ToolDefinition {
+            name: "file_handler".to_string(),
+            description: "Run a file/URL handler (e.g. summarize a video, transcribe audio, extract a document) that the user chose. When the user sends a video/file link or an uploaded file, the system lists the matching handlers in context; present those options to the user and, once they pick one, call this with action=\"run\". Use action=\"list\" to re-fetch the options. The result (e.g. the video summary) is delivered to the chat asynchronously when it finishes.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "run"],
+                        "description": "\"list\" the available handlers for the source, or \"run\" the chosen one."
+                    },
+                    "source_url": {
+                        "type": "string",
+                        "description": "The video/file URL the user sent (mutually exclusive with upload_id)."
+                    },
+                    "upload_id": {
+                        "type": "string",
+                        "description": "The uploaded file's id (mutually exclusive with source_url)."
+                    },
+                    "handler_id": {
+                        "type": "string",
+                        "description": "Required for action=run — the handler the user chose (must be one from action=list)."
+                    }
+                },
+                "required": ["action"]
+            }),
+        },
+        ToolDefinition {
             name: "memory".to_string(),
             description: "Long-term memory: action=search/index/get/delete/update/compress. Use pinned=true for permanent facts.".to_string(),
             input_schema: serde_json::json!({

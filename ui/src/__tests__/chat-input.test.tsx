@@ -198,12 +198,6 @@ vi.mock("zustand/react/shallow", () => ({
 
 // ── Mock: markdown and rich-card ───────────────────────────────────────────
 
-// ChatComposer now imports FileActionButtons, which pulls in lucide-react icons
-// (Video, Wand2) not listed in this file's lucide mock. Stub the whole module so
-// those icons don't cause "No ... export is defined on the lucide-react mock" errors.
-vi.mock("@/app/(authenticated)/chat/composer/FileActionButtons", () => ({
-  FileActionButtons: () => null,
-}));
 
 vi.mock("@/components/ui/markdown", () => ({
   Markdown: ({ children }: { children: string }) => <div data-testid="markdown">{children}</div>,

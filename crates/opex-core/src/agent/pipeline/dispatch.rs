@@ -123,7 +123,7 @@ pub fn clean_tool_params(arguments: &serde_json::Value) -> serde_json::Value {
 pub const SYSTEM_TOOL_NAMES: &[&str] = &[
     "workspace_write", "workspace_read", "workspace_list", "workspace_edit",
     "workspace_delete", "workspace_rename",
-    "web_fetch", "agent", "message", "cron", "code_exec", "browser_action",
+    "web_fetch", "file_handler", "agent", "message", "cron", "code_exec", "browser_action",
     "git", "session", "skill", "skill_use", "canvas", "rich_card",
     "agents_list", "secret_set", "process",
 ];

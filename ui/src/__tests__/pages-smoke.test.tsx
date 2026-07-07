@@ -65,11 +65,6 @@ vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
 }));
 
-// ChatComposer now imports FileActionButtons which uses lucide icons (Video, Wand2)
-// not listed in this file's lucide mock. Stub the module to prevent mock errors.
-vi.mock("@/app/(authenticated)/chat/composer/FileActionButtons", () => ({
-  FileActionButtons: () => null,
-}));
 
 // ── Mock: sidebar (SidebarTrigger requires SidebarProvider context) ─────────
 

@@ -11,8 +11,6 @@ import { Button } from "@/components/ui/button";
 import { SlashMenu } from "../parts/SlashMenu";
 import { MentionAutocomplete } from "./MentionAutocomplete";
 import { ModelDropdown } from "./ModelDropdown";
-import { FileActionButtons } from "./FileActionButtons";
-import { UrlActionButtons } from "./UrlActionButtons";
 import { useVoiceRecorder } from "../hooks/use-voice-recorder";
 import { useProviderActive } from "@/lib/queries";
 import {
@@ -691,19 +689,8 @@ export function ChatComposer() {
                   <X size={12} />
                 </Button>
               </div>
-              <FileActionButtons
-                uploadId={att.uploadId}
-                mime={att.content[0]?.mimeType ?? att.file.type}
-                agent={currentAgent}
-                sessionId={activeSessionId}
-              />
             </div>
           ))}
-          <UrlActionButtons
-            text={composerText}
-            agent={currentAgent}
-            sessionId={activeSessionId}
-          />
           {pendingMessage && (
             <div className="flex items-center gap-2 px-4 pt-2 pb-1 text-xs text-muted-foreground border-b border-border/30">
               <span className="flex-1 min-w-0 truncate">

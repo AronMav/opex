@@ -27,7 +27,6 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("../ModelDropdown", () => ({ ModelDropdown: () => null }));
-vi.mock("../FileActionButtons", () => ({ FileActionButtons: () => null }));
 
 vi.mock("@/lib/queries", () => ({
   useProviderActive: () => ({ data: [] }),

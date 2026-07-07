@@ -236,23 +236,12 @@ pub async fn bootstrap<S: EventSink>(
         .toolgate_url
         .clone()
         .unwrap_or_else(|| "http://localhost:9011".to_string());
-    // Channels whose client renders inline action buttons (web composer,
-    // Telegram) let the user choose the action — the engine must NOT auto-enqueue
-    // a summarize_video job there. Every other surface keeps the auto-enqueue
-    // fallback so a video link isn't silently dropped.
-    let auto_enqueue_video =
-        !crate::agent::channel_kind::channel::shows_action_buttons(&ctx.msg.channel);
     let enrich = crate::agent::pipeline::subagent::enrich_message_text(
         engine.http_client(),
         &engine.cfg().app_config.gateway.listen,
         &toolgate_url,
-        &engine.cfg().agent.language,
-        &engine.cfg().db,
-        session_id,
-        &engine.cfg().agent.name,
         &user_text,
         &ctx.msg.attachments,
-        auto_enqueue_video,
     )
     .await;
     let enriched_text = enrich.text;
