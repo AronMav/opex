@@ -30,3 +30,4 @@ parameters:
     location: body
     description: "Target branch"
 status: verified
+required_base: true

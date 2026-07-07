@@ -12,3 +12,5 @@ auth:
   type: bearer_env
   key: HA_TOKEN
 status: draft
+required_base: true
+allow_private_endpoint: true

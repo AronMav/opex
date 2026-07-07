@@ -16,3 +16,4 @@ parameters:
     description: "merge/squash/rebase, default merge"
 response_transform: "$"
 status: verified
+required_base: true

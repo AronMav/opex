@@ -505,6 +505,13 @@ pub struct YamlToolDef {
     /// If true, this tool is only available to base (system) agents.
     #[serde(default)]
     pub required_base: bool,
+    /// If true, this (admin-authored) tool may target a private RFC1918 LAN /
+    /// tunnel address. Its requests use the LAN client, which still blocks
+    /// loopback, cloud-metadata/link-local, and CGNAT — but permits 10/8,
+    /// 172.16/12, 192.168/16 (e.g. a home-lab Home Assistant over WireGuard).
+    /// Pair with `required_base: true` so only trusted agents can reach it.
+    #[serde(default)]
+    pub allow_private_endpoint: bool,
     /// If true, this tool is safe for concurrent execution with other parallel-safe tools.
     #[serde(default)]
     pub parallel: bool,
@@ -2091,6 +2098,7 @@ mod tests {
             graphql: None,
             response_pipeline: vec![],
             required_base: false,
+            allow_private_endpoint: false,
             parallel: false,
             required_secrets: vec![],
         }

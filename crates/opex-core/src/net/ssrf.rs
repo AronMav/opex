@@ -131,6 +131,79 @@ pub(crate) fn is_private_ip(ip: IpAddr) -> bool {
     }
 }
 
+/// IPs that even a `allow_private_endpoint` ("LAN") tool must NEVER reach:
+/// loopback, link-local (incl. `169.254.169.254` cloud metadata), CGNAT,
+/// unspecified, and multicast/broadcast — plus the IPv6 equivalents. Unlike
+/// [`is_private_ip`], the RFC1918 private ranges (10/8, 172.16/12, 192.168/16)
+/// are PERMITTED here: that is the whole point of the LAN client — reach a
+/// home-lab service over a trusted LAN/tunnel while still blocking the ranges
+/// an SSRF attack actually wants (metadata, Docker, loopback infra).
+pub(crate) fn is_dangerous_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_link_local() // 169.254/16 incl. cloud metadata
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4 == std::net::Ipv4Addr::UNSPECIFIED
+                || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64) // CGNAT
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_dangerous_ip(IpAddr::V4(v4));
+            }
+            v6.is_loopback()
+                || v6 == Ipv6Addr::UNSPECIFIED
+                || v6.is_multicast()
+                || (v6.segments()[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
+        }
+    }
+}
+
+/// DNS resolver for the LAN client: filters only [`is_dangerous_ip`] answers,
+/// permitting RFC1918 private targets. Same DNS-rebinding-safe design as
+/// [`SsrfSafeResolver`] (filters on every resolve, not a cached preflight).
+pub struct SsrfLanResolver;
+
+impl reqwest::dns::Resolve for SsrfLanResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let host = format!("{}:0", name.as_str());
+            let addrs: Vec<SocketAddr> = tokio::net::lookup_host(&host)
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?
+                .filter(|a| !is_dangerous_ip(a.ip()))
+                .collect();
+
+            if addrs.is_empty() {
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "SSRF blocked: '{}' resolves only to dangerous (loopback/metadata/CGNAT) IPs",
+                        name.as_str()
+                    ),
+                )) as Box<dyn std::error::Error + Send + Sync>);
+            }
+
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+/// Like [`ssrf_http_client`] but permits RFC1918 private LAN targets (still
+/// blocks loopback, cloud-metadata/link-local, and CGNAT via [`SsrfLanResolver`]).
+/// For admin-authored YAML tools that set `allow_private_endpoint: true` to reach
+/// a home-lab / tunnel service. Redirect policy is `none` (same as the SSRF client).
+pub fn lan_http_client(timeout: std::time::Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .dns_resolver(Arc::new(SsrfLanResolver))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("failed to build LAN HTTP client")
+}
+
 // ── SSRF-safe DNS resolver ───────────────────────────────────────────────────
 
 /// Custom DNS resolver that filters out every private / internal IP answer.
@@ -538,6 +611,31 @@ mod tests {
         assert!(!is_internal_endpoint("https://api.fal.ai/generate"));
         assert!(!is_internal_endpoint("https://api.openai.com/v1/chat"));
         assert!(!is_internal_endpoint("http://example.com:9011/test"));
+    }
+
+    #[test]
+    fn lan_client_permits_rfc1918_but_blocks_dangerous() {
+        // The LAN client (allow_private_endpoint) must reach home-lab/tunnel
+        // RFC1918 targets while STILL blocking the ranges an SSRF attack wants.
+        for allowed in ["192.168.1.10", "10.8.0.2", "172.16.5.4"] {
+            assert!(
+                !is_dangerous_ip(allowed.parse::<IpAddr>().unwrap()),
+                "{allowed} should be permitted by the LAN client"
+            );
+        }
+        for blocked in [
+            "127.0.0.1",       // loopback
+            "169.254.169.254", // cloud metadata (link-local)
+            "100.64.1.1",      // CGNAT
+            "0.0.0.0",         // unspecified
+        ] {
+            assert!(
+                is_dangerous_ip(blocked.parse::<IpAddr>().unwrap()),
+                "{blocked} must stay blocked even for the LAN client"
+            );
+        }
+        // Full SSRF client still blocks RFC1918 (unchanged behaviour).
+        assert!(is_private_ip("192.168.1.10".parse::<IpAddr>().unwrap()));
     }
 
     #[tokio::test]

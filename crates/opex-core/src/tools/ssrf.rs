@@ -17,6 +17,6 @@
 
 #[allow(unused_imports)]
 pub use crate::net::ssrf::{
-    is_internal_endpoint, preflight_resolve, ssrf_http_client, validate_url_scheme, SsrfError,
-    SsrfSafeResolver,
+    is_internal_endpoint, lan_http_client, preflight_resolve, ssrf_http_client,
+    validate_url_scheme, SsrfError, SsrfSafeResolver,
 };

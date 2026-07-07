@@ -327,8 +327,15 @@ impl AgentEngine {
 
                 let resolver = self.make_resolver();
                 let oauth_ctx = self.make_oauth_context();
+                let lan_client;
                 let client = if crate::tools::ssrf::is_internal_endpoint(&yaml_tool.endpoint) {
                     self.http_client()
+                } else if yaml_tool.allow_private_endpoint {
+                    // Admin-authored tool explicitly allowed to reach a private
+                    // LAN/tunnel host (still blocks loopback/metadata/CGNAT).
+                    lan_client =
+                        crate::tools::ssrf::lan_http_client(std::time::Duration::from_secs(30));
+                    &lan_client
                 } else {
                     self.ssrf_http_client()
                 };

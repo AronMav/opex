@@ -19,3 +19,4 @@ body_template: |
     "html":     {{html}}
   }
 status: draft
+required_base: true

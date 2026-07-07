@@ -602,8 +602,14 @@ pub async fn handle_tool_test(
     let oauth_ctx = make_oauth_context(oauth, agent_name);
     let start = std::time::Instant::now();
     // Internal endpoints (toolgate, searxng, etc.) bypass SSRF filtering
+    let lan_client;
     let client = if crate::tools::ssrf::is_internal_endpoint(&tool.endpoint) {
         http_client
+    } else if tool.allow_private_endpoint {
+        // Admin-authored tool allowed to reach a private LAN/tunnel host
+        // (still blocks loopback/metadata/CGNAT).
+        lan_client = crate::tools::ssrf::lan_http_client(std::time::Duration::from_secs(30));
+        &lan_client
     } else {
         ssrf_client
     };
