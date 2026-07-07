@@ -90,6 +90,12 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Install Playwright browser (chromium)
+        run: npx playwright install --with-deps chromium
+
+      - name: Overflow guard
+        run: npx playwright test src/__e2e__/overflow.spec.ts --project=chromium
+
   toolgate:
     name: Toolgate (Python) tests
     runs-on: ubuntu-latest
