@@ -66,6 +66,13 @@ function renderPart(part: MessagePart, index: number, streaming = false) {
     case "reasoning":
       return <ReasoningPart key={`reasoning-${index}`} text={part.text} streaming={streaming} />;
     case "tool": {
+      // The `file_handler(list)` call only exists to emit the interactive menu
+      // card (rendered as a `rich-card` part) — its tool chip is pure noise that
+      // lingers after the user picks an option. Suppress it; the menu card is the
+      // visible affordance. Other file_handler actions (run) still show a chip.
+      if (part.toolName === "file_handler" && (part.input as { action?: string })?.action === "list") {
+        return null;
+      }
       return (
         <ToolCallPartView
           key={`tool-${part.toolCallId}`}

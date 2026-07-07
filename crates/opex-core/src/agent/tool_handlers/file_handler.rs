@@ -98,11 +98,12 @@ async fn handle_file_handler(deps: ToolDeps<'_>, args: &Value) -> String {
                     let instruction = format!(
                         "An interactive selection menu with these handlers has ALREADY been \
                          shown to the user (as clickable buttons):\n{list_body}\n\
-                         Do NOT repeat, reformat, or tabulate this list in your reply — the \
-                         user already sees and can click the options. Reply with nothing, or at \
-                         most one short line, then wait. When the user picks one, call \
-                         file_handler again with action=\"run\", the chosen handler_id, and the \
-                         same source_url/upload_id."
+                         This menu IS the complete response to the user. Reply with an EMPTY \
+                         message — write NO text at all (not even 'ожидаю выбора' / 'waiting'): \
+                         any text you add only clutters the chat and goes stale once the user \
+                         clicks. Simply stop. When the user later picks one, call file_handler \
+                         again with action=\"run\", the chosen handler_id, and the same \
+                         source_url/upload_id."
                     );
                     let card = json!({
                         "card_type": "handler_menu",
