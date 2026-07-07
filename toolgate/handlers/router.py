@@ -117,8 +117,10 @@ async def run_handler(
         return JSONResponse(status_code=404, content={"error": "handler_not_found"})
 
     # Operator-set per-agent settings (valves) forwarded by core as a JSON blob.
+    # `isinstance(config, str)` guards the unit-test path that calls run_handler
+    # directly (there `config` is the unresolved FastAPI Form sentinel, not a str).
     try:
-        parsed_config = json.loads(config) if config else {}
+        parsed_config = json.loads(config) if isinstance(config, str) and config else {}
     except json.JSONDecodeError:
         parsed_config = {}
     if not isinstance(parsed_config, dict):

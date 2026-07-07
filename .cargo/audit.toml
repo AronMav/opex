@@ -20,6 +20,13 @@ ignore = [
     # used by integration tests. Production binaries do not link this.
     "RUSTSEC-2025-0111",
 
+    # `scc` 2.4.0 (dev-only via serial_test). "unsound" warning: `Array::insert`
+    # can double-free ONLY if the user-supplied compare function panics —
+    # serial_test uses scc with primitive keys and no panicking comparator, and
+    # the crate is a dev-dependency that never links into production binaries.
+    # Published 2026-07-06; will clear on the serial_test/scc bump.
+    "RUSTSEC-2026-0205",
+
     # ── Unmaintained (warning kind, not vulnerability) ──────────────────────
 
     # `dotenv` — used by sqlx for migrations DATABASE_URL lookup. Replacement
