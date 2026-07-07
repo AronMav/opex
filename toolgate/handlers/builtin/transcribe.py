@@ -24,6 +24,9 @@
 #   <params>
 #     <param name="language" type="string" default="ru" required="false"/>
 #   </params>
+#   <config>
+#     <field name="default_language" type="string" default="ru" label="Язык по умолчанию" description="Язык распознавания, если модель не указала его явно (ru, en, auto, …)"/>
+#   </config>
 #   <order>10</order>
 #   <enabled>true</enabled>
 # </handler>
@@ -34,7 +37,8 @@ shared raw client to the STT backend (a trusted provider endpoint)."""
 
 
 async def run(ctx, file, params):
-    language = params.get("language", "ru")
+    # Model-supplied language wins; otherwise the operator's default valve.
+    language = params.get("language") or ctx.config.get("default_language") or "ru"
     text = await ctx.stt.transcribe(
         file.bytes, filename=file.filename, language=language
     )

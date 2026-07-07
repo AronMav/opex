@@ -25,6 +25,7 @@
 #   </params>
 #   <config>
 #     <field name="summary_folder" type="string" default="Summary" label="Папка заметок" description="Каталог в Obsidian-хранилище, куда сохраняются конспекты видео"/>
+#     <field name="include_transcript" type="bool" default="true" label="Вставлять транскрипт" description="Добавлять полный транскрипт в свёрнутом блоке в конце заметки"/>
 #   </config>
 #   <order>20</order>
 #   <enabled>true</enabled>
@@ -379,8 +380,9 @@ def build_note(
     duration: float,
     transcript: str,
     llm_body: str,
+    include_transcript: bool = True,
 ) -> str:
-    """Build the full Obsidian note: frontmatter + LLM body + collapsed transcript."""
+    """Build the full Obsidian note: frontmatter + LLM body + (optional) transcript."""
     body = _strip_image_embeds(llm_body.strip())
 
     lines = [
@@ -393,11 +395,12 @@ def build_note(
         f"# {title}",
         "",
         body.strip(),
-        "",
-        "> [!note]- Полный транскрипт",
     ]
-    for line in transcript.splitlines():
-        lines.append(f"> {line}")
+    if include_transcript:
+        lines.append("")
+        lines.append("> [!note]- Полный транскрипт")
+        for line in transcript.splitlines():
+            lines.append(f"> {line}")
 
     return "\n".join(lines) + "\n"
 
@@ -555,11 +558,16 @@ async def run(ctx, file, params):
     content_hash = hashlib.sha256(transcript.encode()).hexdigest()[:8]
     slug = latin_slug(title, content_hash)
 
+    include_transcript = (
+        str(ctx.config.get("include_transcript") or "true").strip().lower()
+        not in ("false", "0", "no")
+    )
     note = build_note(
         title=title,
         duration=0.0,  # duration not available from bytes-only path; 0 is safe
         transcript=transcript,
         llm_body=llm_body,
+        include_transcript=include_transcript,
     )
 
     # Extract short summary text from the LLM body for the status message

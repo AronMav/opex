@@ -17,6 +17,9 @@
 #   <params>
 #     <param name="max_chars" type="int" default="8000" required="false"/>
 #   </params>
+#   <config>
+#     <field name="max_chars" type="int" default="8000" label="Макс. символов" description="Ограничение объёма извлечённого текста по умолчанию (0 = без лимита)"/>
+#   </config>
 #   <order>20</order>
 #   <enabled>true</enabled>
 # </handler>
@@ -53,8 +56,19 @@ def _extract_sync(data: bytes, mime: str) -> str:
     return data.decode("utf-8", errors="replace")
 
 
+def _int_config(config: dict, key: str, fallback: int) -> int:
+    """Read an int-valued config field (UI stores values as strings)."""
+    try:
+        v = config.get(key)
+        return int(v) if v not in (None, "") else fallback
+    except (TypeError, ValueError):
+        return fallback
+
+
 async def run(ctx, file, params):
-    max_chars = int(params.get("max_chars", 8000))
+    # Per-agent operator default (valve); an explicit per-call param still wins.
+    default_max = _int_config(ctx.config, "max_chars", 8000)
+    max_chars = int(params.get("max_chars", default_max))
     try:
         text = await asyncio.to_thread(_extract_sync, file.bytes, file.mime)
     except Exception as e:  # corrupt/unsupported document

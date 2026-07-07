@@ -194,6 +194,14 @@ async def test_summary_folder_valve_overrides_default_folder():
     assert result.post_action["folder"] == "Videos"
 
 
+def test_build_note_include_transcript_valve():
+    """The include_transcript valve gates the collapsed transcript block."""
+    with_t = sv_mod.build_note("T", 0.0, "[00:00] hi", "## Резюме\nx", include_transcript=True)
+    without_t = sv_mod.build_note("T", 0.0, "[00:00] hi", "## Резюме\nx", include_transcript=False)
+    assert "Полный транскрипт" in with_t
+    assert "Полный транскрипт" not in without_t
+
+
 @pytest.mark.asyncio
 async def test_short_transcript_filename_is_latin_safe():
     """Filename must match ^[A-Za-z0-9 _.-]+$ (core path guard)."""
