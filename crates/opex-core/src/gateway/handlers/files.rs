@@ -827,16 +827,33 @@ async fn deliver_async_outcome(
     job: &handler_jobs::HandlerJob,
     outcome: &ScenarioOutcome,
 ) {
-    // 1. Provenance-wrap with the REAL handler_id + upload_id (R4). URL-based
+    // 1. Generic post-action FIRST (before persist) so the success message can
+    //    report WHERE the note landed. The handler may request a direct note
+    //    write via a `post_action` object in the result JSON (no mcp-obsidian
+    //    dependency). Returns the workspace-relative path, or None if nothing was
+    //    written.
+    let saved = run_post_action(job.id, outcome).await;
+
+    // 2. Provenance-wrap with the REAL handler_id + upload_id (R4). URL-based
     //    jobs (no upload) carry an empty upload id in the wrapper.
     let upload_id = job.upload_id.map(|u| u.to_string()).unwrap_or_default();
-    let content = crate::agent::provenance::wrap_file_output(
+    let wrapped = crate::agent::provenance::wrap_file_output(
         &job.handler_id,
         &upload_id,
         &outcome.summary_text,
     );
 
-    // 2. Persist (R8: omit status → table default 'complete'; source='file_handler'
+    // 3. Human-facing success header — mirrors deliver_async_failure's "⚠️ …"
+    //    prefix so the chat always carries a clear terminal message (the raw
+    //    provenance wrapper below is stripped for display by the UI, and kept
+    //    only so the LLM treats the file-derived text as untrusted next turn).
+    let header = match &saved {
+        Some(path) => format!("✅ Готово — {}. Сохранено: `{}`", job.handler_id, path),
+        None => format!("✅ Готово — {}.", job.handler_id),
+    };
+    let content = format!("{header}\n\n{wrapped}");
+
+    // 4. Persist (R8: omit status → table default 'complete'; source='file_handler'
     //    — column added by migration 066; mirrors file_handler_worker / handler_jobs).
     if let Err(e) = sqlx::query(
         "INSERT INTO messages (session_id, agent_id, role, content, is_mirror, source) \
@@ -850,10 +867,6 @@ async fn deliver_async_outcome(
     {
         tracing::error!(error = %e, job_id = %job.id, "deliver_async_outcome: persist failed");
     }
-
-    // 3. Generic post-action: the handler may request a direct note write via a
-    //    `post_action` object in the result JSON (no mcp-obsidian dependency).
-    run_post_action(job.id, outcome).await;
 }
 
 /// Persist a chat message announcing that an async handler job FAILED, so the
@@ -934,15 +947,19 @@ fn resolve_note_dir(
 /// not silently skipped when mark_handler_job_done failed.
 /// Security: `filename` is validated as a single safe path component; `dir` is
 /// rejected if it contains a `..` component (see `resolve_note_dir`).
-async fn run_post_action(job_id: uuid::Uuid, outcome: &ScenarioOutcome) {
+///
+/// Returns the workspace-relative path of the written note (for surfacing in the
+/// success message), or `None` when no note was written (no post_action, unsafe
+/// path, or a filesystem error).
+async fn run_post_action(job_id: uuid::Uuid, outcome: &ScenarioOutcome) -> Option<String> {
     let outcome_value = serde_json::to_value(outcome).unwrap_or_else(|_| serde_json::json!({}));
     let action = match outcome_value.get("post_action") {
         Some(a) if !a.is_null() => a.clone(),
-        _ => return,
+        _ => return None,
     };
     let kind = action.get("kind").and_then(|k| k.as_str()).unwrap_or("");
     if kind != "write_file" && kind != "obsidian_note" {
-        return;
+        return None;
     }
 
     let filename = action.get("filename").and_then(|v| v.as_str()).unwrap_or("note.md");
@@ -951,7 +968,7 @@ async fn run_post_action(job_id: uuid::Uuid, outcome: &ScenarioOutcome) {
             job_id = %job_id, filename = %filename,
             "run_post_action: filename failed allowlist — skipping write"
         );
-        return;
+        return None;
     }
     let content = action
         .get("content")
@@ -977,18 +994,30 @@ async fn run_post_action(job_id: uuid::Uuid, outcome: &ScenarioOutcome) {
                 job_id = %job_id, dir = %dir, subfolder = %subfolder,
                 "run_post_action: unsafe note directory — skipping write"
             );
-            return;
+            return None;
         }
     };
 
     if let Err(e) = tokio::fs::create_dir_all(&target_dir).await {
         tracing::warn!(error = %e, job_id = %job_id, dir = %target_dir.display(), "run_post_action: create_dir_all failed");
-        return;
+        return None;
     }
     let path = target_dir.join(filename);
     match tokio::fs::write(&path, content).await {
-        Ok(()) => tracing::info!(job_id = %job_id, path = %path.display(), "run_post_action: note written"),
-        Err(e) => tracing::warn!(error = %e, job_id = %job_id, path = %path.display(), "run_post_action: write failed"),
+        Ok(()) => {
+            tracing::info!(job_id = %job_id, path = %path.display(), "run_post_action: note written");
+            // Prefer a workspace-relative display path ("zettelkasten/Summary/x.md");
+            // fall back to the absolute path for operator-configured out-of-workspace dirs.
+            let display = path
+                .strip_prefix(&workspace_root)
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|_| path.clone());
+            Some(display.to_string_lossy().replace('\\', "/"))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, job_id = %job_id, path = %path.display(), "run_post_action: write failed");
+            None
+        }
     }
 }
 
@@ -1105,12 +1134,17 @@ mod tests {
             })),
         };
 
-        run_post_action(uuid::Uuid::new_v4(), &outcome).await;
+        let saved = run_post_action(uuid::Uuid::new_v4(), &outcome).await;
 
         let written = target.join("note.md");
         let body = tokio::fs::read_to_string(&written).await;
         let _ = tokio::fs::remove_dir_all(&base).await;
         assert_eq!(body.unwrap(), "hello from the output_dir valve");
+        // New contract: on a successful write, the note's display path is returned
+        // (absolute here, since `target` is outside the workspace) for the success
+        // message. Path is normalised to forward slashes.
+        let saved = saved.expect("run_post_action returns the written path");
+        assert!(saved.ends_with("Конспекты/note.md"), "unexpected saved path: {saved}");
     }
 
     #[tokio::test]

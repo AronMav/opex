@@ -65,6 +65,16 @@ function parseMarkdownIntoBlocks(markdown: string): string[] {
   return tokens.map((token) => token.raw)
 }
 
+// File-handler results are persisted provenance-wrapped
+// (`<file_output handler=… trust="untrusted">TEXT</file_output>`) so the LLM
+// treats them as untrusted on the next turn. That wrapper is machine-only — strip
+// the tags for human display, keeping the inner TEXT. Display-only: the raw
+// content (with wrapper) stays in the DB for the model.
+function stripProvenanceWrapper(s: string): string {
+  if (!s.includes("<file_output")) return s
+  return s.replace(/<\/?file_output\b[^>]*>/g, "").replace(/^\n+/, "")
+}
+
 function extractLanguage(className?: string): string {
   if (!className) return "plaintext"
   const match = className.match(/language-(\w+)/)
@@ -231,8 +241,9 @@ function MarkdownComponent({
 }: MarkdownProps) {
   const generatedId = useId()
   const blockId = id ?? generatedId
-  const blocks = useMemo(() => parseMarkdownIntoBlocks(children), [children])
-  const footnoteMap = useMemo(() => extractFootnotes(children), [children])
+  const cleaned = useMemo(() => stripProvenanceWrapper(children), [children])
+  const blocks = useMemo(() => parseMarkdownIntoBlocks(cleaned), [cleaned])
+  const footnoteMap = useMemo(() => extractFootnotes(cleaned), [cleaned])
 
   const content = (
     <div className={className}>
