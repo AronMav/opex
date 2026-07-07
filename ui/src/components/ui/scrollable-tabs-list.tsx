@@ -11,10 +11,12 @@ function ScrollableTabsList({
   return (
     <TabsList
       className={cn(
-        // Cap at parent width and scroll horizontally. Triggers keep their
-        // natural width (`flex-none`) instead of the base `flex-1` so the row
-        // scrolls left-aligned as a group rather than stretch/shrink-clipping.
-        "max-w-full justify-start flex-nowrap overflow-x-auto scrollbar-none scroll-fade-x",
+        // WRAP, don't clip: when the triggers exceed the available width they
+        // flow onto a second row so every tab stays visible (horizontal scroll
+        // hid tabs off-screen with no desktop affordance). Triggers keep their
+        // natural width (`flex-none` instead of the base `flex-1`) and the list
+        // grows in height. `h-auto` overrides the base fixed `h-9`.
+        "h-auto max-w-full flex-wrap justify-start gap-1",
         "[&>[data-slot=tabs-trigger]]:flex-none",
         className,
       )}
