@@ -23,6 +23,9 @@
 #   <params>
 #     <param name="language" type="string" default="ru" required="false"/>
 #   </params>
+#   <config>
+#     <field name="summary_folder" type="string" default="Summary" label="Папка заметок" description="Каталог в Obsidian-хранилище, куда сохраняются конспекты видео"/>
+#   </config>
 #   <order>20</order>
 #   <enabled>true</enabled>
 # </handler>
@@ -562,10 +565,14 @@ async def run(ctx, file, params):
     # Extract short summary text from the LLM body for the status message
     summary_text = _extract_short_summary(llm_body)
 
+    # Operator-configurable target folder (per-agent valve); falls back to the
+    # descriptor default when unset. Core validates it against its path allowlist.
+    folder = str(ctx.config.get("summary_folder") or "Summary").strip() or "Summary"
+
     result = ctx.result.text(summary_text)
     result.post_action = {
         "kind": "obsidian_note",
-        "folder": "Summary",
+        "folder": folder,
         "filename": f"{slug}.md",
         "content": note,
     }

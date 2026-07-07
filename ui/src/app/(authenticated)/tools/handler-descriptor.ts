@@ -5,6 +5,16 @@ export interface ParamDescriptor {
   required?: boolean;
 }
 
+/** An operator-configurable setting ("valve") declared in the handler's
+ *  <config> descriptor block. Values are set per-agent in the settings tab. */
+export interface ConfigFieldDescriptor {
+  name: string;
+  type?: string;
+  default?: string | null;
+  label?: string;
+  description?: string;
+}
+
 export interface DescriptorFields {
   id: string;
   labels: Record<string, string>;
@@ -21,6 +31,9 @@ export interface DescriptorFields {
   capability?: string | null;
   output?: string | null;
   params?: ParamDescriptor[];
+  /** Passthrough — operator-configurable field definitions. Must round-trip so
+   *  editing a handler's descriptor doesn't strip its <config> block. */
+  config?: ConfigFieldDescriptor[];
 }
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -50,6 +63,19 @@ export function renderDescriptorBlock(f: DescriptorFields): string {
       L.push(line);
     }
     L.push("#   </params>");
+  }
+  if (f.config && f.config.length > 0) {
+    L.push("#   <config>");
+    for (const c of f.config) {
+      let line = `#     <field name="${esc(c.name)}"`;
+      if (c.type) line += ` type="${esc(c.type)}"`;
+      if (c.default != null) line += ` default="${esc(c.default)}"`;
+      if (c.label) line += ` label="${esc(c.label)}"`;
+      if (c.description) line += ` description="${esc(c.description)}"`;
+      line += "/>";
+      L.push(line);
+    }
+    L.push("#   </config>");
   }
   L.push(`#   <order>${f.order}</order>`);
   L.push(`#   <enabled>${f.enabled}</enabled>`);

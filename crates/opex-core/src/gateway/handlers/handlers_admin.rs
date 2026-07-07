@@ -208,9 +208,94 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/handlers/validate", post(api_validate_handler))
         .route("/api/handlers/{id}/source", get(api_get_handler_source))
         .route(
+            "/api/handlers/{id}/config",
+            get(api_get_handler_config).put(api_set_handler_config),
+        )
+        .route(
             "/api/handlers/{id}",
             axum::routing::put(api_update_handler).delete(api_delete_handler),
         )
+}
+
+#[derive(Deserialize)]
+struct ConfigQuery {
+    agent: Option<String>,
+}
+
+/// `GET /api/handlers/{id}/config?agent=NAME` → `{ fields, values }`.
+/// `fields` are the handler's declared `<config>` descriptor fields; `values`
+/// are the operator's saved settings for this (handler, agent) — `{}` if none.
+async fn api_get_handler_config(
+    State(infra): State<InfraServices>,
+    State(handlers): State<HandlerRegistry>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::extract::Query(q): axum::extract::Query<ConfigQuery>,
+) -> impl IntoResponse {
+    if !valid_handler_id(&id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid handler id" })),
+        )
+            .into_response();
+    }
+    handlers.refresh().await;
+    let fields = handlers
+        .manifests()
+        .await
+        .into_iter()
+        .find(|m| m.id == id)
+        .map(|m| m.config)
+        .unwrap_or_else(|| json!([]));
+    let agent = q.agent.unwrap_or_default();
+    let values = if agent.is_empty() {
+        json!({})
+    } else {
+        crate::db::handler_config::get_config(&infra.db, &id, &agent)
+            .await
+            .unwrap_or_else(|_| json!({}))
+    };
+    Json(json!({ "fields": fields, "values": values })).into_response()
+}
+
+/// `PUT /api/handlers/{id}/config?agent=NAME` body `{ "values": {..} }` — upsert
+/// the operator's per-agent settings for this handler.
+async fn api_set_handler_config(
+    State(infra): State<InfraServices>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::extract::Query(q): axum::extract::Query<ConfigQuery>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    if !valid_handler_id(&id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid handler id" })),
+        )
+            .into_response();
+    }
+    let agent = q.agent.unwrap_or_default();
+    if agent.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "agent query parameter is required" })),
+        )
+            .into_response();
+    }
+    let values = body.get("values").cloned().unwrap_or_else(|| json!({}));
+    if !values.is_object() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "'values' must be an object" })),
+        )
+            .into_response();
+    }
+    match crate::db::handler_config::set_config(&infra.db, &id, &agent, &values).await {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────

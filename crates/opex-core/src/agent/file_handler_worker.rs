@@ -76,10 +76,19 @@ pub async fn dispatch_async_job(
         (String::new(), fname)
     };
 
+    // Operator-set per-agent settings ("valves") for this handler, injected as
+    // ctx.config in the runner. Best-effort: an empty object on any DB miss.
+    let config_str = crate::db::handler_config::get_config(db, &job.handler_id, &job.agent_name)
+        .await
+        .ok()
+        .and_then(|v| serde_json::to_string(&v).ok())
+        .unwrap_or_else(|| "{}".to_string());
+
     let mut form = reqwest::multipart::Form::new()
         .text("mime", if mime.is_empty() { "application/octet-stream".to_string() } else { mime.clone() })
         .text("filename", filename)
         .text("params", params_str)
+        .text("config", config_str)
         .text("language", language)
         .text("job_id", job.id.to_string())
         .text("callback_token", callback_token);

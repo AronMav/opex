@@ -25,10 +25,11 @@ import {
 } from "@/components/ui/select";
 import { Field } from "@/components/ui/field";
 import { DialogTabs } from "@/components/ui/dialog-tabs";
-import { Settings2, FileCode2 } from "lucide-react";
+import { Settings2, FileCode2, SlidersHorizontal } from "lucide-react";
 import { getToken } from "@/lib/api";
 import { useTranslation } from "@/hooks/use-translation";
-import { spliceDescriptor, DescriptorFields, ParamDescriptor } from "./handler-descriptor";
+import { spliceDescriptor, DescriptorFields, ParamDescriptor, ConfigFieldDescriptor } from "./handler-descriptor";
+import { HandlerConfigForm } from "./HandlerConfigForm";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -66,6 +67,7 @@ function defaultFields(id?: string): DescriptorFields {
     capability: null,
     output: "text",
     params: [],
+    config: [],
   };
 }
 
@@ -85,6 +87,7 @@ function parseDescriptorFromApi(desc: Record<string, unknown>): DescriptorFields
     capability: (desc.capability as string | null | undefined) ?? null,
     output: (desc.output as string | null | undefined) ?? "text",
     params: (desc.params as ParamDescriptor[] | undefined) ?? [],
+    config: (desc.config as ConfigFieldDescriptor[] | undefined) ?? [],
   };
 }
 
@@ -146,7 +149,7 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
   const { t } = useTranslation();
   const isEdit = Boolean(id);
 
-  const [tab, setTab] = useState<"settings" | "code">("settings");
+  const [tab, setTab] = useState<"settings" | "code" | "valves">("settings");
   const [source, setSource] = useState(initialSource);
   const [fields, setFields] = useState<DescriptorFields>(() => defaultFields(id));
   const [errors, setErrors] = useState<SaveError[]>([]);
@@ -267,10 +270,15 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
           <DialogTabs
             items={[
               { value: "settings", label: t("tools.handler_tab_settings"), icon: Settings2 },
+              // Per-agent operator settings ("valves") — only when the handler
+              // declares <config> fields and we're editing an existing handler.
+              ...(isEdit && (fields.config?.length ?? 0) > 0
+                ? [{ value: "valves", label: t("tools.handler_tab_valves"), icon: SlidersHorizontal }]
+                : []),
               { value: "code", label: t("tools.handler_tab_code"), icon: FileCode2 },
             ]}
             value={tab}
-            onChange={setTab}
+            onChange={(v) => setTab(v as "settings" | "code" | "valves")}
             className="-mx-6 px-6"
           />
         </DialogHeader>
@@ -398,6 +406,13 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
             >
               {syncing ? t("tools.handler_syncing") : t("tools.handler_sync_from_code")}
             </Button>
+          </div>
+          )}
+
+          {/* ── Per-agent settings (valves) ── */}
+          {tab === "valves" && isEdit && id && (
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-2">
+            <HandlerConfigForm handlerId={id} fields={fields.config ?? []} />
           </div>
           )}
 

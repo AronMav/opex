@@ -29,6 +29,11 @@ class HandlerDescriptor:
     execution: str  # "sync" | "async"
     output: str  # "text" | "file" | "card"
     params: list[dict]
+    # Operator-configurable settings (OpenWebUI-style "valves"), distinct from
+    # `params` (which the model fills per call). Each: {name, type, default,
+    # label, description}. Values are set per-agent in the tool settings UI and
+    # injected as `ctx.config` at run time.
+    config: list[dict]
     order: int
     enabled: bool
     tier: str  # "builtin" | "workspace"
@@ -124,6 +129,22 @@ def parse_descriptor(source: str, tier: str) -> HandlerDescriptor:
                 }
             )
 
+    # Operator-configurable settings block (optional).
+    config: list[dict] = []
+    config_el = root.find("config")
+    if config_el is not None:
+        for f in config_el.findall("field"):
+            name = f.get("name", "")
+            config.append(
+                {
+                    "name": name,
+                    "type": f.get("type", "string"),
+                    "default": f.get("default"),
+                    "label": f.get("label") or name,
+                    "description": f.get("description", ""),
+                }
+            )
+
     order_txt = _text(root, "order")
     enabled_txt = _text(root, "enabled")
 
@@ -159,6 +180,7 @@ def parse_descriptor(source: str, tier: str) -> HandlerDescriptor:
         execution=execution,
         output=_text(root, "output", "text") or "text",
         params=params,
+        config=config,
         order=int(order_txt) if order_txt is not None else 100,
         enabled=(enabled_txt is None) or enabled_txt.strip().lower() == "true",
         tier=tier,

@@ -47,6 +47,10 @@ pub struct HandlerManifest {
     pub output: String,
     #[serde(default)]
     pub params: serde_json::Value,
+    /// Operator-configurable settings ("valves") declared in the handler's
+    /// `<config>` descriptor block. Array of `{name,type,default,label,description}`.
+    #[serde(default)]
+    pub config: serde_json::Value,
     #[serde(default)]
     pub order: i32,
     #[serde(default)]

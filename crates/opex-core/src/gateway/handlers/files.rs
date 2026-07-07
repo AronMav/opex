@@ -367,6 +367,13 @@ async fn run_file_handler(
     let params_str =
         serde_json::to_string(&req.params).unwrap_or_else(|_| "{}".to_string());
 
+    // Operator-set per-agent settings ("valves") → ctx.config in the handler.
+    let config_str = crate::db::handler_config::get_config(&infra.db, &req.handler_id, &req.agent)
+        .await
+        .ok()
+        .and_then(|v| serde_json::to_string(&v).ok())
+        .unwrap_or_else(|| "{}".to_string());
+
     let file_part = reqwest::multipart::Part::bytes(bytes.to_vec())
         .file_name(upload_id.to_string())
         .mime_str(&meta.mime)
@@ -378,6 +385,7 @@ async fn run_file_handler(
         .text("filename", upload_id.to_string())
         .text("size", meta.size.to_string())
         .text("params", params_str)
+        .text("config", config_str)
         .text("language", lang.to_string());
 
     let outcome: ScenarioOutcome = match http.post(&url).multipart(form).send().await {

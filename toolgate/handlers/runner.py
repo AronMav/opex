@@ -125,6 +125,7 @@ async def run_job(spec: dict) -> None:
                 job_id=job_id,
                 core_url=core_url,
                 auth_token=auth,
+                config=spec.get("config") or {},
             )
             # Rebind ctx.progress so it posts over the live http client for
             # this job. The default HandlerContext.progress already does this

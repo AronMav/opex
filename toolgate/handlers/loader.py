@@ -173,6 +173,7 @@ class HandlerRegistry:
             "execution": d.execution,
             "output": d.output,
             "params": d.params,
+            "config": d.config,
             "order": d.order,
             "tier": tier,
             "source": source,

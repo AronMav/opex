@@ -102,6 +102,10 @@ def test_descriptor_is_async_and_matches_video():
     assert any("video" in m for m in d.match_mimes), (
         f"no video/* mime match in {d.match_mimes}"
     )
+    # Operator-configurable summary_folder valve is declared and parsed.
+    folder_field = next((c for c in d.config if c["name"] == "summary_folder"), None)
+    assert folder_field is not None, f"no summary_folder <config> field in {d.config}"
+    assert folder_field["default"] == "Summary"
 
 
 # ── (b) short transcript → single-pass ───────────────────────────────────────

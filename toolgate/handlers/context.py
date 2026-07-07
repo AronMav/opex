@@ -289,6 +289,10 @@ class HandlerContext:
     log: logging.Logger
     # LLM helper for calling core's /api/llm/complete endpoint
     llm: _LlmClient
+    # Operator-set per-agent settings (OpenWebUI-style "valves"), keyed by the
+    # field names declared in the handler's <config> descriptor block. Empty when
+    # nothing is configured; handlers should fall back to their own defaults.
+    config: dict = field(default_factory=dict)
     _job_id: str | None = None
     _core_url: str | None = None
     _auth_token: str | None = None
@@ -321,6 +325,7 @@ def build_context(
     job_id: str | None = None,
     core_url: str | None = None,
     auth_token: str | None = None,
+    config: dict | None = None,
 ) -> HandlerContext:
     """Construct a HandlerContext for a single handler invocation."""
     return HandlerContext(
@@ -335,6 +340,7 @@ def build_context(
         result=ResultBuilder(),
         log=log,
         llm=_LlmClient(core_url, auth_token, http_client),
+        config=config or {},
         _job_id=job_id,
         _core_url=core_url,
         _auth_token=auth_token,

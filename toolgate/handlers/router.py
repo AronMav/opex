@@ -109,11 +109,20 @@ async def run_handler(
     job_id: str | None = Form(default=None),
     source_url: str | None = Form(default=None),
     callback_token: str | None = Form(default=None),
+    config: str = Form(default="{}"),
 ):
     registry = request.app.state.handlers
     lh = registry.get(handler_id)
     if lh is None:
         return JSONResponse(status_code=404, content={"error": "handler_not_found"})
+
+    # Operator-set per-agent settings (valves) forwarded by core as a JSON blob.
+    try:
+        parsed_config = json.loads(config) if config else {}
+    except json.JSONDecodeError:
+        parsed_config = {}
+    if not isinstance(parsed_config, dict):
+        parsed_config = {}
 
     descriptor = lh.descriptor
     if descriptor.execution == "async":
@@ -142,6 +151,7 @@ async def run_handler(
             "mime": mime,
             "filename": filename,
             "params": parsed_params,
+            "config": parsed_config,
             "language": language,
             "job_id": job_id,
             "core_url": os.environ.get("CORE_API_URL", "http://127.0.0.1:18789"),
@@ -167,7 +177,8 @@ async def run_handler(
     f = HandlerFile(bytes=data, mime=mime, filename=filename, size=len(data),
                     source_url=source_url)
     http = request.app.state.http_client
-    ctx = build_context(request.app.state.registry, http, core_url=_core_url())
+    ctx = build_context(request.app.state.registry, http, core_url=_core_url(),
+                        config=parsed_config)
 
     # R5: per-execution timeout on the handler body.
     try:

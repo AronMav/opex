@@ -26,6 +26,7 @@ def validate_source(source: str, expected_id: str | None = None) -> dict:
             "execution": d.execution,
             "output": d.output,
             "params": d.params,
+            "config": d.config,
             "order": d.order,
             "enabled": d.enabled,
         }
