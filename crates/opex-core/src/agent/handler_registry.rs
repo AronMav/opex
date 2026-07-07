@@ -176,6 +176,10 @@ pub fn match_url_handlers(
     let mut matched: Vec<&HandlerManifest> = manifests
         .iter()
         .filter(|m| !m.match_.domains.is_empty())
+        // URL actions are dispatched via /api/handlers/enqueue, which is
+        // async-only. Excluding sync handlers here stops a sync handler (e.g.
+        // `transcribe`) from being offered as a URL button that 400s on click.
+        .filter(|m| m.execution == "async")
         .filter(|m| m.match_.domains.iter().any(|d| domain_matches(d, host)))
         .filter(|m| match m.tier.as_str() {
             "builtin" => {

@@ -8,15 +8,58 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::gateway::clusters::InfraServices;
+use crate::gateway::clusters::{ChannelBus, InfraServices};
 use crate::gateway::AppState;
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/api/notifications", get(api_list_notifications))
+        .route(
+            "/api/notifications",
+            get(api_list_notifications).post(api_create_notification),
+        )
         .route("/api/notifications/read-all", post(api_mark_all_notifications_read))
         .route("/api/notifications/clear", delete(api_clear_all_notifications))
         .route("/api/notifications/{id}", patch(api_mark_notification_read))
+}
+
+/// Body for `POST /api/notifications`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateNotificationBody {
+    #[serde(default = "default_notification_type")]
+    pub r#type: String,
+    pub title: String,
+    pub body: String,
+    #[serde(default)]
+    pub data: serde_json::Value,
+}
+
+fn default_notification_type() -> String { "watchdog_alert".to_string() }
+
+/// POST /api/notifications — create a notification (bell + WS broadcast).
+/// Auth-gated like every other /api route. Used by internal ops (e.g. the
+/// hourly YouTube-cookies health check) to surface alerts to the operator.
+pub(crate) async fn api_create_notification(
+    State(infra): State<InfraServices>,
+    State(bus): State<ChannelBus>,
+    Json(req): Json<CreateNotificationBody>,
+) -> impl IntoResponse {
+    match notify(
+        &infra.db,
+        &bus.ui_event_tx,
+        &req.r#type,
+        &req.title,
+        &req.body,
+        req.data,
+    )
+    .await
+    {
+        Ok(()) => (StatusCode::CREATED, Json(serde_json::json!({"ok": true}))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 // ── Query params ────────────────────────────────────────────────

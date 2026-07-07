@@ -14,7 +14,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from video_helpers import extract_audio, extract_scene_frames, extract_uniform_frames, download_video, _run, _cookie_args_async
+from video_helpers import extract_audio, extract_scene_frames, extract_uniform_frames, download_video, _run, _cookie_args_async, _cleanup_cookie_args
 
 # Hostnames trusted for video_url (always a Core gateway upload URL — localhost only).
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
@@ -192,15 +192,18 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
         # http/https scheme check (rejects '-'-prefixed flag-smuggling + file:/ftp:)
         # and '--' terminates yt-dlp option parsing so the URL can't be read as a flag.
         if not resolved_title and body.page_url and body.page_url.startswith(("http://", "https://")):
+            cookie_args = await _cookie_args_async()
             try:
                 code, out, _ = await _run(
-                    sys.executable, "-m", "yt_dlp", "--js-runtimes", "deno", *(await _cookie_args_async()),
+                    sys.executable, "-m", "yt_dlp", "--js-runtimes", "deno", *cookie_args,
                     "--print", "%(title)s", "--skip-download", "--", body.page_url,
                 )
                 if code == 0:
                     resolved_title = out.decode(errors="ignore").strip()
             except Exception:
                 pass
+            finally:
+                _cleanup_cookie_args(cookie_args)
 
         return {
             "title": resolved_title,

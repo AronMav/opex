@@ -275,7 +275,15 @@ async fn api_enqueue_handler(
         return (StatusCode::BAD_REQUEST, Json(json!({"error": "source_url, handler_id, agent_name required"}))).into_response();
     }
 
-    // Verify the handler exists and is allowed for URL-based dispatch.
+    // Validate the agent exists — fail fast rather than enqueue a job the worker
+    // will later drop for an unknown agent (the sync path derives the agent from
+    // trusted context; this endpoint takes it from the request).
+    if state.agents.get_engine(&req.agent_name).await.is_none() {
+        return (StatusCode::NOT_FOUND, Json(json!({"error": "agent not found"}))).into_response();
+    }
+
+    // Refresh the handler registry to pick up new manifests.
+    state.handlers.refresh().await;
     let manifests = state.handlers.manifests().await;
     let enabled = crate::agent::fse::get_enabled_allowlist(&state.infra.db).await;
     let manifest = manifests.iter().find(|m| m.id == req.handler_id);

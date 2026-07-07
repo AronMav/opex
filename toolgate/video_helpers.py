@@ -148,6 +148,21 @@ async def _cookie_args_async() -> list[str]:
     return []
 
 
+def _cleanup_cookie_args(cookie_args: list[str]) -> None:
+    """Delete the per-call cookie working copy referenced by `cookie_args`.
+
+    The working copy holds a live YouTube session (sensitive) and yt-dlp rewrites
+    it with the refreshed session, so it must not linger in the temp dir. Callers
+    invoke this in a `finally` after the yt-dlp subprocess returns. No-op when no
+    cookies were used.
+    """
+    if len(cookie_args) == 2 and cookie_args[0] == "--cookies":
+        try:
+            os.unlink(cookie_args[1])
+        except OSError:
+            pass
+
+
 async def extract_audio(video_path: str) -> bytes:
     """Decode the audio track to mono 16 kHz ogg/opus (small, STT-friendly)."""
     with tempfile.TemporaryDirectory() as d:
@@ -354,13 +369,17 @@ async def download_video(url: str, dest_dir: str) -> str:
     # "remote components" JS solver from GitHub on first use. Without this flag,
     # yt-dlp warns the solver was "skipped" and extraction fails on newer
     # YouTube player versions.
-    code, _, err = await _run(
-        sys.executable, "-m", "yt_dlp",
-        "--js-runtimes", "deno",
-        "--remote-components", "ejs:github",
-        *(await _cookie_args_async()),
-        "-f", "best[ext=mp4]/best", "-o", out_tmpl, "--no-playlist", "--", url
-    )
+    cookie_args = await _cookie_args_async()
+    try:
+        code, _, err = await _run(
+            sys.executable, "-m", "yt_dlp",
+            "--js-runtimes", "deno",
+            "--remote-components", "ejs:github",
+            *cookie_args,
+            "-f", "best[ext=mp4]/best", "-o", out_tmpl, "--no-playlist", "--", url
+        )
+    finally:
+        _cleanup_cookie_args(cookie_args)
     if code != 0:
         raise RuntimeError(f"yt-dlp failed: {err.decode(errors='ignore')[:400]}")
     files = glob.glob(os.path.join(dest_dir, "dl.*"))

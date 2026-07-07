@@ -471,7 +471,7 @@ export function createTelegramDriver(
     // This mirrors the approval callback security model (audit 2026-05-08).
     if (data.startsWith("ua:")) {
       const access = await bridge.checkAccess(userId);
-      if (!access.allowed && !access.isOwner) {
+      if (!access.isOwner) {
         await ctx.answerCallbackQuery({ text: "Доступ запрещён" }).catch(() => { });
         return;
       }
@@ -525,12 +525,15 @@ export function createTelegramDriver(
         }
         return;
       }
+      // Malformed `ua:` (missing segments) — ignore, don't fall through to the
+      // general LLM message path with the literal callback string.
+      return;
     }
 
     // ── File action buttons (fa:{uploadId}:{handlerId}) ───────────────────
     if (data.startsWith("fa:")) {
       const access = await bridge.checkAccess(userId);
-      if (!access.allowed && !access.isOwner) {
+      if (!access.isOwner) {
         await ctx.answerCallbackQuery({ text: "Доступ запрещён" }).catch(() => { });
         return;
       }
@@ -579,6 +582,8 @@ export function createTelegramDriver(
         }
         return;
       }
+      // Malformed `fa:` — ignore, don't fall through to the general path.
+      return;
     }
 
     // Non-approval callbacks — access check required before forwarding.

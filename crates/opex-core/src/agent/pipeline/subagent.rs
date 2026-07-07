@@ -194,23 +194,30 @@ pub struct EnrichResult {
     pub video_accepted: bool,
 }
 
-/// Enrich user text: auto-fetch URLs (max 2), add attachment hints, and detect
-/// video links. Returns an `EnrichResult` carrying the enriched LLM text.
+/// Enrich user text: auto-fetch URLs (max 2), add attachment hints, and handle
+/// detected video links. Returns an `EnrichResult` carrying the enriched LLM
+/// text + the async-video short-circuit flag.
 ///
-/// When a video link is detected, a context hint is added for the LLM:
-/// "Action buttons were shown to the user. Wait for their choice."
-/// The adapter shows inline buttons; the LLM must NOT auto-process.
+/// Video-link handling depends on `auto_enqueue_video` (derived from the channel
+/// via `channel_kind::channel::shows_action_buttons`):
+/// - `false` (web composer / Telegram — client shows inline action buttons): add
+///   a context hint telling the LLM the user was shown buttons and must choose;
+///   `video_accepted` stays false so the LLM loop runs normally.
+/// - `true` (Discord/Matrix/IRC/Slack/… — no button UI): auto-enqueue a
+///   `summarize_video` job per link (pre-button behavior) and set
+///   `video_accepted = true` so the caller short-circuits the LLM loop.
 #[allow(clippy::too_many_arguments)]
 pub async fn enrich_message_text(
     http_client: &reqwest::Client,
     gateway_listen: &str,
     toolgate_url: &str,
-    _agent_language: &str,
-    _db: &sqlx::PgPool,
-    _session_id: uuid::Uuid,
-    _agent_name: &str,
+    agent_language: &str,
+    db: &sqlx::PgPool,
+    session_id: uuid::Uuid,
+    agent_name: &str,
     user_text: &str,
     attachments: &[opex_types::MediaAttachment],
+    auto_enqueue_video: bool,
 ) -> EnrichResult {
     let mut enriched = user_text.to_string();
 
@@ -235,19 +242,44 @@ pub async fn enrich_message_text(
     }
     enrich_with_attachments(&mut enriched, attachments);
 
-    // Detect video links and add a context hint for the LLM.
-    // DO NOT auto-enqueue handler jobs — the adapter shows inline buttons
-    // and the user chooses the action. The LLM must NOT auto-process.
+    // Video-link handling: button-capable channels show inline action buttons
+    // (user chooses); channels without a button UI keep the auto-enqueue fallback
+    // so a video link isn't silently dropped there.
     let detected = detect_video_links(user_text);
+    let mut video_accepted = false;
     if !detected.is_empty() {
-        let links: Vec<&str> = detected.iter().map(|s| s.as_str()).collect();
-        enriched.push_str(&format!(
-            "\n\n[Видео-ссылка обнаружена: {} — пользователю показаны кнопки действий. Ожидайте выбор пользователя, не обрабатывайте автоматически.]",
-            links.join(", ")
-        ));
+        if auto_enqueue_video {
+            // No button UI on this channel — enqueue a summarize_video job per
+            // link (uses the ORIGINAL user_text link, pre-PII-redaction, so the
+            // stored source URL is real). `video_accepted` short-circuits the LLM
+            // loop; the caller emits the "🎬 …готовлю сводку" ack.
+            let params = serde_json::json!({ "language": agent_language });
+            for link in &detected {
+                match opex_db::handler_jobs::insert_handler_job(
+                    db,
+                    None,
+                    Some(link.as_str()),
+                    "summarize_video",
+                    agent_name,
+                    session_id,
+                    &params,
+                )
+                .await
+                {
+                    Ok(_) => video_accepted = true,
+                    Err(e) => tracing::warn!(error = %e, link = %link, "video url enqueue failed"),
+                }
+            }
+        } else {
+            let links: Vec<&str> = detected.iter().map(|s| s.as_str()).collect();
+            enriched.push_str(&format!(
+                "\n\n[Видео-ссылка обнаружена: {} — пользователю показаны кнопки действий. Ожидайте выбор пользователя, не обрабатывайте автоматически.]",
+                links.join(", ")
+            ));
+        }
     }
 
-    EnrichResult { text: enriched, video_accepted: false }
+    EnrichResult { text: enriched, video_accepted }
 }
 
 /// v1 video-URL allowlist: YouTube only (SSRF surface — see spec §9).
@@ -957,6 +989,7 @@ mod tests {
             "TestAgent",
             "сделай конспект https://www.youtube.com/watch?v=abc123",
             &[],
+            false, // button-capable channel — show buttons, don't auto-enqueue
         )
         .await;
 
@@ -1000,8 +1033,39 @@ mod tests {
             "TestAgent",
             "привет, как дела?",
             &[],
+            false,
         )
         .await;
         assert!(!result.video_accepted, "plain text must not short-circuit the agent loop");
+    }
+
+    /// On a channel WITHOUT inline buttons (`auto_enqueue_video = true`) a video
+    /// link auto-enqueues a `summarize_video` job and short-circuits the loop —
+    /// restores the pre-button behaviour for Discord/Matrix/IRC/Slack/… .
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn enrich_youtube_link_auto_enqueues_when_no_buttons(pool: sqlx::PgPool) {
+        let client = reqwest::Client::new();
+        let session_id = uuid::Uuid::new_v4();
+        let result = enrich_message_text(
+            &client,
+            "127.0.0.1:18789",
+            "http://localhost:9011",
+            "ru",
+            &pool,
+            session_id,
+            "TestAgent",
+            "сделай конспект https://www.youtube.com/watch?v=abc123",
+            &[],
+            true, // no button UI — auto-enqueue fallback
+        )
+        .await;
+
+        assert!(result.video_accepted, "no-button channel must auto-enqueue + short-circuit");
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM handler_jobs WHERE session_id=$1")
+            .bind(session_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row.0, 1, "exactly one summarize_video job must be enqueued");
     }
 }
