@@ -207,7 +207,9 @@ fn menu_ctx() -> &'static std::sync::Mutex<MenuCtxMap> {
 /// Stash `handler_menu` params under a fresh short token (prunes entries older
 /// than 30 min). Called from the channel path when a menu is sent to Telegram.
 pub(crate) fn store_menu_ctx(params: serde_json::Value) -> String {
-    let token: String = uuid::Uuid::new_v4().simple().to_string().chars().take(10).collect();
+    // Full 122-bit UUID (32 hex) — unguessable capability token. Fits Telegram's
+    // 64-byte callback_data as `hm:<32hex>:<handler_id>` (~51 bytes).
+    let token: String = uuid::Uuid::new_v4().simple().to_string();
     if let Ok(mut map) = menu_ctx().lock() {
         let now = std::time::Instant::now();
         map.retain(|_, (_, t)| now.duration_since(*t) < std::time::Duration::from_secs(1800));
@@ -220,6 +222,9 @@ pub(crate) fn store_menu_ctx(params: serde_json::Value) -> String {
 struct MenuTokenRunRequest {
     token: String,
     handler_id: String,
+    /// The chat the callback came from — must match the chat the menu was sent to.
+    #[serde(default)]
+    chat_id: Option<serde_json::Value>,
 }
 
 /// `POST /api/files/menu-run` — the Telegram inline-button callback. Recovers the
@@ -240,6 +245,17 @@ async fn run_menu_token_handler(
         )
             .into_response();
     };
+    // Origin binding: if the menu was bound to a chat, the caller must present
+    // the matching chat_id (blocks replay of a leaked token from another chat).
+    if let Some(stored_chat) = params.get("_chat_id")
+        && req.chat_id.as_ref() != Some(stored_chat)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "callback chat does not match the menu" })),
+        )
+            .into_response();
+    }
     let source_url = params.get("source_url").and_then(|v| v.as_str());
     let upload_id = params
         .get("upload_id")

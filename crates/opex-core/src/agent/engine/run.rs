@@ -455,11 +455,18 @@ impl AgentEngine {
         // button `data` carries only `hm:<token>:<handler_id>` (Telegram's
         // callback_data ≤64 bytes), with the source/session/agent stashed under
         // the token and recovered by POST /api/files/menu-run on click.
-        if let Some(menu) = s.menu.take()
+        if let Some(mut menu) = s.menu.take()
             && let Some(router) = self.channel_router_ref()
-            && let Some(handlers) = menu.get("handlers").and_then(|v| v.as_array())
+            && let Some(handlers) = menu.get("handlers").and_then(|v| v.as_array()).cloned()
             && !handlers.is_empty()
         {
+            // Bind the menu to the originating chat so a leaked token can't be
+            // replayed from another chat (verified in run_menu_token_handler).
+            if let Some(chat) = msg.context.get("chat_id").cloned()
+                && let Some(obj) = menu.as_object_mut()
+            {
+                obj.insert("_chat_id".to_string(), chat);
+            }
             let token = crate::gateway::handlers::files::store_menu_ctx(menu.clone());
             let buttons: Vec<serde_json::Value> = handlers
                 .iter()

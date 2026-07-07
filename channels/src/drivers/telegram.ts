@@ -489,7 +489,9 @@ export function createTelegramDriver(
         const resp = await fetch(`${coreUrl}/api/files/menu-run`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "Authorization": `Bearer ${authToken}` },
-          body: JSON.stringify({ token, handler_id: handlerId }),
+          // chat_id binds the callback to the chat the menu was sent to (Core
+          // rejects a token replayed from another chat).
+          body: JSON.stringify({ token, handler_id: handlerId, chat_id: chatId }),
           signal: AbortSignal.timeout(5000),
         });
         if (resp.ok) {
