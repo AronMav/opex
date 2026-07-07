@@ -119,8 +119,6 @@ impl AgentEngine {
             channel,
             compressor,
             claude_md_content,
-            video_accepted,
-            video_ack_text,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("bootstrap always sets lifecycle_guard");
         let mut compressor = compressor;
@@ -147,52 +145,7 @@ impl AgentEngine {
             channel,
             compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
             claude_md_content,
-            video_accepted: false,
-            video_ack_text: String::new(),
         };
-
-        // Async-video short-circuit: a `summarize_video` job was enqueued during
-        // bootstrap (YouTube link or video attachment). The ack IS the reply —
-        // skip the LLM loop entirely so the agent never tries to fetch/transcribe
-        // the YouTube link itself (slow + emits a misleading "не удалось"). Mirror
-        // the slash-command early-exit: emit start/text/finish, then finalize Done.
-        if video_accepted {
-            let vid_msg_id = opex_types::ids::MessageId::new();
-            let _ = s
-                .emit(PipelineEvent::Stream(StreamEvent::MessageStart {
-                    message_id: vid_msg_id,
-                }))
-                .await;
-            let _ = s
-                .emit(PipelineEvent::Stream(StreamEvent::TextDelta(video_ack_text.clone())))
-                .await;
-            let _ = s
-                .emit(PipelineEvent::Stream(StreamEvent::Finish {
-                    finish_reason: "video_accepted".to_string(),
-                    continuation: false,
-                }))
-                .await;
-
-            let fin_ctx = finalize::finalize_context_from_engine(
-                self,
-                session_id,
-                boot_for_execute.messages.len(),
-                Some(user_message_id),
-                compressor,
-                vid_msg_id.as_uuid(), // same UUID as MessageStart so DB row ID matches SSE event
-            );
-            finalize::finalize(
-                fin_ctx,
-                finalize::FinalizeOutcome::Done {
-                    assistant_text: video_ack_text,
-                    thinking_json: None,
-                },
-                &mut s,
-                &mut lifecycle_guard,
-            )
-            .await?;
-            return Ok(session_id);
-        }
 
         // Slash-command early exit
         if let Some(text) = command_output.take() {
@@ -396,8 +349,6 @@ impl AgentEngine {
             channel,
             compressor,
             claude_md_content,
-            video_accepted,
-            video_ack_text,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("set by bootstrap");
         let mut compressor = compressor;
@@ -415,8 +366,6 @@ impl AgentEngine {
             channel,
             compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
             claude_md_content,
-            video_accepted: false,
-            video_ack_text: String::new(),
         };
 
         // Channel adapters render slash commands as plain TextDelta
@@ -436,33 +385,6 @@ impl AgentEngine {
                 fin_ctx,
                 finalize::FinalizeOutcome::Done {
                     assistant_text: text,
-                    thinking_json: None,
-                },
-                &mut s,
-                &mut lifecycle_guard,
-            )
-            .await;
-        }
-
-        // Async-video short-circuit (same rationale as handle_sse): the enqueue
-        // ack IS the reply — skip the LLM loop so the agent never re-processes the
-        // YouTube link. Channel sink renders the ack as a plain TextDelta.
-        if video_accepted {
-            let _ = s
-                .emit(PipelineEvent::Stream(StreamEvent::TextDelta(video_ack_text.clone())))
-                .await;
-            let fin_ctx = finalize::finalize_context_from_engine(
-                self,
-                session_id,
-                boot_for_execute.messages.len(),
-                Some(user_message_id),
-                compressor,
-                uuid::Uuid::new_v4(), // channel path: no MessageStart was sent
-            );
-            return finalize::finalize(
-                fin_ctx,
-                finalize::FinalizeOutcome::Done {
-                    assistant_text: video_ack_text,
                     thinking_json: None,
                 },
                 &mut s,
@@ -569,8 +491,6 @@ impl AgentEngine {
             channel,
             compressor,
             claude_md_content,
-            video_accepted,
-            video_ack_text,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("set by bootstrap");
         let mut compressor = compressor;
@@ -588,8 +508,6 @@ impl AgentEngine {
             channel,
             compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
             claude_md_content,
-            video_accepted: false,
-            video_ack_text: String::new(),
         };
 
         if let Some(text) = command_output.take() {
@@ -608,31 +526,6 @@ impl AgentEngine {
                 fin_ctx,
                 finalize::FinalizeOutcome::Done {
                     assistant_text: text,
-                    thinking_json: None,
-                },
-                &mut s,
-                &mut lifecycle_guard,
-            )
-            .await;
-        }
-
-        // Async-video short-circuit (same rationale as handle_sse).
-        if video_accepted {
-            let _ = s
-                .emit(PipelineEvent::Stream(StreamEvent::TextDelta(video_ack_text.clone())))
-                .await;
-            let fin_ctx = finalize::finalize_context_from_engine(
-                self,
-                session_id,
-                boot_for_execute.messages.len(),
-                Some(user_message_id),
-                compressor,
-                uuid::Uuid::new_v4(),
-            );
-            return finalize::finalize(
-                fin_ctx,
-                finalize::FinalizeOutcome::Done {
-                    assistant_text: video_ack_text,
                     thinking_json: None,
                 },
                 &mut s,
@@ -775,8 +668,6 @@ impl AgentEngine {
             claude_md_content,
             // Cron/goal RPC turns run the LLM loop unconditionally — the async-video
             // short-circuit is a live-user-turn affordance only.
-            video_accepted: _,
-            video_ack_text: _,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("bootstrap always sets lifecycle_guard");
         let mut compressor = compressor;
@@ -816,8 +707,6 @@ impl AgentEngine {
             channel,
             compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
             claude_md_content,
-            video_accepted: false,
-            video_ack_text: String::new(),
         };
 
         let outcome = match execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &layers).await {
@@ -889,19 +778,6 @@ mod tests {
         assert!(
             src.contains(r#"finish_reason: "command""#),
             "slash-command path must emit Finish with finish_reason=command"
-        );
-    }
-
-    #[test]
-    fn video_accepted_short_circuit_is_present() {
-        let src = source();
-        assert!(
-            src.contains(r#"finish_reason: "video_accepted""#),
-            "video short-circuit must emit Finish with finish_reason=video_accepted"
-        );
-        assert!(
-            src.contains("if video_accepted"),
-            "video short-circuit must guard on the video_accepted flag"
         );
     }
 }

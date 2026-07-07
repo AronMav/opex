@@ -182,16 +182,10 @@ pub async fn fetch_url_content(
     ))
 }
 
-/// Result of `enrich_message_text`: the enriched LLM text plus the async-video
-/// short-circuit flag. (The legacy FSE per-attachment dispatch outcomes and
-/// post-hoc chip alternatives were removed with the FSE sync-dispatch retirement.)
+/// Result of `enrich_message_text`: the enriched LLM text (PII-redacted user
+/// text + fetched-URL content + attachment / file-handler hints).
 pub struct EnrichResult {
     pub text: String,
-    /// `true` when this message was an async-video acceptance (a YouTube/Yandex
-    /// Disk link was enqueued as a `summarize_video` handler job). The pipeline
-    /// uses this to SHORT-CIRCUIT the LLM agent loop: the ack text is the whole
-    /// reply, so the agent never tries to fetch/transcribe the link itself.
-    pub video_accepted: bool,
 }
 
 /// Enrich user text: auto-fetch URLs (max 2), add attachment hints, and — when a
@@ -248,7 +242,7 @@ pub async fn enrich_message_text(
         ));
     }
 
-    EnrichResult { text: enriched, video_accepted: false }
+    EnrichResult { text: enriched }
 }
 
 /// v1 video-URL allowlist: YouTube only (SSRF surface — see spec §9).
@@ -955,7 +949,6 @@ mod tests {
         )
         .await;
 
-        assert!(!result.video_accepted, "no short-circuit — the LLM loop runs");
         assert!(
             result.text.contains("file_handler"),
             "hint must point at the file_handler tool: {:?}", result.text
@@ -982,7 +975,6 @@ mod tests {
             &[],
         )
         .await;
-        assert!(!result.video_accepted);
         assert!(!result.text.contains("file_handler"), "no hint for plain text");
     }
 }

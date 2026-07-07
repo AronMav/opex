@@ -41,14 +41,6 @@ pub struct BootstrapOutcome {
     /// breakpoint. Forwarded from `ContextSnapshot.claude_md_content`.
     /// `None` for non-base agents and agents without prompt_cache.
     pub claude_md_content: Option<String>,
-    /// `true` when an async-video job was accepted during enrich (YouTube link
-    /// enqueued, or a `summarize_video` attachment outcome). The SSE/channel
-    /// adapters short-circuit the LLM loop and persist `video_ack_text` as the
-    /// assistant reply instead of running the agent.
-    pub video_accepted: bool,
-    /// Clean user-facing acknowledgement to emit as the assistant reply when
-    /// `video_accepted` is `true` (empty otherwise). NOT the enriched blob.
-    pub video_ack_text: String,
 }
 
 /// Input context for the bootstrap phase.
@@ -245,15 +237,6 @@ pub async fn bootstrap<S: EventSink>(
     )
     .await;
     let enriched_text = enrich.text;
-    let video_accepted = enrich.video_accepted;
-    // Clean user-facing ack for the short-circuit reply (never the whole enriched
-    // blob, which carries PII-redacted text). The async-video accept always comes
-    // from a detected video link now, so the ack is the canonical constant.
-    let video_ack_text = if video_accepted {
-        "🎬 Видео по ссылке принято, готовлю сводку.".to_string()
-    } else {
-        String::new()
-    };
 
     // Decision-webhooks for BeforeMessage: block the turn or inject context.
     let bm_event = crate::agent::hooks::HookEvent::BeforeMessage;
@@ -414,8 +397,6 @@ pub async fn bootstrap<S: EventSink>(
         channel: ctx.msg.channel.clone(),
         compressor,
         claude_md_content,
-        video_accepted,
-        video_ack_text,
     })
 }
 
