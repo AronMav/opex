@@ -658,7 +658,7 @@ async fn deliver_async_outcome(
 
     // 3. Generic post-action: the handler may request a direct note write via a
     //    `post_action` object in the result JSON (no mcp-obsidian dependency).
-    run_post_action(job, outcome).await;
+    run_post_action(job.id, outcome).await;
 }
 
 /// Persist a chat message announcing that an async handler job FAILED, so the
@@ -739,7 +739,7 @@ fn resolve_note_dir(
 /// not silently skipped when mark_handler_job_done failed.
 /// Security: `filename` is validated as a single safe path component; `dir` is
 /// rejected if it contains a `..` component (see `resolve_note_dir`).
-async fn run_post_action(job: &handler_jobs::HandlerJob, outcome: &ScenarioOutcome) {
+async fn run_post_action(job_id: uuid::Uuid, outcome: &ScenarioOutcome) {
     let outcome_value = serde_json::to_value(outcome).unwrap_or_else(|_| serde_json::json!({}));
     let action = match outcome_value.get("post_action") {
         Some(a) if !a.is_null() => a.clone(),
@@ -753,7 +753,7 @@ async fn run_post_action(job: &handler_jobs::HandlerJob, outcome: &ScenarioOutco
     let filename = action.get("filename").and_then(|v| v.as_str()).unwrap_or("note.md");
     if !is_safe_path_component(filename) {
         tracing::warn!(
-            job_id = %job.id, filename = %filename,
+            job_id = %job_id, filename = %filename,
             "run_post_action: filename failed allowlist — skipping write"
         );
         return;
@@ -779,7 +779,7 @@ async fn run_post_action(job: &handler_jobs::HandlerJob, outcome: &ScenarioOutco
         Some(d) => d,
         None => {
             tracing::warn!(
-                job_id = %job.id, dir = %dir, subfolder = %subfolder,
+                job_id = %job_id, dir = %dir, subfolder = %subfolder,
                 "run_post_action: unsafe note directory — skipping write"
             );
             return;
@@ -787,13 +787,13 @@ async fn run_post_action(job: &handler_jobs::HandlerJob, outcome: &ScenarioOutco
     };
 
     if let Err(e) = tokio::fs::create_dir_all(&target_dir).await {
-        tracing::warn!(error = %e, job_id = %job.id, dir = %target_dir.display(), "run_post_action: create_dir_all failed");
+        tracing::warn!(error = %e, job_id = %job_id, dir = %target_dir.display(), "run_post_action: create_dir_all failed");
         return;
     }
     let path = target_dir.join(filename);
     match tokio::fs::write(&path, content).await {
-        Ok(()) => tracing::info!(job_id = %job.id, path = %path.display(), "run_post_action: note written"),
-        Err(e) => tracing::warn!(error = %e, job_id = %job.id, path = %path.display(), "run_post_action: write failed"),
+        Ok(()) => tracing::info!(job_id = %job_id, path = %path.display(), "run_post_action: note written"),
+        Err(e) => tracing::warn!(error = %e, job_id = %job_id, path = %path.display(), "run_post_action: write failed"),
     }
 }
 
@@ -888,6 +888,57 @@ mod tests {
     }
 
     // ── Job-callback token gate tests (non-DB, unit) ─────────────────────────
+
+    #[tokio::test]
+    async fn run_post_action_writes_note_to_absolute_dir() {
+        // Full E2E of the write path (no LLM/MCP): a write_file post_action with
+        // an absolute `dir` must produce the note file at that exact path.
+        let base = std::env::temp_dir().join(format!("opex_valve_{}", uuid::Uuid::new_v4()));
+        let target = base.join("Конспекты");
+        let outcome = ScenarioOutcome {
+            status: ScenarioStatus::Ok,
+            summary_text: "short".to_string(),
+            artifact_urls: vec![],
+            reason: None,
+            video_accepted: false,
+            post_action: Some(serde_json::json!({
+                "kind": "write_file",
+                "dir": target.to_string_lossy(),
+                "subfolder": "Summary",
+                "filename": "note.md",
+                "content": "hello from the output_dir valve",
+            })),
+        };
+
+        run_post_action(uuid::Uuid::new_v4(), &outcome).await;
+
+        let written = target.join("note.md");
+        let body = tokio::fs::read_to_string(&written).await;
+        let _ = tokio::fs::remove_dir_all(&base).await;
+        assert_eq!(body.unwrap(), "hello from the output_dir valve");
+    }
+
+    #[tokio::test]
+    async fn run_post_action_rejects_traversal_filename() {
+        // A filename that is not a safe component must NOT be written.
+        let base = std::env::temp_dir().join(format!("opex_valve_{}", uuid::Uuid::new_v4()));
+        let outcome = ScenarioOutcome {
+            status: ScenarioStatus::Ok,
+            summary_text: String::new(),
+            artifact_urls: vec![],
+            reason: None,
+            video_accepted: false,
+            post_action: Some(serde_json::json!({
+                "kind": "write_file",
+                "dir": base.to_string_lossy(),
+                "filename": "../escape.md",
+                "content": "nope",
+            })),
+        };
+        run_post_action(uuid::Uuid::new_v4(), &outcome).await;
+        // Nothing created (bad filename → skipped before create_dir_all).
+        assert!(!base.exists());
+    }
 
     #[test]
     fn resolve_note_dir_cases() {
