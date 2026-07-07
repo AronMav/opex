@@ -14,11 +14,13 @@ impl SystemToolHandler for SessionHandler {
             "list" => sessions::handle_sessions_list(deps.db, deps.agent_name, args).await,
             "history" => sessions::handle_sessions_history(deps.db, deps.agent_name, args).await,
             "search" => sessions::handle_session_search(deps.db, deps.agent_name, args).await,
-            "context" => sessions::handle_session_context(deps.db, args).await,
+            "context" => {
+                sessions::handle_session_context(deps.db, deps.agent_name, args).await
+            }
             "send" => {
                 sessions::handle_session_send(deps.state.channel_router.as_ref(), args).await
             }
-            "export" => sessions::handle_session_export(deps.db, args).await,
+            "export" => sessions::handle_session_export(deps.db, deps.agent_name, args).await,
             _ => format!(
                 "Error: unknown session action '{}'. Use: list, history, search, context, send, export.",
                 action

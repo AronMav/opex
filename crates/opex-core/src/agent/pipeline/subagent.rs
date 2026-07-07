@@ -127,6 +127,22 @@ async fn fetch_via_toolgate_web(
 /// short-circuit Core API self-calls (`/api/doctor` etc.) — those bypass toolgate
 /// and use the plain `http_client` directly.
 ///
+/// Build a loopback-only client that does NOT follow redirects.
+///
+/// The core-API self-call shortcut below fetches `http://127.0.0.1:<core>` with a
+/// plain client (no SSRF DNS filter) after only a `starts_with` check on the
+/// INITIAL url. reqwest's default policy follows up to 10 redirects, so a 3xx
+/// from a core endpoint could bounce the request to an internal host
+/// (toolgate :9011, `169.254.169.254`, …) and return its body to the model.
+/// Disabling redirects turns any 3xx into a non-2xx that the caller rejects.
+/// Falls back to cloning `base` only if the builder fails (never in practice).
+fn no_redirect_client(base: &reqwest::Client) -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_else(|_| base.clone())
+}
+
 /// SSRF + size-limit enforcement for external URLs is toolgate's responsibility
 /// (`validate_url_ssrf` + `download_limited(max_bytes=2 MiB)` in `routers/fetch.py`).
 // reviewed: floor_char_boundary-bounded truncation — char boundary
@@ -150,7 +166,7 @@ pub async fn fetch_url_content(
     // Core API self-call: bypass toolgate, fetch directly. Toolgate's SSRF guard
     // would reject the Pi's loopback anyway.
     let text = if is_core_api {
-        let resp = http_client
+        let resp = no_redirect_client(http_client)
             .get(url)
             .header("User-Agent", "OPEX/0.1 (link-preview)")
             .timeout(std::time::Duration::from_secs(10))
@@ -325,7 +341,9 @@ pub async fn handle_web_fetch(
 
     let text = if is_core_api {
         // Core API self-call — bypass toolgate, fetch raw body directly.
-        let resp = match http_client
+        // No-redirect client: a 3xx from a core endpoint must not bounce this
+        // non-SSRF-filtered request to an internal host (see no_redirect_client).
+        let resp = match no_redirect_client(http_client)
             .get(url)
             .header("User-Agent", "OPEX/1.0")
             .timeout(std::time::Duration::from_secs(30))

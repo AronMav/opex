@@ -302,27 +302,14 @@ pub async fn handle_memory_update(
                 format!("{}\n# {}\n- {}\n", existing.trim_end(), section, content)
             }
         }
-        "update" => {
-            let lines: Vec<String> = existing
-                .lines()
-                .map(|l| {
-                    let key = content.split(':').next().unwrap_or(&content).trim();
-                    if l.starts_with("- ") && l.contains(key) {
-                        format!("- {}", content)
-                    } else {
-                        l.to_string()
-                    }
-                })
-                .collect();
-            lines.join("\n")
-        }
-        "remove" => {
-            let lines: Vec<&str> = existing
-                .lines()
-                .filter(|l| !l.contains(&content))
-                .collect();
-            lines.join("\n")
-        }
+        "update" => match memory_update_bullet(&existing, &content) {
+            Ok(updated) => updated,
+            Err(msg) => return msg,
+        },
+        "remove" => match memory_remove_bullet(&existing, &content) {
+            Ok(updated) => updated,
+            Err(msg) => return msg,
+        },
         _ => return format!("Unknown action '{}'. Use: add, update, remove", action),
     };
 
@@ -345,9 +332,105 @@ pub async fn handle_memory_update(
     }
 }
 
+/// Extract a bullet's key: the text after `- ` up to the first `:` (trimmed),
+/// or the whole bullet text when there is no `:`.
+fn bullet_key(content: &str) -> &str {
+    content.split(':').next().unwrap_or(content).trim()
+}
+
+/// Replace the FIRST MEMORY.md bullet whose key exactly matches `content`'s key
+/// with `- {content}`. `Err(message)` when no such bullet exists.
+///
+/// Fixes an unanchored `contains(key)` substring match that rewrote every bullet
+/// merely containing the key (e.g. `api` clobbered `legacy_api`), hit ALL matches
+/// at once, and reported success — silent data loss in the agent's MEMORY.md.
+fn memory_update_bullet(existing: &str, content: &str) -> Result<String, String> {
+    let key = bullet_key(content);
+    let mut replaced = false;
+    let lines: Vec<String> = existing
+        .lines()
+        .map(|l| {
+            if replaced {
+                return l.to_string();
+            }
+            if let Some(rest) = l.strip_prefix("- ")
+                && bullet_key(rest) == key
+            {
+                replaced = true;
+                return format!("- {}", content);
+            }
+            l.to_string()
+        })
+        .collect();
+    if !replaced {
+        return Err(format!(
+            "No entry with key '{}' found in MEMORY.md. Use action=add to create it.",
+            key
+        ));
+    }
+    Ok(lines.join("\n"))
+}
+
+/// Remove MEMORY.md bullets whose key exactly matches `content`'s key OR whose
+/// full text equals `content` — not any line that merely contains the string.
+fn memory_remove_bullet(existing: &str, content: &str) -> Result<String, String> {
+    let key = bullet_key(content);
+    let target = content.trim();
+    let before = existing.lines().count();
+    let lines: Vec<&str> = existing
+        .lines()
+        .filter(|l| {
+            if let Some(rest) = l.strip_prefix("- ") {
+                !(bullet_key(rest) == key || rest.trim() == target)
+            } else {
+                true
+            }
+        })
+        .collect();
+    if lines.len() == before {
+        return Err(format!("No entry matching '{}' found in MEMORY.md.", target));
+    }
+    Ok(lines.join("\n"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::truncate_chunk_content;
+    use super::{memory_remove_bullet, memory_update_bullet, truncate_chunk_content};
+
+    #[test]
+    fn update_matches_exact_key_not_substring() {
+        // "api" must NOT clobber "legacy_api" (the old contains() bug).
+        let md = "# S\n- api: v1\n- legacy_api: v1";
+        let out = memory_update_bullet(md, "api: v2").unwrap();
+        assert_eq!(out, "# S\n- api: v2\n- legacy_api: v1");
+    }
+
+    #[test]
+    fn update_replaces_only_first_match() {
+        let md = "- k: a\n- k: b";
+        let out = memory_update_bullet(md, "k: c").unwrap();
+        assert_eq!(out, "- k: c\n- k: b");
+    }
+
+    #[test]
+    fn update_missing_key_is_error_not_silent_success() {
+        let md = "- other: 1";
+        assert!(memory_update_bullet(md, "api: v2").is_err());
+    }
+
+    #[test]
+    fn remove_matches_exact_key_not_substring() {
+        // "db" must NOT delete "redis-db-cache".
+        let md = "- db: pg\n- redis-db-cache: on";
+        let out = memory_remove_bullet(md, "db").unwrap();
+        assert_eq!(out, "- redis-db-cache: on");
+    }
+
+    #[test]
+    fn remove_missing_is_error() {
+        let md = "- a: 1\n- b: 2";
+        assert!(memory_remove_bullet(md, "zzz").is_err());
+    }
 
     #[test]
     fn excalidraw_marker_replaced() {

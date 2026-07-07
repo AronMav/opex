@@ -165,7 +165,17 @@ async fn execute_host_code(code: &str, language: &str, packages: &[String]) -> S
             cmd.arg(p);
         }
         crate::tools::spawn_env::strip_host_secrets(&mut cmd);
-        let _ = cmd.output().await;
+        // Surface pip failures: swallowing the result let a failed install fall
+        // through to a bare `ModuleNotFoundError` from the run below, hiding the
+        // real cause (bad package name, network, resolver conflict) from the model.
+        match cmd.output().await {
+            Ok(o) if !o.status.success() => {
+                let stderr: String = String::from_utf8_lossy(&o.stderr).chars().take(1500).collect();
+                return format!("Error: pip install failed ({}):\n{}", o.status, stderr.trim());
+            }
+            Ok(_) => {}
+            Err(e) => return format!("Error: could not run pip: {}", e),
+        }
     }
 
     let (cmd, args) = match language {

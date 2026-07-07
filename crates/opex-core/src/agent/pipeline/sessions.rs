@@ -244,7 +244,11 @@ pub async fn handle_session_search(
 }
 
 /// Get metadata about a session (current or specified).
-pub async fn handle_session_context(db: &PgPool, args: &serde_json::Value) -> String {
+pub async fn handle_session_context(
+    db: &PgPool,
+    agent_name: &str,
+    args: &serde_json::Value,
+) -> String {
     let session_id_str = args
         .get("_context")
         .and_then(|c| c.get("session_id"))
@@ -259,6 +263,13 @@ pub async fn handle_session_context(db: &PgPool, args: &serde_json::Value) -> St
 
     let sm = SessionManager::new(db.clone());
     match sm.get_session(session_id).await {
+        // IDOR guard: only expose sessions owned by the calling agent. A
+        // caller-supplied `session_id` must not leak another agent's / user's
+        // session metadata — mirror the `agent_id` scoping in list/history/search.
+        // Return the same "not found" as a genuine miss to avoid an existence oracle.
+        Ok(Some(s)) if s.agent_id != agent_name => {
+            format!("Session {} not found.", session_id)
+        }
         Ok(Some(s)) => {
             let msg_count = sm.count_messages(session_id).await.unwrap_or(0);
             format!(
@@ -331,7 +342,11 @@ pub async fn handle_session_send(
 }
 
 /// Export a session's full conversation as text or JSON.
-pub async fn handle_session_export(db: &PgPool, args: &serde_json::Value) -> String {
+pub async fn handle_session_export(
+    db: &PgPool,
+    agent_name: &str,
+    args: &serde_json::Value,
+) -> String {
     let session_id_str = args
         .get("session_id")
         .and_then(|v| v.as_str())
@@ -346,10 +361,18 @@ pub async fn handle_session_export(db: &PgPool, args: &serde_json::Value) -> Str
         Err(_) => return "Error: invalid session_id (expected UUID)".to_string(),
     };
 
-    match SessionManager::new(db.clone())
-        .load_messages(session_id, Some(500))
-        .await
-    {
+    let sm = SessionManager::new(db.clone());
+    // IDOR guard: verify the session belongs to the calling agent BEFORE loading
+    // any message content. `export` returns full `content`; without this an agent
+    // could dump another agent's / user's entire conversation by supplying its id.
+    // Same "not found" as an empty session to avoid leaking existence.
+    match sm.get_session(session_id).await {
+        Ok(Some(s)) if s.agent_id == agent_name => {}
+        Ok(_) => return "No messages found in session.".to_string(),
+        Err(e) => return format!("Error getting session: {}", e),
+    }
+
+    match sm.load_messages(session_id, Some(500)).await {
         Ok(msgs) if msgs.is_empty() => "No messages found in session.".to_string(),
         Ok(msgs) => {
             if format == "json" {

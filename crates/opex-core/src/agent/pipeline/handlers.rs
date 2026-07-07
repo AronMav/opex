@@ -634,6 +634,13 @@ pub async fn handle_tool_verify(workspace_dir: &str, args: &serde_json::Value) -
         None => return "Error: 'tool_name' is required".to_string(),
     };
 
+    // Path-traversal guard: `tool_file_path` joins `{name}.yaml` with no
+    // sanitization, so an unvalidated name like "../../config/agents/X" would
+    // escape workspace/tools and let this handler read+rewrite arbitrary *.yaml.
+    if !crate::agent::dispatcher::lookup::is_valid_tool_name(tool_name) {
+        return format!("Error: invalid tool name '{}'", tool_name);
+    }
+
     let path = tool_file_path(workspace_dir, &ToolStatus::Draft, tool_name);
     if !path.exists() {
         return format!("Tool '{}' not found. Use tool_list(status=\"draft\") to see draft tools.", tool_name);
@@ -670,6 +677,12 @@ pub async fn handle_tool_disable(workspace_dir: &str, args: &serde_json::Value) 
         Some(n) => n,
         None => return "Error: 'tool_name' is required".to_string(),
     };
+
+    // Path-traversal guard (see handle_tool_verify): reject names that would
+    // escape workspace/tools before building any filesystem path.
+    if !crate::agent::dispatcher::lookup::is_valid_tool_name(tool_name) {
+        return format!("Error: invalid tool name '{}'", tool_name);
+    }
 
     // Check both verified and draft paths (tool could be in either status)
     let verified_path = tool_file_path(workspace_dir, &ToolStatus::Verified, tool_name);
