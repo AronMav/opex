@@ -1,7 +1,0 @@
-name: mcp-youtube-transcript
-container: mcp-youtube-transcript
-port: 9043
-mode: on-demand
-idle_timeout: 5m
-protocol: http
-enabled: true

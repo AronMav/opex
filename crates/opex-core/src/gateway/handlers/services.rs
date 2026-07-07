@@ -452,7 +452,6 @@ pub(crate) async fn api_container_restart(
         "mcp-fetch",
         "mcp-memory",
         "mcp-sequential-thinking",
-        "mcp-youtube-transcript",
         "mcp-time",
         "mcp-filesystem",
         "mcp-git",

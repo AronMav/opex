@@ -212,25 +212,6 @@ services:
       - /etc/timezone:/etc/timezone:ro
     profiles: [ "on-demand" ]
 
-  mcp-youtube-transcript:
-    container_name: mcp-youtube-transcript
-    image: opex-mcp-youtube-transcript:latest
-    mem_limit: ${MCP_DEFAULT_MEM_LIMIT:-384m}
-    cpus: ${MCP_DEFAULT_CPUS:-0.5}
-    build: ./mcp/youtube-transcript
-    # YouTube blocks datacenter IPs for transcript fetches — route egress through
-    # the residential xray proxy (same as toolgate's yt-dlp). Localhost bypasses.
-    environment:
-      - HTTP_PROXY=http://10.10.1.37:1081
-      - HTTPS_PROXY=http://10.10.1.37:1081
-      - NO_PROXY=localhost,127.0.0.1,::1
-    ports:
-      - "127.0.0.1:9043:8000"
-    volumes:
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
-    profiles: [ "on-demand" ]
-
   mcp-time:
     container_name: mcp-time
     image: opex-mcp-time:latest
