@@ -20,10 +20,12 @@ export type FilterTabItem = {
 /**
  * Single source of truth for page-level filter/tab bars.
  *
- * Renders a uniform trigger per item: `[icon] [label] [count badge]`, wrapped in
- * the scrollable tab list. On phones (< sm) the label collapses to an icon for
- * inactive tabs and is shown only for the active tab; from sm up every label is
- * visible. The count badge stays visible on all breakpoints.
+ * Renders a uniform trigger per item: `[icon] [label] [count badge]` in a single
+ * row. When the full-label row would exceed the available width, inactive tabs
+ * COLLAPSE to their icon (the active tab keeps its label) so every tab stays
+ * reachable in one row instead of wrapping or clipping off-screen. The collapse
+ * is measured with a ResizeObserver against the actual container width, so it
+ * adapts to any tab count without a hand-tuned breakpoint.
  *
  * Keep `<Tabs>` and `<TabsContent>` on the page — this replaces only the trigger list.
  */
@@ -35,27 +37,68 @@ function FilterTabsList({
   items: FilterTabItem[]
   className?: string
 } & Omit<React.ComponentProps<typeof ScrollableTabsList>, "children">) {
+  const wrapRef = React.useRef<HTMLDivElement>(null)
+  // Width (px) the row needs with ALL labels shown. Measured while expanded and
+  // used as the stable threshold for re-expanding — prevents collapse↔expand
+  // oscillation (collapsing hides labels, which would otherwise shrink the
+  // measured width and immediately re-expand).
+  const fullWidthRef = React.useRef(0)
+  const [compact, setCompact] = React.useState(false)
+
+  React.useLayoutEffect(() => {
+    const wrap = wrapRef.current
+    if (!wrap) return
+    // Measure the LIST element (it owns the overflow-x-auto that would otherwise
+    // absorb the overflow and hide it from the wrapper's own scrollWidth).
+    const list = wrap.querySelector<HTMLElement>('[data-slot="tabs-list"]')
+    if (!list) return
+    const measure = () => {
+      if (!compact) {
+        fullWidthRef.current = list.scrollWidth
+        if (list.scrollWidth > list.clientWidth + 1) setCompact(true)
+      } else if (fullWidthRef.current > 0 && list.clientWidth >= fullWidthRef.current) {
+        setCompact(false)
+      }
+    }
+    measure()
+    // No ResizeObserver (jsdom/tests, very old browsers) → measure once, keep
+    // labels shown. The page stays functional; only the adaptive collapse is off.
+    if (typeof ResizeObserver === "undefined") return
+    const ro = new ResizeObserver(measure)
+    ro.observe(wrap)
+    return () => ro.disconnect()
+  }, [compact, items])
+
   return (
-    <ScrollableTabsList className={cn("h-9", className)} {...props}>
-      {items.map((item) => (
-        <TabsTrigger
-          key={item.value}
-          value={item.value}
-          aria-label={item.label}
-          className="group/ftab text-xs font-medium"
-        >
-          <span className="shrink-0 [&_svg]:size-4">{item.icon}</span>
-          <span className="hidden sm:inline group-data-[state=active]/ftab:inline">
-            {item.label}
-          </span>
-          {item.count != null && (
-            <Badge variant="secondary" size="xs" className="ml-1.5 tabular-nums">
-              {item.count}
-            </Badge>
-          )}
-        </TabsTrigger>
-      ))}
-    </ScrollableTabsList>
+    <div ref={wrapRef} className="min-w-0">
+      <ScrollableTabsList className={cn("h-9", className)} {...props}>
+        {items.map((item) => (
+          <TabsTrigger
+            key={item.value}
+            value={item.value}
+            aria-label={item.label}
+            title={item.label}
+            className="group/ftab text-xs font-medium"
+          >
+            <span className="shrink-0 [&_svg]:size-4">{item.icon}</span>
+            <span
+              className={cn(
+                "truncate",
+                // Roomy: every label visible. Tight: only the active tab's label.
+                compact ? "hidden group-data-[state=active]/ftab:inline" : "inline",
+              )}
+            >
+              {item.label}
+            </span>
+            {item.count != null && (
+              <Badge variant="secondary" size="xs" className="ml-1.5 tabular-nums">
+                {item.count}
+              </Badge>
+            )}
+          </TabsTrigger>
+        ))}
+      </ScrollableTabsList>
+    </div>
   )
 }
 
