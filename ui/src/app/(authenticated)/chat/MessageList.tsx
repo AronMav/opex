@@ -10,6 +10,7 @@ import { CometLoader, CircularLoader } from "@/components/ui/loader";
 import { MessageItem } from "./MessageItem";
 import { useChatAutoscroll } from "./use-chat-autoscroll";
 import { AgentTransitionDivider } from "@/components/chat/AgentTransitionDivider";
+import { VirtuosoList, VirtuosoListItem } from "@/components/chat/virtuoso-list-roles";
 import { useSessions } from "@/lib/queries";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -258,6 +259,11 @@ export function MessageList({
   }, [messages, showThinking]);
 
   const virtuosoComponents = useMemo(() => ({
+    // role=list / role=listitem on Virtuoso's own wrappers so the items are
+    // DIRECT children of the list (H1) — a plain role on the itemContent div is
+    // orphaned by Virtuoso's intervening scroller/list divs.
+    List: VirtuosoList,
+    Item: VirtuosoListItem,
     Header: () => <VirtuosoHeader hiddenCount={hiddenCount} onLoadEarlier={guardedLoadEarlier} isLoadingHistory={isLoadingHistory} />,
     Footer: () => (
       <>
@@ -314,7 +320,10 @@ export function MessageList({
         itemContent={(index, msg) => {
           if (msg.id === THINKING_ID) {
             return (
-              <div role="listitem" className="mx-auto w-full max-w-4xl px-3 md:px-6 py-2">
+              // aria-live="off": the thread-level role="log" must NOT also
+              // announce this transient row — ThinkingMessage's own role="status"
+              // is the single announcer, avoiding a double "thinking" utterance.
+              <div aria-live="off" className="mx-auto w-full max-w-4xl px-3 md:px-6 py-2">
                 <ThinkingMessage />
               </div>
             );
@@ -349,7 +358,6 @@ export function MessageList({
           return (
             <div
               id={`msg-${msg.id}`}
-              role="listitem"
               className={cn(
                 "mx-auto w-full max-w-4xl px-3 md:px-6 transition-opacity duration-150",
                 isDimmed && "opacity-40",

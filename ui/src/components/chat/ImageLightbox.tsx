@@ -5,6 +5,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { X, ZoomIn, ZoomOut, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/hooks/use-translation";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 
 interface ImageLightboxProps {
   src: string;
@@ -27,35 +28,16 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
   const handleClose = useCallback(() => {
     setOpen(false);
     setZoom(1);
-    // Restore focus to the trigger (the trigger stays mounted regardless of open).
-    triggerRef.current?.focus();
+    // Focus is restored to the trigger by useFocusTrap when `open` flips false.
   }, []);
 
-  // Move focus into the dialog when it opens (custom modal, no Radix trap).
-  useEffect(() => {
-    if (open) dialogRef.current?.focus();
-  }, [open]);
-
-  // Cyclic Tab trap across the toolbar's focusable controls.
-  const handleDialogKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "Tab") return;
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    const focusables = dialog.querySelectorAll<HTMLElement>("button, a[href]");
-    if (focusables.length === 0) return;
-    const first = focusables[0];
-    const last = focusables[focusables.length - 1];
-    const active = document.activeElement;
-    if (e.shiftKey) {
-      if (active === first || active === dialog) {
-        e.preventDefault();
-        last.focus();
-      }
-    } else if (active === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  }, []);
+  // Focus into the dialog on open, restore to trigger on close, trap Tab within.
+  const handleDialogKeyDown = useFocusTrap({
+    active: open,
+    containerRef: dialogRef,
+    restoreTo: triggerRef,
+    initialFocus: "container",
+  });
 
   const handleZoomIn = useCallback(() => {
     setZoom((z) => Math.min(z + 0.5, 3));

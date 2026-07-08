@@ -487,4 +487,14 @@ describe("convertHistory — referential cache (P1)", () => {
     const rows2: MessageRow[] = [makeRow({ id: "u1", role: "user", content: "hi" })];
     expect(convertHistory(rows2)).not.toBe(convertHistory(rows1));
   });
+
+  it("keeps distinct arg-combos cached without thrashing (same rows, alternating flags)", () => {
+    const rows: MessageRow[] = [makeRow({ id: "u1", role: "user", content: "hi" })];
+    const a1 = convertHistory(rows, false);
+    const b1 = convertHistory(rows, true);
+    // Re-request each combo: both must still be cache hits (no single-slot evict).
+    expect(convertHistory(rows, false)).toBe(a1);
+    expect(convertHistory(rows, true)).toBe(b1);
+    expect(a1).not.toBe(b1);
+  });
 });

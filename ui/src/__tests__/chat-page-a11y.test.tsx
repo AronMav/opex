@@ -154,11 +154,21 @@ vi.mock("react-virtuoso", () => {
     Virtuoso: (props: Record<string, unknown>) => {
       const data = (props.data ?? []) as unknown[];
       const itemContent = props.itemContent as ((i: number, item: unknown) => React.ReactNode) | undefined;
-      return React.createElement(
-        "div",
-        { "data-testid": "virtuoso-sessions" },
-        ...data.map((item, i) => React.createElement("div", { key: i }, itemContent ? itemContent(i, item) : null)),
-      );
+      const components = props.components as {
+        List?: React.ComponentType<Record<string, unknown>>;
+        Item?: React.ComponentType<Record<string, unknown>>;
+      } | undefined;
+      const Item = components?.Item;
+      const List = components?.List;
+      const itemEls = data.map((item, i) => {
+        const content = itemContent ? itemContent(i, item) : null;
+        return Item
+          ? React.createElement(Item, { key: i }, content)
+          : React.createElement("div", { key: i }, content);
+      });
+      return List
+        ? React.createElement(List, { "data-testid": "virtuoso-sessions" }, itemEls)
+        : React.createElement("div", { "data-testid": "virtuoso-sessions" }, itemEls);
     },
   };
 });

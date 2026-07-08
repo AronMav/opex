@@ -18,6 +18,7 @@ import { toast } from "sonner";
 
 import { Loader } from "@/components/ui/loader";
 import { Virtuoso } from "react-virtuoso";
+import { VirtuosoList, VirtuosoListItem } from "@/components/chat/virtuoso-list-roles";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -613,15 +614,16 @@ export default function ChatPage() {
             </p>
           </div>
         ) : (
-          <div role="list" className="h-full">
+          <div className="h-full">
             <Virtuoso
               data={filteredSessions}
               className="!h-full scrollbar-none"
+              components={{ List: VirtuosoList, Item: VirtuosoListItem }}
               itemContent={(_index, s) => {
                 const isSelected = selectedSessions.has(s.id);
                 const displayTitle = s.title || s.user_id || t("chat.no_title");
                 return (
-                  <div role="listitem" className="group relative pb-1.5 flex items-stretch gap-1 min-w-0 overflow-hidden">
+                  <div className="group relative pb-1.5 flex items-stretch gap-1 min-w-0 overflow-hidden">
                     <button
                       onClick={() => toggleSessionSelection(s.id)}
                       className={`shrink-0 self-center h-5 w-5 md:h-3.5 md:w-3.5 rounded border transition-colors flex items-center justify-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${

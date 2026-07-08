@@ -165,12 +165,24 @@ vi.mock("react-virtuoso", () => {
       }));
       const data = (props.data ?? []) as unknown[];
       const itemContent = props.itemContent as ((index: number, item: unknown) => React.ReactNode) | undefined;
-      const components = props.components as { Header?: () => React.ReactNode; Footer?: () => React.ReactNode } | undefined;
+      const components = props.components as {
+        Header?: () => React.ReactNode;
+        Footer?: () => React.ReactNode;
+        List?: React.ComponentType<Record<string, unknown>>;
+        Item?: React.ComponentType<Record<string, unknown>>;
+      } | undefined;
+      const Item = components?.Item;
+      const List = components?.List;
+      const itemEls = data.map((item: unknown, i: number) => {
+        const content = itemContent ? itemContent(i, item) : null;
+        return Item
+          ? React.createElement(Item, { key: i, "data-index": i }, content)
+          : React.createElement("div", { key: i }, content);
+      });
+      const body = List ? React.createElement(List, {}, itemEls) : itemEls;
       return React.createElement("div", { "data-testid": "virtuoso-mock", ref: divRef },
         components?.Header ? React.createElement(components.Header) : null,
-        ...(data.map((item: unknown, i: number) =>
-          React.createElement("div", { key: i }, itemContent ? itemContent(i, item) : null)
-        )),
+        body,
         components?.Footer ? React.createElement(components.Footer) : null,
       );
     }),

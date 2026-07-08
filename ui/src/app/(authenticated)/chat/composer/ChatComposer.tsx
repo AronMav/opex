@@ -10,6 +10,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { Button } from "@/components/ui/button";
 import { SlashMenu } from "../parts/SlashMenu";
 import { MentionAutocomplete } from "./MentionAutocomplete";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { ModelDropdown } from "./ModelDropdown";
 import { useVoiceRecorder } from "../hooks/use-voice-recorder";
 import { useProviderActive } from "@/lib/queries";
@@ -170,16 +171,14 @@ export function ChatComposer() {
   const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
   const voiceSettingsTriggerRef = useRef<HTMLButtonElement | null>(null);
   const voiceSettingsPanelRef = useRef<HTMLDivElement | null>(null);
-  const closeVoiceSettings = useCallback(() => {
-    setVoiceSettingsOpen(false);
-    voiceSettingsTriggerRef.current?.focus();
-  }, []);
-  // Move focus into the popover on open (custom overlay, no Radix trap).
-  useEffect(() => {
-    if (voiceSettingsOpen) {
-      voiceSettingsPanelRef.current?.querySelector<HTMLElement>("input")?.focus();
-    }
-  }, [voiceSettingsOpen]);
+  // Focus into the popover on open, restore to the gear on close, trap Tab.
+  const voiceSettingsKeyDown = useFocusTrap({
+    active: voiceSettingsOpen,
+    containerRef: voiceSettingsPanelRef,
+    restoreTo: voiceSettingsTriggerRef,
+    initialFocus: "first",
+  });
+  const closeVoiceSettings = useCallback(() => setVoiceSettingsOpen(false), []);
   useEffect(() => {
     const s = Number(localStorage.getItem("opex.voice.sensitivity"));
     if (Number.isFinite(s) && s >= 0 && s <= 100) setVoiceSensitivity(s);
@@ -881,7 +880,9 @@ export function ChatComposer() {
                           if (e.key === "Escape") {
                             e.stopPropagation();
                             closeVoiceSettings();
+                            return;
                           }
+                          voiceSettingsKeyDown(e);
                         }}
                         className="absolute bottom-full left-0 z-50 mb-2 w-64 rounded-lg border border-border/50 bg-card p-3 shadow-lg"
                       >

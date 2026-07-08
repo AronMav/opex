@@ -94,20 +94,30 @@ function sortToolGroups(parts: MessagePart[], orderMap: Map<string, number>): Me
 // re-runs on every render even when the source rows haven't changed. Key the
 // result by the exact `rows` array reference (React Query hands back the SAME
 // array until a refetch, at which point the WeakMap entry is naturally dropped).
-// The extra args participate in the key so a stream-state or branch-selection
+// The extra args (stream state, branch selection) participate in the key so a
 // change never returns a stale conversion.
-const historyCache = new WeakMap<
-  MessageRow[],
-  { streaming?: boolean; branches?: Record<string, string>; result: ChatMessage[] }
->();
+//
+// A SINGLE rows array is legitimately converted with several arg-combos in one
+// render pass (e.g. `getCachedHistoryMessages` with streaming=false plus a live
+// render path with the current streaming flag), so we keep a SMALL ring of
+// entries per rows array instead of one slot — a single slot would thrash to a
+// 0% hit rate under those alternating callers.
+const HISTORY_CACHE_ENTRIES = 8;
+type HistoryCacheEntry = { streaming?: boolean; branches?: Record<string, string>; result: ChatMessage[] };
+const historyCache = new WeakMap<MessageRow[], HistoryCacheEntry[]>();
 
 export function convertHistory(rows: MessageRow[], isAgentStreaming?: boolean, selectedBranches?: Record<string, string>): ChatMessage[] {
-  const cached = historyCache.get(rows);
-  if (cached && cached.streaming === isAgentStreaming && cached.branches === selectedBranches) {
-    return cached.result;
+  let entries = historyCache.get(rows);
+  if (entries) {
+    const hit = entries.find((e) => e.streaming === isAgentStreaming && e.branches === selectedBranches);
+    if (hit) return hit.result;
+  } else {
+    entries = [];
+    historyCache.set(rows, entries);
   }
   const result = convertHistoryImpl(rows, isAgentStreaming, selectedBranches);
-  historyCache.set(rows, { streaming: isAgentStreaming, branches: selectedBranches, result });
+  entries.push({ streaming: isAgentStreaming, branches: selectedBranches, result });
+  if (entries.length > HISTORY_CACHE_ENTRIES) entries.shift();
   return result;
 }
 
