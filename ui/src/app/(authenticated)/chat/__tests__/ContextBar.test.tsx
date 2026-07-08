@@ -33,6 +33,9 @@ vi.mock("@/hooks/use-translation", () => ({
       if (key === "chat.context_remaining") return `Remaining: ${params?.remaining}`;
       if (key === "chat.context_stale") return "· updates after response";
       if (key === "chat.context_almost_full") return "Context almost full";
+      if (key === "chat.cache_write") return `↑ cache write: ${params?.n}`;
+      if (key === "chat.cache_read") return `↓ cache read: ${params?.n}`;
+      if (key === "chat.reasoning_tokens") return `✦ reasoning: ${params?.n}`;
       return key;
     },
     locale: "en",

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, type ReactNode } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { Virtuoso } from "react-virtuoso";
 import { useChatStore } from "@/stores/chat-store";
 import type { ChatMessage } from "@/stores/chat-store";
@@ -50,8 +50,14 @@ function MessageListSkeleton() {
 // ── Thinking indicator ──────────────────────────────────────────────────────
 
 function ThinkingMessage() {
+  const { t } = useTranslation();
   return (
-    <div className="pt-1 pb-2 pl-12 animate-in fade-in slide-in-from-bottom-2 duration-300 ease-out">
+    <div
+      role="status"
+      aria-live="polite"
+      aria-label={t("chat.thinking")}
+      className="pt-1 pb-2 pl-12 animate-in fade-in slide-in-from-bottom-2 duration-300 ease-out"
+    >
       <CometLoader />
     </div>
   );
@@ -195,6 +201,24 @@ export function MessageList({
   const activeSessionId = useChatStore((s) => s.agents[currentAgent]?.activeSessionId ?? null);
   const turnLimitMessage = useChatStore((s) => s.agents[currentAgent]?.turnLimitMessage ?? null);
 
+  // Double-fetch guard (B3): both `startReached` (scroll) and the "show earlier"
+  // button call onLoadEarlier; without a guard a fast scroll-to-top + click (or
+  // Virtuoso firing startReached repeatedly) triggers duplicate page fetches.
+  // The ref latches until the load settles — reset when the next page arrives
+  // (hiddenCount changes, covers the synchronous render-limit path) OR when the
+  // network fetch finishes (isLoadingHistory flips back to false, covering an
+  // empty/failed page that leaves hiddenCount unchanged — otherwise the latch
+  // would strand pagination for the rest of the session).
+  const loadEarlierInFlight = useRef(false);
+  useEffect(() => {
+    if (!isLoadingHistory) loadEarlierInFlight.current = false;
+  }, [hiddenCount, isLoadingHistory]);
+  const guardedLoadEarlier = useCallback(() => {
+    if (loadEarlierInFlight.current || !onLoadEarlier) return;
+    loadEarlierInFlight.current = true;
+    onLoadEarlier();
+  }, [onLoadEarlier]);
+
   // ── Auto-follow logic ─────────────────────────────────────────────────────
   const {
     virtuosoRef,
@@ -234,7 +258,7 @@ export function MessageList({
   }, [messages, showThinking]);
 
   const virtuosoComponents = useMemo(() => ({
-    Header: () => <VirtuosoHeader hiddenCount={hiddenCount} onLoadEarlier={onLoadEarlier} isLoadingHistory={isLoadingHistory} />,
+    Header: () => <VirtuosoHeader hiddenCount={hiddenCount} onLoadEarlier={guardedLoadEarlier} isLoadingHistory={isLoadingHistory} />,
     Footer: () => (
       <>
         <VirtuosoFooter turnLimitMessage={turnLimitMessage} />
@@ -246,7 +270,7 @@ export function MessageList({
         />
       </>
     ),
-  }), [hiddenCount, onLoadEarlier, isLoadingHistory, turnLimitMessage, setSentinelEl]);
+  }), [hiddenCount, guardedLoadEarlier, isLoadingHistory, turnLimitMessage, setSentinelEl]);
 
   if (isLoadingHistory && messages.length === 0) {
     return (
@@ -266,6 +290,13 @@ export function MessageList({
 
   return (
     <div className={cn("flex flex-1 flex-col relative overflow-hidden overscroll-contain", topOffset)}>
+      <section
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions"
+        aria-label={t("chat.message_thread")}
+        className="flex flex-1 flex-col min-h-0"
+      >
       <Virtuoso
         ref={virtuosoRef}
         scrollerRef={(el) => setScrollerEl(el as HTMLElement)}
@@ -278,12 +309,12 @@ export function MessageList({
         atBottomThreshold={100}
         initialTopMostItemIndex={messages.length > 0 ? messages.length - 1 : 0}
         increaseViewportBy={{ top: 500, bottom: 200 }}
-        startReached={() => { if (onLoadEarlier) onLoadEarlier(); }}
+        startReached={guardedLoadEarlier}
         components={virtuosoComponents}
         itemContent={(index, msg) => {
           if (msg.id === THINKING_ID) {
             return (
-              <div className="mx-auto w-full max-w-4xl px-3 md:px-6 py-2">
+              <div role="listitem" className="mx-auto w-full max-w-4xl px-3 md:px-6 py-2">
                 <ThinkingMessage />
               </div>
             );
@@ -318,6 +349,7 @@ export function MessageList({
           return (
             <div
               id={`msg-${msg.id}`}
+              role="listitem"
               className={cn(
                 "mx-auto w-full max-w-4xl px-3 md:px-6 transition-opacity duration-150",
                 isDimmed && "opacity-40",
@@ -343,6 +375,7 @@ export function MessageList({
           );
         }}
       />
+      </section>
 
       <ScrollToBottomButton
         visible={!isAtTail}

@@ -47,6 +47,14 @@ test("light --muted-foreground-subtle is AA on --card", () => {
     ratio(lightToken("--muted-foreground-subtle"), LIGHT_CARD),
   ).toBeGreaterThanOrEqual(4.5);
 });
+test("light --muted-foreground is enhanced-AA on --card", () => {
+  // Muted foreground carries informative secondary text (timestamps, token
+  // counts, hints) — hold it to a stricter 5.5:1 so it stays legible on the
+  // lightest surface (--card) even before per-class alpha is applied.
+  expect(
+    ratio(lightToken("--muted-foreground"), LIGHT_CARD),
+  ).toBeGreaterThanOrEqual(5.5);
+});
 test("dark --primary-foreground is AA on --primary", () => {
   expect(ratio(darkToken("--primary-foreground"), DARK_PRIMARY)).toBeGreaterThanOrEqual(4.5);
 });

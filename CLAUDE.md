@@ -358,17 +358,17 @@ Next.js 16 App Router, React 19, Tailwind 4, shadcn/ui, Zustand state, CodeMirro
 
 RSC chunks are flattened automatically during `next build` via `ui/build/adapter.cjs` (registered in `next.config.ts` as `experimental.adapterPath`). No separate post-build script needed.
 
-**Key stores:** `chat-store.ts` (451 lines — core state machine + actions), `auth-store.ts` (health check + agent list), `canvas-store.ts` (workspace canvas state).
+**Key stores:** `chat-store.ts` (74 lines — core state machine; actions decomposed into `chat/actions/` — composer, navigation, session-crud, stream-control), `auth-store.ts` (health check + agent list), `canvas-store.ts` (workspace canvas state).
 
 **Chat store decomposition** (Phase 54): `chat-store.ts` was 1891 lines, now split into:
 
 - `chat-types.ts` — types (ChatMessage, MessagePart, AgentState, ConnectionPhase, MessageSource)
 - `chat-history.ts` — convertHistory, resolveActivePath, findSiblings, getCachedRawMessages
-- `chat-reconciliation.ts` — contentHash, reconcileLiveWithHistory
+- `chat-overlay-dedup.ts` — mergeLiveOverlay (dedups live SSE overlay against persisted history)
 - `chat-persistence.ts` — saveLastSession, getLastSessionId, getInitialAgent (localStorage)
 - `streaming-renderer.ts` — factory via `createStreamingRenderer()`: SSE parsing, rAF throttling (50ms), reconnection, per-agent Map cleanup. Non-serializable state (AbortController, setTimeout) in private closures, not Immer
 
-**Chat components** (`ui/src/components/chat/`): ApprovalCard, ApprovalCountdown, ApprovalArgsEditor, ContinuationSeparator, HandoffDivider, ReconnectingIndicator, StepGroup, ToolCallPartView
+**Chat components** (`ui/src/components/chat/`): ApprovalCard, ApprovalCountdown, ApprovalArgsEditor, CompressionDivider, AgentTransitionDivider, ReconnectingIndicator, ToolCallPartView
 
 **Utilities:** `card-registry.tsx` (CARD_REGISTRY + GenerativeUISlot + CardErrorBoundary), `citation-tooltip.tsx` (footnote tooltips), `tool-state.ts` (ToolPartState mapper), `use-smoothed-text.ts` (adaptive text streaming animation)
 

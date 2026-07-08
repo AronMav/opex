@@ -90,7 +90,28 @@ function sortToolGroups(parts: MessagePart[], orderMap: Map<string, number>): Me
  * from the same agent are merged into a single visual message to ensure
  * stable tool grouping and consistent identity.
  */
+// Referential cache (P1): converting a session's history is O(n) tree work that
+// re-runs on every render even when the source rows haven't changed. Key the
+// result by the exact `rows` array reference (React Query hands back the SAME
+// array until a refetch, at which point the WeakMap entry is naturally dropped).
+// The extra args participate in the key so a stream-state or branch-selection
+// change never returns a stale conversion.
+const historyCache = new WeakMap<
+  MessageRow[],
+  { streaming?: boolean; branches?: Record<string, string>; result: ChatMessage[] }
+>();
+
 export function convertHistory(rows: MessageRow[], isAgentStreaming?: boolean, selectedBranches?: Record<string, string>): ChatMessage[] {
+  const cached = historyCache.get(rows);
+  if (cached && cached.streaming === isAgentStreaming && cached.branches === selectedBranches) {
+    return cached.result;
+  }
+  const result = convertHistoryImpl(rows, isAgentStreaming, selectedBranches);
+  historyCache.set(rows, { streaming: isAgentStreaming, branches: selectedBranches, result });
+  return result;
+}
+
+function convertHistoryImpl(rows: MessageRow[], isAgentStreaming?: boolean, selectedBranches?: Record<string, string>): ChatMessage[] {
   // Drop streaming placeholder rows FIRST — they are artifacts of incomplete
   // SSE flushes and historically have been INSERTed with parent_message_id=NULL,
   // which would confuse resolveActivePath into picking the placeholder as

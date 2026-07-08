@@ -123,11 +123,11 @@ export function ContextBar({
     if (hasCacheDetails) {
       tooltipLines.push("");
       if (cacheCreationTokens != null && cacheCreationTokens > 0)
-        tooltipLines.push(`↑ cache write: ${formatNum(cacheCreationTokens)}`);
+        tooltipLines.push(t("chat.cache_write", { n: formatNum(cacheCreationTokens) }));
       if (cacheReadTokens != null && cacheReadTokens > 0)
-        tooltipLines.push(`↓ cache read: ${formatNum(cacheReadTokens)}`);
+        tooltipLines.push(t("chat.cache_read", { n: formatNum(cacheReadTokens) }));
       if (reasoningTokens != null && reasoningTokens > 0)
-        tooltipLines.push(`✦ reasoning: ${formatNum(reasoningTokens)}`);
+        tooltipLines.push(t("chat.reasoning_tokens", { n: formatNum(reasoningTokens) }));
     }
 
     if (isGenerating) {

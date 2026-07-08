@@ -1,7 +1,6 @@
 "use client";
 
-import React, { Component, useEffect, useMemo, useRef, useState } from "react";
-import type { ErrorInfo, ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useChatStore, isActivePhase } from "@/stores/chat-store";
 import { useVisualViewport } from "@/hooks/use-visual-viewport";
 import { useSessionMessages } from "@/lib/queries";
@@ -15,7 +14,7 @@ const EMPTY_ACTIVE_IDS: string[] = [];
 
 import { MessageList, MessageSkeleton } from "./MessageList";
 import { SearchBar } from "./SearchBar";
-import { Button } from "@/components/ui/button";
+import { ThreadErrorBoundary } from "./ThreadErrorBoundary";
 import { ReconnectingIndicator } from "@/components/chat/ReconnectingIndicator";
 import { ChatWelcomeScreen as EmptyState } from "./ChatWelcomeScreen";
 import { ReadOnlyFooter } from "./read-only/ReadOnlyFooter";
@@ -38,41 +37,6 @@ interface ChatThreadProps {
   activeSession?: SessionRow;
   onClearError: () => void;
   onRetry: () => void;
-}
-
-// ── Thread Error Boundary ────────────────────────────────────────────────────
-
-interface ThreadErrorBoundaryProps { children: ReactNode; onRetry?: () => void; retryLabel?: string }
-interface ThreadErrorBoundaryState { error: string | null }
-
-class ThreadErrorBoundary extends Component<ThreadErrorBoundaryProps, ThreadErrorBoundaryState> {
-  state: ThreadErrorBoundaryState = { error: null };
-
-  static getDerivedStateFromError(error: Error) {
-    return { error: error.message };
-  }
-
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    console.warn("[ThreadErrorBoundary]", error.message, info.componentStack?.slice(0, 200));
-  }
-
-  render() {
-    if (this.state.error) {
-      return (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-          <p className="text-sm text-muted-foreground/60 font-mono">{this.state.error}</p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => this.setState({ error: null })}
-          >
-            {this.props.retryLabel || "Retry"}
-          </Button>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
 }
 
 // ── Main Thread ──────────────────────────────────────────────────────────────
@@ -273,7 +237,7 @@ export function ChatThread({
   }
 
   return (
-    <ThreadErrorBoundary retryLabel={t("chat.retry")}>
+    <ThreadErrorBoundary retryLabel={t("chat.retry")} onRetry={onRetry}>
     <div
       className="flex flex-1 flex-col min-h-0 relative"
       style={keyboardHeight > 0 ? { paddingBottom: keyboardHeight } : undefined}

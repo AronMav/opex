@@ -1,5 +1,5 @@
 import { vi, describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
 // ── Polyfill: ResizeObserver (not available in jsdom) ──────────────────────
@@ -361,6 +361,92 @@ describe("Turn animations", () => {
     expect(container.querySelector(".animate-in")).not.toBeInTheDocument();
   });
 
+});
+
+// ── Live region + list semantics (C1 + H1) ────────────────────────────────
+
+describe("MessageList a11y (C1 + H1)", () => {
+  const baseMsg: ChatMessage = {
+    id: "a11y-1",
+    role: "assistant",
+    parts: [{ type: "text", text: "hi" }],
+    agentId: "Bot",
+    createdAt: new Date(Date.now() - 10000).toISOString(),
+  };
+  function renderList() {
+    return render(
+      <MessageList
+        messages={[baseMsg]}
+        isStreaming={false}
+        isTextStreaming={false}
+        showThinking={false}
+        isLoadingHistory={false}
+        emptyState={null}
+        hiddenCount={0}
+        onLoadEarlier={() => {}}
+      />,
+    );
+  }
+  it("wraps the thread in a polite additions-only live region (C1)", () => {
+    renderList();
+    const log = screen.getByRole("log");
+    expect(log).toHaveAttribute("aria-live", "polite");
+    expect(log).toHaveAttribute("aria-relevant", "additions");
+    expect(log).toHaveAccessibleName("chat.message_thread");
+  });
+  it("exposes each message row as a listitem (H1)", () => {
+    renderList();
+    expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
+  });
+});
+
+// ── Double-fetch guard (B3) ────────────────────────────────────────────────
+
+describe("MessageList load-earlier guard (B3)", () => {
+  it("calls onLoadEarlier only once when the button is clicked twice before data arrives", () => {
+    const onLoadEarlier = vi.fn();
+    render(
+      <MessageList
+        messages={[{
+          id: "m1", role: "assistant", parts: [{ type: "text", text: "hi" }],
+          agentId: "Bot", createdAt: new Date(Date.now() - 10000).toISOString(),
+        }]}
+        isStreaming={false}
+        isTextStreaming={false}
+        showThinking={false}
+        isLoadingHistory={false}
+        emptyState={null}
+        hiddenCount={5}
+        onLoadEarlier={onLoadEarlier}
+      />,
+    );
+    const btn = screen.getByRole("button", { name: "chat.show_earlier" });
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    expect(onLoadEarlier).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Thinking indicator live region (H3) ───────────────────────────────────
+
+describe("MessageList thinking indicator (H3)", () => {
+  it("announces the thinking state via role=status", () => {
+    render(
+      <MessageList
+        messages={[]}
+        isStreaming={true}
+        isTextStreaming={false}
+        showThinking={true}
+        isLoadingHistory={false}
+        emptyState={null}
+        hiddenCount={0}
+        onLoadEarlier={() => {}}
+      />,
+    );
+    const status = screen.getByRole("status");
+    expect(status).toBeInTheDocument();
+    expect(status).toHaveAttribute("aria-live", "polite");
+  });
 });
 
 // ── Virtualization stress (UI-04) ─────────────────────────────────────────

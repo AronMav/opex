@@ -1,6 +1,7 @@
 "use client";
 import { useChatStore } from "@/stores/chat-store";
-import { useLanguageStore, type Locale } from "@/stores/language-store";
+import { useTranslation } from "@/hooks/use-translation";
+import type { TranslationKey } from "@/i18n/types";
 import { Loader2 } from "lucide-react";
 
 // Machine phase keys emitted by file handlers via ctx.progress(phase, pct)
@@ -8,22 +9,29 @@ import { Loader2 } from "lucide-react";
 // backend sends the raw key over the `file_job_progress` WS event; we localise
 // it here so the indicator never shows an untranslated "fetch" to the user.
 // Unknown phases fall through to the raw text the store already holds.
-const PHASE_LABELS: Record<string, Record<Locale, string>> = {
-  fetch: { ru: "📥 Загружаю…", en: "📥 Downloading…" },
-  transcribe: { ru: "🎙️ Транскрибирую…", en: "🎙️ Transcribing…" },
-  digest: { ru: "🧠 Составляю конспект…", en: "🧠 Summarizing…" },
-  saving: { ru: "💾 Сохраняю…", en: "💾 Saving…" },
+const PHASES: Record<string, { emoji: string; key: TranslationKey }> = {
+  fetch: { emoji: "📥", key: "chat.video_phase_download" },
+  transcribe: { emoji: "🎙️", key: "chat.video_phase_transcribe" },
+  digest: { emoji: "🧠", key: "chat.video_phase_digest" },
+  saving: { emoji: "💾", key: "chat.video_phase_saving" },
 };
 
 export function VideoProgressIndicator({ sessionId }: { sessionId: string | null }) {
   const entry = useChatStore((s) => (sessionId ? s.videoProgress[sessionId] : undefined));
-  const locale = useLanguageStore((s) => s.locale);
+  const { t } = useTranslation();
   if (!entry) return null;
-  const label = PHASE_LABELS[entry.phase]?.[locale] ?? entry.text;
+  const phase = PHASES[entry.phase];
   return (
-    <div className="flex items-center gap-2 px-4 py-2 text-sm text-muted-foreground">
-      <Loader2 className="h-4 w-4 animate-spin" />
-      <span>{label}</span>
+    <div role="status" aria-live="polite" className="flex items-center gap-2 px-4 py-2 text-sm text-muted-foreground">
+      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+      {phase ? (
+        <span>
+          <span aria-hidden="true">{phase.emoji} </span>
+          {t(phase.key)}
+        </span>
+      ) : (
+        <span>{entry.text}</span>
+      )}
     </div>
   );
 }

@@ -73,7 +73,15 @@ vi.mock("../../hooks/use-voice-recorder", () => ({
   useVoiceRecorder: () => ({ state: "idle", start: vi.fn(), stop: vi.fn(), elapsed: 0, level: 0 }),
 }));
 
+import { render as rtlRender } from "@testing-library/react";
 import { ChatComposer } from "../ChatComposer";
+
+describe("ChatComposer a11y (C2)", () => {
+  it("textarea exposes an accessible name via aria-label", () => {
+    const { getByRole } = rtlRender(<ChatComposer />);
+    expect(getByRole("textbox", { name: /message/i })).toBeInTheDocument();
+  });
+});
 
 // Set an uncontrolled textarea's value the way the component does internally,
 // then dispatch the input event so React's onInput handler runs.
@@ -115,6 +123,19 @@ describe("ChatComposer @-mention keyboard nav (C2)", () => {
 
     // Critically: the half-typed "@" message was NOT sent.
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("wires aria-controls from the textarea to the mention listbox (L5)", async () => {
+    const { container } = render(<ChatComposer />);
+    const ta = container.querySelector("textarea") as HTMLTextAreaElement;
+    typeInto(ta, "hey @");
+    await waitFor(() => {
+      expect(container.querySelector('[role="listbox"]')).toBeInTheDocument();
+    });
+    const listbox = container.querySelector('[role="listbox"]') as HTMLElement;
+    const controls = ta.getAttribute("aria-controls");
+    expect(controls).toBeTruthy();
+    expect(listbox.id).toBe(controls);
   });
 
   it("textarea Enter keydown is suppressed while the mention menu is open (no requestSubmit send)", async () => {

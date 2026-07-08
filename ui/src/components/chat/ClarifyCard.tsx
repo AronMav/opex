@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { memo, useState, useCallback } from "react";
 import { useTranslation } from "@/hooks/use-translation";
 import type { ClarifyPart } from "@/stores/chat-store";
 import { submitClarify } from "@/lib/api";
@@ -12,7 +12,7 @@ interface ClarifyCardProps {
   part: ClarifyPart;
 }
 
-export function ClarifyCard({ part }: ClarifyCardProps) {
+function ClarifyCardImpl({ part }: ClarifyCardProps) {
   const { t } = useTranslation();
   const [otherText, setOtherText] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -152,3 +152,5 @@ export function ClarifyCard({ part }: ClarifyCardProps) {
     </div>
   );
 }
+
+export const ClarifyCard = memo(ClarifyCardImpl);

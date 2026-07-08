@@ -3,6 +3,7 @@
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Bot, User } from "lucide-react";
 import { GenerativeUISlot } from "@/components/ui/card-registry";
+import { useTranslation } from "@/hooks/use-translation";
 
 // ── Avatar colors & hashing ──────────────────────────────────────────────────
 
@@ -38,6 +39,7 @@ export function RoleAvatar({
   iconUrl?: string | null;
   agentName?: string;
 }) {
+  const { t } = useTranslation();
   const isUser = role === "user";
   const isAgentSender = role === "agent-sender";
 
@@ -54,7 +56,7 @@ export function RoleAvatar({
   const colorIdx = agentName ? hashAgentName(agentName) % AGENT_COLORS.length : 0;
   return (
     <Avatar className="h-9 w-9 rounded-xl shadow-sm">
-      {iconUrl && <AvatarImage key={iconUrl} src={iconUrl} alt={agentName || "agent"} className="rounded-xl object-cover" />}
+      {iconUrl && <AvatarImage key={iconUrl} src={iconUrl} alt={agentName || t("common.agent")} className="rounded-xl object-cover" />}
       <AvatarFallback className={`rounded-xl text-sm font-semibold border ${agentName ? AGENT_COLORS[colorIdx] : "bg-muted/50 border-border text-muted-foreground"}`}>
         {agentName ? agentName[0].toUpperCase() : <Bot className="h-4 w-4" />}
       </AvatarFallback>

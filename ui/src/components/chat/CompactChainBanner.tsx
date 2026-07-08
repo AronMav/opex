@@ -63,7 +63,7 @@ export function CompactChainBanner({ activeSessionId, onNavigate }: CompactChain
                 ].join(" ")}
               >
                 <span className="truncate flex-1 min-w-0">
-                  {entry.title ?? `session ${entry.id.slice(0, 8)}`}
+                  {entry.title || t("chat.untitled_session")}
                 </span>
                 <span className="text-3xs text-muted-foreground shrink-0">
                   {new Date(entry.started_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}

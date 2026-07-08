@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { useTranslation } from "@/hooks/use-translation";
 import { MessageContent } from "@/components/ui/message";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { ChevronRight } from "lucide-react";
 
-export function ReasoningPart({ text, streaming = false }: { text: string; streaming?: boolean }) {
+function ReasoningPartImpl({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const { t } = useTranslation();
   // Auto-expand while the model is still emitting reasoning; collapse once the
   // turn finishes. Controlled so the open state tracks `streaming`, while still
@@ -49,3 +49,5 @@ export function ReasoningPart({ text, streaming = false }: { text: string; strea
     </Collapsible>
   );
 }
+
+export const ReasoningPart = memo(ReasoningPartImpl);

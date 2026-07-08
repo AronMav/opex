@@ -109,7 +109,7 @@
   --secondary: #d3d8e3;
   --secondary-foreground: #1a1f2e;
   --muted: #e2e7f0;
-  --muted-foreground: #5a6270;
+  --muted-foreground: #4d5560;
   --accent: #d3d8e3;
   --accent-foreground: #1a1f2e;
   --destructive: #dc3545;
@@ -121,7 +121,7 @@
   --warning: #854d0e;
   --success-foreground: #ffffff;
   --warning-foreground: #ffffff;
-  --muted-foreground-subtle: #5e6675;
+  --muted-foreground-subtle: #525a66;
 
   --chart-1: #4a7cff;
   --chart-2: #22c55e;

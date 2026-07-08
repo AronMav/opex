@@ -470,3 +470,21 @@ describe("resolveActivePath — degenerate two-heirs case (defensive doc)", () =
     expect(ids).not.toContain("leaf_two");
   });
 });
+
+describe("convertHistory — referential cache (P1)", () => {
+  it("returns the same array reference for repeated calls with the same rows", () => {
+    const rows: MessageRow[] = [
+      makeRow({ id: "u1", role: "user", content: "hi" }),
+      makeRow({ id: "a1", role: "assistant", parent_message_id: "u1", content: "yo" }),
+    ];
+    const a = convertHistory(rows);
+    const b = convertHistory(rows);
+    expect(b).toBe(a);
+  });
+
+  it("recomputes when given a different rows array", () => {
+    const rows1: MessageRow[] = [makeRow({ id: "u1", role: "user", content: "hi" })];
+    const rows2: MessageRow[] = [makeRow({ id: "u1", role: "user", content: "hi" })];
+    expect(convertHistory(rows2)).not.toBe(convertHistory(rows1));
+  });
+});

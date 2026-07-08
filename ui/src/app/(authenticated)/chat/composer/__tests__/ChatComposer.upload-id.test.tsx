@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import "@testing-library/jest-dom/vitest";
-import { render, waitFor } from "@testing-library/react";
+import { render, waitFor, fireEvent } from "@testing-library/react";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn(), refresh: vi.fn() }),
@@ -111,5 +111,24 @@ describe("ChatComposer captures upload row UUID", () => {
     expect(chip).not.toBeNull();
     expect(chip!.getAttribute("data-upload-id")).toBe(UPLOAD_UUID);
     expect(chip!.getAttribute("data-upload-id")).not.toContain("/uploads/");
+  });
+
+  it("adds every file from a multi-file drop (B2)", async () => {
+    let n = 0;
+    global.fetch = vi.fn().mockImplementation(async () => ({
+      ok: true,
+      json: async () => ({ url: `/uploads/p${n}.png`, filename: `uuid-${n++}`, size: 10 }),
+    })) as unknown as typeof fetch;
+
+    const { container } = render(<ChatComposer />);
+    const dropZone = container.querySelector("[data-composer-input]") as HTMLElement;
+    const f1 = new File(["a"], "a.png", { type: "image/png" });
+    const f2 = new File(["b"], "b.png", { type: "image/png" });
+
+    fireEvent.drop(dropZone, { dataTransfer: { files: [f1, f2] } });
+
+    await waitFor(() => {
+      expect(container.querySelectorAll("[data-upload-id]").length).toBe(2);
+    });
   });
 });

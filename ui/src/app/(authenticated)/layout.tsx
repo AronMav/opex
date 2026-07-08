@@ -137,6 +137,12 @@ export default function AuthenticatedLayout({
   return (
     <QueryProvider>
     <SidebarProvider>
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded focus:bg-background focus:px-4 focus:py-2 focus:shadow"
+      >
+        {t("common.skip_to_content")}
+      </a>
       <AppSidebar />
       <SidebarInset className="flex flex-col h-[100dvh] min-h-0 bg-transparent relative">
         {/* Unified Mobile Header — hidden on chat and workspace (they have their own headers) */}
@@ -159,7 +165,7 @@ export default function AuthenticatedLayout({
         </div>
         )}
 
-        <main className="flex-1 flex flex-col min-h-0 min-w-0 overflow-y-auto">
+        <main id="main-content" tabIndex={-1} className="flex-1 flex flex-col min-h-0 min-w-0 overflow-y-auto outline-none">
           {children}
         </main>
       </SidebarInset>

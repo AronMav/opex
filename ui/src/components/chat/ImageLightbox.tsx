@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { X, ZoomIn, ZoomOut, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/hooks/use-translation";
@@ -16,6 +16,8 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   const handleOpen = useCallback(() => {
     setOpen(true);
@@ -25,6 +27,34 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
   const handleClose = useCallback(() => {
     setOpen(false);
     setZoom(1);
+    // Restore focus to the trigger (the trigger stays mounted regardless of open).
+    triggerRef.current?.focus();
+  }, []);
+
+  // Move focus into the dialog when it opens (custom modal, no Radix trap).
+  useEffect(() => {
+    if (open) dialogRef.current?.focus();
+  }, [open]);
+
+  // Cyclic Tab trap across the toolbar's focusable controls.
+  const handleDialogKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Tab") return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusables = dialog.querySelectorAll<HTMLElement>("button, a[href]");
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey) {
+      if (active === first || active === dialog) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else if (active === last) {
+      e.preventDefault();
+      first.focus();
+    }
   }, []);
 
   const handleZoomIn = useCallback(() => {
@@ -59,6 +89,7 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
   return (
     <>
       <Button
+        ref={triggerRef}
         type="button"
         variant="ghost"
         size="icon"
@@ -71,8 +102,11 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
 
       {open && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm overflow-auto"
+          ref={dialogRef}
+          tabIndex={-1}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm overflow-auto outline-none"
           onClick={handleClose}
+          onKeyDown={handleDialogKeyDown}
           role="dialog"
           aria-modal="true"
           aria-label={t("chat.lightbox_viewer")}

@@ -613,7 +613,7 @@ export default function ChatPage() {
             </p>
           </div>
         ) : (
-          <>
+          <div role="list" className="h-full">
             <Virtuoso
               data={filteredSessions}
               className="!h-full scrollbar-none"
@@ -621,7 +621,7 @@ export default function ChatPage() {
                 const isSelected = selectedSessions.has(s.id);
                 const displayTitle = s.title || s.user_id || t("chat.no_title");
                 return (
-                  <div className="group relative pb-1.5 flex items-stretch gap-1 min-w-0 overflow-hidden">
+                  <div role="listitem" className="group relative pb-1.5 flex items-stretch gap-1 min-w-0 overflow-hidden">
                     <button
                       onClick={() => toggleSessionSelection(s.id)}
                       className={`shrink-0 self-center h-5 w-5 md:h-3.5 md:w-3.5 rounded border transition-colors flex items-center justify-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
@@ -768,8 +768,7 @@ export default function ChatPage() {
                 );
               }}
             />
-
-          </>
+          </div>
         )}
       </div>
     </div>
@@ -779,6 +778,7 @@ export default function ChatPage() {
   return (
     <ChatRuntimeProvider key={currentAgent}>
     <div className="flex h-full flex-col lg:flex-row bg-background overflow-hidden">
+      <h1 className="sr-only">{t("chat.title")}</h1>
       {/* Desktop sidebar — visible only at lg+ */}
       <aside className="hidden w-70 shrink-0 flex-col border-r border-border lg:flex" aria-label={t("chat.session_list")}>
         {sessionList}

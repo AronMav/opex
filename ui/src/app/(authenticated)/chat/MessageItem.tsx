@@ -184,7 +184,7 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
               {isAgentSender ? senderAgentName : t("chat.you")}
             </span>
             {message.createdAt && (
-              <span className="text-3xs font-mono tabular-nums text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+              <span className="text-3xs font-mono tabular-nums text-muted-foreground/50 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity shrink-0">
                 {formatMessageTime(message.createdAt, locale)}
               </span>
             )}
@@ -299,7 +299,7 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
                 {agentName || t("chat.assistant")}
               </span>
               {message.createdAt && (
-                <span className="text-3xs font-mono tabular-nums text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity">
+                <span className="text-3xs font-mono tabular-nums text-muted-foreground/50 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity">
                   {formatMessageTime(message.createdAt, locale)}
                 </span>
               )}
@@ -315,7 +315,7 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
         </div>
         {message.status === "aborted" && (
           <p className="mt-2 text-xs italic text-muted-foreground">
-            {abortReasonLabel(message.abortReason)}
+            {abortReasonLabel(message.abortReason, t)}
           </p>
         )}
       </div>

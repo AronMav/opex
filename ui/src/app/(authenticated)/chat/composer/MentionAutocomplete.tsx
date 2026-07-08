@@ -5,7 +5,7 @@ import { useTranslation } from "@/hooks/use-translation";
 
 export const MENTION_OPTION_ID_PREFIX = "mention-option-";
 
-export function MentionAutocomplete({ query, agents, onSelect, onClose, onActiveChange }: {
+export function MentionAutocomplete({ query, agents, onSelect, onClose, onActiveChange, listboxId }: {
   query: string;
   agents: string[];
   onSelect: (name: string) => void;
@@ -14,6 +14,9 @@ export function MentionAutocomplete({ query, agents, onSelect, onClose, onActive
   /** Reports the active option's DOM id (or null when closed) so the composer
    *  textarea can mirror it via aria-activedescendant. */
   onActiveChange?: (optionId: string | null) => void;
+  /** id for the listbox element so the composer textarea can point at it via
+   *  aria-controls (WAI-ARIA combobox pattern). */
+  listboxId?: string;
 }) {
   const { t } = useTranslation();
   const q = query.toLowerCase();
@@ -58,6 +61,7 @@ export function MentionAutocomplete({ query, agents, onSelect, onClose, onActive
   return (
     <div
       role="listbox"
+      id={listboxId}
       aria-label={t("chat.mentions_label")}
       className="absolute bottom-full mb-1 left-0 max-h-[50dvh] overflow-y-auto bg-popover border border-border rounded-lg shadow-lg p-1 z-50 w-full max-w-[min(280px,calc(100dvw-1.5rem))]"
     >

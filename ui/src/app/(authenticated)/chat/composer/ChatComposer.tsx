@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useRef, useEffect, useMemo, useId } from "react";
 import { cn } from "@/lib/utils";
 import { assertToken } from "@/lib/api";
 import { useChatStore, isActivePhase } from "@/stores/chat-store";
@@ -133,6 +133,7 @@ export function ChatComposer() {
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [activeMentionId, setActiveMentionId] = useState<string | null>(null);
+  const mentionListboxId = useId();
   const [resolvedMention, setResolvedMention] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<AttachmentEntry[]>([]);
   const formRef = useRef<HTMLFormElement | null>(null);
@@ -167,6 +168,18 @@ export function ChatComposer() {
   const [voiceSensitivity, setVoiceSensitivity] = useState(50);
   const [voicePauseMs, setVoicePauseMs] = useState(2000);
   const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
+  const voiceSettingsTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const voiceSettingsPanelRef = useRef<HTMLDivElement | null>(null);
+  const closeVoiceSettings = useCallback(() => {
+    setVoiceSettingsOpen(false);
+    voiceSettingsTriggerRef.current?.focus();
+  }, []);
+  // Move focus into the popover on open (custom overlay, no Radix trap).
+  useEffect(() => {
+    if (voiceSettingsOpen) {
+      voiceSettingsPanelRef.current?.querySelector<HTMLElement>("input")?.focus();
+    }
+  }, [voiceSettingsOpen]);
   useEffect(() => {
     const s = Number(localStorage.getItem("opex.voice.sensitivity"));
     if (Number.isFinite(s) && s >= 0 && s <= 100) setVoiceSensitivity(s);
@@ -559,15 +572,16 @@ export function ChatComposer() {
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items;
     if (!items) return;
+    const files: File[] = [];
     for (let i = 0; i < items.length; i++) {
       if (items[i].kind === "file") {
-        e.preventDefault();
         const file = items[i].getAsFile();
-        if (file) handleFileAdd(file);
-        return; // handle first file only
+        if (file) files.push(file);
       }
     }
-    // If no files, let default paste behavior (text) proceed
+    if (files.length === 0) return; // no files → let default text paste proceed
+    e.preventDefault();
+    for (const file of files) handleFileAdd(file);
   }, [handleFileAdd]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -587,8 +601,9 @@ export function ChatComposer() {
     e.stopPropagation();
     setDragOver(false);
     const files = e.dataTransfer?.files;
-    if (files && files.length > 0) {
-      handleFileAdd(files[0]);
+    if (!files) return;
+    for (let i = 0; i < files.length; i++) {
+      handleFileAdd(files[i]);
     }
   }, [handleFileAdd]);
 
@@ -672,6 +687,7 @@ export function ChatComposer() {
               onSelect={handleMentionSelect}
               onClose={handleMentionClose}
               onActiveChange={setActiveMentionId}
+              listboxId={mentionListboxId}
             />
           )}
           {attachments.length > 0 && attachments.map((att) => (
@@ -713,8 +729,10 @@ export function ChatComposer() {
             enterKeyHint="send"
             autoCorrect="off"
             autoCapitalize="sentences"
+            aria-label={t("chat.message_placeholder")}
             role={mentionQuery !== null ? "combobox" : undefined}
             aria-expanded={mentionQuery !== null ? true : undefined}
+            aria-controls={mentionQuery !== null ? mentionListboxId : undefined}
             aria-autocomplete={mentionQuery !== null ? "list" : undefined}
             aria-activedescendant={mentionQuery !== null ? (activeMentionId ?? undefined) : undefined}
             placeholder={
@@ -722,12 +740,12 @@ export function ChatComposer() {
                 ? t("chat.continue_dialog")
                 : t("chat.message_placeholder")
             }
-            className="min-h-11 max-h-30 md:max-h-60 resize-none bg-transparent px-4 py-3 text-message text-foreground outline-none placeholder:text-muted-foreground/30"
+            className="min-h-11 max-h-30 md:max-h-60 resize-none bg-transparent px-4 py-3 text-message text-foreground outline-none placeholder:text-muted-foreground/60"
             onKeyDown={handleKeyDown}
           />
           {resolvedMention && (
             <div data-testid="target-agent-indicator" className="flex items-center gap-1.5 px-4 py-1 text-xs text-muted-foreground">
-              <span>Targeting</span>
+              <span>{t("chat.mention_targeting")}</span>
               <span className="font-semibold text-primary">@{resolvedMention}</span>
               <Button
                 type="button"
@@ -832,11 +850,13 @@ export function ChatComposer() {
               {hasSttProvider && (
                 <div className="relative">
                   <Button
+                    ref={voiceSettingsTriggerRef}
                     type="button"
                     variant="ghost"
                     size="icon"
                     aria-label={t("chat.voice_settings")}
                     title={t("chat.voice_settings")}
+                    aria-expanded={voiceSettingsOpen}
                     onClick={() => setVoiceSettingsOpen((v) => !v)}
                     className={cn(
                       voiceSettingsOpen
@@ -851,9 +871,20 @@ export function ChatComposer() {
                       <div
                         className="fixed inset-0 z-40"
                         aria-hidden
-                        onClick={() => setVoiceSettingsOpen(false)}
+                        onClick={closeVoiceSettings}
                       />
-                      <div className="absolute bottom-full left-0 z-50 mb-2 w-64 rounded-lg border border-border/50 bg-card p-3 shadow-lg">
+                      <div
+                        ref={voiceSettingsPanelRef}
+                        role="dialog"
+                        aria-label={t("chat.voice_settings")}
+                        onKeyDown={(e) => {
+                          if (e.key === "Escape") {
+                            e.stopPropagation();
+                            closeVoiceSettings();
+                          }
+                        }}
+                        className="absolute bottom-full left-0 z-50 mb-2 w-64 rounded-lg border border-border/50 bg-card p-3 shadow-lg"
+                      >
                         <div className="mb-3">
                           <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
                             <span>{t("chat.voice_sensitivity")}</span>
