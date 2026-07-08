@@ -41,15 +41,6 @@ export default function OverflowCheckPage() {
         <p>Смотри это видео: {LONG_URL} — оно про биты.</p>
       </div>
 
-      {/* Layer-1 guard: bare mono value with a long URL must wrap, not h-scroll. */}
-      <div
-        data-overflow-check="mono"
-        className="font-mono text-xs"
-        style={{ width: 280, maxWidth: "100%" }}
-      >
-        {LONG_URL}
-      </div>
-
       {/* Visual/screenshot only — tab bar overflow affordance. */}
       <div style={{ width: "100%", maxWidth: "100%" }}>
         <Tabs defaultValue="watchdog">

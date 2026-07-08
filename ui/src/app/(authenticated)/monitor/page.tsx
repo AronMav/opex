@@ -798,7 +798,7 @@ function MonitorPageInner() {
                             <Card key={c.name} className={`px-3 py-2.5 flex items-center gap-2 group min-w-0 overflow-hidden ${!c.healthy ? "border-l-2 border-l-destructive bg-destructive/10" : ""}`}>
                               <span className={`h-3 w-3 rounded-full shrink-0 ${c.healthy ? "bg-success" : "bg-destructive"}`} />
                               <div className="min-w-0 flex-1">
-                                <span className="text-xs font-semibold text-foreground block">{c.name}</span>
+                                <span className="text-xs font-semibold text-foreground block break-words">{c.name}</span>
                                 <span className={`text-3xs block ${c.healthy ? "text-muted-foreground" : "text-destructive"}`}>{c.status}</span>
                               </div>
                               <Button
@@ -830,7 +830,7 @@ function MonitorPageInner() {
                             <Card key={c.name} className={`px-3 py-2.5 flex items-center gap-2 group min-w-0 overflow-hidden ${!c.healthy ? "border-l-2 border-l-destructive bg-destructive/10" : ""}`}>
                               <span className={`h-3 w-3 rounded-full shrink-0 ${c.healthy ? "bg-success" : "bg-destructive"}`} />
                               <div className="min-w-0 flex-1">
-                                <span className="text-xs font-semibold text-foreground block">{c.name}</span>
+                                <span className="text-xs font-semibold text-foreground block break-words">{c.name}</span>
                                 <span className={`text-3xs block ${c.healthy ? "text-muted-foreground" : "text-destructive"}`}>{c.status}</span>
                               </div>
                               <Button
@@ -935,8 +935,8 @@ function MonitorPageInner() {
         >
           {/* Logs section */}
           <div className="flex h-full flex-col bg-background selection:bg-primary/20 min-h-0">
-            <div className="flex flex-col md:flex-row md:items-center gap-4 border-b border-border/50 bg-background px-4 py-3 md:px-6 md:min-h-16 shrink-0">
-              <div className="flex flex-col gap-0.5 md:mr-4">
+            <div className="flex flex-col xl:flex-row xl:items-center gap-4 border-b border-border/50 bg-background px-4 py-3 md:px-6 xl:min-h-16 shrink-0">
+              <div className="flex flex-col gap-0.5 xl:mr-4">
                 <h2 className="font-display text-lg font-bold tracking-tight text-foreground">{t("logs.title")}</h2>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-success" : "bg-destructive"}`} />
@@ -960,7 +960,7 @@ function MonitorPageInner() {
                   placeholder={t("logs.search_placeholder")}
                   value={logSearch}
                   onChange={(e) => setLogSearch(e.target.value)}
-                  className="h-9 flex-1 md:w-48 md:flex-none border-border bg-card/50 font-mono text-sm placeholder:text-muted-foreground/60 rounded-lg focus:ring-primary/20"
+                  className="h-9 flex-1 xl:w-48 xl:flex-none border-border bg-card/50 font-mono text-sm placeholder:text-muted-foreground/60 rounded-lg focus:ring-primary/20"
                 />
 
                 <div className="hidden sm:flex items-center gap-3 px-3 py-1.5 rounded-lg bg-card/50 border border-border">
@@ -1064,8 +1064,8 @@ function MonitorPageInner() {
           className={activeTab !== "audit" ? "hidden" : "flex-1 overflow-hidden min-h-0"}
         >
           <div className="flex h-full flex-col bg-background selection:bg-primary/20 min-h-0">
-            <div className="flex flex-col md:flex-row md:items-center gap-4 border-b border-border/50 bg-background px-4 py-3 md:px-6 md:min-h-16 shrink-0">
-              <div className="flex flex-col gap-0.5 md:mr-4">
+            <div className="flex flex-col xl:flex-row xl:items-center gap-4 border-b border-border/50 bg-background px-4 py-3 md:px-6 xl:min-h-16 shrink-0">
+              <div className="flex flex-col gap-0.5 xl:mr-4">
                 <h2 className="font-display text-lg font-bold tracking-tight text-foreground">{t("audit.title")}</h2>
                 <p className="text-sm text-muted-foreground">{t("audit.subtitle")}</p>
               </div>
@@ -1099,7 +1099,7 @@ function MonitorPageInner() {
                   value={auditSearch}
                   onChange={(v) => { setAuditSearch(v); setAuditOffset(0); }}
                   debounceMs={350}
-                  className="flex-1 md:w-56 md:flex-none"
+                  className="flex-1 xl:w-56 xl:flex-none"
                 />
               </div>
 

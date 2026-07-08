@@ -211,14 +211,15 @@
     @apply bg-background text-foreground antialiased;
     font-size: 15px;
   }
-  /* Long unbroken tokens (URLs, hashes, paths) must wrap instead of distending
-     or horizontally-scrolling their container. Scoped to text content so layout
-     containers' intrinsic sizing is unaffected. `anywhere` (not `break-word`)
-     also lets `min-w-0` flex children reach a smaller min-content width so they
-     can shrink. The overflow guard (src/__e2e__/overflow.spec.ts) protects this
-     rule against regression. */
+  /* Long unbroken tokens (URLs, hashes, paths) in PROSE / chat message text must
+     wrap instead of distending or horizontally-scrolling their container. Scoped
+     to prose/message text only — NOT `.font-mono` broadly: short monospace values
+     (sizes like "380.9 MB", counts, ids) would then collapse to one char per line
+     when a flex row squeezes them. Long mono values use `truncate` per-site; short
+     ones stay on one line via `shrink-0`. The overflow guard
+     (src/__e2e__/overflow.spec.ts) protects this rule against regression. */
   .prose, .prose p, .prose li, .prose a, .prose code,
-  [data-slot="message-content"], .font-mono {
+  [data-slot="message-content"] {
     overflow-wrap: anywhere;
   }
   h1, h2, h3, h4, h5, h6 {

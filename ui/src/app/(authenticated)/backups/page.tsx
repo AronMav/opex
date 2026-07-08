@@ -365,7 +365,7 @@ export default function BackupsPage() {
                     </>
                   }
                 >
-                  <span className="font-mono text-sm text-muted-foreground tabular-nums">
+                  <span className="font-mono text-sm text-muted-foreground tabular-nums shrink-0 whitespace-nowrap">
                     {formatBytes(b.size_bytes)}
                   </span>
                 </DataRow>

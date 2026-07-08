@@ -50,7 +50,7 @@ export const ProviderRow = forwardRef<HTMLDivElement, ProviderRowProps>(function
       ref={ref}
       interactive
       style={style}
-      className={`group relative flex flex-col md:flex-row md:items-center gap-3 p-4 min-w-0 overflow-hidden ${isActive ? "ring-1 ring-primary/30" : ""} ${isDragging ? "opacity-80 shadow-lg" : ""} ${!isActive && isCapabilityGroup ? "opacity-60" : ""}`}
+      className={`group relative flex flex-col xl:flex-row xl:items-center gap-3 p-4 min-w-0 overflow-hidden ${isActive ? "ring-1 ring-primary/30" : ""} ${isDragging ? "opacity-80 shadow-lg" : ""} ${!isActive && isCapabilityGroup ? "opacity-60" : ""}`}
     >
       {/* Drag handle — active capability rows only */}
       {draggable && (
@@ -68,7 +68,7 @@ export const ProviderRow = forwardRef<HTMLDivElement, ProviderRowProps>(function
       )}
 
       {/* Identity */}
-      <div className="flex items-center gap-3 md:min-w-60">
+      <div className="flex items-center gap-3 xl:min-w-60">
         <IconTile tone="muted" size="sm">
           {CATEGORY_ICONS[cap] ?? <Link2 className="h-4 w-4" />}
         </IconTile>
