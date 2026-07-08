@@ -738,33 +738,41 @@ mod tests {
     }
 
     #[test]
-    fn media_processing_is_video_only() {
-        // Step-1 retirement: the image/audio/document arms are now owned by the
-        // File Scenario Engine deterministic default bindings. The skill body must
-        // no longer instruct the LLM to call analyze_image/extract_document/
-        // transcribe_audio for those types; only the video arm survives until the
-        // video plugin lands.
+    fn media_processing_uses_file_handler_menu() {
+        // FSE fully retired (see CLAUDE.md "Legacy FSE — RETIRED"): media
+        // processing is now model-driven through the single `file_handler` tool
+        // (list/run menu) covering every media type — NOT the old per-type
+        // auto-dispatch arms (analyze_image / transcribe_audio / <vision>), and
+        // no longer the transitional "video-only" state.
         let content = std::fs::read_to_string(
             concat!(env!("CARGO_MANIFEST_DIR"), "/../../workspace/skills/media-processing.md"),
         )
-        .expect("media-processing.md must exist (step-1 retirement keeps the video arm)");
+        .expect("media-processing.md must exist");
         let skill = SkillDef::parse(&content).expect("must still parse as a skill");
         let body = skill.instructions.to_lowercase();
-        assert!(body.contains("video"), "video arm must survive step-1 retirement");
+
+        // The skill drives the file_handler tool and documents every media type.
+        assert!(body.contains("file_handler"), "must drive the file_handler tool");
+        assert!(body.contains("video"), "video handling must be documented");
+        assert!(body.contains("image"), "image handling must be documented");
+        assert!(body.contains("document"), "document handling must be documented");
+
+        // The retired per-type auto-dispatch tool calls must not reappear.
         assert!(
             !body.contains("transcribe_audio"),
-            "audio arm must be removed — FSE owns audio→transcribe now"
+            "legacy transcribe_audio arm is retired — file_handler owns audio now"
         );
         assert!(
-            !body.contains("extract_document"),
-            "document arm must be removed — FSE owns document→extract_document now"
+            !body.contains("analyze_image"),
+            "legacy analyze_image arm is retired — file_handler owns images now"
         );
         assert!(
             !body.contains("<vision>"),
-            "image auto-describe arm must be removed — FSE owns image→describe now"
+            "legacy image auto-describe arm is retired — file_handler owns images now"
         );
-        // tools_required is trimmed to the only YAML tool the video arm still uses.
-        assert_eq!(skill.meta.tools_required, vec!["analyze_image".to_string()]);
+
+        // tools_required is exactly the single model-driven entry point.
+        assert_eq!(skill.meta.tools_required, vec!["file_handler".to_string()]);
     }
 
     #[tokio::test]
