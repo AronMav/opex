@@ -13,6 +13,7 @@ import type { SessionRow } from "@/types/api";
 const EMPTY_ACTIVE_IDS: string[] = [];
 
 import { MessageList, MessageSkeleton } from "./MessageList";
+import { StreamingAnnouncer } from "./StreamingAnnouncer";
 import { SearchBar } from "./SearchBar";
 import { ThreadErrorBoundary } from "./ThreadErrorBoundary";
 import { ReconnectingIndicator } from "@/components/chat/ReconnectingIndicator";
@@ -247,6 +248,7 @@ export function ChatThread({
           <SearchBar search={search} />
         </div>
       )}
+      <StreamingAnnouncer agent={currentAgent} />
       <MessageList
         agent={currentAgent}
         messages={allMessages}

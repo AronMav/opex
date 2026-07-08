@@ -298,8 +298,7 @@ export function MessageList({
     <div className={cn("flex flex-1 flex-col relative overflow-hidden overscroll-contain", topOffset)}>
       <section
         role="log"
-        aria-live="polite"
-        aria-relevant="additions"
+        aria-live="off"
         aria-label={t("chat.message_thread")}
         className="flex flex-1 flex-col min-h-0"
       >

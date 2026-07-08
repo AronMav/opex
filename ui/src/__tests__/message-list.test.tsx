@@ -399,11 +399,13 @@ describe("MessageList a11y (C1 + H1)", () => {
       />,
     );
   }
-  it("wraps the thread in a polite additions-only live region (C1)", () => {
+  it("keeps the thread a log landmark but delegates streaming announcements (C1)", () => {
     renderList();
     const log = screen.getByRole("log");
-    expect(log).toHaveAttribute("aria-live", "polite");
-    expect(log).toHaveAttribute("aria-relevant", "additions");
+    // The dedicated StreamingAnnouncer now owns streaming announcements, so the
+    // thread-level log is no longer a live region (avoids additions-only gaps
+    // and nested-live-region double-announce).
+    expect(log).toHaveAttribute("aria-live", "off");
     expect(log).toHaveAccessibleName("chat.message_thread");
   });
   it("exposes each message row as a listitem (H1)", () => {
