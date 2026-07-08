@@ -79,7 +79,7 @@ fn derive_models_url_from_base(provider_type: &str, base_url: &str) -> String {
         .find(|pt| pt.id == provider_type)
         .map_or("/v1/chat/completions", |pt| pt.chat_path);
     let models_path = chat_path.replace("/chat/completions", "/models");
-    format!("{}{}", base_url.trim_end_matches('/'), models_path)
+    super::providers::join_openai_path(base_url, &models_path)
 }
 
 /// Resolve the API key for a provider from secrets or env.
@@ -372,11 +372,16 @@ mod tests {
 
     #[test]
     fn derive_models_url_openai_compat() {
-        // A generic openai_compat provider lists from {base}/v1/models (its
-        // chat_path is /v1/chat/completions).
+        // A generic openai_compat provider whose base already carries a version
+        // segment lists from {base}/models (the /v1 is dropped).
         assert_eq!(
             derive_models_url_from_base("openai_compat", "https://api.z.ai/api/coding/paas/v4"),
-            "https://api.z.ai/api/coding/paas/v4/v1/models"
+            "https://api.z.ai/api/coding/paas/v4/models"
+        );
+        // A root base keeps /v1/models.
+        assert_eq!(
+            derive_models_url_from_base("openai_compat", "https://llm.example.com"),
+            "https://llm.example.com/v1/models"
         );
     }
 

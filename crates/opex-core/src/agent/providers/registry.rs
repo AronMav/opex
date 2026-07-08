@@ -385,6 +385,19 @@ pub fn base_url_has_version(base_url: &str) -> bool {
     matches!(chars.next(), Some('v') | Some('V')) && chars.next().is_some_and(|c| c.is_ascii_digit())
 }
 
+/// Join a base URL with an OpenAI-style `/v1/...` suffix, dropping the leading
+/// `/v1` when the base already ends in a version segment. The single source of
+/// truth for building any OpenAI-compatible endpoint (chat, models, model probe)
+/// so a versioned base (e.g. z.ai's `.../paas/v4`) never double-versions.
+pub fn join_openai_path(base_url: &str, v1_suffix: &str) -> String {
+    let suffix = if base_url_has_version(base_url) && v1_suffix.starts_with("/v1/") {
+        &v1_suffix[3..]
+    } else {
+        v1_suffix
+    };
+    format!("{}{}", base_url.trim_end_matches('/'), suffix)
+}
+
 pub fn resolve_chat_url(provider_type: &str, base_url: &str) -> String {
     // Feature-gated early return: gemini-cloudcode uses an empty chat_path,
     // so the caller's base_url is used as-is (same logic as the empty-path
@@ -400,13 +413,7 @@ pub fn resolve_chat_url(provider_type: &str, base_url: &str) -> String {
     if chat_path.is_empty() {
         return base_url.to_string();
     }
-    // Drop the leading `/v1` when the base already ends in a version segment.
-    let path = if base_url_has_version(base_url) && chat_path.starts_with("/v1/") {
-        &chat_path[3..]
-    } else {
-        chat_path
-    };
-    format!("{}{}", base_url.trim_end_matches('/'), path)
+    join_openai_path(base_url, chat_path)
 }
 
 /// Default base URL for a provider type (from `PROVIDER_TYPES`).

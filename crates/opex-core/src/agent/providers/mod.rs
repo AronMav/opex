@@ -89,6 +89,7 @@ pub use factory::create_cli_provider_with_options;
 
 mod registry;
 pub use registry::resolve_chat_url;
+pub(crate) use registry::join_openai_path;
 // Same as above: kept on the public surface for stability.
 #[allow(unused_imports)]
 pub use registry::{ProviderTypeMeta, default_base_url_for_type};

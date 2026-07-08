@@ -369,7 +369,7 @@ impl OpenAiCompatibleProvider {
         };
 
         // 1. Try individual model endpoint (faster, lower bandwidth).
-        let single_url = format!("{}/v1/models/{}", base, model);
+        let single_url = super::join_openai_path(base, &format!("/v1/models/{model}"));
         if let Ok(resp) = auth(self.client.discovery_client().get(&single_url).timeout(std::time::Duration::from_secs(5)))
             .send().await
             && let Ok(resp) = resp.error_for_status()
@@ -380,7 +380,7 @@ impl OpenAiCompatibleProvider {
                     }
 
         // 2. Fall back to full list and filter by id.
-        let list_url = format!("{}/v1/models", base);
+        let list_url = super::join_openai_path(base, "/v1/models");
         let resp = auth(self.client.discovery_client().get(&list_url).timeout(std::time::Duration::from_secs(5)))
             .send().await.ok()?
             .error_for_status().ok()?
