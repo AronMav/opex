@@ -43,13 +43,15 @@ test("each trigger has an aria-label so icon-only tabs stay accessible", () => {
   expect(screen.getByRole("tab", { name: "Все" })).toHaveAttribute("aria-label", "Все")
 })
 
-test("labels are shown by default (adaptive collapse only kicks in when they overflow)", () => {
-  // Collapse is measured at runtime via ResizeObserver; without a layout engine
-  // (jsdom) the bar stays expanded, so labels render inline and readable.
+test("inactive label hides on phones (< sm), shows from sm up; active always shows", () => {
+  // On phones labels collapse to icons via the sm breakpoint; from sm up they
+  // show (until the ResizeObserver compacts an overflowing row at runtime).
   renderBar()
   const label = screen.getByText("Активные")
   expect(label).toHaveClass("truncate")
-  expect(label).not.toHaveClass("hidden")
+  expect(label).toHaveClass("hidden")
+  expect(label).toHaveClass("sm:inline")
+  expect(label).toHaveClass("group-data-[state=active]/ftab:inline")
 })
 
 test("each trigger carries a title so a collapsed icon-only tab shows its name on hover", () => {

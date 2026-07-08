@@ -89,8 +89,11 @@ function FilterTabsList({
             <span
               className={cn(
                 "truncate",
-                // Roomy: every label visible. Tight: only the active tab's label.
-                compact ? "hidden group-data-[state=active]/ftab:inline" : "inline",
+                // Show only the active tab's label when compact (row overflows) OR
+                // on phones (< sm, where every px counts); otherwise show all.
+                compact
+                  ? "hidden group-data-[state=active]/ftab:inline"
+                  : "hidden sm:inline group-data-[state=active]/ftab:inline",
               )}
             >
               {item.label}
