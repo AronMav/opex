@@ -20,6 +20,7 @@ import {
   useProviders,
   useProviderTypes,
   useProviderActive,
+  useProviderModelsDetailed,
   useCreateProvider,
   useUpdateProvider,
   useDeleteProvider,
@@ -84,6 +85,12 @@ export default function ProvidersPage() {
   const [apiKeyValue, setApiKeyValue] = useState("");
   const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  // Auto-discover models for the provider being EDITED (saved → has a UUID), the
+  // way the agent form does — so the model dropdown appears immediately without a
+  // manual "Discover" click. A manual re-discover (below) takes precedence.
+  const editingId = dialog.open && dialog.editing ? dialog.editing.id : null;
+  const { data: autoModels = [], isLoading: autoModelsLoading } = useProviderModelsDetailed(editingId);
+  const effectiveModels = discoveredModels.length > 0 ? discoveredModels : autoModels.map((m) => m.id);
   const [ttsVoices, setTtsVoices] = useState<{ id: string; name: string; description?: string; language?: string }[]>([]);
   const [ttsVoicesLoading, setTtsVoicesLoading] = useState(false);
   const [testResult, setTestResult] = useState<{
@@ -143,16 +150,18 @@ export default function ProvidersPage() {
 
   const discoverModels = async () => {
     if (!form.provider_type) return;
+    // The models endpoint is keyed by the saved provider's UUID; an unsaved
+    // provider has no id yet (the type-based path is not a route), so guide the
+    // user to save first instead of firing a request that 4xxs.
+    if (!(dialog.open && dialog.editing)) {
+      toast.info(t("providers.save_first_to_discover"));
+      return;
+    }
     setModelsLoading(true);
     try {
-      let url: string;
-      if (dialog.open && dialog.editing) {
-        url = `/api/providers/${dialog.editing.id}/models`;
-      } else {
-        const baseUrl = form.base_url || undefined;
-        url = `/api/providers/${form.provider_type}/models${baseUrl ? `?base_url=${encodeURIComponent(baseUrl)}` : ""}`;
-      }
-      const data = await apiGet<{ models: { id: string }[] | string[] }>(url);
+      const data = await apiGet<{ models: { id: string }[] | string[] }>(
+        `/api/providers/${dialog.editing.id}/models`,
+      );
       setDiscoveredModels(data.models.map((m) => typeof m === "string" ? m : m.id));
     } catch {
       toast.warning(t("providers.discover_failed"));
@@ -452,8 +461,8 @@ export default function ProvidersPage() {
         onClose={() => setDialog({ open: false })}
         onSetCategory={setCategory}
         onSetProviderType={onSetProviderType}
-        discoveredModels={discoveredModels}
-        modelsLoading={modelsLoading}
+        discoveredModels={effectiveModels}
+        modelsLoading={modelsLoading || autoModelsLoading}
         onDiscoverModels={discoverModels}
         testResult={testResult}
         testLoading={testLoading}

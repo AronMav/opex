@@ -19,6 +19,7 @@ vi.mock("@/lib/queries", () => ({
   useProviders: () => ({ data: providers, isLoading: false, error: null, refetch: vi.fn() }),
   useProviderTypes: () => ({ data: [] }),
   useProviderActive: () => ({ data: active }),
+  useProviderModelsDetailed: () => ({ data: [], isLoading: false }),
   useMediaDrivers: () => ({ data: {} }),
   useCreateProvider: () => mutation(),
   useUpdateProvider: () => mutation(),
