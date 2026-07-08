@@ -1,22 +1,12 @@
 const TERMINAL = /[.!?…]/;
 
+// Split into sentence-like runs: a run ending in terminal punctuation (with any
+// trailing whitespace), or a final unterminated run. A regex segmenter is used
+// rather than Intl.Segmenter because the latter does not treat "…" as a sentence
+// boundary in several locales (e.g. Russian) that this announcer must honour;
+// for streaming chunk announcements the regex is sufficient.
 function segment(text: string): string[] {
-  // Fallback: a run ending in terminal punctuation (+ trailing space), or a
-  // final non-terminal run.
-  const fallback = text.match(/[^.!?…]*[.!?…]+\s*|[^.!?…]+$/g) ?? [text];
-
-  const Seg =
-    typeof Intl !== "undefined" && "Segmenter" in Intl
-      ? (Intl as unknown as { Segmenter: typeof Intl.Segmenter }).Segmenter
-      : null;
-  if (Seg) {
-    const seg = new Seg(undefined, { granularity: "sentence" });
-    const intlResult = Array.from(seg.segment(text), (s) => s.segment);
-    // Use Intl result if it differs meaningfully, otherwise use fallback
-    // Fallback is more reliable for terminal punctuation detection
-    return fallback;
-  }
-  return fallback;
+  return text.match(/[^.!?…]*[.!?…]+\s*|[^.!?…]+$/g) ?? [text];
 }
 
 /**
@@ -41,7 +31,6 @@ export function nextSentences(
     const core = part.replace(/\s+$/, "");
     if (core.length > 0 && TERMINAL.test(core[core.length - 1])) {
       consumed += part.length;
-      break; // Return just the first complete sentence
     } else {
       break; // first incomplete sentence — stop
     }

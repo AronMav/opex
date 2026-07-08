@@ -16,11 +16,13 @@ describe("nextSentences", () => {
     expect(again.newOffset).toBe(first.newOffset);
   });
 
-  it("emits the next completed sentence as a delta beyond the offset", () => {
+  it("emits completed sentences as a batch on first call, then empty on subsequent calls at end", () => {
     const first = nextSentences("Hello world. Second sentence.", 0);
+    expect(first.toAnnounce.trim()).toBe("Hello world. Second sentence.");
+    expect(first.newOffset).toBe("Hello world. Second sentence.".length);
     const second = nextSentences("Hello world. Second sentence.", first.newOffset);
-    expect(second.toAnnounce.trim()).toBe("Second sentence.");
-    expect(second.newOffset).toBe("Hello world. Second sentence.".length);
+    expect(second.toAnnounce).toBe("");
+    expect(second.newOffset).toBe(first.newOffset);
   });
 
   it("flush speaks the trailing fragment", () => {
@@ -46,5 +48,10 @@ describe("nextSentences", () => {
   it("returns empty for an empty remainder", () => {
     expect(nextSentences("", 0)).toEqual({ toAnnounce: "", newOffset: 0 });
     expect(nextSentences("abc", 3)).toEqual({ toAnnounce: "", newOffset: 3 });
+  });
+
+  it("batches multiple completed sentences in one call and withholds the tail", () => {
+    const { toAnnounce } = nextSentences("A. B. C", 0);
+    expect(toAnnounce.trim()).toBe("A. B.");
   });
 });
