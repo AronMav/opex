@@ -1275,5 +1275,6 @@
   "chat.thinking": "Думаю",
   "common.retry": "Повторить",
   "common.agent": "Агент",
-  "common.skip_to_content": "Перейти к содержимому"
+  "common.skip_to_content": "Перейти к содержимому",
+  "chat.response_announcer": "Ответ ассистента"
 }

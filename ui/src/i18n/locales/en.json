@@ -1275,5 +1275,6 @@
   "chat.thinking": "Thinking",
   "common.retry": "Retry",
   "common.agent": "Agent",
-  "common.skip_to_content": "Skip to content"
+  "common.skip_to_content": "Skip to content",
+  "chat.response_announcer": "Assistant response"
 }
