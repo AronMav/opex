@@ -128,6 +128,29 @@ async fn fetch_openai_models(url: &str, api_key: Option<&str>) -> Result<Vec<Mod
     Ok(models)
 }
 
+/// List OpenAI-format models tolerating both `{base}/v1/models` and
+/// `{base}/models` layouts. Providers whose `base_url` already carries a version
+/// path (e.g. z.ai's `.../paas/v4`) expose the catalogue at `{base}/models`,
+/// while root base URLs (OpenAI, Ollama) use `{base}/v1/models`. We try the
+/// chat_path-derived URL first, then fall back to the version-less `{base}/models`.
+async fn list_openai_models(provider_type: &str, base: &str, api_key: Option<&str>) -> Result<Vec<ModelInfo>> {
+    let primary = derive_models_url_from_base(provider_type, base);
+    let primary_res = fetch_openai_models(&primary, api_key).await;
+    if let Ok(m) = &primary_res
+        && !m.is_empty()
+    {
+        return primary_res;
+    }
+    let alt = format!("{}/models", base.trim_end_matches('/'));
+    if alt != primary
+        && let Ok(m) = fetch_openai_models(&alt, api_key).await
+        && !m.is_empty()
+    {
+        return Ok(m);
+    }
+    primary_res
+}
+
 /// Fetch models from Anthropic `/v1/models` (non-OpenAI format: requires anthropic-version header).
 async fn fetch_anthropic_models(api_key: Option<&str>, base_url: Option<&str>) -> Result<Vec<ModelInfo>> {
     let base = base_url.unwrap_or("https://api.anthropic.com");
@@ -253,14 +276,13 @@ pub async fn discover_models(
             let Some(base) = base_url_override.or(named.map(|(_, b, _)| *b)) else {
                 return Ok(vec![]);
             };
-            let models_url = derive_models_url_from_base(other, base);
             // Named providers have a standard key env; a generic type has none
             // here (its resolved key arrives via discover_models_with_resolved_key).
             let key = match named {
                 Some((_, _, key_env)) => resolve_key(secrets, key_env).await,
                 None => None,
             };
-            fetch_openai_models(&models_url, key.as_deref()).await
+            list_openai_models(other, base, key.as_deref()).await
         }
     }
 }
@@ -317,8 +339,7 @@ async fn discover_models_with_resolved_key(
             let Some(base) = base_url_override.or(named.map(|(_, b, _)| *b)) else {
                 return Ok(vec![]);
             };
-            let models_url = derive_models_url_from_base(other, base);
-            fetch_openai_models(&models_url, key).await
+            list_openai_models(other, base, key).await
         }
     }
 }
