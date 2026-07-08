@@ -18,8 +18,8 @@ export function Field({ label, hint, children }: { label: string; hint?: string;
 export function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between items-center bg-muted/20 rounded px-2.5 py-1.5 border border-border/50">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-mono text-foreground/80 truncate ml-2">{value}</span>
+      <span className="text-muted-foreground shrink-0">{label}</span>
+      <span className="font-mono text-foreground/80 truncate ml-2 min-w-0">{value}</span>
     </div>
   );
 }

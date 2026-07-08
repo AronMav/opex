@@ -296,7 +296,7 @@ export default function SecretsPage() {
                     {s.has_value ? t("secrets.active") : t("secrets.empty")}
                   </StatusBadge>
                   {s.scope && (
-                    <Badge variant="outline-primary" size="xs" className="font-mono">
+                    <Badge variant="outline-primary" size="xs" className="font-mono shrink-0 whitespace-nowrap">
                       {s.scope}
                     </Badge>
                   )}

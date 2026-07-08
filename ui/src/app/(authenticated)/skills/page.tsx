@@ -204,7 +204,7 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
                     {isExpanded && (
                       <div className="border-t border-border/30">
                         <div className="flex items-center justify-between px-3 py-2 bg-muted/20">
-                          <span className="text-3xs font-mono text-muted-foreground-subtle truncate">
+                          <span className="text-3xs font-mono text-muted-foreground-subtle truncate min-w-0">
                             {v.content_hash}
                           </span>
                           <Button

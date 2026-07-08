@@ -694,7 +694,7 @@ function renderValue(val: unknown, t: (key: TranslationKey, values?: Record<stri
     );
   }
   if (typeof val === "number") {
-    return <span className="font-mono text-sm font-bold text-primary tabular-nums">{val}</span>;
+    return <span className="font-mono text-sm font-bold text-primary tabular-nums shrink-0 whitespace-nowrap">{val}</span>;
   }
   if (Array.isArray(val)) {
     const hasObjects = val.some((v) => v !== null && typeof v === "object");

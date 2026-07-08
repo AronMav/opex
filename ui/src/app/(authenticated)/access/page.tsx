@@ -250,7 +250,7 @@ export default function AccessPage() {
                         {t("access.disabled")}
                       </Badge>
                     )}
-                    <span className="text-2xs text-muted-foreground-subtle font-mono">{t("access.users_count", { count: agentUsers.length })}</span>
+                    <span className="text-2xs text-muted-foreground-subtle font-mono shrink-0 whitespace-nowrap">{t("access.users_count", { count: agentUsers.length })}</span>
                     <ChevronDown className={`h-4 w-4 text-muted-foreground-subtle transition-transform ${isExpanded ? "rotate-180" : ""}`} />
                   </div>
                 </button>
@@ -303,9 +303,9 @@ export default function AccessPage() {
                         {agentPending.map((p) => (
                           <div key={p.code} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2 min-w-0">
                             <div className="flex items-center gap-2 min-w-0">
-                              <span className="font-semibold text-xs truncate">{p.display_name || t("access.unknown_user")}</span>
+                              <span className="font-semibold text-xs truncate min-w-0">{p.display_name || t("access.unknown_user")}</span>
                               <Badge variant="outline" size="xs" className="font-mono bg-background shrink-0">{p.code}</Badge>
-                              <span className="font-mono text-3xs text-muted-foreground-subtle truncate hidden sm:inline">{p.channel_user_id}</span>
+                              <span className="font-mono text-3xs text-muted-foreground-subtle truncate min-w-0 hidden sm:inline">{p.channel_user_id}</span>
                             </div>
                             <div className="flex gap-1.5 shrink-0 self-end sm:self-auto">
                               <Button variant="success" size="sm" onClick={() => approve(agent, p.code)} className="tap-target">

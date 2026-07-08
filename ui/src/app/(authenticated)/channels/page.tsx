@@ -344,7 +344,7 @@ export default function ChannelsPage() {
                           )}
                         </StatusBadge>
                         {ch.error_msg && (
-                          <span className="text-2xs text-destructive truncate">{ch.error_msg}</span>
+                          <span className="text-2xs text-destructive truncate min-w-0">{ch.error_msg}</span>
                         )}
                       </DataRow>
                     );

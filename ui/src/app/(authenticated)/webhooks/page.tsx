@@ -260,8 +260,8 @@ export default function WebhooksPage() {
                 onCopied={() => toast.success(t("webhooks.url_copied"))}
               />
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground-subtle">
-                <span>{t("webhooks.trigger_count", { count: w.trigger_count })}</span>
-                <span>
+                <span className="shrink-0 whitespace-nowrap">{t("webhooks.trigger_count", { count: w.trigger_count })}</span>
+                <span className="whitespace-nowrap">
                   {w.last_triggered_at
                     ? `${t("webhooks.last_triggered")}: ${formatDate(w.last_triggered_at, locale)}`
                     : t("webhooks.never_triggered")}

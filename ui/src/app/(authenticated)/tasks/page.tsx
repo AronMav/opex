@@ -197,7 +197,7 @@ export default function CronPage() {
         ) : (
           <div className="grid gap-4 md:gap-6">
             {jobs.map((j) => (
-              <Card key={j.id} className={`group relative flex flex-col md:flex-row md:flex-wrap md:items-stretch gap-4 p-5 min-w-0 overflow-hidden transition-all duration-300 ${
+              <Card key={j.id} className={`group relative flex flex-col xl:flex-row xl:flex-wrap xl:items-stretch gap-4 p-5 min-w-0 overflow-hidden transition-all duration-300 ${
                 j.enabled
                   ? "hover:shadow-lg"
                   : "opacity-70 hover:opacity-100"
@@ -238,8 +238,8 @@ export default function CronPage() {
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-2 border-t border-border/50 pt-4 md:border-t-0 md:pt-0 md:border-l md:pl-4 shrink-0 md:w-36">
-                  <div className="grid grid-cols-2 md:grid-cols-1 gap-2">
+                <div className="flex flex-col gap-2 border-t border-border/50 pt-4 xl:border-t-0 xl:pt-0 xl:border-l xl:pl-4 shrink-0 xl:w-36">
+                  <div className="grid grid-cols-2 xl:grid-cols-1 gap-2">
                     <Button
                       variant={j.enabled ? "outline-warning" : "default"}
                       size="sm"
@@ -317,7 +317,7 @@ export default function CronPage() {
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                   <span>{new Date(r.started_at).toLocaleString()}</span>
-                                  {duration !== null && <span className="font-mono">{duration}s</span>}
+                                  {duration !== null && <span className="font-mono shrink-0 whitespace-nowrap">{duration}s</span>}
                                 </div>
                                 {r.error && (
                                   <p className="text-xs text-destructive mt-1 font-mono line-clamp-2">{r.error}</p>
