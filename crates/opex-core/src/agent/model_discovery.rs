@@ -224,11 +224,16 @@ pub async fn discover_models(
             fetch_google_models(key.as_deref(), base_url_override).await
         }
 
-        // Ollama — discovery disabled. Tier-aware tag conventions
-        // (`:cloud` suffixes, account-specific catalogue) make automatic
-        // listing unreliable. Operators set the model name manually in
-        // each agent's TOML / UI.
-        "ollama" => Ok(Vec::new()),
+        // Ollama — list via the OpenAI-compatible `/v1/models` endpoint. This
+        // works for both a local daemon (no auth) and the ollama.com cloud
+        // aggregator (Bearer key), which expose their full model catalogue there.
+        "ollama" => {
+            let base = base_url_override.unwrap_or("http://localhost:11434");
+            let models_url = derive_models_url_from_base("ollama", base);
+            // Cloud requires a Bearer key; a local daemon does not — key optional.
+            let key = resolve_key(secrets, "OLLAMA_API_KEY").await;
+            fetch_openai_models(&models_url, key.as_deref()).await
+        }
 
         "openai" | "codex-cli" => {
             let base = base_url_override
@@ -283,8 +288,14 @@ async fn discover_models_with_resolved_key(
         "google" | "gemini" | "gemini-cli" => {
             fetch_google_models(key, base_url_override).await
         }
-        // Ollama — discovery disabled (see note in `discover_models`).
-        "ollama" => Ok(Vec::new()),
+        // Ollama — list via `/v1/models` with the resolved key (see
+        // `discover_models`). The cloud aggregator needs the Bearer key; a local
+        // daemon ignores it.
+        "ollama" => {
+            let base = base_url_override.unwrap_or("http://localhost:11434");
+            let models_url = derive_models_url_from_base("ollama", base);
+            fetch_openai_models(&models_url, key).await
+        }
         "openai" | "codex-cli" => {
             let base = base_url_override
                 .map(std::string::ToString::to_string)
@@ -332,6 +343,20 @@ mod tests {
         assert_eq!(
             derive_models_url_from_base("deepseek", "https://api.deepseek.com"),
             "https://api.deepseek.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn derive_models_url_ollama() {
+        // Ollama (local daemon or the ollama.com cloud aggregator) lists models
+        // via the OpenAI-compatible /v1/models path.
+        assert_eq!(
+            derive_models_url_from_base("ollama", "https://ollama.com"),
+            "https://ollama.com/v1/models"
+        );
+        assert_eq!(
+            derive_models_url_from_base("ollama", "http://localhost:11434"),
+            "http://localhost:11434/v1/models"
         );
     }
 
