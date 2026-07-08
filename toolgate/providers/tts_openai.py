@@ -2,7 +2,7 @@
 
 import httpx
 
-from providers.base import resolve_request_timeout
+from providers.base import resolve_request_timeout, join_openai_path
 
 
 class OpenAITTS:
@@ -22,7 +22,7 @@ class OpenAITTS:
                          response_format: str = "mp3",
                          registry=None) -> bytes:
         resp = await http.post(
-            f"{self.base_url}/audio/speech",
+            join_openai_path(self.base_url, "/v1/audio/speech"),
             headers={"Authorization": f"Bearer {self.api_key}"},
             json={
                 "model": model or self.model,

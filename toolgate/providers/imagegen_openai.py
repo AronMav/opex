@@ -4,7 +4,7 @@ import base64
 
 import httpx
 
-from providers.base import resolve_request_timeout
+from providers.base import resolve_request_timeout, join_openai_path
 
 
 class OpenAIImageGen:
@@ -33,7 +33,7 @@ class OpenAIImageGen:
             body["quality"] = quality
 
         resp = await http.post(
-            f"{self.base_url}/images/generations",
+            join_openai_path(self.base_url, "/v1/images/generations"),
             headers={"Authorization": f"Bearer {self.api_key}"},
             json=body,
             timeout=self._request_timeout,

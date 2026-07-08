@@ -26,6 +26,22 @@ def resolve_request_timeout(options: dict | None, default: float | None = None) 
     return default
 
 
+def join_openai_path(base_url: str, v1_suffix: str) -> str:
+    """Join a base URL with an OpenAI-style '/v1/...' suffix, dropping the leading
+    '/v1' when the base already ends in a version segment (v1, v4, v1beta, ...).
+
+    Lets an OpenAI-compatible provider be configured with either a root base
+    (https://api.example.com) or a versioned base (https://api.example.com/v1,
+    https://api.z.ai/api/coding/paas/v4) and still resolve to the correct
+    endpoint. Mirrors core's `join_openai_path` (registry.rs)."""
+    base = base_url.rstrip("/")
+    last = base.rsplit("/", 1)[-1] if base else ""
+    has_version = len(last) >= 2 and last[0] in "vV" and last[1].isdigit()
+    if has_version and v1_suffix.startswith("/v1/"):
+        return base + v1_suffix[3:]
+    return base + v1_suffix
+
+
 @runtime_checkable
 class STTProvider(Protocol):
     name: str

@@ -4,7 +4,7 @@ import json
 
 import httpx
 
-from providers.base import resolve_request_timeout
+from providers.base import resolve_request_timeout, join_openai_path
 
 # Map a file extension to an audio MIME type. The STT server (speaches) returns
 # HTTP 415 when the multipart part's content-type disagrees with the actual
@@ -84,7 +84,7 @@ class OpenAISTT:
         files = {"file": (filename, audio_bytes, _content_type_for(filename))}
         data = {"model": model or self.model, "language": language,
                 "response_format": "verbose_json"}
-        url = f"{self.base_url}/audio/transcriptions"
+        url = join_openai_path(self.base_url, "/v1/audio/transcriptions")
 
         if not self._stream:
             resp = await http.post(url, headers=headers, files=files, data=data,

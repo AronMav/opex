@@ -2,7 +2,7 @@
 import httpx
 import logging
 
-from providers.base import resolve_request_timeout
+from providers.base import resolve_request_timeout, join_openai_path
 
 log = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ class OpenAIEmbedding:
         texts: list[str],
         model: str | None = None,
     ) -> list[list[float]]:
-        url = f"{self.base_url}/embeddings"
+        url = join_openai_path(self.base_url, "/v1/embeddings")
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
