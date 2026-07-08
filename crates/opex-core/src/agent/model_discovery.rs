@@ -263,9 +263,8 @@ pub async fn discover_models(
                 .map(std::string::ToString::to_string)
                 .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
                 .unwrap_or_else(|| "https://api.openai.com".to_string());
-            let url = format!("{}/v1/models", base.trim_end_matches('/'));
             let key = resolve_key(secrets, "OPENAI_API_KEY").await;
-            fetch_openai_models(&url, key.as_deref()).await
+            list_openai_models("openai", &base, key.as_deref()).await
         }
 
         // Any OpenAI-compatible type — a named provider (deepseek/groq/…) OR a
@@ -328,8 +327,7 @@ async fn discover_models_with_resolved_key(
                 .map(std::string::ToString::to_string)
                 .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
                 .unwrap_or_else(|| "https://api.openai.com".to_string());
-            let url = format!("{}/v1/models", base.trim_end_matches('/'));
-            fetch_openai_models(&url, key).await
+            list_openai_models("openai", &base, key).await
         }
         // Any OpenAI-compatible type (named or a generic `openai_compat`/custom
         // type with an admin-set base_url) — list from `/v1/models` with the
