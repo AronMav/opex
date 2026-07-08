@@ -53,10 +53,15 @@ function FilterTabsList({
     const list = wrap.querySelector<HTMLElement>('[data-slot="tabs-list"]')
     if (!list) return
     const measure = () => {
+      // Available width = the block wrapper (always the full row width). Do NOT
+      // use the list's own clientWidth: TabsList is `w-fit`, so once collapsed it
+      // shrinks to the icons' width (~300px) and would never report enough room
+      // to expand again. `list.scrollWidth` is the width the labels NEED.
+      const avail = wrap.clientWidth
       if (!compact) {
         fullWidthRef.current = list.scrollWidth
-        if (list.scrollWidth > list.clientWidth + 1) setCompact(true)
-      } else if (fullWidthRef.current > 0 && list.clientWidth >= fullWidthRef.current) {
+        if (list.scrollWidth > avail + 1) setCompact(true)
+      } else if (fullWidthRef.current > 0 && avail >= fullWidthRef.current) {
         setCompact(false)
       }
     }

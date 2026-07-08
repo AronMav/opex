@@ -36,3 +36,22 @@ for (const width of WIDTHS) {
     ).toEqual([]);
   });
 }
+
+// FilterTabsList must collapse inactive labels to icons when the row is too
+// narrow AND re-expand them when widened again (regression: the compact state
+// once stuck on because it measured the shrunk list, never the available width).
+test("filter tabs collapse when narrow and re-expand when widened", async ({ page }) => {
+  const inactiveLabel = page.getByText("Диагностика", { exact: true });
+
+  await page.setViewportSize({ width: 1280, height: 500 });
+  await page.goto(HARNESS, { waitUntil: "networkidle" });
+  await expect(inactiveLabel).toBeVisible();
+
+  await page.setViewportSize({ width: 700, height: 500 });
+  await page.waitForTimeout(400);
+  await expect(inactiveLabel).toBeHidden();
+
+  await page.setViewportSize({ width: 1280, height: 500 });
+  await page.waitForTimeout(400);
+  await expect(inactiveLabel).toBeVisible();
+});
