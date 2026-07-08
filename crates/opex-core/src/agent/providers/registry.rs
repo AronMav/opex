@@ -390,10 +390,12 @@ pub fn base_url_has_version(base_url: &str) -> bool {
 /// truth for building any OpenAI-compatible endpoint (chat, models, model probe)
 /// so a versioned base (e.g. z.ai's `.../paas/v4`) never double-versions.
 pub fn join_openai_path(base_url: &str, v1_suffix: &str) -> String {
-    let suffix = if base_url_has_version(base_url) && v1_suffix.starts_with("/v1/") {
-        &v1_suffix[3..]
-    } else {
-        v1_suffix
+    // Drop a leading `/v1` (keeping the rest of the path) when the base already
+    // carries a version. `strip_prefix` avoids a byte-index slice (clippy::string_slice)
+    // and the `starts_with('/')` guard keeps `/v1beta/...` intact.
+    let suffix = match v1_suffix.strip_prefix("/v1") {
+        Some(rest) if base_url_has_version(base_url) && rest.starts_with('/') => rest,
+        _ => v1_suffix,
     };
     format!("{}{}", base_url.trim_end_matches('/'), suffix)
 }
