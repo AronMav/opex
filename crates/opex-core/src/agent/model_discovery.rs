@@ -245,17 +245,22 @@ pub async fn discover_models(
             fetch_openai_models(&url, key.as_deref()).await
         }
 
+        // Any OpenAI-compatible type — a named provider (deepseek/groq/…) OR a
+        // generic `openai_compat` / custom type carrying an admin-set base_url.
+        // List from its `/v1/models` endpoint (derived from the chat_path).
         other => {
-            if let Some((_, base_url_default, key_env)) =
-                OPENAI_COMPAT_PROVIDERS.iter().find(|(n, _, _)| *n == other)
-            {
-                let base = base_url_override.unwrap_or(base_url_default);
-                let models_url = derive_models_url_from_base(other, base);
-                let key = resolve_key(secrets, key_env).await;
-                fetch_openai_models(&models_url, key.as_deref()).await
-            } else {
-                Ok(vec![])
-            }
+            let named = OPENAI_COMPAT_PROVIDERS.iter().find(|(n, _, _)| *n == other);
+            let Some(base) = base_url_override.or(named.map(|(_, b, _)| *b)) else {
+                return Ok(vec![]);
+            };
+            let models_url = derive_models_url_from_base(other, base);
+            // Named providers have a standard key env; a generic type has none
+            // here (its resolved key arrives via discover_models_with_resolved_key).
+            let key = match named {
+                Some((_, _, key_env)) => resolve_key(secrets, key_env).await,
+                None => None,
+            };
+            fetch_openai_models(&models_url, key.as_deref()).await
         }
     }
 }
@@ -304,16 +309,16 @@ async fn discover_models_with_resolved_key(
             let url = format!("{}/v1/models", base.trim_end_matches('/'));
             fetch_openai_models(&url, key).await
         }
+        // Any OpenAI-compatible type (named or a generic `openai_compat`/custom
+        // type with an admin-set base_url) — list from `/v1/models` with the
+        // resolved key.
         other => {
-            if let Some((_, base_url_default, _)) =
-                OPENAI_COMPAT_PROVIDERS.iter().find(|(n, _, _)| *n == other)
-            {
-                let base = base_url_override.unwrap_or(base_url_default);
-                let models_url = derive_models_url_from_base(other, base);
-                fetch_openai_models(&models_url, key).await
-            } else {
-                Ok(vec![])
-            }
+            let named = OPENAI_COMPAT_PROVIDERS.iter().find(|(n, _, _)| *n == other);
+            let Some(base) = base_url_override.or(named.map(|(_, b, _)| *b)) else {
+                return Ok(vec![]);
+            };
+            let models_url = derive_models_url_from_base(other, base);
+            fetch_openai_models(&models_url, key).await
         }
     }
 }
@@ -343,6 +348,16 @@ mod tests {
         assert_eq!(
             derive_models_url_from_base("deepseek", "https://api.deepseek.com"),
             "https://api.deepseek.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn derive_models_url_openai_compat() {
+        // A generic openai_compat provider lists from {base}/v1/models (its
+        // chat_path is /v1/chat/completions).
+        assert_eq!(
+            derive_models_url_from_base("openai_compat", "https://api.z.ai/api/coding/paas/v4"),
+            "https://api.z.ai/api/coding/paas/v4/v1/models"
         );
     }
 
