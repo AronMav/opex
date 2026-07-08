@@ -19,6 +19,7 @@ import type {
   ChatStore,
 } from "./chat-types";
 import { getCachedHistoryMessages } from "./chat-history";
+import { getLiveMessages } from "./chat-types";
 import { mergeLiveOverlay } from "./chat-overlay-dedup";
 
 // Re-export so consumers don't need a second import site.
@@ -147,4 +148,25 @@ export function selectRenderMessages(state: ChatState, agent: string): ChatMessa
   const histSessionId = st.activeSessionId;
   const history = histSessionId ? getCachedHistoryMessages(histSessionId, st.selectedBranches) : [];
   return mergeLiveOverlay(history, src.messages);
+}
+
+const EMPTY_LIVE_TEXT = { id: "", text: "" };
+
+/**
+ * The id + concatenated text of the last assistant message in the live overlay
+ * (live / finishing modes), or a stable empty value otherwise. Used by the
+ * streaming a11y announcer; O(last message + its text parts), so it is cheap to
+ * subscribe to on every streaming tick (with useShallow).
+ */
+export function selectLiveAssistantText(state: ChatState, agent: string): { id: string; text: string } {
+  const src = state.agents[agent]?.messageSource;
+  const live = src ? getLiveMessages(src) : [];
+  for (let i = live.length - 1; i >= 0; i--) {
+    const m = live[i];
+    if (m.role === "assistant") {
+      const text = m.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("");
+      return { id: m.id, text };
+    }
+  }
+  return EMPTY_LIVE_TEXT;
 }
