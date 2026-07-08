@@ -374,6 +374,17 @@ pub(crate) const GEMINI_CLOUD_CODE_META: ProviderTypeMeta = ProviderTypeMeta {
 };
 
 /// Build full chat completions URL from `base_url` + provider's `chat_path`.
+/// True when the base URL's final path segment is a version marker (`v1`, `v4`,
+/// `v1beta`, …). OpenAI-style suffixes (`/v1/chat/completions`, `/v1/models`)
+/// must then be appended WITHOUT the extra `/v1` — the base already carries the
+/// version (e.g. z.ai's `.../paas/v4` serves chat at `{base}/chat/completions`,
+/// not `{base}/v1/chat/completions`).
+pub fn base_url_has_version(base_url: &str) -> bool {
+    let seg = base_url.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    let mut chars = seg.chars();
+    matches!(chars.next(), Some('v') | Some('V')) && chars.next().is_some_and(|c| c.is_ascii_digit())
+}
+
 pub fn resolve_chat_url(provider_type: &str, base_url: &str) -> String {
     // Feature-gated early return: gemini-cloudcode uses an empty chat_path,
     // so the caller's base_url is used as-is (same logic as the empty-path
@@ -389,7 +400,13 @@ pub fn resolve_chat_url(provider_type: &str, base_url: &str) -> String {
     if chat_path.is_empty() {
         return base_url.to_string();
     }
-    format!("{}{}", base_url.trim_end_matches('/'), chat_path)
+    // Drop the leading `/v1` when the base already ends in a version segment.
+    let path = if base_url_has_version(base_url) && chat_path.starts_with("/v1/") {
+        &chat_path[3..]
+    } else {
+        chat_path
+    };
+    format!("{}{}", base_url.trim_end_matches('/'), path)
 }
 
 /// Default base URL for a provider type (from `PROVIDER_TYPES`).
@@ -407,6 +424,41 @@ pub fn default_base_url_for_type(provider_type: &str) -> &'static str {
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod chat_url_tests {
+    use super::*;
+
+    #[test]
+    fn versioned_base_drops_v1() {
+        // z.ai: base already carries /paas/v4 → chat is {base}/chat/completions.
+        assert_eq!(
+            resolve_chat_url("openai_compat", "https://api.z.ai/api/coding/paas/v4"),
+            "https://api.z.ai/api/coding/paas/v4/chat/completions"
+        );
+    }
+
+    #[test]
+    fn root_base_keeps_v1() {
+        assert_eq!(
+            resolve_chat_url("openai_compat", "https://api.openai.com"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            resolve_chat_url("openai", "https://token-plan-sgp.xiaomimimo.com"),
+            "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn version_detection() {
+        assert!(base_url_has_version("https://api.z.ai/api/coding/paas/v4"));
+        assert!(base_url_has_version("https://x.com/v1"));
+        assert!(base_url_has_version("https://x.com/v1beta/"));
+        assert!(!base_url_has_version("https://api.openai.com"));
+        assert!(!base_url_has_version("https://ollama.com/"));
+    }
+}
 
 #[cfg(all(test, feature = "gemini-cloudcode"))]
 mod tests {
