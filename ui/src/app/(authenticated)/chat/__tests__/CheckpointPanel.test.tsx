@@ -122,6 +122,11 @@ const ITEMS = [
 // ── Импорт тестируемого компонента ────────────────────────────────────────────
 
 import { CheckpointPanel } from "../CheckpointPanel";
+import { useLanguageStore } from "@/stores/language-store";
+
+// This suite asserts Russian UI strings, so pin the locale to ru regardless of
+// the app's default (now English) — the real useTranslation reads the store.
+beforeEach(() => useLanguageStore.setState({ locale: "ru" }));
 
 // ── Тесты ─────────────────────────────────────────────────────────────────────
 

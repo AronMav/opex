@@ -9,5 +9,5 @@ const locales: Record<Locale, Translations> = {
 };
 
 export function getTranslations(locale: Locale): Translations {
-  return locales[locale] ?? locales.ru;
+  return locales[locale] ?? locales.en;
 }

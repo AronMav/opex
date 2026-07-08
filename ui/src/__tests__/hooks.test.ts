@@ -17,10 +17,10 @@ describe("getTranslations", () => {
     expect(typeof t).toBe("object");
   });
 
-  it("falls back to Russian for unknown locale", () => {
-    const ru = getTranslations("ru");
+  it("falls back to English for unknown locale", () => {
+    const en = getTranslations("en");
     const fallback = getTranslations("fr" as any);
-    expect(fallback).toBe(ru);
+    expect(fallback).toBe(en);
   });
 
   it("translations have string values", () => {

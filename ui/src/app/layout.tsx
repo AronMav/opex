@@ -42,7 +42,7 @@ export default function RootLayout({
   // cookies() is unavailable at build time. The <html lang> is corrected on the
   // client after hydration by <LanguageSync> based on the persisted locale.
   return (
-    <html lang="ru" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <body className={`${nunito.variable} ${manrope.variable} ${jetbrains.variable} font-sans antialiased h-[100dvh] overflow-hidden`}>
         <ThemeProvider
           attribute="class"

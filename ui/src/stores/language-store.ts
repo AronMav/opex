@@ -14,10 +14,11 @@ interface LanguageState {
 }
 
 function getInitialLocale(): Locale {
-  if (typeof window === "undefined") return "ru";
+  // English is the default; a user's explicit choice (persisted below) wins.
+  if (typeof window === "undefined") return "en";
   const stored = localStorage.getItem("opex.language");
   if (stored === "en" || stored === "ru") return stored;
-  return "ru";
+  return "en";
 }
 
 export const useLanguageStore = create<LanguageState>()(
