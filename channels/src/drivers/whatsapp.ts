@@ -7,6 +7,7 @@
  * - Outgoing: REST API
  */
 
+import { createHmac, timingSafeEqual } from "crypto";
 import type { BridgeHandle } from "../bridge";
 import type { ChannelDriver } from "../session";
 import type { IncomingMessageDto, MediaAttachment } from "../types";
@@ -28,6 +29,10 @@ export function createWhatsAppDriver(
   const phoneNumberId = (channelConfig?.phone_number_id as string) ?? "";
   const verifyToken = (channelConfig?.verify_token as string) ?? "";
   const webhookPort = (channelConfig?.webhook_port as number) ?? 8443;
+  // F017: Meta app secret for X-Hub-Signature-256 verification of inbound
+  // webhooks. When set, POSTs with a missing/invalid signature are rejected so
+  // an attacker can't spoof msg.from and bypass access control.
+  const appSecret = (channelConfig?.app_secret as string) ?? "";
 
   let server: ReturnType<typeof Bun.serve> | null = null;
   const activeRequests = new Map<string, string>();
@@ -161,8 +166,27 @@ export function createWhatsAppDriver(
 
           // Webhook events (POST)
           if (req.method === "POST" && url.pathname === "/webhook") {
+            // F017: verify the Meta X-Hub-Signature-256 HMAC over the RAW body
+            // before trusting any of its contents (msg.from drives access
+            // control). Read the raw text so the HMAC matches byte-for-byte.
+            const raw = await req.text();
+            if (appSecret) {
+              const sigHeader = req.headers.get("x-hub-signature-256") ?? "";
+              const expected =
+                "sha256=" + createHmac("sha256", appSecret).update(raw).digest("hex");
+              const a = Buffer.from(sigHeader);
+              const b = Buffer.from(expected);
+              if (a.length !== b.length || !timingSafeEqual(a, b)) {
+                console.warn("[whatsapp] rejected webhook POST: bad X-Hub-Signature-256");
+                return new Response("Forbidden", { status: 403 });
+              }
+            } else {
+              console.warn(
+                "[whatsapp] app_secret not configured — webhook signature verification DISABLED (spoofable); set channelConfig.app_secret",
+              );
+            }
             try {
-              const body = await req.json();
+              const body = JSON.parse(raw);
               const entries = body?.entry ?? [];
               for (const entry of entries) {
                 const changes = entry?.changes ?? [];
