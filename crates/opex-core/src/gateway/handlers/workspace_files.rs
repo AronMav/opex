@@ -11,7 +11,6 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use percent_encoding::percent_decode_str;
 
 use crate::gateway::clusters::InfraServices;
 use crate::gateway::AppState;
@@ -28,13 +27,14 @@ pub(crate) struct SignedQuery {
 
 pub(crate) async fn serve_workspace_file(
     State(infra): State<InfraServices>,
-    Path(rel_encoded): Path<String>,
+    Path(rel_decoded): Path<String>,
     Query(q): Query<SignedQuery>,
 ) -> Response {
-    let rel_decoded = percent_decode_str(&rel_encoded)
-        .decode_utf8_lossy()
-        .into_owned();
-
+    // axum 0.8's Path extractor already percent-decodes the {*path} capture.
+    // A second manual decode here turned a literal '%2F' in a legitimate filename
+    // into '/', so verify_workspace_file_url signed a different string than mint
+    // did → 403 for any %-containing filename (F128). Consume the extractor value
+    // directly, exactly once — consistent with mint's single encode.
     let key = infra.secrets.get_upload_hmac_key();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -74,7 +74,6 @@ pub(crate) async fn serve_workspace_file(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write;
 
     fn now() -> u64 {
@@ -138,15 +137,18 @@ mod tests {
     }
 
     #[test]
-    fn percent_decode_resolves_to_real_path() {
-        let workspace = tempfile::tempdir().unwrap();
-        write_file(workspace.path(), "My Report.md", b"hello");
-        let decoded = percent_decode_str("My%20Report.md")
-            .decode_utf8_lossy()
-            .into_owned();
-        assert_eq!(decoded, "My Report.md");
-        let abs = workspace.path().join(&decoded).canonicalize().unwrap();
-        assert!(abs.exists());
+    fn signed_url_roundtrips_for_percent_in_filename() {
+        // F128: a filename with a literal '%' must round-trip through mint→verify
+        // using the RAW name. The handler now passes axum's single-decoded path
+        // straight to verify (no second percent-decode), so the string mint signed
+        // and the string verify checks are identical. Previously the extra decode
+        // turned '%CD' / '%2F' into other bytes → HMAC mismatch → 403.
+        let key = [7u8; 32];
+        let rel = "AB%CD.log";
+        let url = crate::uploads::mint_workspace_file_url(rel, &key, 60);
+        let sig = url.split("sig=").nth(1).unwrap().split('&').next().unwrap();
+        let exp: u64 = url.split("exp=").nth(1).unwrap().parse().unwrap();
+        crate::uploads::verify_workspace_file_url(rel, sig, exp, &key, now()).unwrap();
     }
 
     /// Full round-trip: mint URL with the same path that `handle_workspace_write`
