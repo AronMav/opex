@@ -70,6 +70,11 @@ pub struct ExecuteOutcome {
 #[derive(Debug)]
 pub enum ExecuteStatus {
     Done,
+    /// Like `Done`, but the turn/iteration limit was hit so the answer may be
+    /// incomplete (F105). Finalize keeps run_status='done' (the reply is still
+    /// delivered) but fires the iteration-limit notification + a session_failures
+    /// diagnostic row, instead of silently recording the truncated run as success.
+    DoneTurnLimited,
     Failed(String),
     /// Execution stopped before finishing. Reason is a static label for logging.
     Interrupted(&'static str),
@@ -1078,7 +1083,7 @@ pub async fn execute<S: EventSink>(
         .await;
 
     Ok(ExecuteOutcome {
-        status: ExecuteStatus::Done,
+        status: ExecuteStatus::DoneTurnLimited, // F105
         final_text,
         thinking_json: None,
         messages_len_at_end: messages.len(),

@@ -199,6 +199,7 @@ impl AgentEngine {
                 finalize::FinalizeOutcome::Done {
                     assistant_text: text,
                     thinking_json: None,
+                    turn_limited: false,
                 },
                 &mut s,
                 &mut lifecycle_guard,
@@ -407,6 +408,7 @@ impl AgentEngine {
                 finalize::FinalizeOutcome::Done {
                     assistant_text: text,
                     thinking_json: None,
+                    turn_limited: false,
                 },
                 &mut s,
                 &mut lifecycle_guard,
@@ -586,6 +588,7 @@ impl AgentEngine {
                 finalize::FinalizeOutcome::Done {
                     assistant_text: text,
                     thinking_json: None,
+                    turn_limited: false,
                 },
                 &mut s,
                 &mut lifecycle_guard,

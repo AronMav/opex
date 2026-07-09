@@ -324,6 +324,10 @@ pub enum FinalizeOutcome {
         assistant_text: String,
         /// Thinking blocks JSON to be persisted with the message.
         thinking_json: Option<serde_json::Value>,
+        /// F105: the run hit the turn/iteration limit. Still persisted as 'done'
+        /// (the reply is delivered), but finalize additionally fires the
+        /// iteration-limit notification + a session_failures diagnostic row.
+        turn_limited: bool,
     },
     Failed {
         partial: String,
@@ -420,7 +424,7 @@ pub async fn finalize<S: EventSink>(
     let agent_name_ref = ctx.agent_name.as_str();
 
     let out = match &outcome {
-        FinalizeOutcome::Done { assistant_text, thinking_json } => {
+        FinalizeOutcome::Done { assistant_text, thinking_json, turn_limited } => {
             // Resolve the guard before the DB write (C2): if save_message fails the
             // session must not be marked 'failed' by guard Drop — the LLM already
             // produced its response. Failure to persist is non-fatal for session status.
@@ -470,6 +474,28 @@ pub async fn finalize<S: EventSink>(
                         &ctx.bg_tasks,
                     );
                 }
+            // F105: a turn/iteration-limited run stays 'done' (the reply is
+            // delivered), but the truncation must not be silent — fire the bell
+            // notification and a session_failures diagnostic row so dashboards and
+            // the operator can see chronically-incomplete runs.
+            if *turn_limited {
+                notify_iteration_limit(
+                    ctx.db.clone(),
+                    ctx.ui_event_tx.as_ref(),
+                    &ctx.agent_name,
+                    ctx.max_iterations,
+                    &ctx.bg_tasks,
+                );
+                spawn_record_failure(
+                    ctx.db.clone(),
+                    ctx.session_id,
+                    ctx.agent_name.clone(),
+                    "iteration_limit_reached".to_string(),
+                    ctx.llm_provider.clone(),
+                    ctx.llm_model.clone(),
+                    &ctx.bg_tasks,
+                );
+            }
             assistant_text.clone()
         }
         FinalizeOutcome::Failed { partial, reason } => {
@@ -764,6 +790,12 @@ pub fn execute_status_to_finalize(
         ExecuteStatus::Done => FinalizeOutcome::Done {
             assistant_text: final_text,
             thinking_json,
+            turn_limited: false,
+        },
+        ExecuteStatus::DoneTurnLimited => FinalizeOutcome::Done {
+            assistant_text: final_text,
+            thinking_json,
+            turn_limited: true,
         },
         ExecuteStatus::Failed(reason) => FinalizeOutcome::Failed {
             partial: final_text,
