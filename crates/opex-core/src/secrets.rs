@@ -34,6 +34,16 @@ type SecretKey = (String, String);
 /// working set to disappear after rotation/delete).
 type SecretCache = Arc<RwLock<HashMap<SecretKey, Zeroizing<String>>>>;
 
+/// Names that live in `.env` and must NEVER be served through the secrets
+/// env-fallback (F002). They are process-config crown jewels — the vault
+/// master key, the DB DSN, the API auth token — not vault secrets. Serving
+/// them via `get`/`get_scoped` or a YAML-tool `bearer_env` would let a holder
+/// of the rotatable API token escalate to the (effectively unrotatable) master
+/// key + DB credentials, defeating the `master_key_bytes` don't-leak invariant.
+pub fn is_reserved_secret_name(name: &str) -> bool {
+    matches!(name, "OPEX_MASTER_KEY" | "OPEX_AUTH_TOKEN" | "DATABASE_URL")
+}
+
 #[derive(Clone)]
 pub struct SecretsManager {
     cipher: Arc<ChaCha20Poly1305>,
@@ -180,6 +190,9 @@ impl SecretsManager {
             return Some(val.as_str().to_string());
         }
         drop(cache);
+        if is_reserved_secret_name(name) {
+            return None;
+        }
         std::env::var(name).ok()
     }
 
@@ -200,6 +213,9 @@ impl SecretsManager {
             return Some(val.as_str().to_string());
         }
         drop(cache);
+        if is_reserved_secret_name(name) {
+            return None;
+        }
         if let Ok(val) = std::env::var(name) {
             if !scope.is_empty() {
                 tracing::warn!(secret = %name, scope = %scope, "secret resolved from env var — consider migrating to vault");
@@ -525,6 +541,29 @@ mod tests {
         let mgr = SecretsManager::new_noop();
         let result = mgr.get_strict("__missing__").await;
         assert_eq!(result, None);
+    }
+
+    // ── F002: reserved .env keys must never resolve from env ─────────────────
+
+    #[test]
+    fn reserved_names_are_flagged() {
+        assert!(is_reserved_secret_name("OPEX_MASTER_KEY"));
+        assert!(is_reserved_secret_name("OPEX_AUTH_TOKEN"));
+        assert!(is_reserved_secret_name("DATABASE_URL"));
+        assert!(!is_reserved_secret_name("MY_TOOL_TOKEN"));
+        assert!(!is_reserved_secret_name("openai_api_key"));
+    }
+
+    #[tokio::test]
+    async fn reserved_names_not_resolvable_from_env() {
+        // The reserved .env crown-jewels must never be served via the secrets
+        // env-fallback, even when present in the process environment
+        // (DATABASE_URL is set under `make test-db`). See F002.
+        let mgr = SecretsManager::new_noop();
+        assert_eq!(mgr.get("OPEX_MASTER_KEY").await, None);
+        assert_eq!(mgr.get("OPEX_AUTH_TOKEN").await, None);
+        assert_eq!(mgr.get("DATABASE_URL").await, None);
+        assert_eq!(mgr.get_scoped("DATABASE_URL", "agent-x").await, None);
     }
 
     #[tokio::test]

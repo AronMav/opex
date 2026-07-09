@@ -24,6 +24,9 @@ async fn resolve_env(key: &str, resolver: Option<&dyn EnvResolver>) -> Result<St
     {
         return Ok(val);
     }
+    if crate::secrets::is_reserved_secret_name(key) {
+        anyhow::bail!("env var '{key}' is reserved and cannot be used as a tool credential");
+    }
     std::env::var(key).with_context(|| format!("env var '{key}' not set"))
 }
 use std::path::Path;
