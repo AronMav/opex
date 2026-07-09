@@ -1551,10 +1551,14 @@ pub async fn search_messages(
 ) -> Result<Vec<SearchResult>> {
     // Try FTS first (migration 017 adds tsv column)
     let rows = sqlx::query_as::<_, SearchResult>(
+        // F086: the writer builds m.tsv with the 'russian' config (migration 011),
+        // so the query MUST use 'russian' too — 'simple' produces unstemmed lexemes
+        // that never match the stemmed/stopword-stripped tsv, silently returning
+        // incomplete/empty results for the deploy's primary (Russian) content.
         "SELECT m.content, s.id as session_id, s.user_id, s.channel, m.role, m.created_at, \
-                ts_rank_cd(m.tsv, plainto_tsquery('simple', $2))::float8 AS rank \
+                ts_rank_cd(m.tsv, plainto_tsquery('russian', $2))::float8 AS rank \
          FROM messages m JOIN sessions s ON m.session_id = s.id \
-         WHERE s.agent_id = $1 AND m.tsv @@ plainto_tsquery('simple', $2) \
+         WHERE s.agent_id = $1 AND m.tsv @@ plainto_tsquery('russian', $2) \
          ORDER BY rank DESC, m.created_at DESC LIMIT $3",
     )
     .bind(agent_id)
