@@ -62,6 +62,9 @@ async fn main() -> anyhow::Result<()> {
     let mut recovery_state = recovery::RecoveryState::new();
     let mut check_statuses: HashMap<String, status::ServiceStatus> = HashMap::new();
     let mut was_down: HashMap<String, bool> = HashMap::new();
+    // F048: dedup the "flapping — restarts stopped" alert (mirrors was_down) so
+    // it fires once on the transition into flapping, not every loop iteration.
+    let mut was_flapping: HashMap<String, bool> = HashMap::new();
     let mut resource_status: Option<resources::ResourceStatus> = None;
     let mut was_resource_warning: HashMap<String, bool> = HashMap::new();
     let mut was_container_unhealthy: HashMap<String, bool> = HashMap::new();
@@ -120,6 +123,7 @@ async fn main() -> anyhow::Result<()> {
                 if previously_down {
                     recovery_state.mark_recovered(&check.name);
                     was_down.insert(check.name.clone(), false);
+                    was_flapping.insert(check.name.clone(), false); // F048: reset on recovery
                     alerter
                         .send(
                             &alert_config,
@@ -165,13 +169,18 @@ async fn main() -> anyhow::Result<()> {
                         }
                     } else if recovery_state.is_flapping(&check.name) {
                         flapping = true;
-                        alerter
-                            .send(
-                                &alert_config,
-                                &format!("🔥 {} flapping — restarts stopped", check.name),
-                                "down",
-                            )
-                            .await;
+                        // F048: only alert on the transition INTO flapping, not
+                        // every 60s cycle while it stays flapping.
+                        if !was_flapping.get(&check.name).copied().unwrap_or(false) {
+                            alerter
+                                .send(
+                                    &alert_config,
+                                    &format!("🔥 {} flapping — restarts stopped", check.name),
+                                    "down",
+                                )
+                                .await;
+                            was_flapping.insert(check.name.clone(), true);
+                        }
                         recovery_state.enter_cooldown(&check.name, cfg.watchdog.cooldown_secs);
                     }
                 } else if !previously_down {
