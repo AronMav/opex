@@ -219,12 +219,12 @@ export function NotificationBell() {
       </DropdownMenuTrigger>
       <DropdownMenuContent       align="end"
       className="w-80 max-w-[calc(100dvw-0.5rem)] p-0" data-testid="notification-list">
-        {/* Header — title truncates first; the action links stay compact
-            (px-0) and never shrink, so neither button is clipped even at the
-            mobile max-w-[calc(100dvw-0.5rem)] width. */}
-        <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-          <span className="min-w-0 truncate text-sm font-semibold">{t("notifications.title")}</span>
-          <div className="flex shrink-0 items-center gap-3">
+        {/* Header — the title always shows in full; the action links wrap to a
+            second line (right-aligned via ml-auto) when they don't fit beside
+            it, so nothing is clipped and the title is never squeezed. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-3">
+          <span className="text-sm font-semibold">{t("notifications.title")}</span>
+          <div className="ml-auto flex items-center gap-3">
             {unread_count > 0 && (
               <Button
                 variant="link"
