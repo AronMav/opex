@@ -276,6 +276,44 @@ impl ToolExecutionContext {
     }
 }
 
+/// Hard byte cap for buffered YAML-tool text responses (F032). Mirrors the
+/// binary path's `MAX_BINARY_SIZE`; the paginated path already caps at
+/// [`PAGINATION_MAX_TOTAL_BYTES`].
+pub(crate) const MAX_TEXT_RESPONSE_BYTES: usize = 50 * 1024 * 1024; // 50 MB
+
+/// Read a response body as text with a hard byte cap (F032). The non-paginated
+/// text path buffered the whole body via `resp.text()` with no limit, so a tool
+/// endpoint (agent-authored via tool_create, or reachable through an SSRF gap)
+/// returning a multi-GB body OOM-killed the single opex-core process. Streams
+/// with a cap and returns a `tool error:` marker (treated as failure downstream)
+/// when the body is too large, instead of the previous silent `unwrap_or_default`.
+pub(crate) async fn read_body_capped(resp: reqwest::Response) -> String {
+    if let Some(len) = resp.content_length()
+        && len > MAX_TEXT_RESPONSE_BYTES as u64
+    {
+        return format!(
+            "tool error: response too large ({len} bytes, cap {MAX_TEXT_RESPONSE_BYTES})"
+        );
+    }
+    use futures_util::StreamExt as _;
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(c) => {
+                if buf.len() + c.len() > MAX_TEXT_RESPONSE_BYTES {
+                    return format!(
+                        "tool error: response exceeded {MAX_TEXT_RESPONSE_BYTES} byte cap"
+                    );
+                }
+                buf.extend_from_slice(&c);
+            }
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
 pub(crate) fn build_cache_key(
     agent_name: &str,
     tool_name: &str,
@@ -805,7 +843,7 @@ impl YamlToolDef {
 
                         if !resp.status().is_success() {
                             let status = resp.status();
-                            let body = resp.text().await.unwrap_or_default();
+                            let body = read_body_capped(resp).await;
                             // Bug 8: redact secrets from OAuth error body before logging
                             anyhow::bail!(
                                 "oauth token endpoint returned {status}: {}",
@@ -948,14 +986,29 @@ impl YamlToolDef {
                                 )
                             })?;
                             let ssrf_client = ssrf_multipart_client();
-                            let bytes = ssrf_client
+                            let dl_resp = ssrf_client
                                 .get(&val_str)
                                 .send()
                                 .await
-                                .context("failed to download file for multipart")?
+                                .context("failed to download file for multipart")?;
+                            // F032: cap the LLM-controlled file download so it
+                            // can't OOM core with a multi-GB body.
+                            if let Some(len) = dl_resp.content_length()
+                                && len > MAX_TEXT_RESPONSE_BYTES as u64
+                            {
+                                anyhow::bail!(
+                                    "multipart file too large: {len} bytes (cap {MAX_TEXT_RESPONSE_BYTES})"
+                                );
+                            }
+                            let bytes = dl_resp
                                 .bytes()
                                 .await
                                 .context("failed to read file bytes")?;
+                            if bytes.len() > MAX_TEXT_RESPONSE_BYTES {
+                                anyhow::bail!(
+                                    "multipart file exceeded {MAX_TEXT_RESPONSE_BYTES} byte cap"
+                                );
+                            }
                             let filename = body_params
                                 .get("file_name")
                                 .and_then(|v| v.as_str())
@@ -1081,7 +1134,7 @@ impl YamlToolDef {
                 }
             };
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_body_capped(resp).await;
 
             if status.is_success() {
                 let elapsed = start.elapsed();
@@ -1312,7 +1365,7 @@ impl YamlToolDef {
                 }
             };
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_body_capped(resp).await;
 
             if status.is_success() {
                 return Ok(body);
@@ -1402,7 +1455,7 @@ impl YamlToolDef {
                 return Ok(bytes.to_vec());
             }
 
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_body_capped(resp).await;
             if attempt + 1 < max && self.is_retryable(status.as_u16()) {
                 // Bug 10: redact secrets from binary-tool error bodies
                 last_err = Some(anyhow::anyhow!(
