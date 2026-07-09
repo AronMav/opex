@@ -124,8 +124,13 @@ pub struct DefaultToolExecutor {
     /// In-memory waiters for pending tool-call approvals (shared with ApprovalManager).
     /// Backed by `DashMap` (sharded sync lock) — see `ApprovalWaitersMap`.
     pub(crate) approval_waiters: crate::agent::approval_manager::ApprovalWaitersMap,
-    /// SSE event sender for current streaming session — set/cleared by SSE loop.
-    pub(crate) sse_event_tx: Arc<tokio::sync::Mutex<Option<crate::agent::engine_event_sender::EngineEventSender>>>,
+    /// SSE event senders keyed by session_id (F036). One `Arc<AgentEngine>`
+    /// serves concurrent sessions (e.g. two browser tabs of the same agent); a
+    /// single Option slot clobbered them (approval/clarify events cross-
+    /// delivered, and one turn's exit wiped another's sender). A per-session map
+    /// lets out-of-band approval/clarify events target the specific session the
+    /// tool belongs to, and each turn inserts/removes only its own entry.
+    pub(crate) sse_event_tx: Arc<dashmap::DashMap<uuid::Uuid, crate::agent::engine_event_sender::EngineEventSender>>,
 }
 
 /// Construction parameters for `DefaultToolExecutor` — all 13 migrated fields.
@@ -149,7 +154,7 @@ pub struct DefaultToolExecutorFields {
     pub http_client: reqwest::Client,
     pub hooks: Arc<crate::agent::hooks::HookRegistry>,
     pub approval_waiters: crate::agent::approval_manager::ApprovalWaitersMap,
-    pub sse_event_tx: Arc<tokio::sync::Mutex<Option<crate::agent::engine_event_sender::EngineEventSender>>>,
+    pub sse_event_tx: Arc<dashmap::DashMap<uuid::Uuid, crate::agent::engine_event_sender::EngineEventSender>>,
 }
 
 impl DefaultToolExecutor {

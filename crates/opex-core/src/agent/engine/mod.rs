@@ -267,7 +267,7 @@ impl AgentEngine {
     /// Phase 62 RES-01: stores an `EngineEventSender` (bounded-channel wrapper
     /// that enforces text-delta-droppable / non-text-never-dropped contract).
     #[inline]
-    pub(crate) fn sse_event_tx(&self) -> &Arc<tokio::sync::Mutex<Option<crate::agent::engine_event_sender::EngineEventSender>>> {
+    pub(crate) fn sse_event_tx(&self) -> &Arc<dashmap::DashMap<uuid::Uuid, crate::agent::engine_event_sender::EngineEventSender>> {
         &self.tex().sse_event_tx
     }
 

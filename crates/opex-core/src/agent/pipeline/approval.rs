@@ -62,16 +62,28 @@ pub async fn resolve_approval(
     // actively waiting on this event); use send_async to honor the
     // EngineEventSender "non-text never dropped" contract.
     let action = if approved { ApprovalAction::Approved } else { ApprovalAction::Rejected };
-    if let Some(tx) = ctx.tex.sse_event_tx.lock().await.as_ref()
-        && let Err(e) = tx
+    // F036: the resolve path (webhook/API callback) has no session_id in scope.
+    // ApprovalResolved carries only approval_id + action (no sensitive tool
+    // data) and each client acts only on the approval_id it is waiting on, so
+    // deliver to every live session sender. Clone them out of the per-session
+    // map first — never hold a DashMap Ref across the await.
+    let senders: Vec<_> = ctx
+        .tex
+        .sse_event_tx
+        .iter()
+        .map(|r| r.value().clone())
+        .collect();
+    for tx in senders {
+        if let Err(e) = tx
             .send_async(StreamEvent::ApprovalResolved {
                 approval_id,
                 action,
                 modified_input: modified_input.clone(),
             })
             .await
-    {
-        tracing::warn!(approval_id = %approval_id, error = ?e, "ApprovalResolved send failed");
+        {
+            tracing::warn!(approval_id = %approval_id, error = ?e, "ApprovalResolved send failed");
+        }
     }
 
     // Wake up the waiting tool execution.

@@ -84,7 +84,7 @@ impl ApprovalManager {
         timeout_secs: u64,
         channel_router: Option<&ChannelActionRouter>,
         ui_event_tx: Option<&tokio::sync::broadcast::Sender<String>>,
-        sse_event_tx: &Arc<tokio::sync::Mutex<Option<crate::agent::engine_event_sender::EngineEventSender>>>,
+        sse_event_tx: &Arc<dashmap::DashMap<Uuid, crate::agent::engine_event_sender::EngineEventSender>>,
     ) -> ApprovalOutcome {
         let session_id = context
             .get("session_id")
@@ -199,8 +199,14 @@ impl ApprovalManager {
         // deadline below; prune_stale reaps orphans.
         self.waiters.insert(approval_id, (result_tx, Instant::now()));
 
-        // 4. Emit SSE event for inline approval in chat UI
-        if let Some(tx) = sse_event_tx.lock().await.as_ref() {
+        // 4. Emit SSE event for inline approval in chat UI. F036: target the
+        //    sender for THIS approval's session only — ApprovalNeeded carries
+        //    tool_name + tool_input, so mis-delivery to a concurrent session of
+        //    the same agent would leak it. Clone the sender out of the map
+        //    BEFORE the await (never hold a DashMap Ref across await).
+        let approval_sender =
+            session_id.and_then(|sid| sse_event_tx.get(&sid).map(|r| r.clone()));
+        if let Some(tx) = approval_sender {
             let clean_input = {
                 let mut args_clone = arguments.clone();
                 if let Some(obj) = args_clone.as_object_mut() {
@@ -303,7 +309,10 @@ impl ApprovalManager {
                 }
 
                 // Emit SSE event for timeout — non-text, MUST be delivered.
-                if let Some(tx) = sse_event_tx.lock().await.as_ref()
+                // F036: target this session's sender (cloned before await).
+                let timeout_sender =
+                    session_id.and_then(|sid| sse_event_tx.get(&sid).map(|r| r.clone()));
+                if let Some(tx) = timeout_sender
                     && let Err(e) = tx
                         .send_async(StreamEvent::ApprovalResolved {
                             approval_id,

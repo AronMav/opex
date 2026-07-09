@@ -93,8 +93,10 @@ impl SystemToolHandler for ClarifyHandler {
         let clarify_timeout_secs = deps.cfg.app_config.limits.clarify_timeout_secs;
         let timeout_ms = clarify_timeout_secs * 1000;
 
-        // 5a. Web SSE path (Task 5)
-        if let Some(tx) = deps.tex.sse_event_tx.lock().await.as_ref()
+        // 5a. Web SSE path (Task 5). F036: target THIS session's sender
+        // (cloned out of the per-session map before the await).
+        let clarify_sender = deps.tex.sse_event_tx.get(&session_id).map(|r| r.clone());
+        if let Some(tx) = clarify_sender
             && let Err(e) = tx
                 .send_async(crate::agent::engine::StreamEvent::ClarifyNeeded {
                     clarify_id,

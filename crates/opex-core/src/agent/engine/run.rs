@@ -15,6 +15,20 @@ use crate::agent::pipeline::sink::{self, EventSink, PipelineEvent};
 use crate::agent::pipeline::{execute, finalize};
 use crate::agent::stream_event::StreamEvent;
 
+/// F036: RAII guard that removes this session's SSE sender from the per-session
+/// map on every exit path (normal return, `?` error, panic-unwind), so a
+/// finished turn releases only its OWN entry and never wipes a concurrent
+/// session's sender.
+struct SseSenderGuard {
+    map: std::sync::Arc<dashmap::DashMap<Uuid, EngineEventSender>>,
+    session_id: Uuid,
+}
+impl Drop for SseSenderGuard {
+    fn drop(&mut self) {
+        self.map.remove(&self.session_id);
+    }
+}
+
 impl AgentEngine {
     /// Hard-error path helper: when `execute()`/`finalize()` bubble an `Err` out
     /// of an entry point, the normal `finalize` failure machinery never runs and
@@ -70,18 +84,13 @@ impl AgentEngine {
         // always-full drain timeout).
         let _req_guard = self.state.register_request_guarded(cancel.clone());
 
-        // Publish the event sender so approval_manager can broadcast tool-approval
-        // requests while the SSE stream is live. Cleared after finalize so idle
-        // agents don't keep a dangling reference. Previously lost during the
-        // pipeline refactor; restored 2026-04-20.
-        //
-        // C1: wrap inner logic so sse_event_tx is cleared on ALL exit paths
-        // (including bootstrap error, finalize error, etc.) — previously a `?`
-        // anywhere in the body could bypass the clear at the end of the function.
-        *self.sse_event_tx().lock().await = Some(event_tx.clone());
-        let result = self.handle_sse_inner(msg, event_tx, resume_session_id, force_new_session, cancel).await;
-        *self.sse_event_tx().lock().await = None;
-        result
+        // F036: the per-session SSE sender is now published INSIDE
+        // handle_sse_inner, keyed by session_id (known only after bootstrap),
+        // and removed via an RAII guard on every exit path. This replaces the
+        // single Option slot that concurrent sessions of the same agent used to
+        // clobber (cross-delivering approval/clarify events and wiping each
+        // other's sender on exit).
+        self.handle_sse_inner(msg, event_tx, resume_session_id, force_new_session, cancel).await
     }
 
     async fn handle_sse_inner(
@@ -92,6 +101,9 @@ impl AgentEngine {
         force_new_session: bool,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Result<Uuid> {
+        // F036: keep a clone of the sender to publish per-session (below, once
+        // bootstrap resolves the session_id); the original is moved into the sink.
+        let sse_sender = event_tx.clone();
         let mut s = sink::SseSink::new(event_tx);
 
         let boot = bootstrap::bootstrap(
@@ -122,6 +134,15 @@ impl AgentEngine {
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("bootstrap always sets lifecycle_guard");
         let mut compressor = compressor;
+
+        // F036: publish THIS session's SSE sender so the approval/clarify
+        // managers can target it specifically. The RAII guard removes only this
+        // session's entry on every exit path (bootstrap here already succeeded).
+        self.sse_event_tx().insert(session_id, sse_sender);
+        let _sse_sender_guard = SseSenderGuard {
+            map: self.sse_event_tx().clone(),
+            session_id,
+        };
 
         // Emit SessionId so the UI can track which session is active and display the context bar.
         let _ = s
