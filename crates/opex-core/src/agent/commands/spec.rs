@@ -2,15 +2,37 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum CommandScope { Text, Native, Both }
+pub enum CommandScope {
+    // consumed in Phase 2: text-only commands with no native-command mirror
+    #[allow(dead_code)]
+    Text,
+    Native,
+    Both,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum CommandCategory { Session, Options, Status, Management, Media, Tools }
+pub enum CommandCategory {
+    Session,
+    Options,
+    Status,
+    Management,
+    Media,
+    // consumed in Phase 2: category for handler-sourced tool commands
+    #[allow(dead_code)]
+    Tools,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ArgType { String, Number, Boolean }
+pub enum ArgType {
+    String,
+    // consumed in Phase 2: typed args for handler-sourced commands
+    #[allow(dead_code)]
+    Number,
+    #[allow(dead_code)]
+    Boolean,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Choice { pub value: String, pub label: String }
@@ -21,11 +43,21 @@ pub enum Choices { Static { values: Vec<Choice> }, Dynamic { provider: String } 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Visibility { All, BaseOnly }
+pub enum Visibility {
+    All,
+    // consumed in Phase 2: base-agent-only command gating (not introduced in Phase 1)
+    #[allow(dead_code)]
+    BaseOnly,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
-pub enum CommandSourceKind { Builtin, Handler { handler_id: String } }
+pub enum CommandSourceKind {
+    Builtin,
+    // consumed in Phase 2: commands sourced from toolgate file handlers
+    #[allow(dead_code)]
+    Handler { handler_id: String },
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandArg {
@@ -53,9 +85,16 @@ pub struct CommandSpec {
 
 /// Результат исполнения команды (F1). `Menu` задействуется в Фазе 2 (argsMenu).
 #[derive(Debug, Clone)]
-pub enum CommandOutcome { Text(String), Menu { card: serde_json::Value } }
+pub enum CommandOutcome {
+    Text(String),
+    // consumed in Phase 2: argsMenu-driven interactive command results
+    #[allow(dead_code)]
+    Menu { card: serde_json::Value },
+}
 
 /// Санитизация в допустимое нативное имя Telegram: `[a-z0-9_]`, максимум 32.
+// consumed in Phase 2: native-command registration (Telegram BotFather sync)
+#[allow(dead_code)]
 pub fn sanitize_native_name(name: &str) -> Option<String> {
     let s: String = name.to_lowercase().chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();

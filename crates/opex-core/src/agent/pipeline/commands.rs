@@ -123,6 +123,9 @@ fn stop_goal_driver(ctx: &CommandContext<'_>, session_id: uuid::Uuid) {
 
 /// Имена, реально обрабатываемые `match` в `handle_command` (без ведущего `/`).
 /// Держать синхронно с ветками ниже; drift-гард-тест сверяет с BUILTIN_NAMES.
+// consumed by the registry/dispatch drift-guard test below (`dispatch_names_match_registry_builtins`);
+// production match arms are exercised directly, not via this list.
+#[allow(dead_code)]
 pub const DISPATCH_NAMES: &[&str] = &[
     "status", "new", "reset", "compact", "rollback", "model", "think",
     "voice", "usage", "export", "help", "memory", "goal", "subgoal",

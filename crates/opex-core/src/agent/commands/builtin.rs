@@ -8,6 +8,9 @@
 use super::registry::CommandSource;
 use super::spec::*;
 
+// consumed in Phase 2 (also exercised today by the registry/dispatch drift-guard
+// test in `agent::pipeline::commands` and the builtin-coverage tests below).
+#[allow(dead_code)]
 pub const BUILTIN_NAMES: &[&str] = &[
     "status", "new", "reset", "compact", "rollback", "model", "think",
     "voice", "usage", "export", "help", "memory", "goal", "subgoal",

@@ -22,6 +22,10 @@ impl CommandRegistry {
     }
 
     /// Резолв по каноническому имени ИЛИ алиасу; ведущий `/` игнорируется.
+    // consumed in Phase 2: slash-dispatch will resolve through the registry
+    // directly (Phase 1 dispatch still runs through the legacy match table in
+    // `agent::pipeline::commands`); exercised by unit tests today.
+    #[allow(dead_code)]
     pub fn resolve(&self, name: &str) -> Option<&CommandSpec> {
         let n = name.trim().trim_start_matches('/').to_lowercase();
         self.specs.iter().find(|c| {
@@ -36,6 +40,9 @@ impl CommandRegistry {
             .collect()
     }
 
+    // consumed in Phase 2: bulk registry export beyond `/api/commands`
+    // (which filters via `visible_for`); exercised by unit tests today.
+    #[allow(dead_code)]
     pub fn all(&self) -> &[CommandSpec] {
         &self.specs
     }
