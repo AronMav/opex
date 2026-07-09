@@ -632,13 +632,39 @@ impl LlmProvider for RoutingProvider {
                     Self::record_failover(&last_failed_key, &fb.key, reason);
                 }
                 tracing::info!(provider = %fb.provider.name(), "trying streaming fallback provider");
-                match fb.provider.chat_stream(messages, tools, chunk_tx.clone(), opts.clone()).await {
+                // F063: mirror the primary path's chunks_sent guard. Without it,
+                // a fallback that streamed partial content then failed mid-stream
+                // would fail over AGAIN to the next fallback and double-stream to
+                // the same sink (the user sees A's partial output + B's full
+                // output concatenated).
+                use std::sync::atomic::{AtomicBool, Ordering};
+                let chunks_sent = Arc::new(AtomicBool::new(false));
+                let (tracking_tx, mut tracking_rx) = tokio::sync::mpsc::channel::<String>(1024);
+                let forwarder = {
+                    let sentinel = chunks_sent.clone();
+                    let forward_tx = chunk_tx.clone();
+                    tokio::spawn(async move {
+                        while let Some(chunk) = tracking_rx.recv().await {
+                            sentinel.store(true, Ordering::Relaxed);
+                            forward_tx.send(chunk).await.ok();
+                        }
+                    })
+                };
+                match fb.provider.chat_stream(messages, tools, tracking_tx, opts.clone()).await {
                     Ok(mut resp) => {
                         let reason = if primary_skipped { "cooldown" } else { "primary_failed" };
                         resp.fallback_notice = Some(format!("↪️ {} → {} ({})", primary_display, fb.provider.name(), reason));
                         return Ok(resp);
                     }
                     Err(e) => {
+                        // Drain the forwarder before reading the sentinel.
+                        let _ = forwarder.await;
+                        if chunks_sent.load(Ordering::Relaxed) {
+                            let _ = self.handle_provider_error(&e, &fb.key, fb.cooldown_duration);
+                            tracing::warn!(provider = %fb.provider.name(), error = %e,
+                                "streaming fallback: mid-stream failure, partial output already sent — not failing over further");
+                            return Err(e);
+                        }
                         match self.handle_provider_error(&e, &fb.key, fb.cooldown_duration) {
                             None => return Err(e),
                             Some(reason) => {
