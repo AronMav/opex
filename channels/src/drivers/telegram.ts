@@ -10,8 +10,6 @@ import type { ChannelDriver } from "../session";
 import type { ChannelActionDto, IncomingMessageDto, MediaAttachment } from "../types";
 import { getStrings, type Strings } from "../localization";
 import { splitText, toolEmoji, parseDirectives, parseUserCommand, reUploadAttachments, commonMarkToMarkdownV2, isTgPermanentError, extractTgErrorCode, extractTgRetryAfter, exponentialDelay, chatCooldownKey } from "./common";
-import * as fs from "fs";
-import * as path from "path";
 
 /** Builds reply_parameters with allow_sending_without_reply for resilient replies */
 function safeReplyParams(messageId: number | undefined): { message_id: number; allow_sending_without_reply: true } | undefined {
@@ -61,36 +59,12 @@ export async function tgUpload(
   }
 }
 
-const QUEUE_FILE = path.join(process.cwd(), ".pending-queue.json");
-
-interface PersistedQueueItem {
-  userId: string;
-  chatId: number;
-  text: string;
-  attachments: MediaAttachment[];
-}
-
-function persistQueue(pendingQueue: Map<string, QueuedMessage[]>) {
-  try {
-    const data: Record<string, PersistedQueueItem[]> = {};
-    for (const [key, items] of pendingQueue) {
-      data[key] = items.map((q) => ({
-        userId: q.userId, chatId: q.chatId, text: q.text, attachments: q.attachments,
-      }));
-    }
-    fs.writeFileSync(QUEUE_FILE, JSON.stringify(data));
-  } catch (e) {
-    console.error("[queue] failed to persist queue:", e);
-  }
-}
-
-function restoreQueue(): Map<string, PersistedQueueItem[]> {
-  try {
-    const raw = fs.readFileSync(QUEUE_FILE, "utf-8");
-    fs.unlinkSync(QUEUE_FILE);
-    return new Map(Object.entries(JSON.parse(raw)));
-  } catch { return new Map(); }
-}
+// F134: the persist/restore busy-queue machinery was removed. persistQueue wrote
+// .pending-queue.json on the hot path but restoreQueue was NEVER called, so it was
+// write-only overhead that delivered no restart durability — and the persisted
+// items lacked the grammy `msg` (message_id) needed to faithfully replay with
+// reply context anyway. Queued-while-busy messages are dropped on restart (the
+// user can resend); the synchronous fs writes are gone.
 
 // ── Per-chat cooldown map ──────────────────────────────────────────────
 
@@ -617,7 +591,6 @@ async function dispatchOrQueue(
     const existing = state.pendingQueue.get(key) ?? [];
     existing.push({ msg, userId, chatId, text, attachments });
     state.pendingQueue.set(key, existing);
-    persistQueue(state.pendingQueue);
     await bot.api.setMessageReaction(
       chatId, msg.message_id,
       [{ type: "emoji", emoji: "⏳" as any }],
@@ -843,7 +816,6 @@ async function processMessage(
   const queued = state.pendingQueue.get(key);
   if (queued && queued.length > 0) {
     state.pendingQueue.delete(key);
-    persistQueue(state.pendingQueue);
     // Merge all queued messages
     const merged = queued.map((q) => q.text).filter(Boolean).join("\n\n---\n\n");
     const last = queued[queued.length - 1];
