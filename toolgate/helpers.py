@@ -3,7 +3,7 @@
 import ipaddress
 import re
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 from fastapi import HTTPException
@@ -23,11 +23,16 @@ DOWNLOAD_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
 _CGNAT_V4 = ipaddress.IPv4Network("100.64.0.0/10")
 
 
-def validate_url_ssrf(url: str) -> None:
+def validate_url_ssrf(url: str) -> str | None:
     """Block requests to private/internal networks (SSRF protection).
 
-    Validates both the hostname (blocklist) and resolved IPs (private range check).
-    Mirrors the Rust SsrfSafeResolver logic from the Core.
+    Validates the hostname (blocklist) and ALL resolved IPs (private range check),
+    and RETURNS the first safe IP so the caller can PIN the connection to it
+    (F051). Without pinning, httpx re-resolves the hostname at connect time and an
+    attacker controlling the DNS can rebind to 127.0.0.1 / 169.254.169.254 /
+    RFC1918 between this check and the connect (TOCTOU). Returns None only when DNS
+    resolution fails (httpx will then fail the connect itself). Mirrors the Rust
+    SsrfSafeResolver, which likewise pins the validated address.
     """
     parsed = urlparse(url)
     scheme = parsed.scheme.lower()
@@ -42,7 +47,10 @@ def validate_url_ssrf(url: str) -> None:
     if hostname in blocked_hosts or hostname.endswith(".local") or hostname.endswith(".internal"):
         raise HTTPException(400, f"blocked: URL targets internal service ({hostname})")
 
-    # Resolve and check for private IPs
+    # Resolve and check for private IPs. ALL resolved addresses must be public,
+    # so an attacker can't hide a private IP behind a public one in a multi-A
+    # record and hope the connect picks the private one.
+    safe_ip: str | None = None
     try:
         for info in socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM):
             addr = info[4][0]
@@ -55,19 +63,46 @@ def validate_url_ssrf(url: str) -> None:
             # Multicast — IPv4 224.0.0.0/4 and IPv6 ff00::/8. Stdlib is_multicast covers both.
             if ip.is_multicast:
                 raise HTTPException(400, f"blocked: URL resolves to multicast IP ({addr})")
+            if safe_ip is None:
+                safe_ip = addr
     except socket.gaierror:
         pass  # DNS resolution will fail later in httpx — let it
+    return safe_ip
 
 
 async def download_limited(http, url: str, *, max_bytes: int = MAX_DOWNLOAD_BYTES, **kwargs):
     """Download URL with a size limit to prevent OOM. Returns (bytes, content_type)."""
-    validate_url_ssrf(url)
+    pinned_ip = validate_url_ssrf(url)
     # Apply a default read timeout unless the caller set one (F004 slow-loris).
     kwargs.setdefault("timeout", DOWNLOAD_TIMEOUT)
-    # follow_redirects=False mirrors Rust ssrf_http_client (commit 75fee11):
-    # a 302 from a public origin could otherwise bypass the pre-flight
-    # validate_url_ssrf check and land on a private-IP target.
-    async with http.stream("GET", url, follow_redirects=False, **kwargs) as resp:
+
+    # F051: PIN the connection to the exact IP validate_url_ssrf approved, so httpx
+    # cannot re-resolve the hostname (DNS rebinding TOCTOU) to a private target
+    # between the check and the connect. Rewrite the URL to the IP, keep the
+    # original Host header, and (for TLS) set sni_hostname so SNI + cert
+    # verification still use the real hostname. follow_redirects stays False so a
+    # 302 can't escape the pinned target either.
+    stream_url = url
+    headers = dict(kwargs.pop("headers", {}) or {})
+    extensions = dict(kwargs.pop("extensions", {}) or {})
+    parsed = urlparse(url)
+    if pinned_ip and parsed.hostname:
+        scheme = parsed.scheme.lower()
+        port = parsed.port or (443 if scheme == "https" else 80)
+        ip_host = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+        stream_url = urlunparse(parsed._replace(netloc=f"{ip_host}:{port}"))
+        # Host header omits the port for the default scheme port (RFC-normal).
+        default_port = 443 if scheme == "https" else 80
+        headers.setdefault(
+            "Host",
+            parsed.hostname if port == default_port else f"{parsed.hostname}:{port}",
+        )
+        if scheme == "https":
+            extensions.setdefault("sni_hostname", parsed.hostname)
+
+    async with http.stream(
+        "GET", stream_url, follow_redirects=False, headers=headers, extensions=extensions, **kwargs
+    ) as resp:
         resp.raise_for_status()
         cl = resp.headers.get("content-length")
         if cl and int(cl) > max_bytes:
