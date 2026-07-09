@@ -34,7 +34,7 @@ use axum::http::HeaderMap;
 use futures_util::stream;
 
 use opex_core::gateway::restore_stream_core::{
-    check_content_length_cap, drain_body_with_cap, parse_stream_value, CapExceeded,
+    check_content_length_cap, drain_body_with_cap, parse_stream_value, DrainError,
 };
 
 use support::synthesize_backup_bytes;
@@ -216,7 +216,7 @@ async fn stream_drain_aborts_at_cap_without_content_length() {
         .expect_err("600MB stream must exceed 500MB cap");
     let elapsed = t0.elapsed();
 
-    assert!(matches!(err, CapExceeded { .. }));
+    assert!(matches!(err, DrainError::CapExceeded { .. }));
     // Should abort as soon as we cross the cap — ~500 one-MB chunks = ~500ms on a dev
     // box. Allow 10s budget to stay debug-mode safe; the contract is "aborts before
     // 600MB is buffered", not a wall-clock guarantee.

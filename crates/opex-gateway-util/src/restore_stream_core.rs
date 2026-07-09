@@ -27,12 +27,19 @@ use futures_util::{Stream, StreamExt};
 use serde_json::{json, Value};
 use struson::reader::{JsonReader, JsonStreamReader};
 
-/// Body cap exceeded — either via Content-Length fast-path or streaming drain.
+/// Failure while draining the request body under the size cap.
+///
+/// F115: a stream/transport error (client dropped, TCP reset, chunked-decode
+/// failure) MUST be distinguishable from a genuine cap breach. Reporting an I/O
+/// error as `CapExceeded { observed_bytes < cap_bytes }` produced a
+/// self-contradictory 413 that sent operators down the wrong path (shrinking a
+/// backup that was never too big) instead of investigating the transport.
 #[derive(Debug, thiserror::Error)]
-#[error("payload exceeds max_restore_size_mb ({observed_bytes} bytes > {cap_bytes} bytes)")]
-pub struct CapExceeded {
-    pub observed_bytes: usize,
-    pub cap_bytes: usize,
+pub enum DrainError {
+    #[error("payload exceeds max_restore_size_mb ({observed_bytes} bytes > {cap_bytes} bytes)")]
+    CapExceeded { observed_bytes: usize, cap_bytes: usize },
+    #[error("restore body stream error: {0}")]
+    Stream(String),
 }
 
 /// Content-Length header fast-path. Returns `Some((status, json_body))` when the
@@ -63,7 +70,7 @@ pub fn check_content_length_cap(
 ///
 /// The item type is `Result<Bytes, E>` so this works for both axum's `BodyDataStream`
 /// (`E = axum::Error`) and plain `std::io::Error` streams from the test harness.
-pub async fn drain_body_with_cap<S, E>(mut stream: S, cap_bytes: usize) -> Result<Vec<u8>, CapExceeded>
+pub async fn drain_body_with_cap<S, E>(mut stream: S, cap_bytes: usize) -> Result<Vec<u8>, DrainError>
 where
     S: Stream<Item = Result<Bytes, E>> + Unpin,
     E: std::fmt::Display,
@@ -73,17 +80,15 @@ where
         let c = match chunk {
             Ok(b) => b,
             Err(e) => {
-                // Log the underlying error and treat it as cap-exceeded (safer default:
-                // drop the connection rather than silently accept a truncated body).
-                tracing::warn!(error = %e, "restore body stream error; aborting as cap-exceeded");
-                return Err(CapExceeded {
-                    observed_bytes: buf.len(),
-                    cap_bytes,
-                });
+                // F115: a transport/IO failure is NOT a cap breach — report it as
+                // such so the handler maps it to 400/500 with the real cause,
+                // instead of a misleading 413 with observed_bytes < cap_bytes.
+                tracing::warn!(error = %e, "restore body stream error");
+                return Err(DrainError::Stream(e.to_string()));
             }
         };
         if buf.len() + c.len() > cap_bytes {
-            return Err(CapExceeded {
+            return Err(DrainError::CapExceeded {
                 observed_bytes: buf.len() + c.len(),
                 cap_bytes,
             });
@@ -177,8 +182,25 @@ mod tests {
         ];
         let s = stream::iter(chunks);
         let err = drain_body_with_cap(s, 1000).await.unwrap_err();
-        assert!(err.observed_bytes > 1000);
-        assert_eq!(err.cap_bytes, 1000);
+        match err {
+            DrainError::CapExceeded { observed_bytes, cap_bytes } => {
+                assert!(observed_bytes > 1000);
+                assert_eq!(cap_bytes, 1000);
+            }
+            other => panic!("expected CapExceeded, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn drain_body_stream_error_is_not_cap_exceeded() {
+        // F115: a mid-stream IO error must surface as Stream, not a bogus 413.
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
+            Ok(Bytes::from_static(b"partial")),
+            Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset")),
+        ];
+        let s = stream::iter(chunks);
+        let err = drain_body_with_cap(s, 1_000_000).await.unwrap_err();
+        assert!(matches!(err, DrainError::Stream(_)), "got {err:?}");
     }
 
     #[tokio::test]

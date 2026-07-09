@@ -13,7 +13,7 @@ use tokio::fs;
 use crate::gateway::AppState;
 use crate::gateway::clusters::{AgentCore, AuthServices, ConfigServices, InfraServices};
 use crate::gateway::restore_stream_core::{
-    check_content_length_cap, drain_body_with_cap, CapExceeded,
+    check_content_length_cap, drain_body_with_cap, DrainError,
 };
 
 // Re-use the same file as dto_export::backup_dto so the struct definition has
@@ -655,7 +655,7 @@ pub(crate) async fn api_restore(
     let body = req.into_body();
     let buf = match drain_body_with_cap(body.into_data_stream(), cap_bytes).await {
         Ok(b) => b,
-        Err(CapExceeded { observed_bytes, cap_bytes }) => {
+        Err(DrainError::CapExceeded { observed_bytes, cap_bytes }) => {
             tracing::warn!(observed_bytes, cap_bytes, "restore rejected via streaming byte-counter");
             return (
                 StatusCode::PAYLOAD_TOO_LARGE,
@@ -663,6 +663,18 @@ pub(crate) async fn api_restore(
                     "error": "payload exceeds max_restore_size_mb",
                     "cap_bytes": cap_bytes,
                     "observed_bytes": observed_bytes,
+                })),
+            ).into_response();
+        }
+        // F115: a transport/IO failure is not an oversize payload — surface the
+        // real cause as 400 instead of a self-contradictory 413.
+        Err(DrainError::Stream(msg)) => {
+            tracing::warn!(error = %msg, "restore body stream failed mid-transfer");
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "restore upload failed mid-transfer",
+                    "detail": msg,
                 })),
             ).into_response();
         }
