@@ -151,6 +151,15 @@ export class BridgeHandle {
 
     const promise = new Promise<string>((resolve) => {
       this.pendingPairing.set(requestId, resolve);
+      // F018: bound the wait — without this a lost/never-answered pairing_create
+      // response hangs the awaiting driver handler forever. Resolve with an
+      // empty code on timeout (the caller degrades to a no-code message).
+      setTimeout(() => {
+        if (this.pendingPairing.has(requestId)) {
+          this.pendingPairing.delete(requestId);
+          resolve("");
+        }
+      }, 30_000);
     });
 
     this.send({
@@ -172,6 +181,14 @@ export class BridgeHandle {
     const promise = new Promise<{ success: boolean; error?: string }>(
       (resolve) => {
         this.pendingPairingOps.set(requestId, resolve);
+        // F018: bound the wait so a lost pairing_approve response can't hang
+        // the owner-command handler forever.
+        setTimeout(() => {
+          if (this.pendingPairingOps.has(requestId)) {
+            this.pendingPairingOps.delete(requestId);
+            resolve({ success: false, error: "pairing approve timeout (30s)" });
+          }
+        }, 30_000);
       },
     );
 
@@ -307,6 +324,12 @@ export class BridgeHandle {
     for (const [, p] of this.pendingRequests) p.reject(err);
     // Fail-closed: deny access on disconnect rather than hanging forever.
     for (const [, resolve] of this.pendingAccess) resolve({ allowed: false, isOwner: false });
+    // F018: settle pairing promises too — clearing the maps without invoking
+    // the stored resolvers used to leave awaiting driver handlers hung forever.
+    for (const [, resolve] of this.pendingPairing) resolve("");
+    for (const [, resolve] of this.pendingPairingOps) {
+      resolve({ success: false, error: "session closed" });
+    }
     this.pendingRequests.clear();
     this.pendingAccess.clear();
     this.pendingPairing.clear();
