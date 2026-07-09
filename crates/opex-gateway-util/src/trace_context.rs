@@ -148,6 +148,7 @@ pub async fn trace_context_middleware(mut req: Request, next: Next) -> Response 
     // enters on each poll and exits on each yield, so the span never bleeds
     // across tasks (mirrors trace_propagation.rs).
     use tracing::Instrument as _;
+    let span = tracing::info_span!("http_request", trace_id = %trace_id.0);
     next.run(req).instrument(span).await
 }
 
