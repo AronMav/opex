@@ -303,12 +303,26 @@ impl McpRegistry {
     /// Find which MCP provides a given tool name.
     pub async fn find_mcp_for_tool(&self, tool_name: &str) -> Option<String> {
         let cache = self.tool_cache.read().await;
-        for (mcp_name, tools) in cache.iter() {
-            if tools.iter().any(|t| t.name == tool_name) {
-                return Some(mcp_name.clone());
-            }
+        // F040: `tool_cache` is a HashMap, so its iteration order is
+        // nondeterministic — when two MCP servers expose the same tool name
+        // (`search`/`fetch`/… are common), the old first-match returned a
+        // random, restart-varying server, dispatching the call to the wrong
+        // one. Collect all matches, pick deterministically (lexicographically
+        // smallest mcp name), and warn so the collision is visible.
+        let mut matches: Vec<&String> = cache
+            .iter()
+            .filter(|(_, tools)| tools.iter().any(|t| t.name == tool_name))
+            .map(|(mcp_name, _)| mcp_name)
+            .collect();
+        matches.sort();
+        if matches.len() > 1 {
+            tracing::warn!(
+                tool = %tool_name,
+                servers = ?matches,
+                "MCP tool-name collision — routing deterministically to the first; namespace tool names to disambiguate"
+            );
         }
-        None
+        matches.first().map(|s| (*s).clone())
     }
 
     /// Load MCP.md from an MCP server's workspace directory for additional context.
@@ -347,7 +361,28 @@ async fn parse_mcp_response(resp: reqwest::Response) -> Result<serde_json::Value
         .and_then(|v| v.to_str().ok())
         .is_some_and(|ct| ct.contains("text/event-stream"));
 
-    let text = resp.text().await?;
+    // F041: cap the buffered MCP body so a large/runaway response can't OOM the
+    // single opex-core process. Stream with a hard byte limit (robust against a
+    // chunked response that advertises no content-length).
+    const MAX_MCP_RESPONSE_BYTES: usize = 10 * 1024 * 1024; // 10 MB
+    if let Some(len) = resp.content_length()
+        && len > MAX_MCP_RESPONSE_BYTES as u64
+    {
+        anyhow::bail!("MCP response too large: {len} bytes (cap {MAX_MCP_RESPONSE_BYTES})");
+    }
+    let text = {
+        use futures_util::StreamExt as _;
+        let mut stream = resp.bytes_stream();
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if buf.len() + chunk.len() > MAX_MCP_RESPONSE_BYTES {
+                anyhow::bail!("MCP response exceeded {MAX_MCP_RESPONSE_BYTES} byte cap");
+            }
+            buf.extend_from_slice(&chunk);
+        }
+        String::from_utf8_lossy(&buf).into_owned()
+    };
 
     if !is_sse {
         return serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("MCP JSON parse: {e}"));
