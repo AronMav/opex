@@ -29,6 +29,12 @@ export interface OutboundAction {
 
 type SendFn = (json: string) => void;
 
+// F083: Bun's fetch has no default timeout. Without an AbortSignal a stalled
+// half-open connection (a documented failure mode behind the xray egress) wedges
+// the inbound message handler forever. Cap every core/external fetch.
+const MEDIA_FETCH_TIMEOUT_MS = 60_000; // media download + upload can be large
+const API_FETCH_TIMEOUT_MS = 15_000;   // small JSON control-plane calls
+
 let idCounter = 0;
 function genRequestId(): string {
   return `req-${Date.now()}-${++idCounter}`;
@@ -341,6 +347,7 @@ export class BridgeHandle {
     const url = `${this.coreHttpUrl}/api/access/${this.agentName}/users`;
     const resp = await fetch(url, {
       headers: { Authorization: `Bearer ${this.authToken}` },
+      signal: AbortSignal.timeout(API_FETCH_TIMEOUT_MS),
     });
     if (!resp.ok) throw new Error(`listUsers failed: HTTP ${resp.status}`);
     return (await resp.json()) as UserEntry[];
@@ -352,6 +359,7 @@ export class BridgeHandle {
     const resp = await fetch(url, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${this.authToken}` },
+      signal: AbortSignal.timeout(API_FETCH_TIMEOUT_MS),
     });
     if (!resp.ok) throw new Error(`revokeUser failed: HTTP ${resp.status}`);
     return true;
@@ -366,7 +374,7 @@ export class BridgeHandle {
     const headers: Record<string, string> = {};
     if (authHeader) headers.Authorization = authHeader;
 
-    const dlResp = await fetch(sourceUrl, { headers });
+    const dlResp = await fetch(sourceUrl, { headers, signal: AbortSignal.timeout(MEDIA_FETCH_TIMEOUT_MS) });
     if (!dlResp.ok) throw new Error(`uploadMedia download failed: HTTP ${dlResp.status}`);
     const blob = await dlResp.blob();
 
@@ -379,6 +387,7 @@ export class BridgeHandle {
         method: "POST",
         headers: { Authorization: `Bearer ${this.authToken}` },
         body: form,
+        signal: AbortSignal.timeout(MEDIA_FETCH_TIMEOUT_MS),
       },
     );
     if (!uploadResp.ok) throw new Error(`uploadMedia upload failed: HTTP ${uploadResp.status}`);

@@ -96,10 +96,14 @@ async function runSession(
 ): Promise<void> {
   const httpBase = wsToHttp(config.coreWs);
 
-  // Fetch a one-time WS ticket (avoids exposing static token in URL/logs)
+  // Fetch a one-time WS ticket (avoids exposing static token in URL/logs).
+  // F083: bound the fetch by both the loop's abort signal (so shutdown/reconnect
+  // cancels an in-flight ticket request) and a hard timeout (so a stalled
+  // half-open connection cannot wedge session startup forever).
   const ticketResp = await fetch(`${httpBase}/api/auth/ws-ticket`, {
     method: "POST",
     headers: { Authorization: `Bearer ${config.authToken}` },
+    signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
   });
   if (!ticketResp.ok) {
     throw new Error(`WS ticket request failed: ${ticketResp.status}`);
