@@ -277,13 +277,19 @@ impl ToolExecutionContext {
 }
 
 pub(crate) fn build_cache_key(
+    agent_name: &str,
     tool_name: &str,
     method: &str,
     endpoint: &str,
     params: &serde_json::Value,
     key_params: &[String],
 ) -> String {
-    let mut key = format!("{tool_name}|{method}|{endpoint}|");
+    // F039: the response cache (tool_exec_ctx) is a process-wide singleton
+    // shared by ALL agents, but auth (bearer_env / default_from_env) resolves
+    // PER-AGENT scoped secrets — so the same tool+params yields agent-specific
+    // responses. Include the agent name so one agent's authenticated private
+    // response can't be served to another from the shared cache.
+    let mut key = format!("{agent_name}|{tool_name}|{method}|{endpoint}|");
     if let Some(obj) = params.as_object() {
         if key_params.is_empty() {
             // serde_json::Map preserves insertion order (preserve_order feature
@@ -2416,6 +2422,7 @@ method: GET
     #[test]
     fn cache_key_uses_specified_params() {
         let key1 = build_cache_key(
+            "agent",
             "tool",
             "GET",
             "https://example.com",
@@ -2423,6 +2430,7 @@ method: GET
             &["ticker".into()],
         );
         let key2 = build_cache_key(
+            "agent",
             "tool",
             "GET",
             "https://example.com",
@@ -2435,6 +2443,7 @@ method: GET
     #[test]
     fn cache_key_all_params_when_empty() {
         let key1 = build_cache_key(
+            "agent",
             "t",
             "GET",
             "https://example.com",
@@ -2442,6 +2451,7 @@ method: GET
             &[],
         );
         let key2 = build_cache_key(
+            "agent",
             "t",
             "GET",
             "https://example.com",
@@ -2454,6 +2464,7 @@ method: GET
     #[test]
     fn cache_key_object_keys_are_order_independent() {
         let a = build_cache_key(
+            "agent",
             "x",
             "POST",
             "https://api.test/v",
@@ -2461,6 +2472,7 @@ method: GET
             &[],
         );
         let b = build_cache_key(
+            "agent",
             "x",
             "POST",
             "https://api.test/v",
@@ -2476,6 +2488,7 @@ method: GET
     #[test]
     fn cache_key_array_order_matters() {
         let a = build_cache_key(
+            "agent",
             "x",
             "POST",
             "https://api.test/v",
@@ -2483,6 +2496,7 @@ method: GET
             &[],
         );
         let b = build_cache_key(
+            "agent",
             "x",
             "POST",
             "https://api.test/v",
@@ -2490,6 +2504,24 @@ method: GET
             &[],
         );
         assert_ne!(a, b, "array element order is part of the cache key");
+    }
+
+    #[test]
+    fn f039_cache_key_is_scoped_per_agent() {
+        // Same tool + params but different agents must produce DIFFERENT keys,
+        // else agent B reads agent A's authenticated private response.
+        let mk = |agent: &str| {
+            build_cache_key(
+                agent,
+                "my_notifications",
+                "GET",
+                "https://api.example.com/notifications",
+                &serde_json::json!({}),
+                &[],
+            )
+        };
+        assert_ne!(mk("agentA"), mk("agentB"), "cache key must be agent-scoped");
+        assert_eq!(mk("agentA"), mk("agentA"), "stable for the same agent");
     }
 
     #[tokio::test]
@@ -3117,6 +3149,7 @@ graphql:
         let cache_key = match &tool.cache {
             Some(cfg) if tool.channel_action.is_none() && tool.pagination.is_none() => {
                 Some(build_cache_key(
+                    "test-agent",
                     &tool.name,
                     &tool.method,
                     &tool.endpoint,

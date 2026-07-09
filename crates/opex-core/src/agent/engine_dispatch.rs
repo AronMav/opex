@@ -295,6 +295,7 @@ impl AgentEngine {
                             && yaml_tool.pagination.is_none() =>
                     {
                         Some(crate::tools::yaml_tools::build_cache_key(
+                            &self.cfg().agent.name,
                             &yaml_tool.name,
                             &yaml_tool.method,
                             &yaml_tool.endpoint,
