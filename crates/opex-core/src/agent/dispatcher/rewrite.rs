@@ -33,6 +33,32 @@ pub fn rewrite_tool_use_calls(
     calls.iter().map(|tc| rewrite_one(tc, policy, known_tools, extra_deny)).collect()
 }
 
+/// Runtime deny-gate for a resolved tool name. Returns the denial reason when
+/// `name` is blocked by the agent's `policy.deny` or the subagent `extra_deny`
+/// list, else `None`. Applied to the effective dispatched tool on BOTH the
+/// direct-call path and the `tool_use(action="call")` inner-name path — the
+/// gate must never depend on which call shape the model chose (F006).
+fn deny_reason(
+    name: &str,
+    policy: Option<&AgentToolPolicy>,
+    extra_deny: &[String],
+) -> Option<String> {
+    if let Some(p) = policy
+        && p.deny.iter().any(|d| d == name)
+    {
+        return Some(format!("tool '{name}' is denied by agent policy"));
+    }
+    // Audit 2026-05-08: subagent isolation gate — `extra_deny` carries the
+    // result of `runtime_subagent_denylist(&subagent.delegation)` when this
+    // engine is running as a subagent. Without this gate, a subagent could
+    // execute a tool from SUBAGENT_DENIED_TOOLS even though the
+    // visibility-filtered tool list correctly hid it.
+    if extra_deny.iter().any(|d| d == name) {
+        return Some(format!("tool '{name}' is denied for subagents"));
+    }
+    None
+}
+
 // allow(dead_code): consumed by pipeline/parallel.rs.
 #[allow(dead_code)]
 fn rewrite_one(
@@ -42,6 +68,17 @@ fn rewrite_one(
     extra_deny: &[String],
 ) -> RewriteResult {
     if tc.name != "tool_use" {
+        // F006: a DIRECT tool call bypasses the dispatcher rewrite, so the
+        // deny gate MUST run here too — otherwise a subagent (or a
+        // policy.deny agent) can reach a denied tool simply by emitting the
+        // call directly instead of via `tool_use(action="call")`. The
+        // visibility filter is not a runtime enforcement boundary.
+        if let Some(reason) = deny_reason(&tc.name, policy, extra_deny) {
+            return RewriteResult::Denied {
+                id: tc.id.as_str().to_string(),
+                reason,
+            };
+        }
         return RewriteResult::Direct(tc.clone());
     }
 
@@ -72,26 +109,10 @@ fn rewrite_one(
         };
     }
 
-    if let Some(p) = policy
-        && p.deny.iter().any(|d| d == inner_name)
-    {
+    if let Some(reason) = deny_reason(inner_name, policy, extra_deny) {
         return RewriteResult::Denied {
             id: tc.id.as_str().to_string(),
-            reason: format!("tool '{inner_name}' is denied by agent policy"),
-        };
-    }
-
-    // Audit 2026-05-08: subagent isolation gate — `extra_deny` carries the
-    // result of `runtime_subagent_denylist(&subagent.delegation)` when this
-    // engine is running as a subagent (the value is computed by
-    // `subagent_runner.rs` and threaded through). Without this gate, a
-    // subagent with the dispatcher enabled could promote/execute a tool
-    // from SUBAGENT_DENIED_TOOLS even though the visibility-filtered tool
-    // list correctly hid it.
-    if extra_deny.iter().any(|d| d == inner_name) {
-        return RewriteResult::Denied {
-            id: tc.id.as_str().to_string(),
-            reason: format!("tool '{inner_name}' is denied for subagents"),
+            reason,
         };
     }
 
@@ -209,6 +230,45 @@ mod tests {
         let extra_deny = vec!["code_exec".to_string(), "cron".to_string()];
         let r = rewrite_tool_use_calls(&calls, None, &known(&["code_exec"]), &extra_deny);
         assert!(matches!(&r[0], RewriteResult::Denied { reason, .. } if reason.contains("denied for subagents")));
+    }
+
+    #[test]
+    fn denies_direct_call_to_subagent_denied_tool() {
+        // F006: a DIRECT tool call (name != "tool_use") to a tool in the
+        // subagent runtime denylist must be refused — not just the
+        // tool_use(action=call) form. A prompt-injected subagent that emits
+        // `{name:"code_exec", ...}` directly must be blocked identically.
+        let calls = vec![tc("code_exec", json!({"command": "rm -rf /"}))];
+        let extra_deny = vec!["code_exec".to_string(), "cron".to_string()];
+        let r = rewrite_tool_use_calls(&calls, None, &known(&["code_exec"]), &extra_deny);
+        assert!(matches!(&r[0], RewriteResult::Denied { reason, id }
+            if reason.contains("denied for subagents") && id == "call_code_exec"),
+            "direct call to a subagent-denied tool must be Denied, got: {:?}",
+            matches!(&r[0], RewriteResult::Direct(_)));
+    }
+
+    #[test]
+    fn denies_direct_call_to_policy_denied_tool() {
+        // F006: the agent's own policy.deny must also gate DIRECT calls, not
+        // only tool_use(action=call).
+        let policy = AgentToolPolicy {
+            deny: vec!["secret_set".to_string()],
+            ..Default::default()
+        };
+        let calls = vec![tc("secret_set", json!({"name": "X", "value": "y"}))];
+        let r = rewrite_tool_use_calls(&calls, Some(&policy), &known(&["secret_set"]), &[]);
+        assert!(matches!(&r[0], RewriteResult::Denied { reason, .. }
+            if reason.contains("denied by agent policy")),
+            "direct call to a policy-denied tool must be Denied");
+    }
+
+    #[test]
+    fn allows_direct_call_to_permitted_tool() {
+        // Regression guard: the new direct-call deny gate must NOT reject a
+        // normal, permitted direct call.
+        let calls = vec![tc("workspace_read", json!({"filename": "x.md"}))];
+        let r = rewrite_tool_use_calls(&calls, None, &known(&["workspace_read"]), &["code_exec".to_string()]);
+        assert!(matches!(&r[0], RewriteResult::Direct(t) if t.name == "workspace_read"));
     }
 
     #[test]
