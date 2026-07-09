@@ -153,7 +153,14 @@ pub async fn mark_handler_job_failed(db: &PgPool, id: Uuid, error: &str) -> anyh
 /// Reset rows stuck in 'processing' (crash recovery). Jobs attempted 3+ times
 /// are marked failed instead of retried (mirrors video_jobs).
 /// Returns the number of rows touched (both reset-to-queued and marked-failed).
-pub async fn recover_stale_handler_jobs(db: &PgPool) -> anyhow::Result<u64> {
+///
+/// F100: age-gate on `updated_at` so a legitimately in-flight long job (e.g. a
+/// 6h video whose runner survives a core restart) is NOT requeued and
+/// re-dispatched into a SECOND concurrent runner (double GPU/LLM compute). A
+/// healthy job bumps `updated_at` on every progress post, so only rows untouched
+/// for `max_age_secs` — genuinely abandoned runners — are recovered here; the
+/// runtime sweep reaps the rest on the same deadline.
+pub async fn recover_stale_handler_jobs(db: &PgPool, max_age_secs: i64) -> anyhow::Result<u64> {
     let res = sqlx::query(
         "UPDATE handler_jobs \
          SET status = CASE WHEN attempts >= 3 THEN 'failed' ELSE 'queued' END, \
@@ -161,8 +168,10 @@ pub async fn recover_stale_handler_jobs(db: &PgPool) -> anyhow::Result<u64> {
                           THEN jsonb_build_object('status','failed','reason','exceeded retry limit after crash') \
                           ELSE result END, \
              updated_at = now() \
-         WHERE status = 'processing'",
+         WHERE status = 'processing' \
+           AND updated_at < now() - make_interval(secs => $1)",
     )
+    .bind(max_age_secs as f64)
     .execute(db)
     .await?;
     Ok(res.rows_affected())
@@ -367,8 +376,27 @@ mod tests {
             .await
             .unwrap();
 
-        let n = recover_stale_handler_jobs(&pool).await.unwrap();
-        assert_eq!(n, 2, "both stuck rows touched");
+        // F100: age A and B into the past so the age-gate recovers them; add a
+        // FRESH row C (updated_at=now) that a restart must NOT requeue — it stands
+        // in for a genuinely in-flight long job whose runner survived the restart.
+        sqlx::query("UPDATE handler_jobs SET updated_at = now() - interval '10 hours' WHERE id = ANY($1)")
+            .bind(vec![a, b])
+            .execute(&pool)
+            .await
+            .unwrap();
+        let c = insert_handler_job(
+            &pool, None, None, "summarize_video", "Atlas", sid, &serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE handler_jobs SET status='processing' WHERE id=$1")
+            .bind(c)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let n = recover_stale_handler_jobs(&pool, 4 * 3600).await.unwrap();
+        assert_eq!(n, 2, "only the two aged rows are recovered");
 
         let ra = get_handler_job(&pool, a).await.unwrap().unwrap();
         assert_eq!(ra.status, "queued", "attempts<3 resets to queued");
@@ -379,5 +407,8 @@ mod tests {
             rb.error(),
             Some("exceeded retry limit after crash")
         );
+
+        let rc = get_handler_job(&pool, c).await.unwrap().unwrap();
+        assert_eq!(rc.status, "processing", "fresh in-flight job survives restart");
     }
 }

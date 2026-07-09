@@ -190,7 +190,7 @@ pub fn spawn_file_handler_worker(state: &AppState, shutdown: CancellationToken) 
 
     tokio::spawn(async move {
         // Crash recovery: reset rows stuck in 'processing' from a previous run.
-        match handler_jobs::recover_stale_handler_jobs(&db).await {
+        match handler_jobs::recover_stale_handler_jobs(&db, STALE_PROCESSING_DEADLINE_SECS).await {
             Ok(n) if n > 0 => {
                 tracing::info!(recovered = n, "file_handler_worker: recovered stale jobs")
             }
