@@ -136,7 +136,24 @@ pub(crate) async fn chat_completions(
                 engine_clone.handle_openai(&messages, Some(chunk_tx)).await
             });
 
-            while let Some(chunk) = chunk_rx.recv().await {
+            // F013: abort the run when the client disconnects. `sse_rx` is
+            // dropped by axum on disconnect, so `sse_tx.closed()` resolves —
+            // select on it alongside chunk delivery so an aborted request stops
+            // burning LLM calls / tool executions immediately, even mid tool
+            // loop (the old `while let ... recv()` only noticed on the next
+            // chunk and never aborted the detached inner task).
+            loop {
+                let chunk = tokio::select! {
+                    biased;
+                    _ = sse_tx.closed() => {
+                        handle.abort();
+                        return;
+                    }
+                    maybe = chunk_rx.recv() => match maybe {
+                        Some(c) => c,
+                        None => break, // engine finished — emit the final stop chunk
+                    },
+                };
                 let payload = ChatCompletionChunk {
                     id: completion_id.clone(),
                     object: "chat.completion.chunk".to_string(),
