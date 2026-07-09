@@ -192,6 +192,53 @@ async fn copy_dir_to(src: &str, dst: &std::path::Path) -> anyhow::Result<()> {
 /// FK constraints referencing included tables (e.g. cron_runs → scheduled_jobs).
 async fn run_pg_restore(container: &str, dump_path: &std::path::Path) -> anyhow::Result<()> {
     // Step 1: get the list of tables present in the dump.
+    let tables = list_dump_tables(container, dump_path).await?;
+
+    // F023: TRUNCATE + pg_restore is destructive and NOT transactional across
+    // the two docker-exec calls — a pg_restore failure AFTER the truncate
+    // (pg-version drift, schema drift, a non-superuser `--disable-triggers`
+    // rejection, or a truncated-but-valid dump) would otherwise leave the
+    // production DB irreversibly wiped. Take a pg_dump safety snapshot of the
+    // CURRENT state before truncating, and roll back to it if the restore fails.
+    let safety_path = dump_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("pre-restore-safety.dump");
+    pg_dump_snapshot(container, &safety_path)
+        .await
+        .context("F023 safety snapshot before restore failed — aborting to avoid data loss")?;
+
+    match truncate_and_restore(container, &tables, dump_path).await {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&safety_path);
+            Ok(())
+        }
+        Err(restore_err) => {
+            tracing::error!(
+                error = %restore_err,
+                "pg_restore failed after TRUNCATE — rolling back to pre-restore snapshot"
+            );
+            if let Err(rollback_err) = truncate_and_restore(container, &tables, &safety_path).await {
+                // Do NOT delete the safety snapshot — it is the only remaining
+                // copy of the pre-restore data.
+                anyhow::bail!(
+                    "RESTORE FAILED AND ROLLBACK FAILED — the DB may be inconsistent. \
+                     Pre-restore snapshot preserved at {}. \
+                     restore error: {restore_err}; rollback error: {rollback_err}",
+                    safety_path.display()
+                );
+            }
+            let _ = std::fs::remove_file(&safety_path);
+            anyhow::bail!("pg_restore failed (rolled back to pre-restore state): {restore_err}");
+        }
+    }
+}
+
+/// List the `TABLE DATA public` tables present in a `-Fc` dump (quoted for SQL).
+async fn list_dump_tables(
+    container: &str,
+    dump_path: &std::path::Path,
+) -> anyhow::Result<Vec<String>> {
     let file_list = std::fs::File::open(dump_path)
         .with_context(|| format!("open db.dump for --list: {}", dump_path.display()))?;
     let list_out = tokio::process::Command::new("docker")
@@ -200,14 +247,40 @@ async fn run_pg_restore(container: &str, dump_path: &std::path::Path) -> anyhow:
         .output()
         .await
         .context("pg_restore --list failed")?;
-
     // Lines look like: "234; 0 16442 TABLE DATA public memory_chunks postgres"
-    let tables: Vec<String> = String::from_utf8_lossy(&list_out.stdout)
+    Ok(String::from_utf8_lossy(&list_out.stdout)
         .lines()
         .filter(|l| l.contains(" TABLE DATA public "))
         .filter_map(|l| l.split_whitespace().nth(6).map(|t| format!("\"{}\"", t)))
-        .collect();
+        .collect())
+}
 
+/// Write a `-Fc` pg_dump of the current `opex` DB to `out_path` on the host.
+async fn pg_dump_snapshot(container: &str, out_path: &std::path::Path) -> anyhow::Result<()> {
+    let out_file = std::fs::File::create(out_path)
+        .with_context(|| format!("create safety snapshot file: {}", out_path.display()))?;
+    let status = tokio::process::Command::new("docker")
+        .args(["exec", container, "pg_dump", "-U", "opex", "-Fc", "opex"])
+        .stdout(std::process::Stdio::from(out_file))
+        .output()
+        .await
+        .context("pg_dump safety snapshot spawn failed")?;
+    if !status.status.success() {
+        anyhow::bail!(
+            "pg_dump safety snapshot failed: {}",
+            String::from_utf8_lossy(&status.stderr)
+        );
+    }
+    Ok(())
+}
+
+/// TRUNCATE the given tables (CASCADE) then `pg_restore --data-only` from
+/// `dump_path`. Shared by the primary restore and the F023 rollback.
+async fn truncate_and_restore(
+    container: &str,
+    tables: &[String],
+    dump_path: &std::path::Path,
+) -> anyhow::Result<()> {
     // Step 2: TRUNCATE with CASCADE to clear existing rows without dropping schema.
     if !tables.is_empty() {
         let sql = format!("TRUNCATE {} CASCADE", tables.join(", "));
