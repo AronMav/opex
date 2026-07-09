@@ -101,6 +101,10 @@ pub(crate) async fn api_curator_config_put(
         body.max_repairs_per_run,
         body.agent_name.as_deref(),
     ) {
+        // F113: the write we set the flag to suppress never happened. Reset it so
+        // the flag isn't left armed — otherwise it consumes (and silently skips)
+        // the operator's NEXT manual opex.toml edit.
+        cfg_svc.config_api_write_flag.store(false, std::sync::atomic::Ordering::Release);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
