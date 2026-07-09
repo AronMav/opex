@@ -29,6 +29,11 @@ export function createIrcDriver(
 
   let socket: Socket | null = null;
   const activeRequests = new Map<string, string>();
+  // F022: driver-level reconnect state. The session loop only reconnects on the
+  // CORE WebSocket dropping, never on the IRC TCP socket, so a server-side
+  // disconnect used to leave the bot silently deaf until a full process restart.
+  let stopped = false;
+  let reconnectAttempts = 0;
 
   function sendRaw(line: string): void {
     socket?.write(`${line}\r\n`);
@@ -111,18 +116,20 @@ export function createIrcDriver(
     activeRequests.delete(from);
   }
 
-  return {
-    start: () => new Promise<void>((resolve, reject) => {
-      console.log(`[irc] connecting to ${server}:${port}...`);
-      socket = connect(port, server, () => {
-        if (password) sendRaw(`PASS ${password}`);
-        sendRaw(`NICK ${nick}`);
-        sendRaw(`USER ${nick} 0 * :OPEX Bot`);
-        resolve();
-      });
+  function connectSocket(resolve?: () => void, reject?: (e: unknown) => void): void {
+    console.log(`[irc] connecting to ${server}:${port}...`);
+    let connected = false;
+    socket = connect(port, server, () => {
+      connected = true;
+      reconnectAttempts = 0; // reset backoff on a good connection
+      if (password) sendRaw(`PASS ${password}`);
+      sendRaw(`NICK ${nick}`);
+      sendRaw(`USER ${nick} 0 * :OPEX Bot`);
+      resolve?.();
+    });
 
-      let buffer = "";
-      socket.on("data", (data) => {
+    let buffer = "";
+    socket.on("data", (data) => {
         buffer += data.toString();
         const lines = buffer.split("\r\n");
         buffer = lines.pop() ?? "";
@@ -165,16 +172,38 @@ export function createIrcDriver(
         }
       });
 
-      socket.on("error", (err) => {
-        console.error("[irc] socket error:", err);
-        reject(err);
-      });
+    socket.on("error", (err) => {
+      console.error("[irc] socket error:", err);
+      // Only fail the initial start() promise; a drop AFTER connecting is
+      // handled by 'close' → reconnect (F022).
+      if (!connected) reject?.(err);
+    });
 
-      socket.on("close", () => {
-        console.log("[irc] disconnected");
-      });
+    socket.on("close", () => {
+      console.log("[irc] disconnected");
+      socket = null;
+      activeRequests.clear(); // drop stale in-flight request state
+      if (!stopped) {
+        // F022: reconnect with capped exponential backoff instead of going
+        // silently deaf until a full channels-process restart.
+        reconnectAttempts++;
+        const delay = Math.min(2 ** Math.min(reconnectAttempts, 6) * 1000, 60_000);
+        console.log(`[irc] reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
+        setTimeout(() => {
+          if (!stopped) connectSocket();
+        }, delay);
+      }
+    });
+  }
+
+  return {
+    start: () => new Promise<void>((resolve, reject) => {
+      stopped = false;
+      reconnectAttempts = 0;
+      connectSocket(resolve, reject);
     }),
     stop: async () => {
+      stopped = true;
       if (socket) {
         sendRaw("QUIT :Goodbye");
         socket.end();
