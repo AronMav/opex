@@ -92,7 +92,7 @@ pub(crate) async fn api_uploads_serve(
 /// risking script execution: `image/*` (except `image/svg+xml`), `audio/*`,
 /// and `video/*`. Everything else (html, svg, pdf, text/*, application/*) is
 /// forced to download via `Content-Disposition: attachment`.
-fn is_inlineable_mime(mime: &str) -> bool {
+pub(crate) fn is_inlineable_mime(mime: &str) -> bool {
     let lower = mime.to_ascii_lowercase();
     if lower.starts_with("image/") {
         // Exclude image/svg+xml — SVG can carry <script>.

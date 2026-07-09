@@ -59,15 +59,33 @@ pub(crate) async fn serve_workspace_file(
     }
 
     let mime = crate::uploads::guess_mime_from_extension(&rel_decoded);
+    // F092: this endpoint is PUBLIC (auth-exempt) and can serve agent-written
+    // .html/.svg. Without hardening, an admin opening such a signed URL top-level
+    // executes same-origin script that can exfiltrate the bearer token from
+    // localStorage. Mirror uploads_serve: never MIME-sniff, and force any
+    // non-inlineable type (html, svg, pdf, text, application/*) to download.
+    let inlineable = super::uploads_serve::is_inlineable_mime(mime);
     let body = match tokio::fs::read(&abs).await {
         Ok(b) => b,
         Err(_) => return (StatusCode::NOT_FOUND, "not found").into_response(),
     };
 
-    Response::builder()
+    let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", mime)
         .header("Cache-Control", "private, max-age=900")
+        .header("X-Content-Type-Options", "nosniff");
+    if !inlineable {
+        let filename = StdPath::new(&rel_decoded)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file");
+        builder = builder.header(
+            "Content-Disposition",
+            format!("attachment; filename=\"{filename}\""),
+        );
+    }
+    builder
         .body(axum::body::Body::from(body))
         .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "build response").into_response())
 }
