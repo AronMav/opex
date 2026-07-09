@@ -9,6 +9,7 @@ use opex_types::{IncomingMessage, Message};
 use uuid::Uuid;
 
 use super::AgentEngine;
+use crate::agent::commands::spec::CommandOutcome;
 use crate::agent::session_manager::SessionManager;
 use crate::agent::tool_loop::LoopDetector;
 use crate::agent::workspace;
@@ -167,7 +168,7 @@ impl AgentEngine {
     // ── Command handler (from engine_commands.rs) ────────────────────────────
 
     /// Handle /slash commands. Returns Some(result) if a command matched, None otherwise.
-    pub(crate) async fn handle_command(&self, text: &str, msg: &IncomingMessage) -> Option<Result<String>> {
+    pub(crate) async fn handle_command(&self, text: &str, msg: &IncomingMessage) -> Option<Result<CommandOutcome>> {
         let dm_scope = self.cfg().agent.session.as_ref()
             .map(|s| s.dm_scope.as_str())
             .unwrap_or("per-channel-peer");

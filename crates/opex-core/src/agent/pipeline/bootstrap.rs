@@ -2,6 +2,7 @@
 //!
 //! See docs/superpowers/specs/2026-04-20-execution-pipeline-unification-design.md §3, §5.
 
+use crate::agent::commands::spec::CommandOutcome;
 use crate::agent::engine::stream::{ProcessingGuard, ProcessingPhase};
 use crate::agent::pipeline::sink::{EventSink, PipelineEvent};
 use crate::agent::session_manager::{SessionLifecycleGuard, SessionManager};
@@ -26,7 +27,7 @@ pub struct BootstrapOutcome {
     /// Option so the adapter can take() it before passing BootstrapOutcome to execute().
     pub lifecycle_guard: Option<SessionLifecycleGuard>,
     /// Non-None when the user message was a slash-command that was already handled.
-    pub command_output: Option<String>,
+    pub command_output: Option<CommandOutcome>,
     /// ID of the user message just persisted; used by finalize as parent for the assistant reply.
     pub user_message_id: Uuid,
     /// Opaque context echoed from the incoming message (e.g. `{"chat_id": 123}` for Telegram).

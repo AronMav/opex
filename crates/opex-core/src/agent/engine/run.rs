@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use super::stream::ProcessingPhase;
 use super::AgentEngine;
+use crate::agent::commands::spec::CommandOutcome;
 use crate::agent::engine_event_sender::EngineEventSender;
 use crate::agent::pipeline::behaviour::BehaviourLayers;
 use crate::agent::pipeline::bootstrap::{self, BootstrapContext, BootstrapOutcome};
@@ -169,7 +170,12 @@ impl AgentEngine {
         };
 
         // Slash-command early exit
-        if let Some(text) = command_output.take() {
+        if let Some(outcome) = command_output.take() {
+            let text = match outcome {
+                CommandOutcome::Text(t) => t,
+                // Phase 1 fallback; real RichCard emission is Phase 2
+                CommandOutcome::Menu { card } => card.to_string(),
+            };
             let slash_msg_id = opex_types::ids::MessageId::new();
             let _ = s
                 .emit(PipelineEvent::Stream(StreamEvent::MessageStart {
@@ -391,7 +397,12 @@ impl AgentEngine {
         };
 
         // Channel adapters render slash commands as plain TextDelta
-        if let Some(text) = command_output.take() {
+        if let Some(outcome) = command_output.take() {
+            let text = match outcome {
+                CommandOutcome::Text(t) => t,
+                // Phase 1 fallback; real RichCard emission is Phase 2
+                CommandOutcome::Menu { card } => card.to_string(),
+            };
             let _ = s
                 .emit(PipelineEvent::Stream(StreamEvent::TextDelta(text.clone())))
                 .await;
@@ -571,7 +582,12 @@ impl AgentEngine {
             claude_md_content,
         };
 
-        if let Some(text) = command_output.take() {
+        if let Some(outcome) = command_output.take() {
+            let text = match outcome {
+                CommandOutcome::Text(t) => t,
+                // Phase 1 fallback; real RichCard emission is Phase 2
+                CommandOutcome::Menu { card } => card.to_string(),
+            };
             let _ = s
                 .emit(PipelineEvent::Stream(StreamEvent::TextDelta(text.clone())))
                 .await;

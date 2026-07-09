@@ -7,6 +7,7 @@ use std::future::Future;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use opex_types::{IncomingMessage, Message, MessageRole};
+use crate::agent::commands::spec::CommandOutcome;
 use crate::agent::history;
 use crate::agent::localization;
 use crate::agent::memory_service::MemoryService;
@@ -120,6 +121,13 @@ fn stop_goal_driver(ctx: &CommandContext<'_>, session_id: uuid::Uuid) {
 
 // ── handle_command ─────────────────────────────────────────────────────────
 
+/// Имена, реально обрабатываемые `match` в `handle_command` (без ведущего `/`).
+/// Держать синхронно с ветками ниже; drift-гард-тест сверяет с BUILTIN_NAMES.
+pub const DISPATCH_NAMES: &[&str] = &[
+    "status", "new", "reset", "compact", "rollback", "model", "think",
+    "voice", "usage", "export", "help", "memory", "goal", "subgoal",
+];
+
 /// Handle /slash commands. Returns `Some(result)` if a command matched, `None` otherwise.
 ///
 /// Two callbacks are required for operations that still live on `AgentEngine`:
@@ -129,7 +137,7 @@ pub async fn handle_command<F, Fut>(
     text: &str,
     msg: &IncomingMessage,
     invalidate_cache_fn: F,
-) -> Option<Result<String>>
+) -> Option<Result<CommandOutcome>>
 where
     F: Fn() -> Fut,
     Fut: Future<Output = ()>,
@@ -166,9 +174,9 @@ where
                 .fetch_one(ctx.db).await.unwrap_or(0);
             let provider_name = ctx.provider.name();
             let current_model = ctx.provider.current_model();
-            Some(Ok(
+            Some(Ok(CommandOutcome::Text(
                 localization::fmt(s.status_format, &[ctx.agent_name, provider_name, &current_model, &session_info, &chunks.to_string()])
-            ))
+            )))
         }
         "/new" => {
             match sessions::find_active_session(
@@ -178,9 +186,9 @@ where
                     if let Err(e) = sessions::delete_session(ctx.db, sid).await {
                         return Some(Err(e));
                     }
-                    Some(Ok(s.new_session_started.to_string()))
+                    Some(Ok(CommandOutcome::Text(s.new_session_started.to_string())))
                 }
-                Ok(None) => Some(Ok(s.new_session_none.to_string())),
+                Ok(None) => Some(Ok(CommandOutcome::Text(s.new_session_none.to_string()))),
                 Err(e) => Some(Err(e)),
             }
         }
@@ -195,14 +203,14 @@ where
             let deleted: i64 = sqlx::query_scalar(
                 "WITH d AS (DELETE FROM memory_chunks WHERE pinned = false AND agent_id = $1 RETURNING 1) SELECT COUNT(*) FROM d"
             ).bind(ctx.agent_name).fetch_one(ctx.db).await.unwrap_or(0);
-            Some(Ok(localization::fmt(s.reset_done, &[&deleted.to_string()])))
+            Some(Ok(CommandOutcome::Text(localization::fmt(s.reset_done, &[&deleted.to_string()]))))
         }
         "/compact" => {
             let sid = match sessions::find_active_session(
                 ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope, chat_scope.as_deref(),
             ).await {
                 Ok(Some(sid)) => sid,
-                _ => return Some(Ok(s.compact_no_session.to_string())),
+                _ => return Some(Ok(CommandOutcome::Text(s.compact_no_session.to_string()))),
             };
             let history_rows = match sessions::load_messages(ctx.db, sid, Some(ctx.max_history_messages.unwrap_or(50) as i64)).await {
                 Ok(h) => h,
@@ -239,7 +247,7 @@ where
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     }
                     Err(e) => {
-                        return Some(Ok(format!("Compaction failed after retry: {}", e)));
+                        return Some(Ok(CommandOutcome::Text(format!("Compaction failed after retry: {}", e))));
                     }
                 }
             }
@@ -283,26 +291,26 @@ where
                         tx.commit().await?;
                         Ok::<(), anyhow::Error>(())
                     }.await {
-                        return Some(Ok(format!("Compaction succeeded but DB persist failed: {}", e)));
+                        return Some(Ok(CommandOutcome::Text(format!("Compaction succeeded but DB persist failed: {}", e))));
                     }
 
-                    Some(Ok(
+                    Some(Ok(CommandOutcome::Text(
                         localization::fmt(s.compact_done, &[&before.to_string(), &after.to_string(), &facts.len().to_string()])
-                    ))
+                    )))
                 }
-                Some(None) => Some(Ok(s.compact_not_needed.to_string())),
-                None => Some(Ok("Compaction failed.".to_string())),
+                Some(None) => Some(Ok(CommandOutcome::Text(s.compact_not_needed.to_string()))),
+                None => Some(Ok(CommandOutcome::Text("Compaction failed.".to_string()))),
             }
         }
         "/rollback" => {
             let Some(engine) = ctx.engine_arc.clone() else {
-                return Some(Ok("Откат недоступен в этом контексте.".to_string()));
+                return Some(Ok(CommandOutcome::Text("Откат недоступен в этом контексте.".to_string())));
             };
             let Some(cm) = engine.cfg().checkpoint_manager.clone() else {
-                return Some(Ok("Чекпойнты отключены.".to_string()));
+                return Some(Ok(CommandOutcome::Text("Чекпойнты отключены.".to_string())));
             };
             if !cm.enabled() {
-                return Some(Ok("Чекпойнты отключены.".to_string()));
+                return Some(Ok(CommandOutcome::Text("Чекпойнты отключены.".to_string())));
             }
             let ws = engine.cfg().workspace_dir.clone();
             let agent = engine.cfg().agent.name.clone();
@@ -343,7 +351,7 @@ where
                     Err(e) => format!("Ошибка отката файла: {e}"),
                 },
             };
-            Some(Ok(result))
+            Some(Ok(CommandOutcome::Text(result)))
         }
         "/model" => {
             let model_arg = args.trim();
@@ -351,20 +359,20 @@ where
                 let current = ctx.provider.current_model();
                 let base = ctx.agent_model;
                 if current == *base {
-                    Some(Ok(localization::fmt(s.model_current, &[&current])))
+                    Some(Ok(CommandOutcome::Text(localization::fmt(s.model_current, &[&current]))))
                 } else {
-                    Some(Ok(
+                    Some(Ok(CommandOutcome::Text(
                         localization::fmt(s.model_override, &[&current, base])
-                    ))
+                    )))
                 }
             } else if model_arg == "reset" {
                 ctx.provider.set_model_override(None);
                 invalidate_cache_fn().await;
-                Some(Ok(localization::fmt(s.model_reset, &[ctx.agent_model])))
+                Some(Ok(CommandOutcome::Text(localization::fmt(s.model_reset, &[ctx.agent_model]))))
             } else {
                 ctx.provider.set_model_override(Some(model_arg.to_string()));
                 invalidate_cache_fn().await;
-                Some(Ok(localization::fmt(s.model_switched, &[model_arg])))
+                Some(Ok(CommandOutcome::Text(localization::fmt(s.model_switched, &[model_arg]))))
             }
         }
         "/think" => {
@@ -390,9 +398,9 @@ where
                 5 => "MAX",
                 _ => "?",
             };
-            Some(Ok(
+            Some(Ok(CommandOutcome::Text(
                 localization::fmt(s.think_level, &[label, &new_level.to_string()])
-            ))
+            )))
         }
         "/voice" => {
             let chat_id = msg
@@ -401,9 +409,9 @@ where
                 .map(|v| v.to_string().trim_matches('"').to_string())
                 .filter(|c| !c.is_empty() && c != "null");
             let Some(chat_id) = chat_id else {
-                return Some(Ok(
+                return Some(Ok(CommandOutcome::Text(
                     "/voice only applies to chat channels (Telegram, etc.).".to_string(),
-                ));
+                )));
             };
             let channel = msg.channel.as_str();
             match parse_voice_command(args) {
@@ -411,22 +419,22 @@ where
                     if let Err(e) =
                         crate::db::channel_voice_modes::set_voice_mode(ctx.db, channel, &chat_id, mode).await
                     {
-                        return Some(Ok(format!("Failed to set voice mode: {e}")));
+                        return Some(Ok(CommandOutcome::Text(format!("Failed to set voice mode: {e}"))));
                     }
                     let reply = if mode == "on" {
                         "Voice replies enabled for this chat. Each reply will also be sent as audio. /voice off to disable."
                     } else {
                         "Voice replies disabled for this chat."
                     };
-                    Some(Ok(reply.to_string()))
+                    Some(Ok(CommandOutcome::Text(reply.to_string())))
                 }
                 VoiceCmd::Status => {
                     let mode = crate::db::channel_voice_modes::get_voice_mode(ctx.db, channel, &chat_id)
                         .await
                         .unwrap_or_else(|_| "off".to_string());
-                    Some(Ok(format!(
+                    Some(Ok(CommandOutcome::Text(format!(
                         "Voice mode for this chat: {mode}. Use /voice on or /voice off."
-                    )))
+                    ))))
                 }
             }
         }
@@ -474,21 +482,21 @@ where
                 );
             }
 
-            Some(Ok(out))
+            Some(Ok(CommandOutcome::Text(out)))
         }
         "/export" => {
             let sid = match sessions::find_active_session(
                 ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope, chat_scope.as_deref(),
             ).await {
                 Ok(Some(sid)) => sid,
-                _ => return Some(Ok(s.export_no_session.to_string())),
+                _ => return Some(Ok(CommandOutcome::Text(s.export_no_session.to_string()))),
             };
             let rows = match sessions::load_messages(ctx.db, sid, Some(500)).await {
                 Ok(r) => r,
                 Err(e) => return Some(Err(e)),
             };
             if rows.is_empty() {
-                return Some(Ok(s.export_empty.to_string()));
+                return Some(Ok(CommandOutcome::Text(s.export_empty.to_string())));
             }
             let mut out = localization::fmt(s.export_header, &[ctx.agent_name, &sid.to_string()]);
             for m in &rows {
@@ -507,10 +515,10 @@ where
                 };
                 out.push_str(&format!("\n**{role}** ({time}):\n{content}\n"));
             }
-            Some(Ok(out))
+            Some(Ok(CommandOutcome::Text(out)))
         }
         "/help" => {
-            Some(Ok(s.help_text.to_string()))
+            Some(Ok(CommandOutcome::Text(s.help_text.to_string())))
         }
         "/memory" => {
             let query = args.trim();
@@ -526,16 +534,16 @@ where
                 }
             };
             if results.is_empty() {
-                return Some(Ok(s.memory_empty.to_string()));
+                return Some(Ok(CommandOutcome::Text(s.memory_empty.to_string())));
             }
             let lines: Vec<String> = results.iter().enumerate().map(|(i, r)| {
                 let pin = if r.pinned { "📌 " } else { "" };
                 format!("{}{}. {}", pin, i + 1,
                     r.content.chars().take(200).collect::<String>())
             }).collect();
-            Some(Ok(
+            Some(Ok(CommandOutcome::Text(
                 localization::fmt(s.memory_header, &[&mode, &results.len().to_string(), &lines.join("\n\n")])
-            ))
+            )))
         }
         "/goal" => {
             use crate::agent::goal::{parse_goal_command, GoalCmd};
@@ -545,7 +553,7 @@ where
             .await
             {
                 Ok(Some(sid)) => sid,
-                _ => return Some(Ok("No active session for this chat.".to_string())),
+                _ => return Some(Ok(CommandOutcome::Text("No active session for this chat.".to_string()))),
             };
             // Channel sessions carry a chat_id; web sessions don't (driver delivers via ui_event).
             let target: crate::agent::goal::pool::GoalTarget = msg
@@ -557,17 +565,17 @@ where
                 GoalCmd::Set(text) => {
                     let max_turns = 20;
                     if let Err(e) = crate::db::session_goals::upsert(ctx.db, session_id, &text, max_turns).await {
-                        return Some(Ok(format!("Failed to set goal: {e}")));
+                        return Some(Ok(CommandOutcome::Text(format!("Failed to set goal: {e}"))));
                     }
                     if !start_goal_driver(ctx, session_id, target) {
-                        return Some(Ok("Goal saved, but the autonomous driver could not start here.".to_string()));
+                        return Some(Ok(CommandOutcome::Text("Goal saved, but the autonomous driver could not start here.".to_string())));
                     }
-                    Some(Ok(format!(
+                    Some(Ok(CommandOutcome::Text(format!(
                         "🎯 Goal set: {text}\nWorking on it autonomously (max {max_turns} turns). /goal status · /goal pause · /goal clear."
-                    )))
+                    ))))
                 }
                 GoalCmd::Status => match crate::db::session_goals::get(ctx.db, session_id).await {
-                    Ok(Some(g)) => Some(Ok(format!(
+                    Ok(Some(g)) => Some(Ok(CommandOutcome::Text(format!(
                         "🎯 Goal: {}\nStatus: {} ({}/{} turns){}",
                         g.goal_text,
                         g.status,
@@ -578,25 +586,25 @@ where
                         } else {
                             format!("\nSubgoals: {}", g.subgoals.join("; "))
                         }
-                    ))),
-                    _ => Some(Ok("No goal set. Use /goal <text>.".to_string())),
+                    )))),
+                    _ => Some(Ok(CommandOutcome::Text("No goal set. Use /goal <text>.".to_string()))),
                 },
                 GoalCmd::Pause => {
                     let _ = crate::db::session_goals::set_status(ctx.db, session_id, "paused").await;
                     stop_goal_driver(ctx, session_id);
-                    Some(Ok("⏸ Goal paused. /goal resume to continue.".to_string()))
+                    Some(Ok(CommandOutcome::Text("⏸ Goal paused. /goal resume to continue.".to_string())))
                 }
                 GoalCmd::Resume => {
                     let _ = crate::db::session_goals::set_status(ctx.db, session_id, "active").await;
                     if !start_goal_driver(ctx, session_id, target) {
-                        return Some(Ok("Could not resume the autonomous driver here.".to_string()));
+                        return Some(Ok(CommandOutcome::Text("Could not resume the autonomous driver here.".to_string())));
                     }
-                    Some(Ok("▶ Goal resumed.".to_string()))
+                    Some(Ok(CommandOutcome::Text("▶ Goal resumed.".to_string())))
                 }
                 GoalCmd::Clear => {
                     stop_goal_driver(ctx, session_id);
                     let _ = crate::db::session_goals::clear(ctx.db, session_id).await;
-                    Some(Ok("🗑 Goal cleared.".to_string()))
+                    Some(Ok(CommandOutcome::Text("🗑 Goal cleared.".to_string())))
                 }
             }
         }
@@ -608,37 +616,37 @@ where
             .await
             {
                 Ok(Some(sid)) => sid,
-                _ => return Some(Ok("No active session.".to_string())),
+                _ => return Some(Ok(CommandOutcome::Text("No active session.".to_string()))),
             };
             let Ok(Some(mut g)) = crate::db::session_goals::get(ctx.db, session_id).await else {
-                return Some(Ok("No active goal — set one with /goal <text>.".to_string()));
+                return Some(Ok(CommandOutcome::Text("No active goal — set one with /goal <text>.".to_string())));
             };
             match parse_subgoal_command(args) {
                 SubgoalCmd::Add(t) => {
                     g.subgoals.push(t);
                     let _ = crate::db::session_goals::set_subgoals(ctx.db, session_id, &g.subgoals).await;
-                    Some(Ok(format!("Added subgoal. {} total.", g.subgoals.len())))
+                    Some(Ok(CommandOutcome::Text(format!("Added subgoal. {} total.", g.subgoals.len()))))
                 }
                 SubgoalCmd::List => {
                     if g.subgoals.is_empty() {
-                        Some(Ok("No subgoals.".to_string()))
+                        Some(Ok(CommandOutcome::Text("No subgoals.".to_string())))
                     } else {
-                        Some(Ok(g
+                        Some(Ok(CommandOutcome::Text(g
                             .subgoals
                             .iter()
                             .enumerate()
                             .map(|(i, s)| format!("{}. {s}", i + 1))
                             .collect::<Vec<_>>()
-                            .join("\n")))
+                            .join("\n"))))
                     }
                 }
                 SubgoalCmd::Remove(n) => {
                     if n >= 1 && n <= g.subgoals.len() {
                         g.subgoals.remove(n - 1);
                         let _ = crate::db::session_goals::set_subgoals(ctx.db, session_id, &g.subgoals).await;
-                        Some(Ok(format!("Removed subgoal {n}. {} left.", g.subgoals.len())))
+                        Some(Ok(CommandOutcome::Text(format!("Removed subgoal {n}. {} left.", g.subgoals.len()))))
                     } else {
-                        Some(Ok(format!("No subgoal #{n}.")))
+                        Some(Ok(CommandOutcome::Text(format!("No subgoal #{n}."))))
                     }
                 }
             }
@@ -680,5 +688,16 @@ mod tests {
         assert!(matches!(parse_voice_command(""), VoiceCmd::Status));
         assert!(matches!(parse_voice_command("status"), VoiceCmd::Status));
         assert!(matches!(parse_voice_command("garbage"), VoiceCmd::Status));
+    }
+
+    #[test]
+    fn dispatch_names_match_registry_builtins() {
+        use crate::agent::commands::builtin::BUILTIN_NAMES;
+        let mut dispatch: Vec<&str> = super::DISPATCH_NAMES.to_vec();
+        let mut builtin: Vec<&str> = BUILTIN_NAMES.to_vec();
+        dispatch.sort_unstable();
+        builtin.sort_unstable();
+        assert_eq!(dispatch, builtin,
+            "match-диспетч и BUILTIN_NAMES разъехались — обновите обе стороны");
     }
 }
