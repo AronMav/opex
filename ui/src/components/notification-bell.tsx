@@ -219,14 +219,17 @@ export function NotificationBell() {
       </DropdownMenuTrigger>
       <DropdownMenuContent       align="end"
       className="w-80 max-w-[calc(100dvw-0.5rem)] p-0" data-testid="notification-list">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <span className="text-sm font-semibold">{t("notifications.title")}</span>
-          <div className="flex items-center gap-3">
+        {/* Header — title truncates first; the action links stay compact
+            (px-0) and never shrink, so neither button is clipped even at the
+            mobile max-w-[calc(100dvw-0.5rem)] width. */}
+        <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+          <span className="min-w-0 truncate text-sm font-semibold">{t("notifications.title")}</span>
+          <div className="flex shrink-0 items-center gap-3">
             {unread_count > 0 && (
               <Button
                 variant="link"
                 size="xs"
+                className="h-auto whitespace-nowrap px-0"
                 onClick={() => markAllRead.mutate()}
               >
                 {t("notifications.mark_all_read")}
@@ -236,7 +239,7 @@ export function NotificationBell() {
               <Button
                 variant="link"
                 size="xs"
-                className="text-destructive"
+                className="h-auto whitespace-nowrap px-0 text-destructive"
                 onClick={() => clearAll.mutate()}
               >
                 {t("notifications.clear_all")}
