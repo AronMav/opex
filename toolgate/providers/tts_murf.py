@@ -4,6 +4,7 @@ import base64
 
 import httpx
 
+from helpers import validate_url_ssrf
 from providers.base import resolve_request_timeout
 
 
@@ -58,6 +59,11 @@ class MurfTTS:
         if not audio_b64:
             audio_url = data.get("audioFile", "")
             if audio_url:
+                # F079: SSRF-validate the provider-returned URL before fetching
+                # via the shared (non-SSRF) client — an operator-configurable /
+                # compromised Murf endpoint could otherwise reflect an internal
+                # or metadata URL and have toolgate fetch it as "audio".
+                validate_url_ssrf(audio_url)
                 audio_resp = await http.get(audio_url, timeout=self._request_timeout)
                 audio_resp.raise_for_status()
                 return audio_resp.content
