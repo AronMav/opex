@@ -79,12 +79,12 @@ pub async fn handle(
     // Index session transcripts
     let mut session_indexed = 0u32;
     if include_sessions && !agent_id.is_empty() {
+        // F117: propagate a real DB failure so the reindex task fails (and is
+        // retried) instead of silently under-indexing sessions while reporting
+        // success. Still logs before bubbling up.
         session_indexed = index_sessions(db, client, fts_language, agent_id)
             .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "session transcript indexing failed");
-                0
-            });
+            .inspect_err(|e| tracing::warn!(error = %e, "session transcript indexing failed"))?;
     }
 
     tracing::info!(indexed, errors, total_files, session_indexed, "universal reindex complete");
@@ -199,6 +199,9 @@ async fn index_sessions(
     for (session_id,) in &sessions {
         let source = format!("session:{session_id}");
 
+        // F117: propagate a real DB error instead of coercing it to an empty Vec.
+        // Swallowing it under-indexed the session silently while the task still
+        // reported success; `?` marks the reindex failed so it is retried.
         let messages: Vec<(String, String)> = sqlx::query_as(
             "SELECT role, content FROM messages WHERE session_id = $1 \
              AND role IN ('user', 'assistant') AND length(content) > 10 \
@@ -206,8 +209,7 @@ async fn index_sessions(
         )
         .bind(session_id)
         .fetch_all(db)
-        .await
-        .unwrap_or_default();
+        .await?;
 
         if messages.is_empty() {
             continue;
