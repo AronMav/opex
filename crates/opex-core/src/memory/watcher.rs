@@ -132,14 +132,16 @@ pub fn spawn_workspace_watcher(
                                     .unwrap_or(path.as_path())
                                     .to_string_lossy()
                                     .to_string();
-                                // Delete existing chunks from this source, then re-index
-                                if let Err(e) = mem.delete_by_source(&source).await {
-                                    tracing::debug!(source = %source, error = %e, "no existing chunks to delete");
-                                }
-                                match mem.index(&content, &source, false, "shared", "").await {
+                                // F065: reindex_source embeds FIRST and only
+                                // deletes the old chunks after embedding
+                                // succeeds — so an embedding blip leaves the
+                                // file's existing chunks intact (still
+                                // searchable) instead of wiping them. Warn (not
+                                // debug) so the skipped update is observable.
+                                match mem.reindex_source(&content, &source, false, "shared", "").await {
                                     Ok(_) => indexed += 1,
                                     Err(e) => {
-                                        tracing::debug!(error = %e, "embedding unavailable -- skipping workspace indexing");
+                                        tracing::warn!(source = %source, error = %e, "embedding unavailable — kept existing chunks, skipping re-index (will retry on next edit)");
                                         break;
                                     }
                                 }

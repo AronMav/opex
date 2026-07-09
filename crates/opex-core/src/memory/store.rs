@@ -303,6 +303,37 @@ impl MemoryStore {
         Ok(id)
     }
 
+    /// Re-index a source safely (F065): EMBED FIRST — the failure-prone step —
+    /// and delete the source's existing chunks only AFTER embedding succeeds,
+    /// then insert. So a transient embedding outage returns Err WITHOUT having
+    /// dropped the old chunks, instead of the previous delete-then-index order
+    /// that left the file with zero searchable chunks on any embedding blip.
+    pub async fn reindex_source(
+        &self,
+        content: &str,
+        source: &str,
+        pinned: bool,
+        scope: &str,
+        agent_id: &str,
+    ) -> Result<String> {
+        if self.embedder.dim_mismatch() {
+            anyhow::bail!("dim_mismatch: reindex required (POST /api/memory/reindex)");
+        }
+        let lang = self.validated_fts_language()?;
+        // Embed BEFORE touching existing chunks — if this fails, the old chunks
+        // stay intact and searchable.
+        let embedding = self.embedder.embed(content).await?;
+        let vec_str = fmt_vec(&embedding);
+        // Embedding succeeded — now replace old chunks with the fresh one.
+        self.delete_by_source(source).await?;
+        let id = uuid::Uuid::new_v4().to_string();
+        crate::db::memory_queries::insert_chunk(
+            &self.db, &id, content, &vec_str, source, pinned, &lang, scope, agent_id,
+        )
+        .await?;
+        Ok(id)
+    }
+
     /// Batch index: embed multiple texts and insert them all. Returns chunk IDs.
     /// Tuple: (content, source, pinned, scope).
     /// `agent_id`: the agent that owns these chunks (used for visibility filtering).
