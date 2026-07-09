@@ -30,14 +30,15 @@ log = logging.getLogger("toolgate.runner")
 _BUILTIN_DIR = str(Path(__file__).resolve().parent / "builtin")
 
 
-def _load_registry(http: httpx.AsyncClient) -> HandlerRegistry:
+def _load_registry(http: httpx.AsyncClient, workspace_dir: str | None) -> HandlerRegistry:
     """Rebuild the handler registry in the subprocess.
 
-    Only builtins are loaded here; workspace handlers are added in a future
-    phase when the workspace path is passed in the job spec.
+    F050: loads builtins AND workspace handlers from `workspace_dir` (carried in
+    the job spec) so async workspace handlers and builtin overrides resolve
+    identically to the sync in-process path.
     """
     reg = HandlerRegistry()
-    reg.load_all(builtin_dir=_BUILTIN_DIR, workspace_dir=None)
+    reg.load_all(builtin_dir=_BUILTIN_DIR, workspace_dir=workspace_dir)
     return reg
 
 
@@ -137,7 +138,7 @@ async def run_job(spec: dict) -> None:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=120.0)
         ) as http:
-            registry = _load_registry(http)
+            registry = _load_registry(http, spec.get("workspace_dir"))
             loaded = registry.get(spec["handler_id"])
             if loaded is None:
                 await _post_complete(

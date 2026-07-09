@@ -159,6 +159,14 @@ async def run_handler(
             "core_url": os.environ.get("CORE_API_URL", "http://127.0.0.1:18789"),
             "auth_token": os.environ.get("OPEX_AUTH_TOKEN", ""),
             "callback_token": callback_token,
+            # F050: carry the workspace dir so the out-of-process runner loads
+            # the SAME workspace handlers (and builtin overrides) as this main
+            # process — otherwise async workspace handlers fail as "unknown
+            # handler" and async builtin overrides silently run the pristine
+            # builtin.
+            "workspace_dir": getattr(
+                getattr(request.app.state.registry, "config", None), "workspace_dir", None
+            ),
         }
         # F026: pipe the spec over stdin, NOT argv. spec carries the master
         # OPEX_AUTH_TOKEN and the per-job HMAC callback_token; on argv they are
