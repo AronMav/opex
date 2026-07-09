@@ -822,12 +822,12 @@ async fn validate_workspace_path_inner(
                 && !name.is_empty() => {}
             // Agent's own directory — allowed
             "agents" => {
-                let own_prefix = format!("agents{}{}", std::path::MAIN_SEPARATOR, agent_name);
-                if !relative
-                    .to_str()
-                    .unwrap_or("")
-                    .starts_with(&own_prefix)
-                {
+                // F010: compare on PATH COMPONENTS, not raw bytes. A byte
+                // `starts_with("agents/op")` also matches `agents/opex/SOUL.md`,
+                // letting agent "op" overwrite agent "opex"'s identity files.
+                // `Path::starts_with` is component-aware, so "opex" != "op".
+                let own_dir = std::path::Path::new("agents").join(agent_name);
+                if !relative.starts_with(&own_dir) {
                     anyhow::bail!(
                         "access denied: cannot write to another agent's directory ('{filename}')"
                     );
@@ -1401,6 +1401,29 @@ mod tests {
             "must stay at workspace root: {}", path.display()
         );
         assert!(!path.to_string_lossy().contains("agents"), "must NOT be under agents/");
+    }
+
+    /// F010: an agent whose name is a string-prefix of another agent's name
+    /// must NOT be able to write into that other agent's directory. A byte
+    /// `starts_with("agents/op")` would match `agents/opex/SOUL.md`; the
+    /// path-boundary comparison rejects it.
+    #[tokio::test]
+    async fn cross_agent_prefix_write_is_denied() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().join("workspace");
+        std::fs::create_dir_all(ws.join("agents").join("opex")).unwrap();
+        std::fs::create_dir_all(ws.join("agents").join("op")).unwrap();
+        let ws_str = ws.to_str().unwrap();
+
+        // Agent "op" tries to overwrite base agent "opex"'s identity file.
+        let breach = validate_workspace_path(ws_str, "op", "agents/opex/SOUL.md").await;
+        assert!(
+            breach.is_err(),
+            "agent 'op' must NOT write into agents/opex/: {breach:?}"
+        );
+        // Its own directory still works.
+        let own = validate_workspace_path(ws_str, "op", "agents/op/notes.md").await;
+        assert!(own.is_ok(), "agent 'op' must write its own dir: {own:?}");
     }
 
     /// `write_workspace_file("notes/report.md")` must write and create parent dirs.
