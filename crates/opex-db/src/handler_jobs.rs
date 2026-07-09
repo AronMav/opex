@@ -73,6 +73,19 @@ pub async fn claim_next_handler_job(db: &PgPool) -> anyhow::Result<Option<Handle
     Ok(job)
 }
 
+/// Count jobs currently in flight ('processing'). Used to bound concurrent
+/// out-of-process runners (F088): each runner (yt-dlp + ffmpeg + STT + LLM
+/// map-reduce) runs for minutes and is fire-and-forget on the toolgate side, so
+/// dispatching one job every poll regardless of how many are still running would
+/// spawn unbounded concurrent processes and exhaust CPU/RAM.
+pub async fn count_processing_handler_jobs(db: &PgPool) -> anyhow::Result<i64> {
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM handler_jobs WHERE status='processing'")
+            .fetch_one(db)
+            .await?;
+    Ok(n)
+}
+
 pub async fn mark_handler_job_processing(db: &PgPool, id: Uuid) -> anyhow::Result<()> {
     sqlx::query("UPDATE handler_jobs SET status='processing', updated_at=now() WHERE id=$1")
         .bind(id)

@@ -159,6 +159,10 @@ pub async fn dispatch_async_job(
 const STALE_PROCESSING_DEADLINE_SECS: i64 = 4 * 3600; // 4h
 /// Minimum spacing between stale-sweeps (the poll loop ticks every 5s).
 const SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+/// Max concurrent in-flight ('processing') runners (F088). Each runner spawns a
+/// multi-minute out-of-process pipeline (yt-dlp + ffmpeg + STT + LLM), so the
+/// worker must not keep dispatching new jobs while old ones are still running.
+const MAX_CONCURRENT_RUNNERS: i64 = 3;
 
 pub fn spawn_file_handler_worker(state: &AppState, shutdown: CancellationToken) {
     let state = state.clone();
@@ -232,6 +236,18 @@ pub fn spawn_file_handler_worker(state: &AppState, shutdown: CancellationToken) 
                     Err(e) => {
                         tracing::warn!(error = %e, "file_handler_worker: stale sweep failed")
                     }
+                }
+            }
+
+            // F088: cap concurrent in-flight runners. Skip claiming while at the
+            // cap — the queued job stays put and is picked up once a running one
+            // finishes (posts /complete) or is reaped by the stale sweep above.
+            match handler_jobs::count_processing_handler_jobs(&db).await {
+                Ok(n) if n >= MAX_CONCURRENT_RUNNERS => continue,
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "file_handler_worker: processing-count failed");
+                    continue;
                 }
             }
 
