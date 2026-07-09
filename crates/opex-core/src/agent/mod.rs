@@ -9,6 +9,7 @@ pub(crate) mod checkpoint_manager;
 pub mod channel_actions;
 pub mod channel_kind;
 pub mod cli_backend;
+pub mod commands;
 pub mod hooks;
 // Phase 62 RES-01: `StreamEvent` extracted as a leaf module so the lib
 // facade can expose it to integration tests without cascading engine.rs.
