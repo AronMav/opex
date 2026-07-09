@@ -219,12 +219,12 @@ export function NotificationBell() {
       </DropdownMenuTrigger>
       <DropdownMenuContent       align="end"
       className="w-80 max-w-[calc(100dvw-0.5rem)] p-0" data-testid="notification-list">
-        {/* Header — the title always shows in full; the action links wrap to a
-            second line (right-aligned via ml-auto) when they don't fit beside
-            it, so nothing is clipped and the title is never squeezed. */}
+        {/* Header — title on its own line; the action links sit on a full-width
+            row below it with "mark all read" pinned left and "clear all" pushed
+            right (ml-auto keeps clear-all right even when it's the only one). */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-3">
           <span className="text-sm font-semibold">{t("notifications.title")}</span>
-          <div className="ml-auto flex items-center gap-3">
+          <div className="flex w-full items-center gap-3">
             {unread_count > 0 && (
               <Button
                 variant="link"
@@ -239,7 +239,7 @@ export function NotificationBell() {
               <Button
                 variant="link"
                 size="xs"
-                className="h-auto whitespace-nowrap px-0 text-destructive"
+                className="ml-auto h-auto whitespace-nowrap px-0 text-destructive"
                 onClick={() => clearAll.mutate()}
               >
                 {t("notifications.clear_all")}
