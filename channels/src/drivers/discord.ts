@@ -114,8 +114,17 @@ export function createDiscordDriver(
       directives.think = true;
     }
 
-    // Re-upload media
-    const stableAttachments = await reUploadAttachments(bridge, attachments);
+    // Re-upload media. A failed re-upload must not silently drop the whole
+    // message — react ❌ and tell the user so they can retry (F082).
+    let stableAttachments: typeof attachments;
+    try {
+      stableAttachments = await reUploadAttachments(bridge, attachments);
+    } catch (err: any) {
+      console.error("[discord] reUploadAttachments failed:", err?.message ?? err);
+      await msg.react("❌").catch(() => {});
+      await msg.reply(strings.errorMessage(err?.message ?? "media upload failed")).catch(() => {});
+      return;
+    }
 
     const dto: IncomingMessageDto = {
       user_id: userId,

@@ -123,8 +123,17 @@ export function createSlackDriver(
       directives.think = true;
     }
 
-    // Re-upload media
-    const stableAttachments = await reUploadAttachments(bridge, attachments, `Bearer ${botToken}`);
+    // Re-upload media. A failed re-upload must not silently drop the whole
+    // message — react x and tell the user so they can retry (F082).
+    let stableAttachments: MediaAttachment[];
+    try {
+      stableAttachments = await reUploadAttachments(bridge, attachments, `Bearer ${botToken}`);
+    } catch (err: any) {
+      console.error("[slack] reUploadAttachments failed:", err?.message ?? err);
+      await client.reactions.add({ channel: channelId, name: "x", timestamp: msg.ts }).catch(() => {});
+      await say({ text: strings.errorMessage(err?.message ?? "media upload failed"), thread_ts: threadTs }).catch(() => {});
+      return;
+    }
 
     const dto: IncomingMessageDto = {
       user_id: userId,
