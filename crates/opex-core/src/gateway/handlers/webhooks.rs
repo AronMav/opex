@@ -104,6 +104,14 @@ fn webhook_auth_success(name: &str, ip: &str) {
     WEBHOOK_AUTH_THROTTLE.remove(&throttle_key(name, ip));
 }
 
+/// Drop ALL per-IP throttle entries for a webhook name (used on secret
+/// rotation): an IP locked out under the old secret must be able to retry with
+/// the new one, regardless of which IP it came from.
+fn webhook_auth_clear_all(name: &str) {
+    let prefix = format!("{name}\u{0}");
+    WEBHOOK_AUTH_THROTTLE.retain(|k, _| !k.starts_with(&prefix));
+}
+
 // ── Webhook type enum ──
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, sqlx::Type)]
@@ -534,7 +542,7 @@ pub(crate) async fn api_regenerate_webhook_secret(
         .await;
     match result {
         Ok(Some((name,))) => {
-            webhook_auth_success(&name, &client_ip);
+            webhook_auth_clear_all(&name);
             tracing::info!(webhook_id = %id, webhook_name = %name, "webhook secret regenerated");
             Json(json!({"ok": true, "secret": new_secret})).into_response()
         }
