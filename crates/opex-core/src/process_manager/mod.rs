@@ -67,11 +67,37 @@ struct ProcessState {
     last_started: Option<Instant>,
     /// Consecutive failed health probes (reset on success and on spawn).
     health_failures: u32,
+    /// F025: earliest instant this process may be respawned. The monitor stamps
+    /// it (backoff / circuit-breaker window) instead of sleeping inline, so one
+    /// flapping process's cooldown never blocks detection+restart of its peers.
+    next_retry_at: Option<Instant>,
 }
 
 impl ProcessState {
     fn new() -> Self {
-        Self { child: None, restart_count: 0, last_started: None, health_failures: 0 }
+        Self { child: None, restart_count: 0, last_started: None, health_failures: 0, next_retry_at: None }
+    }
+
+    /// Stamp the next allowed respawn instant based on `restart_count`
+    /// (exponential backoff, or the 5-minute circuit-breaker cooldown after 10
+    /// consecutive failures). Replaces the old inline `tokio::time::sleep`.
+    fn schedule_retry(&mut self, name: &str) {
+        let now = Instant::now();
+        if self.restart_count >= 10 {
+            tracing::error!(
+                process = %name,
+                restarts = self.restart_count,
+                "circuit breaker tripped, cooling down for 5 minutes"
+            );
+            self.next_retry_at = Some(now + Duration::from_secs(300));
+            self.restart_count = 0; // fresh sequence after cooldown
+        } else {
+            let base = 2_u64.pow(self.restart_count.min(5)); // 2,4,8,16,32
+            let jitter = base / 4;
+            let delay = Duration::from_secs((base + jitter).min(60));
+            tracing::info!(process = %name, delay_secs = delay.as_secs(), restarts = self.restart_count, "scheduling managed-process restart");
+            self.next_retry_at = Some(now + delay);
+        }
     }
 }
 
@@ -85,6 +111,11 @@ pub struct ProcessManager {
     base_dir: PathBuf,
     /// Client for `health_url` probes — short timeouts, loopback-only targets.
     http: reqwest::Client,
+    /// F024: set by `stop_all` BEFORE it kills anything, so the monitor/health
+    /// loops and `spawn_process` stop respawning the very processes shutdown is
+    /// tearing down. Without it the loops race stop_all and a killed process
+    /// briefly comes back up mid-shutdown.
+    shutting_down: std::sync::atomic::AtomicBool,
 }
 
 impl ProcessManager {
@@ -102,6 +133,7 @@ impl ProcessManager {
                 .timeout(Duration::from_secs(3))
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
+            shutting_down: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -219,6 +251,11 @@ impl ProcessManager {
     }
 
     async fn spawn_process(&self, name: &str) -> anyhow::Result<()> {
+        // F024: never (re)spawn once shutdown has begun — otherwise a monitor
+        // respawn races stop_all and a killed process comes back up.
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            anyhow::bail!("process manager is shutting down; refusing to spawn '{name}'");
+        }
         let cfg = self
             .config_for(name)
             .ok_or_else(|| anyhow::anyhow!("unknown managed process: {name}"))?;
@@ -263,6 +300,9 @@ impl ProcessManager {
 
     /// Gracefully stop all managed processes: SIGTERM → 5s wait → SIGKILL.
     pub async fn stop_all(&self) {
+        // F024: flip the shutdown flag FIRST so the monitor/health loops (and
+        // any in-flight restart) stop respawning what we're about to kill.
+        self.shutting_down.store(true, std::sync::atomic::Ordering::SeqCst);
         // Phase 1: send SIGTERM to all running processes
         {
             let states = self.states.lock().await;
@@ -320,6 +360,9 @@ impl ProcessManager {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
+            if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+                break; // F024: don't health-kill (→ respawn) during shutdown
+            }
             for cfg in self.configs.iter() {
                 let Some(url) = cfg.health_url.as_deref() else { continue };
 
@@ -395,88 +438,79 @@ impl ProcessManager {
     }
 
     /// Background loop: check if processes exited and restart them.
+    ///
+    /// F025: the per-process backoff / circuit-breaker is a `next_retry_at`
+    /// timestamp (stamped by `schedule_retry`), NOT an inline sleep — so a
+    /// flapping / cooling-down process is simply skipped this tick and does not
+    /// block detection+restart of its healthy-but-crashed peers.
     async fn monitor_loop(self: Arc<Self>) {
+        use std::sync::atomic::Ordering;
         let mut interval = tokio::time::interval(Duration::from_secs(2));
         loop {
             interval.tick().await;
+            if self.shutting_down.load(Ordering::SeqCst) {
+                break; // F024: don't respawn during shutdown
+            }
             let names: Vec<String> = self.names();
             for name in names {
-                let should_restart = {
+                if self.shutting_down.load(Ordering::SeqCst) {
+                    break;
+                }
+                // Decide under the lock whether this process is due to spawn now.
+                let spawn_now = {
                     let mut states = self.states.lock().await;
-                    if let Some(state) = states.get_mut(&name) {
-                        if let Some(ref mut child) = state.child {
-                            // try_wait is non-blocking
-                            match child.try_wait() {
-                                Ok(Some(exit_status)) => {
-                                    // Process has exited
-                                    let uptime = state
-                                        .last_started
-                                        .map_or(0, |t| t.elapsed().as_secs());
-                                    tracing::warn!(
-                                        process = %name,
-                                        exit = %exit_status,
-                                        uptime_secs = uptime,
-                                        restarts = state.restart_count,
-                                        "managed process exited — scheduling restart"
-                                    );
-                                    state.child = None;
-                                    state.restart_count += 1;
-                                    true
-                                }
-                                Ok(None) => {
-                                    // Reset restart counter after 60s of stable uptime
-                                    if state.restart_count > 0
-                                        && let Some(started) = state.last_started
-                                            && started.elapsed() > Duration::from_secs(60) {
-                                                state.restart_count = 0;
-                                            }
-                                    false
-                                }
-                                Err(e) => {
-                                    tracing::warn!(process = %name, error = %e, "try_wait error");
-                                    false
-                                }
+                    let Some(state) = states.get_mut(&name) else { continue };
+                    if let Some(ref mut child) = state.child {
+                        match child.try_wait() {
+                            Ok(Some(exit_status)) => {
+                                let uptime = state.last_started.map_or(0, |t| t.elapsed().as_secs());
+                                tracing::warn!(
+                                    process = %name,
+                                    exit = %exit_status,
+                                    uptime_secs = uptime,
+                                    restarts = state.restart_count,
+                                    "managed process exited — scheduling restart"
+                                );
+                                state.child = None;
+                                state.restart_count += 1;
+                                // Stamp the cooldown; the actual respawn happens on
+                                // a later tick once next_retry_at has elapsed.
+                                state.schedule_retry(&name);
+                                false
                             }
-                        } else {
-                            true // no child at all → needs spawn
+                            Ok(None) => {
+                                // Reset restart counter after 60s of stable uptime.
+                                if state.restart_count > 0
+                                    && let Some(started) = state.last_started
+                                    && started.elapsed() > Duration::from_secs(60)
+                                {
+                                    state.restart_count = 0;
+                                    state.next_retry_at = None;
+                                }
+                                false
+                            }
+                            Err(e) => {
+                                tracing::warn!(process = %name, error = %e, "try_wait error");
+                                false
+                            }
                         }
                     } else {
-                        false
+                        // No child → needs spawn, but only once the cooldown has
+                        // elapsed (skip-not-sleep so peers aren't blocked).
+                        match state.next_retry_at {
+                            Some(due) if Instant::now() < due => false,
+                            _ => {
+                                state.next_retry_at = None;
+                                true
+                            }
+                        }
                     }
                 };
 
-                if should_restart {
-                    let count = {
-                        let states = self.states.lock().await;
-                        states.get(&name).map_or(0, |s| s.restart_count)
-                    };
-
-                    // Circuit breaker: after 10 consecutive failures, wait 5 minutes then retry
-                    if count >= 10 {
-                        tracing::error!(
-                            process = %name,
-                            restarts = count,
-                            "circuit breaker tripped, cooling down for 5 minutes"
-                        );
-                        tokio::time::sleep(Duration::from_secs(300)).await;
-                        // Reset counter to allow fresh retry sequence after cooldown
-                        let mut states = self.states.lock().await;
-                        if let Some(state) = states.get_mut(&name) {
-                            state.restart_count = 0;
-                        }
-                        continue;
-                    }
-
-                    // Exponential backoff with deterministic jitter, capped at 60s
-                    let base = 2_u64.pow(count.min(5));        // 2, 4, 8, 16, 32
-                    let jitter = base / 4;                      // deterministic jitter
-                    let delay = Duration::from_secs((base + jitter).min(60));
-                    tracing::info!(process = %name, delay_secs = delay.as_secs(), restarts = count, "restarting managed process");
-                    tokio::time::sleep(delay).await;
-
-                    if let Err(e) = self.spawn_process(&name).await {
-                        tracing::error!(process = %name, error = %e, "failed to respawn managed process");
-                    }
+                if spawn_now
+                    && let Err(e) = self.spawn_process(&name).await
+                {
+                    tracing::error!(process = %name, error = %e, "failed to respawn managed process");
                 }
             }
         }
@@ -490,4 +524,35 @@ pub struct ProcessStatus {
     pub running: bool,
     pub restart_count: u32,
     pub pid: Option<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn f025_schedule_retry_stamps_backoff_without_sleeping() {
+        // schedule_retry must return immediately (no inline sleep) and stamp a
+        // future next_retry_at — the property that keeps one process's cooldown
+        // from blocking its peers.
+        let mut s = ProcessState::new();
+        s.restart_count = 1;
+        let before = Instant::now();
+        s.schedule_retry("t");
+        assert!(before.elapsed() < Duration::from_millis(50), "must not sleep inline");
+        assert!(s.next_retry_at.is_some_and(|d| d > Instant::now()), "must stamp a future retry");
+    }
+
+    #[test]
+    fn f025_circuit_breaker_resets_count_and_sets_long_cooldown() {
+        let mut s = ProcessState::new();
+        s.restart_count = 10; // trips the breaker
+        s.schedule_retry("t");
+        assert_eq!(s.restart_count, 0, "circuit breaker resets restart_count for a fresh sequence");
+        let due = s.next_retry_at.expect("cooldown stamped");
+        assert!(
+            due > Instant::now() + Duration::from_secs(250),
+            "circuit-breaker cooldown should be ~5 minutes"
+        );
+    }
 }
