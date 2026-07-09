@@ -160,9 +160,19 @@ async def run_handler(
             "auth_token": os.environ.get("OPEX_AUTH_TOKEN", ""),
             "callback_token": callback_token,
         }
-        await asyncio.create_subprocess_exec(
-            sys.executable, "-m", _RUNNER_MODULE, json.dumps(spec)
+        # F026: pipe the spec over stdin, NOT argv. spec carries the master
+        # OPEX_AUTH_TOKEN and the per-job HMAC callback_token; on argv they are
+        # world-readable via /proc/<pid>/cmdline and `ps auxww` for the entire
+        # (possibly hours-long) runner lifetime. runner.main() already reads the
+        # spec from stdin when no argv is given.
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", _RUNNER_MODULE,
+            stdin=asyncio.subprocess.PIPE,
         )
+        if proc.stdin is not None:
+            proc.stdin.write(json.dumps(spec).encode())
+            await proc.stdin.drain()
+            proc.stdin.close()
         return JSONResponse(status_code=202, content={"accepted": True, "job_id": job_id})
 
     # R12: bytes arrive in the multipart `file` field — never fetched here.
