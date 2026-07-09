@@ -255,6 +255,10 @@ async fn main() -> anyhow::Result<()> {
                 was_resource_warning.remove("disk_critical");
             }
 
+            // F078: mirror the disk path — alert on ram_warning too, not just
+            // ram_critical. Previously ram_warning_percent silently did nothing
+            // and the first RAM alert fired only at ram_critical (~95%), by
+            // which point the host may already be OOM-killing.
             if res.ram_critical
                 && !was_resource_warning
                     .get("ram_critical")
@@ -269,7 +273,25 @@ async fn main() -> anyhow::Result<()> {
                     )
                     .await;
                 was_resource_warning.insert("ram_critical".into(), true);
-            } else if !res.ram_critical {
+                was_resource_warning.remove("ram_warning");
+            } else if res.ram_warning
+                && !res.ram_critical
+                && !was_resource_warning
+                    .get("ram_warning")
+                    .copied()
+                    .unwrap_or(false)
+            {
+                alerter
+                    .send(
+                        &alert_config,
+                        &format!("⚠️ RAM high: {:.0}%", res.ram_used_percent),
+                        "resource",
+                    )
+                    .await;
+                was_resource_warning.insert("ram_warning".into(), true);
+                was_resource_warning.remove("ram_critical");
+            } else if !res.ram_warning && !res.ram_critical {
+                was_resource_warning.remove("ram_warning");
                 was_resource_warning.remove("ram_critical");
             }
 
