@@ -745,6 +745,21 @@ pub(crate) async fn api_restore(
         tracing::warn!("workspace snapshot for rollback failed — rollback will not be available if restore fails");
     }
 
+    // Snapshot config for rollback too (F091): config restore is as critical as
+    // workspace — a failed copy must be rolled back and surfaced, not silently
+    // reported as success.
+    let config_bak = tmpdir.join("config.bak.tar.gz");
+    let config_bak_ok = tokio::process::Command::new("tar")
+        .args(["czf"])
+        .arg(&config_bak)
+        .args(["-C", ".", "config"])
+        .output().await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !config_bak_ok {
+        tracing::warn!("config snapshot for rollback failed — rollback will not be available if restore fails");
+    }
+
     tracing::warn!("RESTORE initiated from pg_dump backup (v3)");
 
     // Stop all running agents
@@ -808,7 +823,20 @@ pub(crate) async fn api_restore(
     let config_src = extract_dir.join("config");
     if config_src.exists() {
         let config_src_str = config_src.to_string_lossy().into_owned();
-        let _ = copy_dir_to(&config_src_str, std::path::Path::new("config")).await;
+        // F091: check the config copy (was `let _ = ...`). A failed copy left the
+        // system half-restored yet returned {"ok":true}; mirror the workspace path
+        // — roll back from the snapshot and return 500.
+        if let Err(e) = copy_dir_to(&config_src_str, std::path::Path::new("config")).await {
+            if config_bak_ok {
+                let _ = tokio::process::Command::new("tar")
+                    .args(["xzf"]).arg(&config_bak).args(["-C", "."]).output().await;
+            } else {
+                tracing::error!("config rollback skipped: snapshot was not created");
+            }
+            let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+            return (StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("config restore failed: {e}")}))).into_response();
+        }
     }
 
     // Mark setup complete
