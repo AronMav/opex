@@ -89,15 +89,14 @@ pub async fn resolve_approval(
         tx.send(result).ok();
     }
 
-    // Opportunistic cleanup: remove stale waiters (>5 min old, oneshot already dropped)
-    let stale_threshold = std::time::Duration::from_secs(300);
-    waiters.retain(|id, (_tx, created_at)| {
-        let stale = created_at.elapsed() > stale_threshold;
-        if stale {
-            tracing::debug!(approval_id = %id, "cleaning up stale approval waiter");
-        }
-        !stale
-    });
+    // F035: do NOT opportunistically evict other waiters by a hardcoded 300s
+    // here. `approval_waiters` is per-agent and shared across all its sessions,
+    // so a 300s retain force-cancelled OTHER approvals that were still
+    // legitimately pending under a longer configured `timeout_seconds` (e.g.
+    // 600s) — the human hadn't clicked yet, but their tool was silently
+    // cancelled ~5 min early. Each waiter already enforces its OWN deadline via
+    // `tokio::time::timeout(timeout_secs, result_rx)`, and `prune_stale` reaps
+    // orphaned entries; this opportunistic cutoff was decoupled from both.
 
     Ok(())
 }

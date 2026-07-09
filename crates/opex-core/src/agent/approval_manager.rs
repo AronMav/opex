@@ -193,9 +193,10 @@ impl ApprovalManager {
         // 3. Create oneshot waiter and insert into map.
         //    DashMap is sync and sharded — no cross-await lock held.
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-        // Opportunistic cleanup: remove expired entries (>5 min).
-        let cutoff = Instant::now() - Duration::from_secs(300);
-        self.waiters.retain(|_, (_, created_at)| *created_at > cutoff);
+        // F035: no hardcoded 300s eviction here either — it force-cancelled
+        // still-pending approvals of the SAME agent (shared per-agent map) that
+        // had a longer configured timeout. Each waiter enforces its own
+        // deadline below; prune_stale reaps orphans.
         self.waiters.insert(approval_id, (result_tx, Instant::now()));
 
         // 4. Emit SSE event for inline approval in chat UI
