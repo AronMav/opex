@@ -390,8 +390,16 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                 }
-                Ok(_) => {}
-                Err(e) => tracing::debug!(error = %e, "stuck sessions check failed"),
+                // F116: a non-2xx (endpoint renamed/removed, 500 during core
+                // restart, auth drift) used to be swallowed silently and the
+                // transport error logged only at debug — the auto-retry feature
+                // could die invisibly. Surface both at warn.
+                Ok(resp) => {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    tracing::warn!(%status, body, "stuck-sessions check returned non-success");
+                }
+                Err(e) => tracing::warn!(error = %e, "stuck sessions check failed"),
             }
         }
 
