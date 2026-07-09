@@ -598,6 +598,19 @@ pub async fn handle_tool_test(
         );
     }
 
+    // F009: draft/unverified tools run here with an agent-supplied endpoint
+    // and no verify gate, so the literal-IP SSRF check must run before
+    // dispatch — reqwest bypasses the DNS resolver for a literal IP written
+    // into the URL (`http://169.254.169.254/…`). Same gate as engine_dispatch.
+    let ssrf_check = if tool.allow_private_endpoint {
+        crate::tools::ssrf::validate_lan_endpoint(&tool.endpoint)
+    } else {
+        crate::tools::ssrf::validate_outbound_endpoint(&tool.endpoint)
+    };
+    if let Err(e) = ssrf_check {
+        return format!("**tool_test('{tool_name}')** ⛔ blocked by SSRF policy: {e}");
+    }
+
     let resolver = make_resolver(secrets, agent_name);
     let oauth_ctx = make_oauth_context(oauth, agent_name);
     let start = std::time::Instant::now();
