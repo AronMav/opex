@@ -42,7 +42,20 @@ use opex_db::handler_jobs;
 static FILES_HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
 
 fn files_http_client() -> &'static reqwest::Client {
-    FILES_HTTP_CLIENT.get_or_init(reqwest::Client::new)
+    // F028: explicit timeouts. This client drives the SYNC handler path — a
+    // loopback upload download plus the multipart POST to single-process
+    // toolgate. Built with reqwest::Client::new() it had NO connect/request
+    // timeout, so a slow/wedged handler made `.send()` await forever, pinning a
+    // tokio task plus the up-to-50MB buffered upload in memory (there is no
+    // global tower TimeoutLayer to cancel it). Mirrors the async worker's
+    // client (file_handler_worker.rs), sized larger to tolerate big uploads.
+    FILES_HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
 }
 
 // ── post_action path-traversal allowlist ──────────────────────────────────────
