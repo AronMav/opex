@@ -733,9 +733,19 @@ pub(crate) async fn api_get_shared(
                         .collect()
                 })
                 .unwrap_or_default();
+            // F071: redact tool RESULT content on the public share link. Tool
+            // outputs (role='tool') can carry fetched secrets / PII / internal
+            // API bodies — strictly more sensitive than the tool *arguments*
+            // this endpoint already strips. The share contract promises "tool
+            // names only".
+            let content = if m.role == "tool" {
+                Value::String("[tool result hidden]".to_string())
+            } else {
+                Value::String(m.content.clone())
+            };
             json!({
                 "role": m.role,
-                "content": m.content,
+                "content": content,
                 "tools": tools,
                 "created_at": m.created_at,
             })
@@ -1145,6 +1155,18 @@ pub(crate) async fn api_retry_session(
         Err(e) => return ApiError::Internal(e.to_string()).into_response(),
     };
 
+    // F072: resolve the engine BEFORE any destructive delete. If the owning
+    // agent was deleted/renamed/not-yet-reloaded, the None arm must return with
+    // the transcript INTACT — the old order deleted the last user message first
+    // and then 404'd, permanently losing the turn with no re-drive.
+    let engine = match agents.get_engine(&session.agent_id).await {
+        Some(e) => e,
+        None => {
+            let _ = sessions::mark_session_failed(&infra.db, id).await;
+            return ApiError::NotFound(format!("agent '{}' not found", session.agent_id)).into_response();
+        }
+    };
+
     // 3. Increment retry count FIRST (atomic guard against concurrent
     //    double-retry). R-RETRY fix: this MUST happen before any destructive
     //    delete. Previously the handler deleted the last user message and empty
@@ -1173,16 +1195,8 @@ pub(crate) async fn api_retry_session(
 
     tracing::info!(session_id = %id, agent = %session.agent_id, retry_count, "retrying stuck session");
 
-    // 5. Get engine
-    let engine = match agents.get_engine(&session.agent_id).await {
-        Some(e) => e,
-        None => {
-            let _ = sessions::mark_session_failed(&infra.db, id).await;
-            return ApiError::NotFound(format!("agent '{}' not found", session.agent_id)).into_response();
-        }
-    };
-
-    // 6. Build message and run via handle_sse with resume_session_id
+    // 6. Build message and run via handle_sse with resume_session_id (engine
+    //    was resolved above, before any destructive delete — F072).
     let msg = opex_types::IncomingMessage {
         text: Some(user_text),
         user_id: session.user_id.clone(),
