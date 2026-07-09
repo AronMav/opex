@@ -25,11 +25,11 @@ pub struct ScenarioOutcome {
     pub summary_text: String,
     pub artifact_urls: Vec<String>,
     pub reason: Option<String>,
-    /// `true` ONLY when this outcome is the async-video acceptance ack
-    /// (`summarize_video` successfully enqueued a durable `handler_jobs` row).
-    /// Drives the pipeline short-circuit: when set, the LLM agent loop is
-    /// skipped and the ack is persisted directly as the assistant reply so the
-    /// agent does not redundantly try to process the YouTube link itself.
+    /// F131: RETAINED wire/DB-compat field, but NOT read by any production code.
+    /// Async video is routed via the manifest `execution=="async"` → `handler_jobs`
+    /// queue (files.rs), NOT this flag; no code path short-circuits the agent loop
+    /// on it. It is always constructed `false` and only asserted in tests. Do not
+    /// rely on setting it to skip the agent loop — that behavior does not exist.
     /// `#[serde(default)]` keeps wire/DB compatibility for older payloads.
     #[serde(default)]
     pub video_accepted: bool,
