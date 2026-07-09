@@ -102,7 +102,9 @@ def _imap_session(req):
     (404) on folder-not-found.
     """
     try:
-        imap = imaplib.IMAP4_SSL(req.server, req.port)
+        # F029: explicit socket timeout — without it a firewalled/stalled host
+        # blocks connect+login+command round-trips indefinitely.
+        imap = imaplib.IMAP4_SSL(req.server, req.port, timeout=15)
     except OSError as e:
         raise HTTPException(502, f"IMAP connection failed: {e}") from e
 
@@ -129,7 +131,10 @@ def _imap_session(req):
 
 
 @router.post("/fetch")
-async def fetch(req: ImapFetchRequest):
+def fetch(req: ImapFetchRequest):
+    # F029: plain `def` (not `async def`) so FastAPI runs this in its threadpool.
+    # imaplib is blocking sync I/O; on the async loop it froze single-process
+    # toolgate (STT/TTS/embeddings/vision) for the whole hang duration.
     """Fetch recent messages from an IMAP folder (UID-based for stability)."""
     with _imap_session(req) as imap:
         criteria_parts = []
@@ -152,7 +157,8 @@ async def fetch(req: ImapFetchRequest):
 
 
 @router.post("/search")
-async def search(req: ImapSearchRequest):
+def search(req: ImapSearchRequest):
+    # F029: plain `def` → FastAPI threadpool (blocking imaplib off the loop).
     """Full-text search an IMAP folder (UID-based, with UTF-8 charset declaration + ASCII fallback)."""
     with _imap_session(req) as imap:
         # Try CHARSET UTF-8 first (needed for Cyrillic/non-ASCII on strict servers).

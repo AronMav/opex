@@ -30,7 +30,9 @@ class SmtpSendRequest(BaseModel):
 
 
 @router.post("/send")
-async def send(req: SmtpSendRequest):
+def send(req: SmtpSendRequest):
+    # F029: plain `def` → FastAPI threadpool; blocking smtplib on the async loop
+    # froze all of single-process toolgate for the hang duration.
     """Send an email via SMTP with optional STARTTLS. Stateless — all creds in body."""
     if req.html:
         msg = MIMEMultipart("alternative")
@@ -45,7 +47,7 @@ async def send(req: SmtpSendRequest):
         msg["Reply-To"] = req.reply_to
 
     try:
-        with smtplib.SMTP(req.server, req.port) as smtp:
+        with smtplib.SMTP(req.server, req.port, timeout=15) as smtp:
             smtp.ehlo()
             if req.use_tls:
                 smtp.starttls()
