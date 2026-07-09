@@ -24,8 +24,10 @@ max_restore_size_mb = 500
 signed_url_ttl_secs = 86400
 require_signature = true
 
-[typing]
-mode = "instant"
+# F130: [typing] removed — it had no field in AppConfig and was silently
+# parsed-and-discarded. Typing mode is resolved per-channel from the
+# agent_channels config (channel_ws/handshake.rs reads `typing_mode`), never
+# from opex.toml.
 
 [subagents]
 enabled = true
@@ -128,27 +130,15 @@ message_wait_for_idle_secs = 60   # how long to wait for target agent to become 
 message_result_secs = 300         # how long sync run/message/collect blocks waiting for a result
 safety_timeout_secs = 600         # outer defense-in-depth wrapper (must be > 60 + 300)
 
-# ═══ Video summarization (FSE feature) ═══
-# v1 documentation section — tunables for the in-core video worker and toolgate.
-# The in-core worker reads `job_timeout_secs`; ffmpeg-side knobs are supplied via
-# toolgate env vars (VIDEO_SCENE_THRESHOLD, VIDEO_FRAME_CEILING).
-# This section is NOT wired into a Rust config struct (YAGNI for v1):
-# the loader is lenient (no deny_unknown_fields on AppConfig) so unknown sections
-# are silently ignored — no parse error, no struct needed.
+# ═══ Video summarization ═══
+# F123: only `digest_provider` / `digest_model` are read at runtime
+# (gateway/handlers/llm.rs). The former scene_threshold / frame_ceiling /
+# job_timeout_secs / url_allowlist / note_max_frames / vault_name keys were REMOVED
+# — the in-core video worker was deleted in Phase 6 (m068) and nothing reads them;
+# toolgate's summarize_video handler reads its own env vars. (The video-URL
+# allowlist is hardcoded in pipeline/subagent.rs::is_supported_video_host.)
 
 [video]
-# Scene-cut sensitivity for key-frame extraction (0..1 ffmpeg scene score).
-scene_threshold = 0.4
-# High safety ceiling on extracted frames (NOT a product cap).
-frame_ceiling = 200
-# Liveness guard per job (seconds) — fails a wedged job, not a cap on long video.
-job_timeout_secs = 1800
-# v1 video-URL download allowlist (yt-dlp). YouTube only.
-url_allowlist = ["youtube.com", "youtu.be"]
-# Zettelkasten note output (v1): max screenshots embedded per note.
-note_max_frames = 24
-# Obsidian vault name for the obsidian:// deep link in the chat notification.
-vault_name = "zettelkasten"
 # Override LLM provider for the video digest step (name from the providers table).
 # When unset, the digest uses the job-owning agent's own LLM provider.
 # Useful for routing the digest to a large-context or local model without
