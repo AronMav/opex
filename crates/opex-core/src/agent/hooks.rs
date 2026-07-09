@@ -190,14 +190,24 @@ impl HookRegistry {
                 .and_then(|u| u.host_str().map(|s| s.to_string()))
                 .unwrap_or_default();
 
-            let fut = client.post(&cw.cfg.url).json(&req).send();
+            // F043: wrap BOTH send() AND the body read in the timeout. The
+            // allow_internal client has only a connect_timeout (no overall
+            // .timeout()), and the previous timeout covered only send(), so a
+            // decision webhook that returned headers promptly but stalled the
+            // body hung r.text() indefinitely — freezing the tool decision and
+            // the whole agent turn.
+            let url = cw.cfg.url.clone();
+            let fut = async {
+                let r = client.post(&url).json(&req).send().await?;
+                r.text().await
+            };
             let resp = tokio::time::timeout(
                 std::time::Duration::from_millis(cw.cfg.timeout_ms.min(30_000)),
                 fut,
             ).await;
 
             let body = match resp {
-                Ok(Ok(r)) => r.text().await.unwrap_or_default(),
+                Ok(Ok(text)) => text,
                 _ => {
                     tracing::warn!(url = %cw.cfg.url, "decision hook failed (timeout or transport error)");
                     match cw.cfg.on_failure {
