@@ -166,9 +166,23 @@ pub(crate) async fn gmail_push_handler(
 ) -> impl IntoResponse {
     use base64::Engine;
 
-    // Verify push authentication token — the Pub/Sub subscription URL must include
-    // ?token=OPEX_AUTH_TOKEN so only our own Google Cloud project can trigger this handler.
-    let expected_token = opex_gateway_util::env::env_var("AUTH_TOKEN").unwrap_or_default();
+    // Verify the push token embedded in the Pub/Sub subscription URL.
+    // F033: prefer a DEDICATED per-endpoint secret (GMAIL_PUSH_TOKEN) so the
+    // token that lives in Google Cloud config / every push URL / proxy logs is
+    // NOT the master OPEX_AUTH_TOKEN (which grants full API + secrets-vault
+    // access). Fall back to the master token only when the dedicated secret is
+    // unset, with a warning to migrate — so existing deployments keep working.
+    let expected_token = match auth.secrets.get("GMAIL_PUSH_TOKEN").await {
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            tracing::warn!(
+                "gmail push: GMAIL_PUSH_TOKEN not configured — falling back to the master \
+                 OPEX_AUTH_TOKEN. Set a dedicated GMAIL_PUSH_TOKEN secret and update the \
+                 Pub/Sub push URL so a leak of that URL can't escalate to full API access."
+            );
+            opex_gateway_util::env::env_var("AUTH_TOKEN").unwrap_or_default()
+        }
+    };
     let provided_token = params.get("token").map_or("", std::string::String::as_str);
     use subtle::ConstantTimeEq;
     if expected_token.is_empty()
