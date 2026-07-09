@@ -145,12 +145,18 @@ pub(crate) async fn api_curator_run(
     let cfg = cfg_svc.shared_config.read().await.curator.clone();
 
     if let Ok(Some(last)) = crate::db::curator_runs::last_run(&db).await
-        && last.finished_at.is_none() {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({"error": "curator already running", "run_id": last.id})),
-            ).into_response();
-        }
+        && last.finished_at.is_none()
+        // F074: only block on a RECENT run. A crash/restart mid-run (every
+        // deploy restarts core) leaves finished_at NULL forever, and there is
+        // no startup sweep — without this staleness bound the manual curator is
+        // permanently bricked with a 409.
+        && (chrono::Utc::now() - last.started_at) < chrono::Duration::minutes(30)
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "curator already running", "run_id": last.id})),
+        ).into_response();
+    }
 
     let run_id = match crate::db::curator_runs::insert_run(&db, "manual", false).await {
         Ok(id) => id,
@@ -185,12 +191,16 @@ pub(crate) async fn api_curator_preview(
     let cfg = cfg_svc.shared_config.read().await.curator.clone();
 
     if let Ok(Some(last)) = crate::db::curator_runs::last_run(&db).await
-        && last.finished_at.is_none() {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({"error": "curator already running", "run_id": last.id})),
-            ).into_response();
-        }
+        && last.finished_at.is_none()
+        // F074: stale-run bound (see api_curator_run) so a crashed run doesn't
+        // brick preview with a permanent 409.
+        && (chrono::Utc::now() - last.started_at) < chrono::Duration::minutes(30)
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "curator already running", "run_id": last.id})),
+        ).into_response();
+    }
 
     let run_id = match crate::db::curator_runs::insert_run(&db, "preview", true).await {
         Ok(id) => id,
