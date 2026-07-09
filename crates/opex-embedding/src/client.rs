@@ -189,7 +189,13 @@ impl ToolgateClient {
 }
 
 fn classify_reqwest_err(e: reqwest::Error) -> RetryableError {
-    if e.is_timeout() || e.is_connect() {
+    // F075: also treat request/body/incomplete-message errors as Transient. A
+    // toolgate restart / OOM mid-request surfaces as a dropped-connection body
+    // error that is neither is_timeout() nor is_connect(); classifying it
+    // Permanent failed the embed with no retry, even though one short backoff
+    // would succeed once toolgate is back. Only genuine non-network errors
+    // (e.g. builder/decode) stay Permanent.
+    if e.is_timeout() || e.is_connect() || e.is_request() || e.is_body() {
         RetryableError::Transient(anyhow!("network error: {e}"))
     } else {
         RetryableError::Permanent(anyhow!("non-retryable error: {e}"))
