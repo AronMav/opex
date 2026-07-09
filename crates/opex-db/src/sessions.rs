@@ -1567,7 +1567,22 @@ pub async fn search_messages(
     .fetch_all(db)
     .await;
 
-    if let Ok(r) = rows { Ok(r) } else {
+    let fts_err = match rows {
+        Ok(r) => return Ok(r),
+        Err(e) => e,
+    };
+    // F114: fall back to ILIKE ONLY when the tsv column genuinely does not exist
+    // (undefined_column, SQLSTATE 42703). Any other error — a transient DB failure,
+    // a connection drop, a real query bug — must propagate; silently ILIKE-scanning
+    // on every error masked real failures and changed ranking/semantics.
+    let missing_tsv = fts_err
+        .as_database_error()
+        .and_then(|db_err| db_err.code())
+        .is_some_and(|code| code.as_ref() == "42703");
+    if !missing_tsv {
+        return Err(fts_err.into());
+    }
+    {
         // Fallback to ILIKE if tsv column doesn't exist yet.
         // Escape LIKE wildcards (%, _, \) to prevent wildcard injection.
         let escaped = query
