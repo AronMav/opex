@@ -91,7 +91,12 @@ impl OpenAiCompatibleProvider {
         // Parse SSE stream: accumulate content (streamed) + tool calls (buffered)
         let mut full_content = String::new();
         let mut full_reasoning = String::new(); // DeepSeek extended thinking (reasoning_content)
-        let mut buffer = String::new();
+        // F062: accumulate RAW BYTES, not a String. Decoding each network
+        // chunk with from_utf8_lossy corrupted any multi-byte char (Cyrillic,
+        // emoji) split across a chunk boundary into U+FFFD. Buffer bytes and
+        // decode only COMPLETE lines (which are whole UTF-8), so a split
+        // sequence is reassembled from the next chunk before decoding.
+        let mut buffer: Vec<u8> = Vec::new();
         let mut thinking_filter = crate::agent::thinking::ThinkingFilter::new();
         // Indexed by tool_call index: (id, name, arguments)
         let mut tool_call_parts: Vec<(String, String, String)> = Vec::new();
@@ -121,11 +126,13 @@ impl OpenAiCompatibleProvider {
                     return Err(anyhow::Error::new(LlmCallError::from(e)));
                 }
             };
-            buffer.push_str(&String::from_utf8_lossy(&chunk_bytes));
+            buffer.extend_from_slice(&chunk_bytes);
 
-            while let Some(line_end) = buffer.find('\n') {
-                let line = buffer[..line_end].trim().to_string();
-                buffer = buffer[line_end + 1..].to_string();
+            while let Some(line_end) = buffer.iter().position(|&b| b == b'\n') {
+                // A complete line (bytes up to '\n') is whole UTF-8, so lossy
+                // decoding here can never split a multi-byte char.
+                let line = String::from_utf8_lossy(&buffer[..line_end]).trim().to_string();
+                buffer.drain(..=line_end);
 
                 if line.is_empty() || line.starts_with(':') {
                     continue;
