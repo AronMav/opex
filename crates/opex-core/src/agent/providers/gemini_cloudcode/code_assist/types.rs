@@ -62,6 +62,26 @@ pub enum CodeAssistError {
     Serialization(String),
 }
 
+// ── HTTP client ────────────────────────────────────────────────────────────────
+
+/// Build the reqwest client used for all Code Assist project/quota HTTP calls.
+///
+/// F007: previously these call sites used `reqwest::Client::new()`, which has
+/// NO connect/request timeout, so a stalled `cloudcode-pa.googleapis.com`
+/// (accepts the TCP connection but never responds) would hang the request/cron
+/// task indefinitely. This mirrors the timeouts already set on the OAuth
+/// refresh/device-flow clients (`.use_rustls_tls().timeout(20s)`), with an
+/// added `connect_timeout` so a black-holed endpoint fails fast enough to
+/// surface an error / fail over.
+pub(super) fn code_assist_client() -> Result<reqwest::Client, CodeAssistError> {
+    reqwest::Client::builder()
+        .use_rustls_tls()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| CodeAssistError::Http { status: 0, body: e.to_string() })
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

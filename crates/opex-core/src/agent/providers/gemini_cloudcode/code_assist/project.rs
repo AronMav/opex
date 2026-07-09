@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use super::types::{CodeAssistError, CODE_ASSIST_ENDPOINT, FREE_TIER_ID, LEGACY_TIER_ID, ProjectContext};
+use super::types::{CodeAssistError, CODE_ASSIST_ENDPOINT, FREE_TIER_ID, LEGACY_TIER_ID, ProjectContext, code_assist_client};
 
 // ── is_free_tier_quota_error ──────────────────────────────────────────────────
 
@@ -74,7 +74,7 @@ pub(super) async fn ensure_project_ctx_with_base(
         });
     }
 
-    let client = reqwest::Client::new();
+    let client = code_assist_client()?;
 
     // Step 1: loadCodeAssist
     let load_url = format!("{}/v1internal:loadCodeAssist", base_url.trim_end_matches('/'));

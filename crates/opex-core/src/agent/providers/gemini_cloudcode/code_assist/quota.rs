@@ -3,7 +3,7 @@
 //! Calls `POST /v1internal:retrieveUserQuota`. Not in the hot path —
 //! used only by operator tooling (e.g., a future /gquota UI endpoint).
 
-use super::types::{CodeAssistError, CODE_ASSIST_ENDPOINT};
+use super::types::{CodeAssistError, CODE_ASSIST_ENDPOINT, code_assist_client};
 use chrono::{DateTime, Utc};
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -40,7 +40,7 @@ pub(super) async fn retrieve_user_quota_with_base(
     project_id: &str,
     base_url: &str,
 ) -> Result<Vec<QuotaBucket>, CodeAssistError> {
-    let client = reqwest::Client::new();
+    let client = code_assist_client()?;
     let url = format!(
         "{}/v1internal:retrieveUserQuota",
         base_url.trim_end_matches('/')
