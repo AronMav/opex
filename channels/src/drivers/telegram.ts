@@ -379,7 +379,8 @@ export function createTelegramDriver(
           if (!e) return;
           state.debounce.delete(key);
           const mergedText = e.texts.join("\n");
-          dispatchOrQueue(bot, e.msg, e.userId, e.chatId, mergedText, e.attachments, bridge, strings, state, errorCooldownMs, errorPolicy);
+          dispatchOrQueue(bot, e.msg, e.userId, e.chatId, mergedText, e.attachments, bridge, strings, state, errorCooldownMs, errorPolicy)
+            .catch((err) => console.error("[tg] debounce dispatch failed:", err?.message ?? err));
         }, DEBOUNCE_DELAY_MS);
         return;
       }
@@ -389,7 +390,8 @@ export function createTelegramDriver(
         if (!e) return;
         state.debounce.delete(key);
         const mergedText = e.texts.join("\n");
-        dispatchOrQueue(bot, e.msg, e.userId, e.chatId, mergedText, e.attachments, bridge, strings, state, errorCooldownMs, errorPolicy);
+        dispatchOrQueue(bot, e.msg, e.userId, e.chatId, mergedText, e.attachments, bridge, strings, state, errorCooldownMs, errorPolicy)
+          .catch((err) => console.error("[tg] debounce dispatch failed:", err?.message ?? err));
       }, DEBOUNCE_DELAY_MS);
 
       state.debounce.set(key, { texts: text ? [text] : [], attachments: [...attachments], msg, userId, chatId, timer });
@@ -658,8 +660,22 @@ async function processMessage(
   // even if media re-upload is slow.
   await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "👀" as any }]).catch(() => { });
 
-  // Re-upload media for stable URLs
-  const stableAttachments = await reUploadAttachments(bridge, attachments);
+  // Re-upload media for stable URLs. A failed re-upload (core /api/media/upload
+  // 5xx/413, or the Telegram file download 404) must NOT silently drop the whole
+  // message — react ❌ and tell the user so they can retry (F080).
+  let stableAttachments: MediaAttachment[];
+  try {
+    stableAttachments = await reUploadAttachments(bridge, attachments);
+  } catch (err: any) {
+    console.error("[tg] reUploadAttachments failed:", err?.message ?? err);
+    await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "👎" }]).catch(() => { });
+    const isGroup = chatId < 0;
+    await bot.api.sendMessage(chatId, strings.errorMessage(err?.message ?? "media upload failed"), {
+      reply_parameters: safeReplyParams(msg.message_id),
+      disable_notification: isGroup,
+    }).catch(() => { });
+    return;
+  }
 
   // Video/file handler selection is model-driven now: Core injects a hint that
   // tells the LLM to offer the applicable handlers (via the `file_handler` tool)
