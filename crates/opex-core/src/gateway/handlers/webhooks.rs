@@ -67,29 +67,36 @@ fn webhook_auth_check(name: &str, ip: &str) -> Result<(), (StatusCode, Json<Valu
 
 fn webhook_auth_failure(name: &str, ip: &str) {
     let now = Instant::now();
-    let mut entry = WEBHOOK_AUTH_THROTTLE
-        .entry(throttle_key(name, ip))
-        .or_insert(WebhookAuthState {
-            failures: 0,
-            first_failure: now,
-            locked_until: None,
-        });
+    // Scope the per-shard write guard from `.entry()` and DROP it before the
+    // `.len()`/`.retain()` below: those acquire read locks on every shard,
+    // including the one this guard write-locks — holding both self-deadlocks
+    // the DashMap (RwLock is not reentrant). Without the explicit block this
+    // hangs the calling task on every auth failure.
+    {
+        let mut entry = WEBHOOK_AUTH_THROTTLE
+            .entry(throttle_key(name, ip))
+            .or_insert(WebhookAuthState {
+                failures: 0,
+                first_failure: now,
+                locked_until: None,
+            });
 
-    if now.duration_since(entry.first_failure).as_secs() > WEBHOOK_AUTH_WINDOW_SECS {
-        entry.failures = 0;
-        entry.first_failure = now;
-        entry.locked_until = None;
-    }
+        if now.duration_since(entry.first_failure).as_secs() > WEBHOOK_AUTH_WINDOW_SECS {
+            entry.failures = 0;
+            entry.first_failure = now;
+            entry.locked_until = None;
+        }
 
-    entry.failures += 1;
-    if entry.failures >= WEBHOOK_AUTH_MAX_FAILURES {
-        entry.locked_until =
-            Some(now + std::time::Duration::from_secs(WEBHOOK_AUTH_LOCKOUT_SECS));
-        tracing::warn!(
-            webhook = %name,
-            "webhook auth locked after {} failures",
-            WEBHOOK_AUTH_MAX_FAILURES
-        );
+        entry.failures += 1;
+        if entry.failures >= WEBHOOK_AUTH_MAX_FAILURES {
+            entry.locked_until =
+                Some(now + std::time::Duration::from_secs(WEBHOOK_AUTH_LOCKOUT_SECS));
+            tracing::warn!(
+                webhook = %name,
+                "webhook auth locked after {} failures",
+                WEBHOOK_AUTH_MAX_FAILURES
+            );
+        }
     }
 
     if WEBHOOK_AUTH_THROTTLE.len() > 100 {
