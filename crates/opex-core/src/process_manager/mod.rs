@@ -1,8 +1,11 @@
 //! Manages long-lived child processes (channels, toolgate) spawned by Core.
 //!
 //! Each managed process is:
-//! - Spawned at Core startup via `systemd-run --scope --user` (gives `MemoryMax`, `CPUQuota`,
-//!   `NoNewPrivileges`, `PrivateTmp` without Docker overhead).
+//! - Spawned at Core startup as a DIRECT child (`tokio::process::Command`), NOT
+//!   via `systemd-run --scope`. F104: the `memory_max` / `cpu_quota` fields on
+//!   `[[managed_process]]` are therefore accepted-but-NOT-enforced — no cgroup
+//!   limit is applied to managed children. (Core's own systemd unit may cap the
+//!   whole tree, but there is no per-child MemoryMax/CPUQuota.)
 //! - Automatically restarted on crash (with backoff).
 //! - Reachable via `POST /api/services/{name}/restart` (kill + respawn with port release wait).
 //! - Given only the env vars it needs (minimal passthrough, no DB credentials leaked to channels).
@@ -362,11 +365,21 @@ impl ProcessManager {
                         tracing::info!(process = %name, pid = pid, "sending SIGTERM");
                         #[cfg(unix)]
                         {
-                            // Negative PID sends signal to entire process group
-                            // (matches process_group(0) set during spawn)
-                            let _ = std::process::Command::new("kill")
+                            // Negative PID sends signal to the entire process group
+                            // (matches process_group(0) set during spawn).
+                            // F127: capture the result + reap the helper — the old
+                            // fire-and-forget `let _ = ...spawn()` silently skipped
+                            // graceful termination if `kill` failed to launch and
+                            // left a short-lived zombie.
+                            match tokio::process::Command::new("kill")
                                 .args(["-TERM", &format!("-{}", pid)])
-                                .spawn();
+                                .status()
+                                .await
+                            {
+                                Ok(s) if s.success() => {}
+                                Ok(s) => tracing::warn!(process = %name, pid, code = ?s.code(), "SIGTERM (kill) returned non-zero"),
+                                Err(e) => tracing::warn!(process = %name, pid, error = %e, "failed to send SIGTERM (kill spawn failed)"),
+                            }
                         }
                     }
             }
