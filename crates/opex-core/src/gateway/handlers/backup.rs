@@ -185,6 +185,28 @@ async fn copy_dir_to(src: &str, dst: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Remove every entry INSIDE `dir` (keeping `dir` itself). F090: restore uses this
+/// to make the filesystem a faithful point-in-time mirror of the backup — files
+/// present live but absent from the backup are deleted, matching the DB
+/// truncate-replace (a merge would resurrect e.g. an agent config created after
+/// the backup). Only called when a rollback snapshot exists, so a mid-restore
+/// failure can restore the prior state.
+async fn clear_dir_contents(dir: &std::path::Path) -> std::io::Result<()> {
+    let mut rd = match tokio::fs::read_dir(dir).await {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    while let Some(entry) = rd.next_entry().await? {
+        if entry.file_type().await?.is_dir() {
+            tokio::fs::remove_dir_all(entry.path()).await?;
+        } else {
+            tokio::fs::remove_file(entry.path()).await?;
+        }
+    }
+    Ok(())
+}
+
 /// Run pg_restore inside the postgres container, reading db.dump from stdin.
 ///
 /// Strategy: TRUNCATE all tables in the dump (CASCADE handles FK deps from excluded tables),
@@ -839,6 +861,15 @@ pub(crate) async fn api_restore(
     // Restore workspace and config
     let workspace_src = extract_dir.join("workspace");
     if workspace_src.exists() {
+        // F090: faithful restore — clear the live dir so files absent from the
+        // backup are removed (not merged). Only when the rollback snapshot exists,
+        // so a mid-restore failure can restore the prior state; else fall back to
+        // merge rather than clearing with no safety net.
+        if workspace_bak_ok {
+            if let Err(e) = clear_dir_contents(std::path::Path::new("workspace")).await {
+                tracing::warn!(error = %e, "workspace clear-before-restore failed — copying as merge");
+            }
+        }
         let workspace_src_str = workspace_src.to_string_lossy().into_owned();
         if let Err(e) = copy_dir_to(&workspace_src_str, std::path::Path::new("workspace")).await {
             // Rollback workspace from snapshot (only if snapshot was created successfully)
@@ -855,6 +886,14 @@ pub(crate) async fn api_restore(
     }
     let config_src = extract_dir.join("config");
     if config_src.exists() {
+        // F090: faithful restore — clear config/ so a stale agent TOML (e.g. an
+        // agent created after the backup) doesn't survive and get restarted from
+        // disk with no DB backing. Gated on the snapshot for rollback safety.
+        if config_bak_ok {
+            if let Err(e) = clear_dir_contents(std::path::Path::new("config")).await {
+                tracing::warn!(error = %e, "config clear-before-restore failed — copying as merge");
+            }
+        }
         let config_src_str = config_src.to_string_lossy().into_owned();
         // F091: check the config copy (was `let _ = ...`). A failed copy left the
         // system half-restored yet returned {"ok":true}; mirror the workspace path
