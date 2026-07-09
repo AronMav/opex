@@ -1828,11 +1828,14 @@ pub fn update_service_urls(config_path: &str, toolgate_url: Option<&str>) -> Res
 }
 
 /// Update [memory] section in TOML config file.
+///
+/// F132: the embed_url/embed_model parameters were dropped — embedding is managed
+/// by toolgate (the providers registry), MemoryConfig has no such fields, and the
+/// sole caller always passed None. Keeping the params + write branches was dead
+/// code that would reintroduce config drift if a caller ever passed them.
 pub fn update_memory_config(
     config_path: &str,
     enabled: Option<bool>,
-    embed_url: Option<&str>,
-    embed_model: Option<&str>,
     embed_dim: Option<u32>,
     embed_dimensions: Option<u32>,
 ) -> Result<()> {
@@ -1850,26 +1853,6 @@ pub fn update_memory_config(
 
     if let Some(en) = enabled {
         doc["memory"]["enabled"] = toml_edit::value(en);
-    }
-
-    if let Some(url) = embed_url {
-        if url.is_empty() {
-            if let Some(mem) = doc.get_mut("memory") {
-                mem.as_table_mut().map(|t| t.remove("embed_url"));
-            }
-        } else {
-            doc["memory"]["embed_url"] = toml_edit::value(url);
-        }
-    }
-
-    if let Some(model) = embed_model {
-        if model.is_empty() {
-            if let Some(mem) = doc.get_mut("memory") {
-                mem.as_table_mut().map(|t| t.remove("embed_model"));
-            }
-        } else {
-            doc["memory"]["embed_model"] = toml_edit::value(model);
-        }
     }
 
     if let Some(dim) = embed_dim {

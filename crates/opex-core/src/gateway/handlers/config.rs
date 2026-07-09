@@ -353,8 +353,6 @@ pub(crate) async fn api_update_config(
         && let Err(e) = crate::config::update_memory_config(
             &config_path,
             payload.embed_enabled,
-            None, // embed_url removed — managed by toolgate
-            None, // embed_model removed — managed by toolgate
             payload.embed_dim,
             payload.embed_dimensions,
         ) {
