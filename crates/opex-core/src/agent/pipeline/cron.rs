@@ -216,14 +216,25 @@ pub async fn handle_cron(ctx: &CommandContext<'_>, args: &serde_json::Value) -> 
             // goalless until the next restart, diverging DB from runtime.
             let autonomous_goal: Option<String> = match args.get("autonomous_goal").and_then(|v| v.as_str()) {
                 Some(g) => Some(g.to_string()),
-                None => sqlx::query_scalar::<_, Option<String>>(
+                // F060: distinguish a query ERROR from a genuine SQL NULL. The
+                // old `.ok().flatten()` collapsed both to None, so a transient
+                // DB blip during the keep-read caused the unconditional
+                // `SET autonomous_goal = $8` below to bind NULL and permanently
+                // erase the job's goal. On error, abort the update instead.
+                None => match sqlx::query_scalar::<_, Option<String>>(
                     "SELECT autonomous_goal FROM scheduled_jobs WHERE id = $1",
                 )
                 .bind(uuid)
                 .fetch_one(&cfg.db)
                 .await
-                .ok()
-                .flatten(),
+                {
+                    Ok(g) => g,
+                    Err(e) => {
+                        return format!(
+                            "Error reading current job goal (update aborted to avoid erasing it): {e}"
+                        );
+                    }
+                },
             };
 
             // Validate cron if changed
