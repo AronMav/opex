@@ -102,6 +102,38 @@ else
   echo "  toolgate deps unchanged"
 fi
 
+# Channels is a managed Bun/TypeScript process launched by core from
+# ${RUN_DIR}/channels (working_dir=channels, core cwd=${RUN_DIR}). Like toolgate,
+# `git pull` only updates ${SRC_DIR}, so its sources must be copied into the
+# runtime dir before the core restart re-spawns channels — otherwise committed
+# channel-adapter fixes silently never ship (F058). Runtime state
+# (node_modules) lives beside src and is untouched by the src sync.
+echo "==> sync channels sources to runtime"
+if [ -d "${SRC_DIR}/channels/src" ]; then
+  rsync -a --delete "${SRC_DIR}/channels/src/" "${RUN_DIR}/channels/src/" 2>/dev/null || true
+  # Bun deps: reinstall only when package.json changed (fail-soft — a bun
+  # hiccup must not abort the deploy after binaries are already swapped).
+  SRC_PKG="${SRC_DIR}/channels/package.json"
+  RUN_PKG="${RUN_DIR}/channels/package.json"
+  BUN_BIN="${HOME}/.bun/bin/bun"
+  if [ -f "$SRC_PKG" ] && ! cmp -s "$SRC_PKG" "$RUN_PKG" 2>/dev/null; then
+    if [ -x "$BUN_BIN" ] && (cd "${RUN_DIR}/channels" && "$BUN_BIN" install >/dev/null 2>&1); then
+      cp -f "$SRC_PKG" "$RUN_PKG"
+      echo "  channels deps reinstalled (package.json changed)"
+    else
+      echo "  WARNING: channels bun install failed — deps may be stale"
+    fi
+  fi
+  echo "  synced channels/src (core restart re-spawns channels)"
+else
+  echo "  channels/src missing in SRC — skipping"
+fi
+
+# NOTE: the web UI (${RUN_DIR}/ui/out) is NOT synced here. It ships via
+# `scripts/deploy-ui.sh` from the DEV machine (local `npm run build` + scp +
+# atomic symlink flip — the symlink swap avoids the NPM-proxy 502-cache window
+# that a server-side rebuild-in-place would reopen). Run it after a UI change.
+
 # On-demand MCP containers must EXIST (stopped) for core's ContainerManager to
 # start them — `ensure_running` only inspect+start, never create. `up --no-start`
 # is idempotent: creates any missing container from already-built images. If an
