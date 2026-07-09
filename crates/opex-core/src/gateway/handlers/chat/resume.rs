@@ -143,9 +143,15 @@ pub(crate) async fn api_chat_resume_stream(
                                     continue;
                                 }
                             let _ = highest_replayed.replace(seq);
-                            let is_terminal =
-                                event_json.contains("\"type\":\"finish\"")
-                                || event_json.contains("\"type\":\"error\"");
+                            // F068: parse only the TOP-LEVEL discriminator. A raw
+                            // substring scan matched `"type":"error"` nested
+                            // (unescaped) inside a tool-input `input` / rich-card
+                            // `data` payload, prematurely ending the resumed
+                            // stream mid-turn on ordinary tool arguments.
+                            let is_terminal = serde_json::from_str::<serde_json::Value>(&event_json)
+                                .ok()
+                                .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(String::from))
+                                .is_some_and(|t| t == "finish" || t == "error");
                             yield Ok(Event::default().id(seq.to_string()).data(event_json));
                             if is_terminal {
                                 yield Ok(Event::default().data("[DONE]"));
