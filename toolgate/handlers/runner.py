@@ -55,6 +55,56 @@ def _outcome_dict(outcome) -> dict:
     }
 
 
+# F016: finite wall-clock backstop for the whole handler body — a stalled
+# provider or a CPU-bound handler must not wedge the runner subprocess forever.
+# Sized for long-video digests (hours) but finite; core's worker stale-sweep
+# (F014, deadline 4h) reaps the row only well past this.
+JOB_WALL_CLOCK_SECS = 3 * 3600  # 3h
+
+# F015: the final /complete POST is the ONLY signal that moves the job out of
+# 'processing'. A single fire-and-forget POST that ignores a transient non-2xx
+# silently discards the result and wedges the row — retry with bounded backoff.
+_COMPLETE_MAX_RETRIES = 4
+
+
+async def _post_complete(
+    http: httpx.AsyncClient,
+    core_url: str,
+    job_id: str,
+    headers: dict,
+    payload: dict,
+) -> None:
+    """POST the final outcome to core /complete with status check + bounded
+    retry (F015). Core marks the job done/failed ONLY on a 2xx here, so a
+    dropped/transient-error callback must be retried, not ignored."""
+    last_err: str | None = None
+    for attempt in range(_COMPLETE_MAX_RETRIES):
+        if attempt:
+            await asyncio.sleep(min(2 ** attempt, 15))
+        try:
+            resp = await http.post(
+                f"{core_url}/api/files/jobs/{job_id}/complete",
+                headers=headers,
+                json=payload,
+                timeout=30.0,  # F016: explicit finite timeout, not the client's read
+            )
+            if 200 <= resp.status_code < 300:
+                return
+            # An auth/permission rejection won't recover on retry (expired token).
+            if resp.status_code in (401, 403):
+                log.error("job %s /complete rejected %s — giving up", job_id, resp.status_code)
+                return
+            last_err = f"HTTP {resp.status_code}"
+            log.warning("job %s /complete → %s (attempt %d)", job_id, resp.status_code, attempt + 1)
+        except Exception as exc:  # noqa: BLE001 — retry any transport error
+            last_err = str(exc)
+            log.warning("job %s /complete post failed (attempt %d): %s", job_id, attempt + 1, exc)
+    log.error(
+        "job %s /complete FAILED after %d attempts (%s) — result lost until core sweep reaps it",
+        job_id, _COMPLETE_MAX_RETRIES, last_err,
+    )
+
+
 async def run_job(spec: dict) -> None:
     """Execute one async handler job end-to-end.
 
@@ -80,16 +130,19 @@ async def run_job(spec: dict) -> None:
         os.environ["OPEX_AUTH_TOKEN"] = auth
 
     try:
+        # F016: finite read timeout (was read=None). A provider/core endpoint
+        # that accepts the connection but never sends a body must fail the call,
+        # not block the runner forever. 300s per-read tolerates slow STT/LLM
+        # streaming while still bounding a black-holed socket.
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=120.0)
+            timeout=httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=120.0)
         ) as http:
             registry = _load_registry(http)
             loaded = registry.get(spec["handler_id"])
             if loaded is None:
-                await http.post(
-                    f"{core_url}/api/files/jobs/{job_id}/complete",
-                    headers=headers,
-                    json={
+                await _post_complete(
+                    http, core_url, job_id, headers,
+                    {
                         "status": "failed",
                         "summary_text": "",
                         "artifact_urls": [],
@@ -148,8 +201,25 @@ async def run_job(spec: dict) -> None:
             )
 
             try:
-                outcome = await loaded.run(ctx, handler_file, spec.get("params") or {})
+                # F016: bound the handler body with an overall wall-clock so a
+                # stalled provider or a runaway handler can't wedge the runner
+                # (and pin the job in 'processing') forever.
+                outcome = await asyncio.wait_for(
+                    loaded.run(ctx, handler_file, spec.get("params") or {}),
+                    timeout=JOB_WALL_CLOCK_SECS,
+                )
                 payload = _outcome_dict(outcome)
+            except asyncio.TimeoutError:
+                log.error(
+                    "handler %s exceeded %ds wall-clock limit",
+                    spec["handler_id"], JOB_WALL_CLOCK_SECS,
+                )
+                payload = {
+                    "status": "failed",
+                    "summary_text": "",
+                    "artifact_urls": [],
+                    "reason": f"handler exceeded {JOB_WALL_CLOCK_SECS}s wall-clock limit",
+                }
             except Exception as exc:
                 log.exception("handler %s run failed", spec["handler_id"])
                 payload = {
@@ -159,11 +229,7 @@ async def run_job(spec: dict) -> None:
                     "reason": str(exc),
                 }
 
-            await http.post(
-                f"{core_url}/api/files/jobs/{job_id}/complete",
-                headers=headers,
-                json=payload,
-            )
+            await _post_complete(http, core_url, job_id, headers, payload)
     finally:
         if temp_path and os.path.exists(temp_path):
             try:
