@@ -43,8 +43,11 @@ export interface Strings {
 }
 
 const RU: Strings = {
+  // F122: plain text (no Telegram MarkdownV2 escaping) — these strings are shared
+  // across Matrix/Slack/IRC/Email, which render them literally. The Telegram
+  // driver sends them without parse_mode:"MarkdownV2".
   accessRestricted: (code) =>
-    `Доступ ограничен\\. Ваш код: \`${code}\`\nПередайте его владельцу бота\\.`,
+    `Доступ ограничен. Ваш код: ${code}\nПередайте его владельцу бота.`,
   accessRequest: (label, userId, code) =>
     `Запрос доступа от ${label} (ID: ${userId})\nКод: ${code}\n\n/approve ${code}`,
   documentsNotSupported: "Документы пока не поддерживаются.",
@@ -81,8 +84,9 @@ const RU: Strings = {
 };
 
 const EN: Strings = {
+  // F122: plain text — see the RU note above.
   accessRestricted: (code) =>
-    `Access restricted\\. Your code: \`${code}\`\nSend it to the bot owner\\.`,
+    `Access restricted. Your code: ${code}\nSend it to the bot owner.`,
   accessRequest: (label, userId, code) =>
     `Access request from ${label} (ID: ${userId})\nCode: ${code}\n\n/approve ${code}`,
   documentsNotSupported: "Documents are not supported yet.",

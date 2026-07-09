@@ -277,8 +277,9 @@ export function createTelegramDriver(
       const displayName = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || userId;
       const code = await bridge.createPairingCode(userId, displayName);
 
+      // F122: accessRestricted is now plain text (shared across channels) — send
+      // without MarkdownV2 so the code/dots render correctly.
       await ctx.reply(strings.accessRestricted(code), {
-        parse_mode: "MarkdownV2",
         reply_parameters: safeReplyParams(msg.message_id),
       }).catch(() => { });
 
@@ -478,7 +479,8 @@ export function createTelegramDriver(
       const displayName = ctx.callbackQuery.from.first_name || userId;
       const code = await bridge.createPairingCode(userId, displayName);
       await ctx.answerCallbackQuery().catch(() => { });
-      await ctx.reply(strings.accessRestricted(code), { parse_mode: "MarkdownV2" }).catch(() => { });
+      // F122: plain text now — no MarkdownV2 parse_mode.
+      await ctx.reply(strings.accessRestricted(code)).catch(() => { });
       return;
     }
 
