@@ -12,7 +12,20 @@ from playwright.async_api import async_playwright, Browser, Page
 
 from automation_actions import dispatch_action
 from profiles import ProfileManager
+from ssrf_guard import is_private_or_metadata
 from stealth import STEALTH_INIT_JS, stealth_context_kwargs
+
+
+def _ssrf_check(url: str | None) -> None:
+    """Block private/loopback/link-local/CGNAT/metadata destinations. The
+    /extract and /screenshot endpoints previously did a bare `page.goto` with NO
+    SSRF check of their own — only toolgate's pre-flight validated, which a
+    redirect inside goto could escape (and a direct call to this internal service
+    would bypass entirely). Mirror the /automation guard: check BEFORE goto
+    (reject an obviously-private target without fetching) and AFTER goto (catch a
+    302/JS redirect to a private address before returning its content)."""
+    if is_private_or_metadata(url):
+        raise HTTPException(status_code=400, detail=f"blocked: URL targets a private/internal address ({url})")
 
 browser: Browser | None = None
 pw_instance = None
@@ -153,11 +166,13 @@ DEFAULT_VIEWPORT = {"width": 1280, "height": 720}
 
 @app.post("/extract", response_model=ExtractResponse)
 async def extract(req: ExtractRequest):
+    _ssrf_check(req.url)
     page = await browser.new_page(
         user_agent=DEFAULT_USER_AGENT,
     )
     try:
         await page.goto(req.url, wait_until="domcontentloaded", timeout=req.timeout * 1000)
+        _ssrf_check(page.url)  # a redirect inside goto may have landed on a private host
 
         # Wait for JS rendering: custom selector or a short delay
         if req.selector:
@@ -219,12 +234,14 @@ class ScreenshotRequest(BaseModel):
 
 @app.post("/screenshot")
 async def screenshot(req: ScreenshotRequest):
+    _ssrf_check(req.url)
     page = await browser.new_page(
         viewport=DEFAULT_VIEWPORT,
         user_agent=DEFAULT_USER_AGENT,
     )
     try:
         await page.goto(req.url, wait_until="domcontentloaded", timeout=req.timeout * 1000)
+        _ssrf_check(page.url)  # a redirect inside goto may have landed on a private host
         await page.wait_for_timeout(2000)
         img_bytes = await page.screenshot(full_page=req.full_page)
         media_type = "image/png"
