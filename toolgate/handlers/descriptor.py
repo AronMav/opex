@@ -146,6 +146,18 @@ def parse_descriptor(source: str, tier: str) -> HandlerDescriptor:
             )
 
     order_txt = _text(root, "order")
+    # F118: guard the <order> cast (mirrors max_size_mb above). An unguarded
+    # int() on a non-numeric value raised an uncaught ValueError that surfaced as
+    # a 500 from POST /handlers/validate instead of a structured field error.
+    if order_txt is not None:
+        try:
+            order = int(order_txt)
+        except ValueError as e:
+            raise DescriptorError(
+                f"descriptor order must be an integer, got '{order_txt}'"
+            ) from e
+    else:
+        order = 100
     enabled_txt = _text(root, "enabled")
 
     hid = (_text(root, "id") or "").strip()
@@ -181,7 +193,7 @@ def parse_descriptor(source: str, tier: str) -> HandlerDescriptor:
         output=_text(root, "output", "text") or "text",
         params=params,
         config=config,
-        order=int(order_txt) if order_txt is not None else 100,
+        order=order,
         enabled=(enabled_txt is None) or enabled_txt.strip().lower() == "true",
         tier=tier,
     )
