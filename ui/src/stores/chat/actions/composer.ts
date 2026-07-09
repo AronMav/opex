@@ -45,14 +45,27 @@ export function createComposerActions(deps: ActionDeps) {
     },
 
     setModelOverride: async (agent: string, model: string | null) => {
+      // F055: the /api/chat body carries no model field — the backend applies the
+      // override solely from this persisted record. An optimistic update that is
+      // never rolled back on failure leaves the UI showing a model the backend
+      // never uses. Capture the previous value and revert on failure.
+      const prev = get().agents[agent]?.modelOverride ?? null;
       update(agent, { modelOverride: model });
       const { getToken } = await import("@/lib/api");
       const token = getToken();
-      await fetch(`/api/agents/${encodeURIComponent(agent)}/model-override`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ model }),
-      }).catch((e) => { console.warn("[chat] save failed:", e); }); // fail silently — store already updated optimistically
+      try {
+        const resp = await fetch(`/api/agents/${encodeURIComponent(agent)}/model-override`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ model }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      } catch (e) {
+        console.warn("[chat] model-override save failed:", e);
+        update(agent, { modelOverride: prev });
+        const { toast } = await import("sonner");
+        toast.error("Не удалось сохранить выбор модели");
+      }
     },
 
     loadEarlierMessages: (agent: string) => {
