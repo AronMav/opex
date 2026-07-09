@@ -50,6 +50,12 @@ pub fn spawn_workspace_watcher(
         let mut index_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
 
         loop {
+            // F106: reap finished index tasks each iteration. tokio's JoinSet does
+            // not free a completed task's node until it is joined, so without this
+            // drain every debounce flush leaks an entry for the process lifetime
+            // (and the shutdown `index_tasks.len()` over-reports in-flight work).
+            while index_tasks.try_join_next().is_some() {}
+
             // Bug 12: cap recv_timeout to 250 ms so the cancel check is polled
             // frequently even when no FS events arrive.
             let timeout = debounce_deadline
