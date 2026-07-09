@@ -41,13 +41,12 @@ pub async fn run_check(cfg: &CheckConfig, http: &reqwest::Client) -> CheckResult
 
 /// Check all Docker containers — returns all non-MCP containers with health status.
 pub async fn check_docker_containers() -> Vec<ContainerInfo> {
-    let output = tokio::process::Command::new("docker")
-        .args(["ps", "-a", "--format", "{{.Names}}\t{{.Status}}"])
-        .output()
-        .await;
+    let mut cmd = tokio::process::Command::new("docker");
+    cmd.args(["ps", "-a", "--format", "{{.Names}}\t{{.Status}}"]);
+    let output = crate::proc::output_with_timeout(&mut cmd, crate::proc::DEFAULT_PROC_TIMEOUT).await;
 
     let mut containers = Vec::new();
-    if let Ok(o) = output {
+    if let Some(o) = output {
         let text = String::from_utf8_lossy(&o.stdout);
         for line in text.lines() {
             let parts: Vec<&str> = line.splitn(2, '\t').collect();
@@ -94,9 +93,10 @@ fn friendly_name(docker_name: &str) -> String {
 }
 
 async fn run_shell(cmd: &str) -> anyhow::Result<bool> {
-    let output = tokio::process::Command::new("bash")
-        .args(["-c", cmd])
-        .output()
-        .await?;
-    Ok(output.status.success())
+    let mut c = tokio::process::Command::new("bash");
+    c.args(["-c", cmd]);
+    match crate::proc::output_with_timeout(&mut c, crate::proc::DEFAULT_PROC_TIMEOUT).await {
+        Some(output) => Ok(output.status.success()),
+        None => Ok(false), // timeout / spawn error → treat as failed check
+    }
 }

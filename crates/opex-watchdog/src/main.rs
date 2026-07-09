@@ -1,4 +1,5 @@
 mod checker;
+mod proc;
 mod recovery;
 mod resources;
 mod status;

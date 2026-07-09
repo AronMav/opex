@@ -64,14 +64,12 @@ impl RecoveryState {
 
 pub async fn restart_service(cmd: &str) -> bool {
     tracing::info!(cmd, "restarting service");
-    match tokio::process::Command::new("bash")
-        .args(["-c", cmd])
-        .output()
-        .await
-    {
-        Ok(o) => o.status.success(),
-        Err(e) => {
-            tracing::error!(error = %e, cmd, "restart failed");
+    let mut c = tokio::process::Command::new("bash");
+    c.args(["-c", cmd]);
+    match crate::proc::output_with_timeout(&mut c, crate::proc::DEFAULT_PROC_TIMEOUT).await {
+        Some(o) => o.status.success(),
+        None => {
+            tracing::error!(cmd, "restart timed out or failed to spawn");
             false
         }
     }

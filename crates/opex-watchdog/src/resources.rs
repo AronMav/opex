@@ -33,27 +33,25 @@ pub async fn check_resources(
 }
 
 async fn get_disk_free_gb() -> f64 {
-    let output = tokio::process::Command::new("df")
-        .args(["--output=avail", "-BG", "/"])
-        .output()
-        .await;
+    let mut cmd = tokio::process::Command::new("df");
+    cmd.args(["--output=avail", "-BG", "/"]);
+    let output = crate::proc::output_with_timeout(&mut cmd, crate::proc::DEFAULT_PROC_TIMEOUT).await;
     match output {
-        Ok(o) => String::from_utf8_lossy(&o.stdout)
+        Some(o) => String::from_utf8_lossy(&o.stdout)
             .lines()
             .nth(1)
             .and_then(|l| l.trim().trim_end_matches('G').parse().ok())
             .unwrap_or(0.0),
-        Err(_) => 0.0,
+        None => 0.0,
     }
 }
 
 async fn get_ram_used_percent() -> f64 {
-    let output = tokio::process::Command::new("free")
-        .args(["-m"])
-        .output()
-        .await;
+    let mut cmd = tokio::process::Command::new("free");
+    cmd.args(["-m"]);
+    let output = crate::proc::output_with_timeout(&mut cmd, crate::proc::DEFAULT_PROC_TIMEOUT).await;
     match output {
-        Ok(o) => {
+        Some(o) => {
             let text = String::from_utf8_lossy(&o.stdout);
             if let Some(line) = text.lines().find(|l| l.starts_with("Mem:")) {
                 let parts: Vec<&str> = line.split_whitespace().collect();
@@ -65,7 +63,7 @@ async fn get_ram_used_percent() -> f64 {
             }
             0.0
         }
-        Err(_) => 0.0,
+        None => 0.0,
     }
 }
 
