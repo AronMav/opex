@@ -1083,7 +1083,8 @@ async function executeAction(
           await bot.api.editMessageText(chatId, messageId, editMd2, { parse_mode: "MarkdownV2" });
         } catch (e) {
           console.warn("[telegram] action edit MarkdownV2 failed:", (e as Error).message?.slice(0, 100));
-          await bot.api.editMessageText(chatId, messageId, editText).catch(() => { });
+          // Let a doubly-failed edit throw so session.ts reports success=false (F081).
+          await bot.api.editMessageText(chatId, messageId, editText);
         }
       }
       break;
@@ -1104,9 +1105,10 @@ async function executeAction(
         });
       } catch (e) {
         console.warn("[telegram] action reply MarkdownV2 failed:", (e as Error).message?.slice(0, 100));
+        // Let a doubly-failed reply throw so session.ts reports success=false (F081).
         await bot.api.sendMessage(chatId, replyText, {
           reply_parameters: safeReplyParams(messageId),
-        }).catch(() => { });
+        });
       }
       break;
     }
@@ -1120,7 +1122,8 @@ async function executeAction(
           await bot.api.sendMessage(chatId, md2, { parse_mode: "MarkdownV2" });
         } catch (e) {
           console.warn("[telegram] action send_message MarkdownV2 failed:", (e as Error).message?.slice(0, 100));
-          await bot.api.sendMessage(chatId, part).catch(() => { });
+          // Let a doubly-failed send throw so session.ts reports success=false (F081).
+          await bot.api.sendMessage(chatId, part);
         }
       }
       break;
