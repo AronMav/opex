@@ -32,11 +32,22 @@ pub fn spawn(cfg: CatalogConfig, client: reqwest::Client) {
     tokio::spawn(async move {
         let period = Duration::from_secs(cfg.refresh_hours.max(1) * 3600);
         loop {
-            let cat = build(&client, &cfg).await;
+            let (cat, all_ok) = build(&client, &cfg).await;
             let n = cat.len();
-            if n > 0 {
+            // F047: never overwrite a working global catalog with a PARTIAL
+            // fetch (one source down) — that silently drops every model
+            // exclusive to the failed source and regresses context-window
+            // resolution. Install only when all sources succeeded, OR when the
+            // global is still empty (first population, nothing to regress).
+            let global_empty = super::global()
+                .read()
+                .map(|g| g.is_empty())
+                .unwrap_or(true);
+            if n > 0 && (all_ok || global_empty) {
                 super::install(cat);
-                tracing::info!(models = n, "model catalog loaded");
+                tracing::info!(models = n, all_sources_ok = all_ok, "model catalog loaded");
+            } else if n > 0 && !all_ok {
+                tracing::warn!(models = n, "model catalog fetch was partial (a source failed) — keeping last-good catalog to avoid regression");
             } else {
                 tracing::warn!("model catalog empty after fetch (all sources failed) — falling back to native probe / heuristic");
             }
@@ -48,8 +59,11 @@ pub fn spawn(cfg: CatalogConfig, client: reqwest::Client) {
 /// Build one catalog from all configured sources. models.dev is loaded FIRST
 /// (priority 0), OpenRouter SECOND (priority 1), so on-conflict models.dev wins.
 /// Each source is independent — a failure logs and is skipped.
-async fn build(client: &reqwest::Client, cfg: &CatalogConfig) -> ModelCatalog {
+/// Returns the built catalog AND whether EVERY enabled source succeeded (F047).
+/// The caller must NOT overwrite a working global catalog with a partial one.
+async fn build(client: &reqwest::Client, cfg: &CatalogConfig) -> (ModelCatalog, bool) {
     let mut cat = ModelCatalog::new();
+    let mut all_ok = true;
 
     if !cfg.models_dev_url.is_empty() {
         match fetch_json(client, &cfg.models_dev_url).await {
@@ -57,7 +71,10 @@ async fn build(client: &reqwest::Client, cfg: &CatalogConfig) -> ModelCatalog {
                 let n = models_dev::load_into(&mut cat, &json);
                 tracing::debug!(models = n, "loaded models.dev");
             }
-            Err(e) => tracing::warn!(error = %e, url = %cfg.models_dev_url, "models.dev fetch failed"),
+            Err(e) => {
+                tracing::warn!(error = %e, url = %cfg.models_dev_url, "models.dev fetch failed");
+                all_ok = false;
+            }
         }
     }
     if !cfg.openrouter_url.is_empty() {
@@ -66,10 +83,13 @@ async fn build(client: &reqwest::Client, cfg: &CatalogConfig) -> ModelCatalog {
                 let n = openrouter::load_into(&mut cat, &json);
                 tracing::debug!(models = n, "loaded OpenRouter");
             }
-            Err(e) => tracing::warn!(error = %e, url = %cfg.openrouter_url, "OpenRouter fetch failed"),
+            Err(e) => {
+                tracing::warn!(error = %e, url = %cfg.openrouter_url, "OpenRouter fetch failed");
+                all_ok = false;
+            }
         }
     }
-    cat
+    (cat, all_ok)
 }
 
 async fn fetch_json(client: &reqwest::Client, url: &str) -> anyhow::Result<serde_json::Value> {
