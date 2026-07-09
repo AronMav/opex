@@ -31,6 +31,11 @@ pub fn spawn(cfg: CatalogConfig, client: reqwest::Client) {
     }
     tokio::spawn(async move {
         let period = Duration::from_secs(cfg.refresh_hours.max(1) * 3600);
+        // F107: on a total fetch failure (empty catalog) retry with a short capped
+        // backoff instead of sleeping the full refresh period, so a boot-time
+        // transient (egress not ready, upstream 5xx) self-heals in the same
+        // process rather than disabling the catalog for ~24h.
+        let mut retry_backoff = Duration::from_secs(60);
         loop {
             let (cat, all_ok) = build(&client, &cfg).await;
             let n = cat.len();
@@ -51,7 +56,17 @@ pub fn spawn(cfg: CatalogConfig, client: reqwest::Client) {
             } else {
                 tracing::warn!("model catalog empty after fetch (all sources failed) — falling back to native probe / heuristic");
             }
-            tokio::time::sleep(period).await;
+            // F107: full period once we have any catalog; short capped backoff
+            // while it is still empty (all sources failing).
+            let sleep_for = if n > 0 {
+                retry_backoff = Duration::from_secs(60);
+                period
+            } else {
+                let d = retry_backoff;
+                retry_backoff = (retry_backoff * 2).min(period);
+                d
+            };
+            tokio::time::sleep(sleep_for).await;
         }
     });
 }
