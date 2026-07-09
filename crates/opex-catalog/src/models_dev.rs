@@ -54,7 +54,10 @@ pub fn load_into(cat: &mut ModelCatalog, json: &Value) -> usize {
                 model_id,
                 ModelMeta { context, output, cost, caps, source: CatalogSource::ModelsDev },
             );
-            model_ids.push(model_id.clone());
+            // F076: do NOT push again — line 28 already listed every model
+            // exactly once. The second push duplicated every context-bearing
+            // (chat) model in ProviderMeta.models, corrupting the preset picker
+            // count and the "known model ids" contract.
             n += 1;
         }
 
