@@ -25,7 +25,9 @@ class GoogleVision:
 
         resp = await http.post(
             f"{self.base_url}/models/{self.model}:generateContent",
-            params={"key": self.api_key},
+            # F053: key via header, not ?key= (avoids leaking it into OTel span
+            # url.full attributes exported to the trace collector).
+            headers={"x-goog-api-key": self.api_key},
             json={
                 "contents": [{
                     "parts": [

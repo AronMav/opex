@@ -25,7 +25,9 @@ class GoogleSTT:
         mdl = model or self.model
         resp = await http.post(
             f"{self.base_url}/models/{mdl}:generateContent",
-            params={"key": self.api_key},
+            # F053: send the key in a header, NOT ?key= — the query form lands
+            # verbatim in httpx OTel span url.full attributes (leaked to Jaeger).
+            headers={"x-goog-api-key": self.api_key},
             json={
                 "contents": [{
                     "parts": [
