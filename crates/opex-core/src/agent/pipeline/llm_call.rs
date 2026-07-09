@@ -477,6 +477,16 @@ pub fn audit(
 /// Handled by `execute::forward_chunks_into_sink` to emit `StreamEvent::Reconnecting`.
 pub(crate) const RECONNECTING_PREFIX: &str = "__reconnecting__:";
 
+/// Hard upper bound on consecutive timeout retries in `deadline_retry_inner`,
+/// independent of `run_max_duration_secs` and the cancel token. Cron/isolated
+/// runs (`handle_isolated_via_pipeline`) pass `run_max_duration_secs=0` AND a
+/// fresh, never-cancelled `CancellationToken`, so without this backstop a
+/// persistently-stalling provider (accepts the connection but streams no
+/// tokens) would retry forever and leak the tokio task — one per stuck cron
+/// fire. Ten retries with the 30s-capped backoff bound the retry loop of a
+/// single LLM call to a clearly-pathological ceiling before giving up. See F005.
+const MAX_TIMEOUT_RETRIES: u32 = 10;
+
 /// Inner timeout-retry loop without timeline logging — extracted for unit testability.
 /// Production callers use `chat_stream_with_deadline_retry` which wraps this.
 #[allow(clippy::too_many_arguments)]
@@ -546,8 +556,27 @@ async fn deadline_retry_inner(
                         let is_resumable = partial_state.as_ref().map(|p| p.is_resumable()).unwrap_or(false);
 
                         attempt += 1;
-                        // Exponential backoff: 2s, 4s, 8s, 16s, 30s cap
-                        let delay_ms = (2u64.saturating_pow(attempt) * 1000).min(30_000);
+
+                        // Hard backstop independent of run_max_duration_secs and
+                        // the cancel token: the cron/isolated path leaves both
+                        // disengaged, so this cap is the only guaranteed exit for
+                        // a provider that stalls on every attempt (F005).
+                        if attempt >= MAX_TIMEOUT_RETRIES {
+                            tracing::warn!(
+                                attempt,
+                                reason = te.abort_reason().unwrap_or("unknown"),
+                                "LLM call exceeded max timeout retries; giving up"
+                            );
+                            return Err(e);
+                        }
+
+                        // Exponential backoff: 2s, 4s, 8s, 16s, 30s cap.
+                        // Overflow-safe: a non-saturating `* 1000` could wrap for
+                        // large `attempt` and defeat the 30s cap.
+                        let delay_ms = 2u64
+                            .saturating_pow(attempt)
+                            .saturating_mul(1000)
+                            .min(30_000);
 
                         on_retry(attempt, delay_ms);
 
@@ -822,6 +851,48 @@ mod deadline_retry_tests {
         let err = result.unwrap_err();
         assert!(err.downcast_ref::<LlmCallError>().map(|e| matches!(e, LlmCallError::UserCancelled { .. })).unwrap_or(false),
             "expected UserCancelled, got: {err}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn deadline_retry_stops_after_max_retries_without_cancel() {
+        // F005: cron/isolated runs pass run_max_duration_secs=0 AND a
+        // never-cancelled token. A provider that always InactivityTimeouts must
+        // NOT loop forever — the hard MAX_TIMEOUT_RETRIES backstop terminates it.
+        // `start_paused` virtualizes the backoff sleeps so this runs instantly.
+        struct AlwaysInactiveProvider {
+            calls: std::sync::atomic::AtomicU32,
+        }
+        #[async_trait::async_trait]
+        impl crate::agent::providers::LlmProvider for AlwaysInactiveProvider {
+            async fn chat(&self, _m: &[opex_types::Message], _t: &[opex_types::ToolDefinition], _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> { Ok(ok_response()) }
+            async fn chat_stream(&self, _m: &[opex_types::Message], _t: &[opex_types::ToolDefinition], _tx: tokio::sync::mpsc::Sender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(anyhow::Error::new(LlmCallError::InactivityTimeout {
+                    provider: "test".into(), silent_secs: 60, partial_state: PartialState::Empty,
+                }))
+            }
+            fn name(&self) -> &str { "always-inactive" }
+        }
+
+        let provider = AlwaysInactiveProvider { calls: std::sync::atomic::AtomicU32::new(0) };
+        // Never-cancelled token, run_max_duration_secs=0 — exactly the cron path.
+        let cancel = CancellationToken::new();
+        let (chunk_tx, _rx) = tokio::sync::mpsc::channel::<String>(1024);
+        let mut messages = vec![];
+
+        let result = chat_stream_with_deadline_retry_no_wal(
+            &provider, &mut messages, &[], chunk_tx, &NoopCompact, &cancel, 0,
+        ).await;
+
+        let err = result.unwrap_err();
+        assert!(err.downcast_ref::<LlmCallError>().map(|e| matches!(e, LlmCallError::InactivityTimeout { .. })).unwrap_or(false),
+            "expected the loop to give up with the last timeout error, got: {err}");
+        // Exactly MAX_TIMEOUT_RETRIES stream attempts, then it stops.
+        assert_eq!(
+            provider.calls.load(std::sync::atomic::Ordering::SeqCst),
+            super::MAX_TIMEOUT_RETRIES,
+            "must stop after MAX_TIMEOUT_RETRIES attempts, not loop forever",
+        );
     }
 
     #[tokio::test]
