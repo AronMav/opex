@@ -12,6 +12,13 @@ import { apiPost } from "@/lib/api";
 export function createStreamActions(deps: ActionDeps) {
   const { get, set, renderer } = deps;
 
+  // F085: agents with an interruptAndSend in flight. abortLocalOnly flips
+  // connectionPhase to 'idle' synchronously, so a rapid second sendMessage would
+  // read phase='idle', take the non-interrupt branch, and start a racing stream
+  // that the delayed first startStream then tears down (a dropped/reordered
+  // message). The phase alone is not a reliable concurrency gate; this flag is.
+  const interrupting = new Set<string>();
+
   // ── Stream-control actions ───────────────────────────────────────────────
 
   return {
@@ -19,6 +26,14 @@ export function createStreamActions(deps: ActionDeps) {
       const store = get();
       const agent = store.currentAgent;
       const st = store.agents[agent] ?? emptyAgentState();
+
+      // An interrupt is already in flight for this agent — queue this message
+      // into pendingMessage (drained by ChatThread when the phase reaches idle)
+      // instead of racing a fresh startStream (F085).
+      if (interrupting.has(agent)) {
+        get().queueMessage(text, attachments);
+        return;
+      }
 
       // If streaming is active, interrupt and send instead of silently dropping the message.
       if (isActivePhase(st.connectionPhase)) {
@@ -48,32 +63,42 @@ export function createStreamActions(deps: ActionDeps) {
       const store = get();
       const agent = store.currentAgent;
 
-      // Abort the current stream (POST /abort + local teardown).
-      renderer.abortActiveStream(agent);
+      // Mark this agent as interrupting so a rapid follow-up sendMessage queues
+      // instead of racing (F085). The add runs synchronously before the first
+      // await, so it is already set when sendMessage returns.
+      interrupting.add(agent);
+      try {
+        // Abort the current stream (POST /abort + local teardown).
+        renderer.abortActiveStream(agent);
 
-      // Poll up to 1500ms for connectionPhase to reach idle.
-      const POLL_INTERVAL_MS = 100;
-      const MAX_WAIT_MS = 1500;
-      const deadline = Date.now() + MAX_WAIT_MS;
-      while (Date.now() < deadline) {
-        await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-        const phase = get().agents[agent]?.connectionPhase;
-        if (!phase || phase === "idle") break;
+        // Poll up to 1500ms for connectionPhase to reach idle.
+        const POLL_INTERVAL_MS = 100;
+        const MAX_WAIT_MS = 1500;
+        const deadline = Date.now() + MAX_WAIT_MS;
+        while (Date.now() < deadline) {
+          await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+          const phase = get().agents[agent]?.connectionPhase;
+          if (!phase || phase === "idle") break;
+        }
+
+        // Send regardless of whether we reached idle (timeout safety).
+        const currentSt = get().agents[agent] ?? emptyAgentState();
+        const sessionId = currentSt.activeSessionId;
+        let seedMessages: ChatMessage[] = [];
+
+        if (currentSt.messageSource.mode === "history") {
+          seedMessages = getCachedHistoryMessages(sessionId, currentSt.selectedBranches);
+        } else {
+          const liveMsgs = getLiveMessages(currentSt.messageSource);
+          if (liveMsgs.length > 0) seedMessages = liveMsgs;
+        }
+
+        renderer.startStream(agent, sessionId, seedMessages, text, attachments, uuid());
+      } finally {
+        // startStream has (synchronously) re-armed the stream; clearing the flag
+        // now lets the queued follow-up drain via ChatThread's idle-phase effect.
+        interrupting.delete(agent);
       }
-
-      // Send regardless of whether we reached idle (timeout safety).
-      const currentSt = get().agents[agent] ?? emptyAgentState();
-      const sessionId = currentSt.activeSessionId;
-      let seedMessages: ChatMessage[] = [];
-
-      if (currentSt.messageSource.mode === "history") {
-        seedMessages = getCachedHistoryMessages(sessionId, currentSt.selectedBranches);
-      } else {
-        const liveMsgs = getLiveMessages(currentSt.messageSource);
-        if (liveMsgs.length > 0) seedMessages = liveMsgs;
-      }
-
-      renderer.startStream(agent, sessionId, seedMessages, text, attachments, uuid());
     },
 
     queueMessage: (text: string, attachments?: Array<MessageAttachment>) => {
