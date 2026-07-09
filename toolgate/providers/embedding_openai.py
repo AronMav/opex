@@ -42,6 +42,9 @@ class OpenAIEmbedding:
         resp.raise_for_status()
         data = resp.json()
 
-        # OpenAI format: {"data": [{"embedding": [...], "index": 0}, ...]}
-        embeddings = sorted(data["data"], key=lambda x: x["index"])
+        # OpenAI format: {"data": [{"embedding": [...], "index": 0}, ...]}.
+        # F126: some OpenAI-compatible backends (llama.cpp / local gateways) omit
+        # `index`; sort defensively (preserve response order when absent) so a
+        # valid vector response isn't turned into a KeyError → 502.
+        embeddings = sorted(data["data"], key=lambda x: x.get("index", 0))
         return [item["embedding"] for item in embeddings]
