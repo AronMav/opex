@@ -263,6 +263,7 @@ pub async fn handle_agent_ask(
 
     // Single write lock for the spawn — prevents TOCTOU where two concurrent
     // `ask` calls both observe pool-miss and both try to spawn.
+    let result_rx;
     {
         let mut pools_write = pools.write().await;
 
@@ -299,14 +300,14 @@ pub async fn handle_agent_ask(
             return ask_continue_existing(pools, session_id, target, text, timeouts).await;
         }
 
-        let live_agent = match session_agent_pool::spawn_live_agent(
+        let (live_agent, rx) = match session_agent_pool::spawn_live_agent(
             target.to_string(),
             target_engine,
             text.to_string(),
             session_id,
             new_depth,
         ) {
-            Some(la) => la,
+            Some(pair) => pair,
             None => {
                 return format!(
                     "Error: failed to deliver initial task to agent '{target}'"
@@ -314,6 +315,7 @@ pub async fn handle_agent_ask(
             }
         };
         pool.insert(live_agent);
+        result_rx = rx;
     }
 
     tracing::info!(
@@ -323,9 +325,9 @@ pub async fn handle_agent_ask(
         "agent ask: spawned"
     );
 
-    // Block for the spawn-time result. The agent stays alive in the pool
-    // afterwards — no auto-cleanup (the old `run` removed it; we don't).
-    wait_for_agent_result(pools, session_id, target, timeouts.message_result).await
+    // Block for the spawn-time result via THIS task's own oneshot (F061) — the
+    // agent stays alive in the pool afterwards (no auto-cleanup).
+    await_message_result(result_rx, target, timeouts.message_result).await
 }
 
 /// Continue an existing dialog with a live agent: wait for idle → CAS PROCESSING
@@ -353,6 +355,10 @@ async fn ask_continue_existing(
     // transition. Only the CAS winner is allowed to revert to IDLE on send failure.
     // If two senders race and both manage to enqueue, the agent's mpsc receiver
     // will process them sequentially — that is fine.
+    // Per-message result channel (F061): the processing loop delivers THIS
+    // message's result here, so concurrent same-target asks each receive their
+    // own answer instead of racing on the shared `last_result` slot.
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel::<String>();
     let send_result = {
         let pools_read = pools.read().await;
         let pool = match pools_read.get(&session_id) {
@@ -379,12 +385,14 @@ async fn ask_continue_existing(
 
         let r = agent.message_tx.try_send(session_agent_pool::AgentMessage {
             text: text.to_string(),
+            respond_to: Some(result_tx),
         });
         // On Full: revert to IDLE *only if we owned the IDLE→PROCESSING transition*.
         // If CAS failed (someone else owns PROCESSING), reverting would clobber
         // their state and falsely report idle while they are still in flight.
-        // On Closed: keep PROCESSING — wait_for_agent_result detects
-        // task_handle.is_finished() and returns the error rather than "(no result)".
+        // On Closed: keep PROCESSING — the try_send dropped our result_tx, so the
+        // awaiting await_message_result observes the closed oneshot and returns
+        // the error rather than "(no result)".
         if we_won_cas
             && matches!(&r, Err(tokio::sync::mpsc::error::TrySendError::Full(_)))
         {
@@ -398,9 +406,9 @@ async fn ask_continue_existing(
 
     match send_result {
         Ok(()) => {
-            // Wait for the result. Agent stays in the pool — only `kill` /
-            // `fresh=true` / session end removes it.
-            wait_for_agent_result(pools, session_id, target, timeouts.message_result).await
+            // Wait for THIS message's result via its own oneshot (F061). Agent
+            // stays in the pool — only `kill` / `fresh=true` / session end removes it.
+            await_message_result(result_rx, target, timeouts.message_result).await
         }
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             // Defense-in-depth: should be unreachable now that we wait for idle.
@@ -414,76 +422,51 @@ async fn ask_continue_existing(
     }
 }
 
-/// Block until a live agent completes its current task, then return its result.
+/// Await a single enqueued message's result via its own oneshot channel (F061).
 ///
-/// Uses `LiveAgent::result_notify` for near-zero latency instead of polling.
-/// Falls back to the timeout if the agent never transitions to idle.
-pub async fn wait_for_agent_result(
-    pools: &SessionPoolsMap,
-    session_id: Uuid,
+/// Correlates the result to the exact message the caller sent, so concurrent
+/// same-target asks no longer mis-attribute or lose each other's answers (the
+/// old path read a single shared `last_result` slot that any waiter could grab).
+/// Returns the same JSON envelopes as before (`completed` / `timeout` / `error`).
+pub async fn await_message_result(
+    rx: tokio::sync::oneshot::Receiver<String>,
     target: &str,
     timeout: std::time::Duration,
 ) -> String {
-    let deadline = std::time::Instant::now() + timeout;
-
-    loop {
-        // Snapshot: is the agent done? If so, grab the result.
-        // If not, grab the Notify handle so we can wait for the next signal.
-        let maybe_notify = {
-            let pools_read = pools.read().await;
-            let Some(pool) = pools_read.get(&session_id) else {
-                return serde_json::json!({
-                    "status": "error",
-                    "agent": target,
-                    "result": format!("Session pool not found for {target}"),
-                }).to_string();
+    match tokio::time::timeout(timeout, rx).await {
+        Ok(Ok(text)) => {
+            let result_text = if text.trim().is_empty() {
+                "(no result)".to_string()
+            } else {
+                text
             };
-            let Some(agent) = pool.get(target) else {
-                return serde_json::json!({
-                    "status": "error",
-                    "agent": target,
-                    "result": format!("Agent '{target}' was removed before completing"),
-                }).to_string();
-            };
-
-            if agent.is_idle() || agent.task_handle.is_finished() {
-                // Done — read the result outside this lock scope.
-                let result_arc = agent.last_result.clone();
-                drop(pools_read);
-                let result = result_arc.read().await.clone();
-                let result_text = match result {
-                    Some(s) if !s.trim().is_empty() => s,
-                    _ => "(no result)".to_string(),
-                };
-                return serde_json::json!({
-                    "status": "completed",
-                    "agent": target,
-                    "result": result_text,
-                }).to_string();
-            }
-
-            // Still processing — get the Notify handle.
-            agent.result_notify.clone()
-        };
-
-        // Check timeout before waiting.
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        if remaining.is_zero() {
-            return serde_json::json!({
-                "status": "timeout",
+            serde_json::json!({
+                "status": "completed",
                 "agent": target,
-                "message": format!(
-                    "Agent '{}' did not complete within {} seconds",
-                    target,
-                    timeout.as_secs()
-                ),
-            }).to_string();
+                "result": result_text,
+            })
+            .to_string()
         }
-
-        // Wait for the agent to signal completion (or timeout).
-        // `notify_one()` stores a permit, so if it fired between our check
-        // and this line, `notified()` returns immediately.
-        let _ = tokio::time::timeout(remaining, maybe_notify.notified()).await;
+        Ok(Err(_)) => {
+            // Sender dropped without responding — the agent was killed or its
+            // processing loop exited before finishing this message.
+            serde_json::json!({
+                "status": "error",
+                "agent": target,
+                "result": format!("Agent '{target}' exited before completing"),
+            })
+            .to_string()
+        }
+        Err(_) => serde_json::json!({
+            "status": "timeout",
+            "agent": target,
+            "message": format!(
+                "Agent '{}' did not complete within {} seconds",
+                target,
+                timeout.as_secs()
+            ),
+        })
+        .to_string(),
     }
 }
 
@@ -708,7 +691,12 @@ mod tests {
                 status_for_task.store(STATUS_PROCESSING, Ordering::Release);
                 // Tiny yield so observers can see PROCESSING if they're racing.
                 tokio::time::sleep(Duration::from_millis(20)).await;
-                *last_result_for_task.write().await = Some(format!("echo: {}", msg.text));
+                let echo = format!("echo: {}", msg.text);
+                *last_result_for_task.write().await = Some(echo.clone());
+                // Mirror the real loop: answer THIS message's own oneshot (F061).
+                if let Some(tx) = msg.respond_to {
+                    let _ = tx.send(echo);
+                }
                 iteration_count_for_task.fetch_add(1, Ordering::Relaxed);
                 status_for_task.store(STATUS_IDLE, Ordering::Release);
                 result_notify_for_task.notify_one();
@@ -726,6 +714,30 @@ mod tests {
             task_handle,
             result_notify,
         }
+    }
+
+    #[tokio::test]
+    async fn concurrent_asks_receive_their_own_result_via_oneshot() {
+        // F061: two messages enqueued to the SAME agent must each receive the
+        // result of the message they sent — not race on a shared last_result slot.
+        let agent = spawn_echo_agent("Bob");
+        let (tx1, rx1) = tokio::sync::oneshot::channel::<String>();
+        let (tx2, rx2) = tokio::sync::oneshot::channel::<String>();
+        agent
+            .message_tx
+            .send(AgentMessage { text: "Q1".into(), respond_to: Some(tx1) })
+            .await
+            .unwrap();
+        agent
+            .message_tx
+            .send(AgentMessage { text: "Q2".into(), respond_to: Some(tx2) })
+            .await
+            .unwrap();
+
+        let r1 = await_message_result(rx1, "Bob", Duration::from_secs(5)).await;
+        let r2 = await_message_result(rx2, "Bob", Duration::from_secs(5)).await;
+        assert!(r1.contains("echo: Q1"), "waiter 1 must get Q1's result, got {r1}");
+        assert!(r2.contains("echo: Q2"), "waiter 2 must get Q2's result, got {r2}");
     }
 
     // ── Validation paths ────────────────────────────────────────────────────

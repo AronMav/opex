@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde::Serialize;
-use tokio::sync::{mpsc, Notify, RwLock};
+use tokio::sync::{mpsc, oneshot, Notify, RwLock};
 use uuid::Uuid;
 
 use super::engine::AgentEngine;
@@ -22,6 +22,12 @@ pub type SessionPoolsMap = Arc<tokio::sync::RwLock<HashMap<Uuid, SessionAgentPoo
 /// Message sent to a `LiveAgent`'s processing loop.
 pub struct AgentMessage {
     pub text: String,
+    /// Per-message result channel (F061). The processing loop sends THIS
+    /// message's result here when it finishes, so a waiter receives exactly the
+    /// result of the message it enqueued — instead of racing every other waiter
+    /// on the single shared `last_result` slot. `None` for fire-and-forget sends
+    /// that don't await a result.
+    pub respond_to: Option<oneshot::Sender<String>>,
 }
 
 // ── LiveAgent ─────────────────────────────────────────────────────────────────
@@ -37,8 +43,9 @@ pub struct LiveAgent {
     pub iteration_count: Arc<AtomicUsize>,
     pub task_handle: tokio::task::JoinHandle<()>,
     /// Signaled (via `notify_one`) each time the agent transitions to IDLE.
-    /// Callers waiting in `wait_for_agent_result` / `wait_until_idle` await
-    /// this instead of polling — near-zero latency overhead.
+    /// Callers waiting in `wait_until_idle` await this instead of polling —
+    /// near-zero latency overhead. (Per-message results are delivered via each
+    /// `AgentMessage::respond_to` oneshot, not this signal — F061.)
     pub result_notify: Arc<Notify>,
 }
 
@@ -283,7 +290,7 @@ pub fn spawn_live_agent(
     initial_task: String,
     session_id: Uuid,
     depth: u8,
-) -> Option<LiveAgent> {
+) -> Option<(LiveAgent, oneshot::Receiver<String>)> {
     let (tx, rx) = mpsc::channel::<AgentMessage>(32);
     let status = Arc::new(AtomicU8::new(STATUS_PROCESSING));
     let last_result = Arc::new(RwLock::new(None));
@@ -304,22 +311,34 @@ pub fn spawn_live_agent(
     ));
 
     // Send initial task synchronously — channel is fresh with capacity 32.
-    if tx.try_send(AgentMessage { text: initial_task }).is_err() {
+    // The oneshot lets the spawning `ask` await THIS task's result specifically
+    // (F061), even if concurrent asks enqueue more messages before it finishes.
+    let (result_tx, result_rx) = oneshot::channel::<String>();
+    if tx
+        .try_send(AgentMessage {
+            text: initial_task,
+            respond_to: Some(result_tx),
+        })
+        .is_err()
+    {
         task_handle.abort();
         return None;
     }
 
-    Some(LiveAgent {
-        name,
-        message_tx: tx,
-        status,
-        last_result,
-        cancel,
-        created_at: Instant::now(),
-        iteration_count,
-        task_handle,
-        result_notify,
-    })
+    Some((
+        LiveAgent {
+            name,
+            message_tx: tx,
+            status,
+            last_result,
+            cancel,
+            created_at: Instant::now(),
+            iteration_count,
+            task_handle,
+            result_notify,
+        },
+        result_rx,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -370,7 +389,13 @@ async fn agent_processing_loop(
         };
 
         iteration_count.fetch_add(1, Ordering::Relaxed);
-        *last_result.write().await = Some(result_text);
+        // Keep the shared slot for the `status` action's last-result poll, and
+        // deliver THIS message's result to its own waiter via the per-message
+        // oneshot (F061). A dropped receiver (waiter timed out / gave up) is fine.
+        *last_result.write().await = Some(result_text.clone());
+        if let Some(tx) = msg.respond_to {
+            let _ = tx.send(result_text);
+        }
         status.store(STATUS_IDLE, Ordering::Relaxed);
         result_notify.notify_one();
 
