@@ -960,6 +960,77 @@ mod tests {
         assert!(root.path().exists());
     }
 
+    #[tokio::test]
+    async fn faithful_restore_removes_files_absent_from_backup() {
+        // F090 E2E (filesystem semantics): the exact scenario — an agent config
+        // created AFTER the backup must NOT survive a restore of that older
+        // backup. Reproduces the handler's clear→copy sequence on absolute paths
+        // (no CWD dependency) using the same private helpers the handler calls.
+        let root = tempfile::tempdir().unwrap();
+
+        // Live runtime config: Old + New (New created after the backup was taken).
+        let live = root.path().join("config");
+        std::fs::create_dir_all(live.join("agents")).unwrap();
+        std::fs::write(live.join("agents/Old.toml"), b"old-live").unwrap();
+        std::fs::write(live.join("agents/New.toml"), b"new-live").unwrap();
+
+        // The backup's config dir contains ONLY Old.
+        let backup = root.path().join("backup/config");
+        std::fs::create_dir_all(backup.join("agents")).unwrap();
+        std::fs::write(backup.join("agents/Old.toml"), b"old-backup").unwrap();
+
+        // Faithful restore = clear the live dir, then copy the backup in.
+        clear_dir_contents(&live).await.unwrap();
+        copy_dir_to(&backup.to_string_lossy(), &live).await.unwrap();
+
+        assert!(
+            !live.join("agents/New.toml").exists(),
+            "an agent created after the backup must be REMOVED (faithful restore, not merge)"
+        );
+        assert_eq!(
+            std::fs::read(live.join("agents/Old.toml")).unwrap(),
+            b"old-backup",
+            "Old must be restored from the backup copy"
+        );
+    }
+
+    #[tokio::test]
+    async fn faithful_restore_rolls_back_on_copy_failure() {
+        // F090: if the copy fails AFTER the dir was cleared, the snapshot rollback
+        // must restore the prior state (so a mid-restore failure is not data loss).
+        let root = tempfile::tempdir().unwrap();
+        let live = root.path().join("workspace");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::write(live.join("keep.md"), b"live-data").unwrap();
+
+        // Snapshot the live dir contents (as the handler does before clearing).
+        let snap = root.path().join("workspace.bak.tar.gz");
+        let snap_ok = tokio::process::Command::new("tar")
+            .args(["czf"]).arg(&snap).args(["-C"]).arg(&live).arg(".")
+            .output().await.map(|o| o.status.success()).unwrap_or(false);
+        assert!(snap_ok, "snapshot must be created");
+
+        // Clear, then a copy that FAILS (source does not exist).
+        clear_dir_contents(&live).await.unwrap();
+        let copy_res = copy_dir_to(
+            &root.path().join("missing-src").to_string_lossy(),
+            &live,
+        ).await;
+        assert!(copy_res.is_err(), "copy from a missing source must fail");
+        assert!(!live.join("keep.md").exists(), "dir is empty after clear+failed copy");
+
+        // Rollback: clear + extract the snapshot back into the dir.
+        clear_dir_contents(&live).await.unwrap();
+        let _ = tokio::process::Command::new("tar")
+            .args(["xzf"]).arg(&snap).args(["-C"]).arg(&live)
+            .output().await;
+        assert!(
+            live.join("keep.md").exists(),
+            "rollback must restore the pre-restore snapshot"
+        );
+        assert_eq!(std::fs::read(live.join("keep.md")).unwrap(), b"live-data");
+    }
+
     #[test]
     fn safe_pg_identifier_rejects_injection() {
         // F087: legit snake_case names pass; anything with quotes/spaces/parens
