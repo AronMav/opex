@@ -129,8 +129,20 @@ export async function apiDelete(path: string): Promise<void> {
   if (!resp.ok) throw new Error(await extractError(resp));
 }
 
-/** Like apiFetch but does NOT set Content-Type — caller controls headers (FormData, blob, etc.). */
-export async function apiFetchRaw(path: string, init?: RequestInit): Promise<Response> {
+/**
+ * Like apiFetch but does NOT set Content-Type — caller controls headers (FormData, blob, etc.).
+ *
+ * F057: the 30s client abort is fine for JSON control-plane calls but wrong for
+ * large-media transfers (uploads/downloads over slow links, video/long-audio
+ * pipelines) — it aborts them mid-flight with a cryptic AbortError. Pass
+ * `{ timeoutMs: null }` to disable the client-side abort (transfer is then
+ * bounded by the server/reverse-proxy), or a custom value to extend it.
+ */
+export async function apiFetchRaw(
+  path: string,
+  init?: RequestInit,
+  opts?: { timeoutMs?: number | null },
+): Promise<Response> {
   if (redirecting) throw new Error("Session expired");
   const token = getToken();
   if (!token) {
@@ -141,12 +153,19 @@ export async function apiFetchRaw(path: string, init?: RequestInit): Promise<Res
     ...(init?.headers as Record<string, string>),
   };
   headers["Authorization"] = `Bearer ${token}`;
+  const timeoutMs = opts?.timeoutMs === undefined ? REQUEST_TIMEOUT : opts.timeoutMs;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+  const timeout = timeoutMs === null || timeoutMs <= 0
+    ? null
+    : setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const signal = init?.signal
-      ? AbortSignal.any([init.signal, controller.signal])
-      : controller.signal;
+    const signals = [init?.signal, timeout ? controller.signal : undefined]
+      .filter(Boolean) as AbortSignal[];
+    const signal = signals.length === 0
+      ? undefined
+      : signals.length === 1
+        ? signals[0]
+        : AbortSignal.any(signals);
     const resp = await fetch(path, { ...init, headers, signal });
     if (resp.status === 401) {
       handleUnauthorized();
@@ -157,20 +176,22 @@ export async function apiFetchRaw(path: string, init?: RequestInit): Promise<Res
     }
     return resp;
   } finally {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
   }
 }
 
-/** GET that returns a Blob (media, file downloads). */
+/** GET that returns a Blob (media, file downloads). No client abort — large
+ *  downloads must not be cut off by the 30s JSON timeout (F057). */
 export async function apiGetBlob(path: string, extraHeaders?: Record<string, string>): Promise<Blob> {
-  const resp = await apiFetchRaw(path, { method: "GET", headers: extraHeaders });
+  const resp = await apiFetchRaw(path, { method: "GET", headers: extraHeaders }, { timeoutMs: null });
   if (!resp.ok) throw new Error(await extractError(resp));
   return resp.blob();
 }
 
-/** POST with FormData (file uploads). Does NOT set Content-Type. */
+/** POST with FormData (file uploads). Does NOT set Content-Type. No client abort —
+ *  large uploads must not be cut off by the 30s JSON timeout (F057). */
 export async function apiPostFormData<T>(path: string, formData: FormData, extraHeaders?: Record<string, string>): Promise<T> {
-  const resp = await apiFetchRaw(path, { method: "POST", body: formData, headers: extraHeaders });
+  const resp = await apiFetchRaw(path, { method: "POST", body: formData, headers: extraHeaders }, { timeoutMs: null });
   if (!resp.ok) throw new Error(await extractError(resp));
   return resp.json();
 }
