@@ -900,7 +900,7 @@ pub(crate) async fn fail_stuck_job_and_notify(
         &job.session_id.to_string(),
         "done",
         100,
-        true,
+        "failed",
     );
     let _ = state.channels.ui_event_tx.send(ev.to_string());
     true
