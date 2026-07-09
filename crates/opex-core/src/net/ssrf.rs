@@ -311,6 +311,32 @@ pub fn validate_outbound_endpoint(endpoint: &str) -> Result<(), SsrfError> {
     validate_url_scheme(endpoint)
 }
 
+/// Literal-IP sync pre-check for the `allow_private_endpoint` LAN path
+/// ([`lan_http_client`] / [`SsrfLanResolver`]). Permits RFC1918 private targets
+/// (the whole point of the LAN client) but rejects a literal loopback /
+/// cloud-metadata / link-local / CGNAT IP written directly into the URL — the
+/// same literal-IP hole [`validate_outbound_endpoint`] closes for the default
+/// path, since reqwest bypasses [`SsrfLanResolver`] for literal IPs. Hostnames
+/// still resolve through the DNS-filtering [`SsrfLanResolver`] at connect time.
+pub fn validate_lan_endpoint(endpoint: &str) -> Result<(), SsrfError> {
+    let parsed = reqwest::Url::parse(endpoint)
+        .map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        scheme => return Err(SsrfError::BlockedScheme(scheme.to_string())),
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| SsrfError::InvalidUrl("URL has no host".to_string()))?;
+    // Only literal IPs bypass the resolver; hostnames are filtered at connect.
+    if let Ok(ip) = host.parse::<IpAddr>()
+        && is_dangerous_ip(ip)
+    {
+        return Err(SsrfError::InternalBlocked(host.to_string()));
+    }
+    Ok(())
+}
+
 // ── URL validation (sync, no DNS) ────────────────────────────────────────────
 
 /// Validate URL scheme, internal-service blocklist, cloud-metadata hostnames,
@@ -821,6 +847,39 @@ mod tests {
         // A public hostname passes the sync pre-check (no DNS here); the
         // SSRF-safe client still filters the resolved answer at connect time.
         assert!(validate_outbound_endpoint("https://api.openai.com/v1/audio/speech").is_ok());
+    }
+
+    #[test]
+    fn validate_lan_endpoint_blocks_literal_metadata_and_loopback() {
+        // F008/F009: the allow_private_endpoint path permits RFC1918 LAN IPs
+        // but must still reject a literal loopback / cloud-metadata / CGNAT IP
+        // written directly into the URL (reqwest bypasses SsrfLanResolver for
+        // literal IPs).
+        for ep in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://127.0.0.1/admin",
+            "http://100.64.0.1/", // CGNAT
+        ] {
+            assert!(
+                validate_lan_endpoint(ep).is_err(),
+                "expected LAN gate to block dangerous literal IP {ep}",
+            );
+        }
+    }
+
+    #[test]
+    fn validate_lan_endpoint_permits_rfc1918_and_hostnames() {
+        // The whole point of the LAN client: reach a home-lab service over a
+        // private LAN. RFC1918 literals and hostnames pass the sync pre-check.
+        assert!(validate_lan_endpoint("http://192.168.1.10/api").is_ok());
+        assert!(validate_lan_endpoint("http://10.0.0.5:8080/").is_ok());
+        assert!(validate_lan_endpoint("https://home.example.com/svc").is_ok());
+    }
+
+    #[test]
+    fn validate_lan_endpoint_rejects_bad_scheme() {
+        assert!(validate_lan_endpoint("file:///etc/passwd").is_err());
+        assert!(validate_lan_endpoint("gopher://10.0.0.1/").is_err());
     }
 
     #[test]

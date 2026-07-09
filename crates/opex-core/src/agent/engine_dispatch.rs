@@ -325,6 +325,21 @@ impl AgentEngine {
                     return format!("⛔ blocked by domain policy: {u}");
                 }
 
+                // F008: literal-IP SSRF gate. reqwest connects straight to a
+                // literal IP written into the URL without ever invoking the
+                // DNS resolver, so the SSRF/LAN client's DNS filter alone never
+                // sees `http://169.254.169.254/…`. Validate the endpoint inline
+                // (skips trusted internal services; permits RFC1918 only for
+                // allow_private_endpoint tools) before dispatch.
+                let ssrf_check = if yaml_tool.allow_private_endpoint {
+                    crate::tools::ssrf::validate_lan_endpoint(&yaml_tool.endpoint)
+                } else {
+                    crate::tools::ssrf::validate_outbound_endpoint(&yaml_tool.endpoint)
+                };
+                if let Err(e) = ssrf_check {
+                    return format!("⛔ blocked by SSRF policy: {e}");
+                }
+
                 let resolver = self.make_resolver();
                 let oauth_ctx = self.make_oauth_context();
                 let lan_client;
