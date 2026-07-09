@@ -160,6 +160,10 @@ async def run_job(spec: dict) -> None:
                         f"{core_url}/api/files/jobs/{job_id}/progress",
                         headers=headers,
                         json={"phase": phase, "pct": pct},
+                        # F133: a loopback callback to core must never inherit the
+                        # 300s provider read timeout — bound it so a stalled core
+                        # can't wedge progress reporting for minutes.
+                        timeout=30.0,
                     )
                 except Exception as exc:  # progress is best-effort
                     log.warning("progress post failed: %s", exc)
