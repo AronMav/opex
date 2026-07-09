@@ -360,10 +360,22 @@ export async function processSSEStream(
 
           case "rich-card": {
             session.buffer.flushText();
+            // F077: the Rust SSE wire wraps every non-table/metric card as
+            // RichCardData::Other → {cardType:"other", data:{cardType:<real>,
+            // data:<flat>}}. The history/raw-marker path (chat-history.ts) stores
+            // the FLAT shape, so unwrap the Other nesting here to match — without
+            // it, custom cards (e.g. the shipping handler_menu file-handler menu)
+            // render blank on the live SSE path and only appear after a reload.
+            let cardType: string = event.cardType;
+            let data: Record<string, unknown> = event.data as Record<string, unknown>;
+            if (cardType === "other" && data && typeof data.cardType === "string") {
+              cardType = data.cardType;
+              data = (data.data ?? {}) as Record<string, unknown>;
+            }
             session.buffer.parts.push({
               type: "rich-card",
-              cardType: event.cardType,
-              data: event.data,
+              cardType,
+              data,
             });
             session.scheduleCommit();
             break;
