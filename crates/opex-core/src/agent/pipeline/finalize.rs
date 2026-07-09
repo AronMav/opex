@@ -938,7 +938,17 @@ mod tests {
     fn execute_status_done_maps_to_finalize_done() {
         use crate::agent::pipeline::execute::ExecuteStatus;
         let out = execute_status_to_finalize(ExecuteStatus::Done, "hello".into(), None);
-        assert!(matches!(out, FinalizeOutcome::Done { assistant_text, .. } if assistant_text == "hello"));
+        assert!(matches!(out, FinalizeOutcome::Done { assistant_text, turn_limited: false, .. } if assistant_text == "hello"));
+    }
+
+    #[test]
+    fn execute_status_done_turn_limited_flags_finalize_done() {
+        // F105: DoneTurnLimited still delivers the reply (run_status='done') but
+        // carries turn_limited=true so finalize fires the notification + a
+        // session_failures diagnostic row instead of recording it as clean success.
+        use crate::agent::pipeline::execute::ExecuteStatus;
+        let out = execute_status_to_finalize(ExecuteStatus::DoneTurnLimited, "partial".into(), None);
+        assert!(matches!(out, FinalizeOutcome::Done { assistant_text, turn_limited: true, .. } if assistant_text == "partial"));
     }
 
     #[test]

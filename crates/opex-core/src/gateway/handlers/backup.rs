@@ -938,12 +938,28 @@ pub(crate) async fn api_restore(
 mod tests {
     use super::*;
 
-    // Regression: `docker ps --filter name=postgres` is a *substring* filter, so
-    // it also matches `docker-postgres-test-1`. Docker's output order is not
-    // deterministic — when the test container is listed first, the old "first
-    // line wins" logic picked it, and pg_dump failed with `role "opex" does
-    // not exist` (the test container has no opex role). The configured
-    // container must win whenever it is present.
+    #[tokio::test]
+    async fn clear_dir_contents_removes_all_but_keeps_dir() {
+        // F090: verify the destructive helper clears files AND nested dirs, keeps
+        // the target dir itself, and is a no-op on a missing dir (never panics /
+        // over-deletes the parent).
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("workspace");
+        std::fs::create_dir_all(dir.join("agents/Aria")).unwrap();
+        std::fs::write(dir.join("MEMORY.md"), b"x").unwrap();
+        std::fs::write(dir.join("agents/Aria/note.md"), b"y").unwrap();
+
+        clear_dir_contents(&dir).await.unwrap();
+
+        assert!(dir.exists(), "target dir itself must survive");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "dir must be empty");
+
+        // Missing dir → Ok (no-op), does not touch the parent.
+        let missing = root.path().join("does-not-exist");
+        clear_dir_contents(&missing).await.unwrap();
+        assert!(root.path().exists());
+    }
+
     #[test]
     fn safe_pg_identifier_rejects_injection() {
         // F087: legit snake_case names pass; anything with quotes/spaces/parens
@@ -959,6 +975,12 @@ mod tests {
         assert!(!is_safe_pg_identifier("a.b"));
     }
 
+    // Regression: `docker ps --filter name=postgres` is a *substring* filter, so
+    // it also matches `docker-postgres-test-1`. Docker's output order is not
+    // deterministic — when the test container is listed first, the old "first
+    // line wins" logic picked it, and pg_dump failed with `role "opex" does
+    // not exist` (the test container has no opex role). The configured
+    // container must win whenever it is present.
     #[test]
     fn select_container_prefers_configured_over_substring_match() {
         assert_eq!(
