@@ -140,9 +140,49 @@ async fn fetch_wan_ip(status: &StatusMonitor) -> serde_json::Value {
 
 // ── Full network summary ──────────────────────────────────────────────────────
 
-/// Assembles the full network summary used by both `/api/network/addresses` and
-/// `/api/doctor` (as the "network" check details).
+// ── Network summary cache + single-flight (F094) ──────────────────────────────
+//
+// Both /api/network/addresses and /api/doctor are exempt from the per-minute
+// limiter for authenticated callers, and each summary spawns a `tailscale`
+// subprocess + a blocking LAN scan + (on cache miss) a 10s WAN lookup. Without
+// this, a loop/burst of authenticated calls forks unbounded subprocesses and
+// floods the external IP-lookup service. Cache the whole summary for a short TTL
+// and single-flight the refresh so only ONE runs per window.
+const SUMMARY_TTL_SECS: u64 = 30;
+static SUMMARY_CACHE: std::sync::LazyLock<
+    tokio::sync::RwLock<Option<(serde_json::Value, std::time::Instant)>>,
+> = std::sync::LazyLock::new(|| tokio::sync::RwLock::new(None));
+static SUMMARY_REFRESH_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+fn fresh_summary(
+    cache: &Option<(serde_json::Value, std::time::Instant)>,
+) -> Option<serde_json::Value> {
+    match cache {
+        Some((v, at)) if at.elapsed().as_secs() < SUMMARY_TTL_SECS => Some(v.clone()),
+        _ => None,
+    }
+}
+
+/// Cached, single-flighted network summary used by both `/api/network/addresses`
+/// and `/api/doctor` (as the "network" check details).
 pub(crate) async fn fetch_network_summary(status: &StatusMonitor) -> serde_json::Value {
+    if let Some(v) = fresh_summary(&*SUMMARY_CACHE.read().await) {
+        return v;
+    }
+    // Single-flight: only one refresh runs per TTL window; concurrent callers
+    // block here and then observe the just-populated cache.
+    let _guard = SUMMARY_REFRESH_LOCK.lock().await;
+    if let Some(v) = fresh_summary(&*SUMMARY_CACHE.read().await) {
+        return v; // another caller refreshed while we waited
+    }
+    let summary = build_network_summary(status).await;
+    *SUMMARY_CACHE.write().await = Some((summary.clone(), std::time::Instant::now()));
+    summary
+}
+
+/// Assembles the full network summary (uncached — see `fetch_network_summary`).
+async fn build_network_summary(status: &StatusMonitor) -> serde_json::Value {
     let (tailscale_raw, lan) =
         tokio::join!(detect_tailscale(), enumerate_lan_addresses());
 
