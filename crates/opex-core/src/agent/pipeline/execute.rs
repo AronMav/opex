@@ -1004,7 +1004,16 @@ pub async fn execute<S: EventSink>(
                 thinking_json: None,
                 messages_len_at_end: messages.len(),
                 final_parent_msg_id: last_msg_id,
-                assistant_message_id: assistant_msg_id,
+                // F059: on the forced-final path the last iteration had tool
+                // calls, so `assistant_msg_id` ALREADY has a persisted row —
+                // reusing it makes finalize's ON CONFLICT (id) DO NOTHING
+                // silently drop the forced-final summary. Give the distinct
+                // summary message a fresh id so it's actually inserted.
+                assistant_message_id: if layers.forced_final_call.is_some() {
+                    uuid::Uuid::new_v4()
+                } else {
+                    assistant_msg_id
+                },
             });
         }
     }
@@ -1063,7 +1072,13 @@ pub async fn execute<S: EventSink>(
         thinking_json: None,
         messages_len_at_end: messages.len(),
         final_parent_msg_id: last_msg_id,
-        assistant_message_id: assistant_msg_id,
+        // F059: fresh id for the forced-final summary (see loop-broken path) so
+        // finalize inserts it instead of colliding with the last tool-call row.
+        assistant_message_id: if layers.forced_final_call.is_some() {
+            uuid::Uuid::new_v4()
+        } else {
+            assistant_msg_id
+        },
     })
 }
 
