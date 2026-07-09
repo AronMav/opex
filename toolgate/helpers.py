@@ -5,9 +5,17 @@ import re
 import socket
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import HTTPException
 
 MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+
+# Per-download timeout. read=30s aborts a slow-trickle origin (slow-loris)
+# that would otherwise hold an outbound connection open forever and exhaust
+# the shared 20-connection pool, DoS-ing the whole hub (F004). Steady
+# downloads are unaffected — the read timeout is per-chunk idle time, not
+# total duration. Callers may override with their own `timeout=` kwarg.
+DOWNLOAD_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
 
 # CGNAT / carrier-grade NAT range (RFC 6598). Python's ipaddress stdlib
 # does NOT classify this as private/reserved; mirror Rust
@@ -54,6 +62,8 @@ def validate_url_ssrf(url: str) -> None:
 async def download_limited(http, url: str, *, max_bytes: int = MAX_DOWNLOAD_BYTES, **kwargs):
     """Download URL with a size limit to prevent OOM. Returns (bytes, content_type)."""
     validate_url_ssrf(url)
+    # Apply a default read timeout unless the caller set one (F004 slow-loris).
+    kwargs.setdefault("timeout", DOWNLOAD_TIMEOUT)
     # follow_redirects=False mirrors Rust ssrf_http_client (commit 75fee11):
     # a 302 from a public origin could otherwise bypass the pre-flight
     # validate_url_ssrf check and land on a private-IP target.
