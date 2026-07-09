@@ -120,7 +120,16 @@ pub(crate) async fn chat_completions(
     };
 
     let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
-    let model_name = engine.model_name();
+    // F069: echo the REQUESTED identifier (the agent id advertised by
+    // /v1/models and passed in `model`), not engine.model_name() (the provider
+    // model, e.g. "glm-4.6"). OpenAI-compat routers correlate response.model
+    // with the requested model; the provider-model mismatch broke them.
+    let model_name = req
+        .model
+        .clone()
+        .filter(|s| !s.is_empty())
+        .or_else(|| req.agent.clone().filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| engine.model_name());
     let created = chrono::Utc::now().timestamp();
 
     if req.stream {
