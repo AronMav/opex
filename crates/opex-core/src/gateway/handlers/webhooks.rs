@@ -41,8 +41,19 @@ struct WebhookAuthState {
 static WEBHOOK_AUTH_THROTTLE: LazyLock<DashMap<String, WebhookAuthState>> =
     LazyLock::new(DashMap::new);
 
-fn webhook_auth_check(name: &str) -> Result<(), (StatusCode, Json<Value>)> {
-    if let Some(entry) = WEBHOOK_AUTH_THROTTLE.get(name)
+// F019: the throttle is keyed on (name, client_ip), NOT name alone. Keying on
+// the bare (public, guessable) webhook name let any anonymous caller who knows
+// the name POST a few bad tokens and lock out the webhook for EVERYONE —
+// including correctly-signed GitHub deliveries, which are checked AFTER this
+// gate and so could never self-heal the lock. Scoping to the TCP peer IP (same
+// non-spoofable source the rate limiter uses) means an attacker only locks
+// their own IP; a legitimate delivery from GitHub's IP is unaffected.
+fn throttle_key(name: &str, ip: &str) -> String {
+    format!("{name}\u{0}{ip}")
+}
+
+fn webhook_auth_check(name: &str, ip: &str) -> Result<(), (StatusCode, Json<Value>)> {
+    if let Some(entry) = WEBHOOK_AUTH_THROTTLE.get(&throttle_key(name, ip))
         && let Some(locked_until) = entry.locked_until
             && Instant::now() < locked_until {
                 let remaining = locked_until.saturating_duration_since(Instant::now()).as_secs();
@@ -54,10 +65,10 @@ fn webhook_auth_check(name: &str) -> Result<(), (StatusCode, Json<Value>)> {
     Ok(())
 }
 
-fn webhook_auth_failure(name: &str) {
+fn webhook_auth_failure(name: &str, ip: &str) {
     let now = Instant::now();
     let mut entry = WEBHOOK_AUTH_THROTTLE
-        .entry(name.to_string())
+        .entry(throttle_key(name, ip))
         .or_insert(WebhookAuthState {
             failures: 0,
             first_failure: now,
@@ -89,8 +100,8 @@ fn webhook_auth_failure(name: &str) {
     }
 }
 
-fn webhook_auth_success(name: &str) {
-    WEBHOOK_AUTH_THROTTLE.remove(name);
+fn webhook_auth_success(name: &str, ip: &str) {
+    WEBHOOK_AUTH_THROTTLE.remove(&throttle_key(name, ip));
 }
 
 // ── Webhook type enum ──
@@ -332,8 +343,12 @@ pub(crate) async fn webhook_handler(
 
     let is_async = req.uri().query().is_some_and(|q| q.contains("async=true"));
 
+    // F019: scope the auth throttle to the TCP peer so one attacker can't lock
+    // out valid deliveries for everyone (ConnectInfo peer — not spoofable).
+    let client_ip = crate::gateway::middleware::extract_client_ip(&req);
+
     // Throttle check before DB lookup — minimize load under attack
-    if let Err(resp) = webhook_auth_check(&name) {
+    if let Err(resp) = webhook_auth_check(&name, &client_ip) {
         return resp.into_response();
     }
 
@@ -380,10 +395,10 @@ pub(crate) async fn webhook_handler(
                     let auth = auth_header.as_deref().unwrap_or("");
                     let provided = auth.strip_prefix("Bearer ").unwrap_or(auth);
                     if !bool::from(provided.as_bytes().ct_eq(expected.as_bytes())) {
-                        webhook_auth_failure(&name);
+                        webhook_auth_failure(&name, &client_ip);
                         return (StatusCode::UNAUTHORIZED, Json(json!({"error": "invalid token"}))).into_response();
                     }
-                    webhook_auth_success(&name);
+                    webhook_auth_success(&name, &client_ip);
                 }
         }
         WebhookType::Github => {
@@ -407,12 +422,12 @@ pub(crate) async fn webhook_handler(
             None => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "GitHub webhook has no HMAC secret configured"}))).into_response(),
         };
         let sig_header = if let Some(s) = &github_signature_header { s.as_str() } else {
-            webhook_auth_failure(&name);
+            webhook_auth_failure(&name, &client_ip);
             return (StatusCode::UNAUTHORIZED, Json(json!({"error": "missing X-Hub-Signature-256 header"}))).into_response();
         };
         let hex_sig = sig_header.strip_prefix("sha256=").unwrap_or(sig_header);
         let expected_bytes = if let Ok(b) = hex::decode(hex_sig) { b } else {
-            webhook_auth_failure(&name);
+            webhook_auth_failure(&name, &client_ip);
             return (StatusCode::UNAUTHORIZED, Json(json!({"error": "invalid signature format"}))).into_response();
         };
         let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
@@ -420,10 +435,10 @@ pub(crate) async fn webhook_handler(
         mac.update(&body_bytes);
         let computed = mac.finalize().into_bytes();
         if !bool::from(computed.as_slice().ct_eq(&expected_bytes)) {
-            webhook_auth_failure(&name);
+            webhook_auth_failure(&name, &client_ip);
             return (StatusCode::UNAUTHORIZED, Json(json!({"error": "HMAC signature mismatch"}))).into_response();
         }
-        webhook_auth_success(&name);
+        webhook_auth_success(&name, &client_ip);
         // Event filtering
         if let Some(ref event_type) = github_event_header
             && let Some(ref filters) = wh.event_filter
@@ -519,7 +534,7 @@ pub(crate) async fn api_regenerate_webhook_secret(
         .await;
     match result {
         Ok(Some((name,))) => {
-            webhook_auth_success(&name);
+            webhook_auth_success(&name, &client_ip);
             tracing::info!(webhook_id = %id, webhook_name = %name, "webhook secret regenerated");
             Json(json!({"ok": true, "secret": new_secret})).into_response()
         }
@@ -558,5 +573,38 @@ fn webhook_to_dto(wh: &WebhookRow) -> WebhookEntryDto {
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_else(|| "generic".to_string()),
         event_filter: wh.event_filter.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn f019_lockout_is_scoped_per_ip_not_global_by_name() {
+        // Unique name so this test doesn't share the global throttle map with
+        // any other test.
+        let name = "f019-scope-test-webhook";
+        let attacker = "203.0.113.7";
+        let github = "140.82.115.1";
+
+        // Attacker exhausts the failure budget from their own IP.
+        for _ in 0..WEBHOOK_AUTH_MAX_FAILURES {
+            webhook_auth_failure(name, attacker);
+        }
+        // The attacker's IP is now locked out …
+        assert!(
+            webhook_auth_check(name, attacker).is_err(),
+            "attacker IP must be locked after {WEBHOOK_AUTH_MAX_FAILURES} failures"
+        );
+        // … but a correctly-signed delivery from a DIFFERENT IP (GitHub) must
+        // still get through — the pre-fix name-only key blocked everyone.
+        assert!(
+            webhook_auth_check(name, github).is_ok(),
+            "a different IP must NOT be locked out by another IP's failures"
+        );
+
+        webhook_auth_success(name, attacker);
+        webhook_auth_success(name, github);
     }
 }
