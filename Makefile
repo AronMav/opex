@@ -94,8 +94,11 @@ remote-deploy:
 	ssh $(SERVER_HOST) '~/opex-src/scripts/server-deploy.sh'
 
 # Build only (no swap, no restart). Useful for CI-style verification.
+# F124: build WITH --features opex-core/gemini-cloudcode to match the real deploy
+# (server-deploy.sh) — otherwise the gemini-cloudcode module + its optional deps
+# are excluded and a compile error there passes remote-build but fails the deploy.
 remote-build:
-	ssh $(SERVER_HOST) 'cd ~/opex-src && git pull --ff-only && . ~/.cargo/env && cargo build --release -p opex-core -p opex-watchdog -p opex-memory-worker'
+	ssh $(SERVER_HOST) 'cd ~/opex-src && git pull --ff-only && . ~/.cargo/env && cargo build --release --features opex-core/gemini-cloudcode -p opex-core -p opex-watchdog -p opex-memory-worker'
 
 # Skip rebuild: redeploy from existing target/release on the server.
 deploy-remote: remote-deploy
