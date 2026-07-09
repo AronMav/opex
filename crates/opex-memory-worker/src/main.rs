@@ -185,11 +185,25 @@ async fn main() -> anyhow::Result<()> {
                     tracing::info!(id = %task.id, task_type = %task.task_type, "processing task");
                     match handlers::dispatch(&task, &db, &ctx).await {
                         Ok(result) => {
-                            tasks::complete(&db, task.id, result).await?;
-                            tracing::info!(id = %task.id, "task completed");
+                            // F049: do NOT `?` here. A transient Postgres blip
+                            // (prod PG restarts under deploy RAM pressure) on
+                            // this UPDATE would otherwise propagate out of main()
+                            // and KILL the worker, leaving the row 'processing'
+                            // so recover_stuck redoes the whole (expensive)
+                            // reindex after restart. Log + continue; the row
+                            // stays 'processing' and the next poll / recover_stuck
+                            // reclaims it — matching how claim/dispatch errors are
+                            // already handled.
+                            if let Err(e) = tasks::complete(&db, task.id, result).await {
+                                tracing::error!(id = %task.id, error = %e, "failed to mark task complete (will be reclaimed)");
+                            } else {
+                                tracing::info!(id = %task.id, "task completed");
+                            }
                         }
                         Err(e) => {
-                            tasks::fail(&db, task.id, &e.to_string()).await?;
+                            if let Err(fe) = tasks::fail(&db, task.id, &e.to_string()).await {
+                                tracing::error!(id = %task.id, error = %fe, "failed to mark task failed (will be reclaimed)");
+                            }
                             tracing::error!(id = %task.id, error = %e, "task failed");
                             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         }
