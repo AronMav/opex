@@ -226,7 +226,11 @@ export function createStreamActions(deps: ActionDeps) {
         // user message instead of creating a duplicate via /api/chat.
         renderer.startStream(agent, sessionId, seedMessages, newContent, undefined, resp.message_id);
       } catch (e) {
+        // F084: surface the failure — a silent console.error leaves the composer
+        // looking idle so the user can't tell the edit-and-regenerate failed.
         console.error("[fork] failed:", e);
+        const { toast } = await import("sonner");
+        toast.error("Не удалось изменить и перегенерировать сообщение");
       }
     },
   };
