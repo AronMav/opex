@@ -13,7 +13,17 @@ from playwright.async_api import async_playwright, Browser, Page
 from automation_actions import dispatch_action
 from profiles import ProfileManager
 from ssrf_guard import is_private_or_metadata
+from ssrf_proxy import PROXY_HOST, PROXY_PORT, start_proxy
 from stealth import STEALTH_INIT_JS, stealth_context_kwargs
+
+# F051: route ALL Chromium traffic through the in-process SSRF proxy, which
+# atomically resolves+pins each host to a validated public IP (closing the
+# DNS-rebinding TOCTOU that per-URL checks cannot). `<-loopback>` forces even
+# loopback/localhost navigations through the proxy so they are blocked too.
+_PROXY_ARGS = [
+    f"--proxy-server=http://{PROXY_HOST}:{PROXY_PORT}",
+    "--proxy-bypass-list=<-loopback>",
+]
 
 
 def _ssrf_check(url: str | None) -> None:
@@ -30,6 +40,7 @@ def _ssrf_check(url: str | None) -> None:
 browser: Browser | None = None
 pw_instance = None
 profile_manager: ProfileManager | None = None
+ssrf_proxy_server = None
 
 # ── Session management ────────────────────────────────────────────────────────
 sessions: dict[str, Page] = {}
@@ -97,11 +108,15 @@ def _make_dialog_handler(sid: str):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global browser, pw_instance
+    global browser, pw_instance, ssrf_proxy_server
+    # Start the SSRF proxy BEFORE the browser so every launched Chromium can
+    # reach it. If it fails to bind, the browser can't navigate → the container
+    # goes unhealthy (fail-closed), which is the intended safety posture.
+    ssrf_proxy_server = await start_proxy()
     pw_instance = await async_playwright().start()
     browser = await pw_instance.chromium.launch(
         headless=True,
-        args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
+        args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", *_PROXY_ARGS],
     )
 
     global profile_manager
@@ -110,7 +125,7 @@ async def lifespan(app: FastAPI):
             user_data_dir=user_data_dir,
             headless=True,
             args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
-                  "--disable-blink-features=AutomationControlled"],
+                  "--disable-blink-features=AutomationControlled", *_PROXY_ARGS],
             **stealth_context_kwargs(),
         )
         await ctx.add_init_script(STEALTH_INIT_JS)
@@ -131,6 +146,12 @@ async def lifespan(app: FastAPI):
         await profile_manager.close_all()
     await browser.close()
     await pw_instance.stop()
+    if ssrf_proxy_server is not None:
+        ssrf_proxy_server.close()
+        try:
+            await ssrf_proxy_server.wait_closed()
+        except Exception:
+            pass
 
 
 app = FastAPI(title="Browser Renderer", lifespan=lifespan)
