@@ -1184,6 +1184,25 @@ pub async fn get_last_user_message(db: &PgPool, session_id: Uuid) -> Result<Opti
     Ok(row.map(|(c,)| c))
 }
 
+/// Like [`get_last_user_message`] but also returns the row id, so the retry
+/// path can scope its DELETE to the EXACT captured message instead of a
+/// re-evaluated `ORDER BY created_at DESC LIMIT 1` subquery — which, if two
+/// retries raced, could resolve to (and delete) an OLDER user turn (F031).
+pub async fn get_last_user_message_with_id(
+    db: &PgPool,
+    session_id: Uuid,
+) -> Result<Option<(Uuid, String)>> {
+    let row: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, content FROM messages \
+         WHERE session_id = $1 AND role = 'user' \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(session_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row)
+}
+
 /// Delete empty assistant messages from a session (cleanup before retry).
 pub async fn delete_empty_assistant_messages(db: &PgPool, session_id: Uuid) -> Result<u64> {
     let result = sqlx::query(

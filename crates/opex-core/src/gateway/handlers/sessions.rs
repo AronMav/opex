@@ -1081,6 +1081,24 @@ pub(crate) async fn api_stuck_sessions(
 /// POST /api/sessions/{id}/retry?agent=xxx — replay last user message through engine
 ///
 /// Requires `?agent=<owner>` (audit 2026-05-08, IDOR).
+/// F031: in-process set of sessions with a retry currently in flight. OPEX is
+/// a single binary, so a process-local guard fully serializes retries of one
+/// session — preventing a double-click / overlapping cron-retry from both
+/// claiming it (the DB `increment_retry_count` alone re-matches a still-
+/// 'running' row and does NOT), running two concurrent handle_sse loops, and
+/// double-deleting the last user turn.
+static RETRY_IN_FLIGHT: std::sync::LazyLock<dashmap::DashSet<uuid::Uuid>> =
+    std::sync::LazyLock::new(dashmap::DashSet::new);
+
+/// RAII: removes the session from [`RETRY_IN_FLIGHT`] on drop, so every exit
+/// path (early return or the spawned run finishing) releases the guard.
+struct RetryGuard(uuid::Uuid);
+impl Drop for RetryGuard {
+    fn drop(&mut self) {
+        RETRY_IN_FLIGHT.remove(&self.0);
+    }
+}
+
 pub(crate) async fn api_retry_session(
     State(infra): State<InfraServices>,
     State(agents): State<AgentCore>,
@@ -1095,6 +1113,18 @@ pub(crate) async fn api_retry_session(
         return resp;
     }
 
+    // F031: claim the in-process retry guard BEFORE any DB claim or destructive
+    // delete. A concurrent retry of the same session gets 409 here and never
+    // reaches increment_retry_count / the delete. The guard is dropped on every
+    // early return below and, on the happy path, moved into the spawned run so
+    // it releases only when handle_sse finishes.
+    let retry_guard = if RETRY_IN_FLIGHT.insert(id) {
+        RetryGuard(id)
+    } else {
+        return ApiError::Conflict("retry already in progress for this session".into())
+            .into_response();
+    };
+
     // 1. Load session
     let session: crate::db::sessions::Session = match sqlx::query_as(
         "SELECT * FROM sessions WHERE id = $1"
@@ -1107,9 +1137,10 @@ pub(crate) async fn api_retry_session(
         Err(e) => return ApiError::Internal(e.to_string()).into_response(),
     };
 
-    // 2. Get last user message
-    let user_text = match sessions::get_last_user_message(&infra.db, id).await {
-        Ok(Some(text)) => text,
+    // 2. Get last user message (with its id so the delete below is scoped to
+    //    the EXACT captured row, not a re-evaluated ORDER BY subquery — F031).
+    let (last_user_msg_id, user_text) = match sessions::get_last_user_message_with_id(&infra.db, id).await {
+        Ok(Some(pair)) => pair,
         Ok(None) => return ApiError::BadRequest("no user message in session".into()).into_response(),
         Err(e) => return ApiError::Internal(e.to_string()).into_response(),
     };
@@ -1133,15 +1164,12 @@ pub(crate) async fn api_retry_session(
         && deleted > 0 {
         tracing::info!(session_id = %id, deleted, "cleaned up empty assistant messages before retry");
     }
-    // Delete the last user message — handle_sse will re-insert it
-    let _ = sqlx::query(
-        "DELETE FROM messages WHERE id = (\
-         SELECT id FROM messages WHERE session_id = $1 AND role = 'user' \
-         ORDER BY created_at DESC LIMIT 1)"
-    )
-    .bind(id)
-    .execute(&infra.db)
-    .await;
+    // Delete the last user message — handle_sse will re-insert it. Scoped to
+    // the id captured in step 2 (F031) so a race can't delete an older turn.
+    let _ = sqlx::query("DELETE FROM messages WHERE id = $1")
+        .bind(last_user_msg_id)
+        .execute(&infra.db)
+        .await;
 
     tracing::info!(session_id = %id, agent = %session.agent_id, retry_count, "retrying stuck session");
 
@@ -1173,6 +1201,9 @@ pub(crate) async fn api_retry_session(
     let db = infra.db.clone();
     let session_id = id;
     tokio::spawn(async move {
+        // F031: hold the retry guard for the whole run so a second retry is
+        // rejected until this one finishes (dropped when the task returns).
+        let _retry_guard = retry_guard;
         // Phase 62 RES-01: engine writes to the bounded EngineEventSender
         // wrapper; a local drain task silently consumes all events. The retry
         // path does not stream to any UI client — events are only needed for
@@ -1256,6 +1287,24 @@ pub(crate) async fn api_active_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn f031_retry_guard_serializes_then_releases() {
+        let id = uuid::Uuid::new_v4();
+        {
+            assert!(RETRY_IN_FLIGHT.insert(id), "first retry claim must succeed");
+            let _g = RetryGuard(id);
+            assert!(
+                !RETRY_IN_FLIGHT.insert(id),
+                "a concurrent retry of the same session must be rejected"
+            );
+        } // guard drops here
+        assert!(
+            RETRY_IN_FLIGHT.insert(id),
+            "the session must be claimable again once the run finished"
+        );
+        RETRY_IN_FLIGHT.remove(&id);
+    }
 
     #[test]
     fn format_session_markdown_basic_structure() {
