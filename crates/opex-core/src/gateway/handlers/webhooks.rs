@@ -290,6 +290,7 @@ pub(crate) async fn api_update_webhook(
         }
     };
 
+    let old_name = existing.name.clone();
     let name = req.name.unwrap_or(existing.name);
     let agent_id = req.agent.unwrap_or(existing.agent_id);
     let prompt_prefix = req.prompt_prefix.or(existing.prompt_prefix);
@@ -313,7 +314,16 @@ pub(crate) async fn api_update_webhook(
     .await;
 
     match result {
-        Ok(wh) => Json(webhook_to_dto(&wh)).into_response(),
+        Ok(wh) => {
+            // F112: on rename the name-keyed auth throttle for the OLD name is
+            // orphaned, and any stale lockout under the NEW name would be inherited
+            // by this webhook. Clear both, mirroring the regenerate-secret path.
+            if old_name != name {
+                webhook_auth_clear_all(&old_name);
+                webhook_auth_clear_all(&name);
+            }
+            Json(webhook_to_dto(&wh)).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": e.to_string()})),
@@ -326,14 +336,19 @@ pub(crate) async fn api_delete_webhook(
     State(state): State<InfraServices>,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
 ) -> impl IntoResponse {
-    let result = sqlx::query("DELETE FROM webhooks WHERE id = $1")
+    // RETURNING name so we can clear the name-keyed auth throttle (F112) — else a
+    // recreated webhook with the same name inherits the deleted one's lockout.
+    let result = sqlx::query_scalar::<_, String>("DELETE FROM webhooks WHERE id = $1 RETURNING name")
         .bind(id)
-        .execute(&state.db)
+        .fetch_optional(&state.db)
         .await;
 
     match result {
-        Ok(r) if r.rows_affected() > 0 => Json(json!({"ok": true})).into_response(),
-        Ok(_) => (
+        Ok(Some(name)) => {
+            webhook_auth_clear_all(&name);
+            Json(json!({"ok": true})).into_response()
+        }
+        Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "webhook not found"})),
         )
