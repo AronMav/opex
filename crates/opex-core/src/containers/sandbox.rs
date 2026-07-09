@@ -55,11 +55,7 @@ impl CodeSandbox {
 
     /// Sanitize agent name for use as a Docker container name.
     fn container_name(&self, agent_id: &str) -> String {
-        let sanitized: String = agent_id
-            .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-            .collect();
-        format!("hc-agent-{}", sanitized.to_lowercase())
+        container_name_for(agent_id)
     }
 
     /// Pull the configured image if it's not present locally.
@@ -426,18 +422,28 @@ impl CodeSandbox {
             }
         };
 
+        // F012: wrap the in-container command with coreutils `timeout -s KILL`
+        // so a runaway process (e.g. `while True: pass`) is actually killed
+        // rather than left running forever inside the persistent
+        // (restart=unless-stopped) container — the old tokio-only timeout just
+        // dropped the attach stream and leaked the process, stacking zombies
+        // that pinned CPU/memory across reused executions. Race-free: the
+        // in-container guard self-terminates; the outer tokio timeout is only a
+        // backstop for a stalled docker daemon, so it must be strictly larger.
+        let base_secs = self.timeout_secs.max(5);
+        let hard_kill = format!("{base_secs}s");
         let exec = self.docker.create_exec(
             &container_name,
             CreateExecOptions {
                 attach_stdout: Some(true),
                 attach_stderr: Some(true),
-                cmd: Some(vec!["sh", "-c", &run_cmd]),
+                cmd: Some(timeout_wrapped_cmd(&hard_kill, &run_cmd)),
                 ..Default::default()
             },
         ).await?;
 
         // Start and collect output with timeout + size limit
-        let timeout = std::time::Duration::from_secs(self.timeout_secs.max(5));
+        let timeout = std::time::Duration::from_secs(base_secs + 10);
         const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MB
         let collect = async {
             let mut stdout = String::new();
@@ -517,6 +523,11 @@ impl CodeSandbox {
             .collect();
         let env_refs: Vec<&str> = env_vec.iter().map(String::as_str).collect();
 
+        // F012: same in-container `timeout -s KILL` wrapper as `execute` so a
+        // runaway codemode script is killed, not leaked into the persistent
+        // container. Outer tokio timeout is a strictly-larger docker backstop.
+        let base_secs = self.timeout_secs.max(5);
+        let hard_kill = format!("{base_secs}s");
         let exec = self
             .docker
             .create_exec(
@@ -524,14 +535,14 @@ impl CodeSandbox {
                 CreateExecOptions {
                     attach_stdout: Some(true),
                     attach_stderr: Some(true),
-                    cmd: Some(vec!["sh", "-c", &run_cmd]),
+                    cmd: Some(timeout_wrapped_cmd(&hard_kill, &run_cmd)),
                     env: Some(env_refs),
                     ..Default::default()
                 },
             )
             .await?;
 
-        let timeout = std::time::Duration::from_secs(self.timeout_secs.max(5));
+        let timeout = std::time::Duration::from_secs(base_secs + 10);
         const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
         let collect = async {
             let mut stdout = String::new();
@@ -577,5 +588,62 @@ impl CodeSandbox {
                 exit_code: 124,
             }),
         }
+    }
+}
+
+/// Per-agent Docker container name. Pure free function so collision-freedom is
+/// unit-testable.
+///
+/// F011: the readable prefix folds case and non-alphanumerics (`Ops`→`ops`,
+/// `a.b`→`a_b`), so distinct agent ids could map onto ONE container — letting a
+/// restricted agent reuse a base agent's networked, credential-bearing sandbox.
+/// A short hash of the EXACT, case/punctuation-preserved agent id is appended
+/// so the name is collision-free while staying stable (same id → same
+/// container) and human-readable.
+fn container_name_for(agent_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let sanitized: String = agent_id
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let digest = Sha256::digest(agent_id.as_bytes());
+    let short = hex::encode(&digest[..4]); // 8 hex chars — collision-resistant enough for names
+    format!("hc-agent-{}-{}", sanitized.to_lowercase(), short)
+}
+
+/// Build the `create_exec` argv, wrapping the shell command with an
+/// in-container coreutils `timeout -s KILL` guard (F012). Kept as a pure free
+/// function so the wrapper can't be silently dropped without failing a test —
+/// a runaway process must be killed inside the persistent container, not left
+/// leaking CPU/memory across reused executions.
+fn timeout_wrapped_cmd<'a>(hard_kill: &'a str, run_cmd: &'a str) -> Vec<&'a str> {
+    vec!["timeout", "-s", "KILL", hard_kill, "sh", "-c", run_cmd]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn container_name_is_collision_free_across_case_and_punctuation() {
+        // F011: agent ids that fold to the same sanitized/lowercased string
+        // must NOT share a container name.
+        assert_ne!(container_name_for("Ops"), container_name_for("ops"));
+        assert_ne!(container_name_for("a.b"), container_name_for("a_b"));
+        // Stable: same id → same name (container reuse must keep working).
+        assert_eq!(container_name_for("ops"), container_name_for("ops"));
+        // Readable prefix retained.
+        assert!(container_name_for("Ops").starts_with("hc-agent-ops-"), "{}", container_name_for("Ops"));
+    }
+
+    #[test]
+    fn timeout_wrapped_cmd_prefixes_coreutils_timeout() {
+        // F012 regression guard: the exec argv MUST start with a hard-kill
+        // `timeout` so a `while True: pass` self-terminates in-container.
+        let cmd = timeout_wrapped_cmd("30s", "echo hi && python3 /tmp/s.py");
+        assert_eq!(cmd[0], "timeout");
+        assert_eq!(&cmd[1..4], ["-s", "KILL", "30s"]);
+        assert_eq!(&cmd[4..6], ["sh", "-c"]);
+        assert_eq!(cmd[6], "echo hi && python3 /tmp/s.py");
     }
 }
