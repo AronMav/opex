@@ -152,7 +152,14 @@ async fn menu_run_core(
         (match_url_handlers(&manifests, url, &enabled, lang), None)
     } else if let Some(uid) = upload_id_req {
         match assert_upload_accessible(&infra.db, uid).await {
-            Ok(meta) => (match_buttons(&manifests, &meta.mime, meta.size, &enabled, lang), Some(uid)),
+            Ok(meta) => {
+                // F070: the menu enqueues onto the async-only handler_jobs queue.
+                // Drop sync handlers so a sync click can't be enqueued+stranded
+                // (mirrors the match_url_handlers async filter above).
+                let mut b = match_buttons(&manifests, &meta.mime, meta.size, &enabled, lang);
+                crate::agent::handler_registry::retain_async_handlers(&mut b, &manifests);
+                (b, Some(uid))
+            }
             Err((status, body)) => return (status, body).into_response(),
         }
     } else {

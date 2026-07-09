@@ -136,6 +136,25 @@ pub fn match_buttons(
         .collect()
 }
 
+/// Retain only async-execution handlers in a button list (F070).
+///
+/// The model-driven menu (`file_handler` tool) and the menu-click endpoints
+/// (`/api/files/run`, `/api/files/menu-run`) enqueue the chosen handler onto the
+/// async-only `handler_jobs` queue. Sync handlers (describe / extract_document /
+/// save) run INLINE via the composer's `/api/files/{id}/run` path instead;
+/// offering or enqueuing one through the async menu path strands the job (no
+/// `/complete` callback is ever posted). `match_url_handlers` already filters
+/// this way — this applies the same guard to the upload path, which shares the
+/// unfiltered `match_buttons` with the inline sync path and so cannot filter at
+/// the source.
+pub fn retain_async_handlers(buttons: &mut Vec<HandlerButton>, manifests: &[HandlerManifest]) {
+    buttons.retain(|b| {
+        manifests
+            .iter()
+            .any(|m| m.id == b.id && m.execution == "async")
+    });
+}
+
 /// True if `url`'s host matches a domain pattern from a handler manifest.
 ///
 /// Pattern matching rules:
@@ -359,6 +378,25 @@ mod tests {
         assert!(m.match_.max_size_mb.is_none());
         assert!(m.labels.is_empty());
         assert_eq!(m.order, 0);
+    }
+
+    #[test]
+    fn retain_async_handlers_drops_sync_keeps_async() {
+        // F070: the menu/enqueue path must offer async handlers only.
+        let sync_m = mf("save", "builtin", &["*/*"], None, 10); // mf defaults to sync
+        let mut async_m = mf("summarize_video", "workspace", &["video/*"], None, 20);
+        async_m.execution = "async".to_string();
+        let manifests = vec![sync_m, async_m];
+        let btn = |id: &str| HandlerButton {
+            id: id.to_string(),
+            label: id.to_string(),
+            icon: String::new(),
+            params: serde_json::json!([]),
+        };
+        let mut buttons = vec![btn("save"), btn("summarize_video")];
+        retain_async_handlers(&mut buttons, &manifests);
+        assert_eq!(buttons.len(), 1);
+        assert_eq!(buttons[0].id, "summarize_video");
     }
 
     #[test]
