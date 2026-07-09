@@ -101,8 +101,14 @@ export async function processSSEStream(
           const idStr = line.slice(3).trim();
           const idNum = Number.parseInt(idStr, 10);
           if (!Number.isNaN(idNum)) {
+            // F054: the backend attaches an `id:` to EVERY buffered event
+            // (incl. every text-delta). Do NOT write the store here — that was
+            // ~1 immer produce per token, defeating the 50ms commit throttle and
+            // making every subscriber selector re-run per token (O(N^2) on long
+            // replies). Keep it on the session only; it is flushed to agent state
+            // once per stream in the finally block below (the reconnect path reads
+            // the store copy).
             session.lastEventId = idNum;
-            session.write({ lastEventId: idNum });
           }
           continue;
         }
@@ -527,6 +533,14 @@ export async function processSSEStream(
     reader.releaseLock();
     session.cancelScheduledCommit();
     session.buffer.flushText();
+
+    // F054: flush the last SSE event id to agent state once per stream (not per
+    // event). The store copy is only read on the reconnect/resume path
+    // (streaming-renderer reads agents[agent].lastEventId for the Last-Event-ID
+    // header). Runs before onReconnectNeeded below so the reconnect sees it.
+    if (session.lastEventId !== null) {
+      session.write({ lastEventId: session.lastEventId });
+    }
 
     if (!session.signal.aborted) {
       // Flush any remaining buffer content
