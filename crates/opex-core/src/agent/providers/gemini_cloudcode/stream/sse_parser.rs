@@ -18,6 +18,9 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeminiStreamEvent {
+    // F064: tolerate events with no `candidates` array (e.g. a usage-only
+    // terminal chunk) instead of failing the whole parse and dropping it.
+    #[serde(default)]
     pub candidates: Vec<GeminiCandidate>,
     #[serde(default)]
     pub usage_metadata: Option<GeminiUsageMetadata>,
@@ -34,6 +37,11 @@ pub struct GeminiCandidate {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeminiContent {
+    // F064: Gemini streams terminal candidates carrying `content` (role only)
+    // with NO `parts` array. A required field failed the whole SseEnvelope
+    // parse, silently dropping that event and losing its finishReason + usage
+    // (so the turn's token usage/billing went unrecorded). Default to empty.
+    #[serde(default)]
     pub parts: Vec<GeminiPart>,
 }
 
