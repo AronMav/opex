@@ -235,6 +235,15 @@ async fn run_pg_restore(container: &str, dump_path: &std::path::Path) -> anyhow:
 }
 
 /// List the `TABLE DATA public` tables present in a `-Fc` dump (quoted for SQL).
+/// True if `name` is a bare PostgreSQL identifier safe to wrap in `"..."` without
+/// escaping. Restricts dump-supplied table names to `[A-Za-z0-9_]+` (F087): the
+/// names come from `pg_restore --list` on an attacker-uploadable dump and are
+/// interpolated into `TRUNCATE "{}" CASCADE`, so anything else could break out of
+/// the quoted identifier and inject SQL.
+fn is_safe_pg_identifier(name: &str) -> bool {
+    !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
 async fn list_dump_tables(
     container: &str,
     dump_path: &std::path::Path,
@@ -248,11 +257,23 @@ async fn list_dump_tables(
         .await
         .context("pg_restore --list failed")?;
     // Lines look like: "234; 0 16442 TABLE DATA public memory_chunks postgres"
-    Ok(String::from_utf8_lossy(&list_out.stdout)
-        .lines()
-        .filter(|l| l.contains(" TABLE DATA public "))
-        .filter_map(|l| l.split_whitespace().nth(6).map(|t| format!("\"{}\"", t)))
-        .collect())
+    let mut tables = Vec::new();
+    for line in String::from_utf8_lossy(&list_out.stdout).lines() {
+        if !line.contains(" TABLE DATA public ") {
+            continue;
+        }
+        let Some(name) = line.split_whitespace().nth(6) else {
+            continue;
+        };
+        // F087: reject a crafted dump instead of injecting its table name into SQL.
+        if !is_safe_pg_identifier(name) {
+            anyhow::bail!(
+                "refusing restore: dump lists a non-identifier table name {name:?}"
+            );
+        }
+        tables.push(format!("\"{name}\""));
+    }
+    Ok(tables)
 }
 
 /// Write a `-Fc` pg_dump of the current `opex` DB to `out_path` on the host.
@@ -872,6 +893,21 @@ mod tests {
     // line wins" logic picked it, and pg_dump failed with `role "opex" does
     // not exist` (the test container has no opex role). The configured
     // container must win whenever it is present.
+    #[test]
+    fn safe_pg_identifier_rejects_injection() {
+        // F087: legit snake_case names pass; anything with quotes/spaces/parens
+        // (the SQL-injection primitives) is rejected.
+        assert!(is_safe_pg_identifier("memory_chunks"));
+        assert!(is_safe_pg_identifier("scheduled_jobs"));
+        assert!(is_safe_pg_identifier("Table1"));
+        assert!(!is_safe_pg_identifier(""));
+        assert!(!is_safe_pg_identifier("t\"; COPY x TO PROGRAM 'sh'--"));
+        assert!(!is_safe_pg_identifier("a\"b"));
+        assert!(!is_safe_pg_identifier("a b"));
+        assert!(!is_safe_pg_identifier("a-b"));
+        assert!(!is_safe_pg_identifier("a.b"));
+    }
+
     #[test]
     fn select_container_prefers_configured_over_substring_match() {
         assert_eq!(
