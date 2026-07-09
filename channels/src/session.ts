@@ -132,6 +132,10 @@ async function runSession(
   return new Promise<void>((resolve, reject) => {
     let driver: ChannelDriver | null = null;
     let pingTimer: ReturnType<typeof setInterval> | null = null;
+    // F121: declared here (not just in the message scope) so cleanup() can clear
+    // it — a pre-handshake close/error otherwise leaves this 30s timer armed to
+    // fire a misleading "handshake timeout" and re-close the connection.
+    let handshakeTimer: ReturnType<typeof setTimeout> | null = null;
     let handshakeComplete = false;
     let cleaned = false;
 
@@ -139,6 +143,7 @@ async function runSession(
       if (cleaned) return;
       cleaned = true;
       if (pingTimer) clearInterval(pingTimer);
+      if (handshakeTimer) clearTimeout(handshakeTimer);
       bridge.clearAll();
       if (driver) {
         try {
@@ -164,7 +169,7 @@ async function runSession(
     });
 
     const HANDSHAKE_TIMEOUT_MS = 30_000;
-    const handshakeTimer = setTimeout(() => {
+    handshakeTimer = setTimeout(() => {
       if (!handshakeComplete) {
         console.error(`[${config.agentName}] handshake timeout — no config received in 30s, closing`);
         ws.close();
