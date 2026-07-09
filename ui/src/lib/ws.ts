@@ -53,6 +53,17 @@ export class WsManager {
         headers: { Authorization: `Bearer ${this.token}` },
       });
       if (!resp.ok) {
+        // F056: distinguish auth failure from a transient outage. A rotated/invalid
+        // token returns 401/403 on every attempt; backing off and re-polling forever
+        // leaves the real-time channel permanently dead with no re-auth. Route auth
+        // failures through the shared logout+redirect instead of reconnect.
+        if (resp.status === 401 || resp.status === 403) {
+          console.warn("[ws] ticket endpoint returned auth failure, redirecting to login");
+          this.disconnect();
+          const { handleUnauthorized } = await import("@/lib/api");
+          handleUnauthorized();
+          return;
+        }
         console.warn("[ws] ticket endpoint failed, scheduling reconnect");
         this.scheduleReconnect();
         return;
