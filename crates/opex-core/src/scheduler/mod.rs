@@ -1059,7 +1059,10 @@ impl Scheduler {
             "adding dynamic job"
         );
 
-        let jitter_ms_max = jitter_secs as u64 * 1000;
+        // F067: clamp + saturating arithmetic. A raw `jitter_secs as u64 * 1000`
+        // sign-extends a negative i32 to ~1.8e19 (multi-decade sleep) and can
+        // overflow-panic in debug builds. Bound to a sane ceiling.
+        let jitter_ms_max = (jitter_secs.clamp(0, 3600) as u64).saturating_mul(1000);
         let db_id_clone = db_id;
         let ui_tx = self.ui_event_tx.clone();
         let locks = self.agent_locks.clone();

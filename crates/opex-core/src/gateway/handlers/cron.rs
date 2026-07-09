@@ -146,6 +146,29 @@ pub(crate) async fn api_create_cron(
 
     let timezone = req.timezone.unwrap_or_else(|| "UTC".to_string());
 
+    // F067: bound jitter_secs. It is cast i32→u64 then *1000 in the scheduler;
+    // a negative value sign-extends to a ~584-billion-year sleep and a huge
+    // positive one to a multi-decade sleep — either way the job silently never
+    // fires (and debug builds overflow-panic).
+    if !(0..=3600).contains(&req.jitter_secs) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "jitter_secs must be between 0 and 3600"})),
+        )
+            .into_response();
+    }
+    // F073: validate the cron expression up front (mirrors the agent-create
+    // path). Without this a malformed expression is committed as an enabled job
+    // that add_dynamic_job then fails to schedule (Err swallowed by warn), so
+    // it returns 200 but silently never fires.
+    if !req.run_once && crate::scheduler::compute_next_run(&req.cron, &timezone).is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("invalid cron expression: '{}'", req.cron)})),
+        )
+            .into_response();
+    }
+
     let silent = req.silent.unwrap_or(false);
     let result = sqlx::query_scalar::<_, uuid::Uuid>(
         "INSERT INTO scheduled_jobs (agent_id, name, cron_expr, timezone, task_message, announce_to, silent, jitter_secs, run_once, run_at, tool_policy, autonomous_goal) \
