@@ -4,6 +4,7 @@ import asyncio
 
 import httpx
 
+from helpers import validate_url_ssrf
 from providers.base import ImageGenProvider, resolve_request_timeout
 
 
@@ -90,6 +91,11 @@ class PixazoImageGen(ImageGenProvider):
                 poll_data = poll_resp.json()
                 images = poll_data.get("images", [])
                 if images:
+                    # F052: SSRF-validate the provider-returned URL before
+                    # fetching (matches fal/Runware) — the shared client has no
+                    # SSRF resolver, so a reflected internal URL would otherwise
+                    # reach loopback/metadata.
+                    validate_url_ssrf(images[0]["url"])
                     img_resp = await http.get(images[0]["url"], timeout=self._request_timeout)
                     img_resp.raise_for_status()
                     return img_resp.content
@@ -97,6 +103,7 @@ class PixazoImageGen(ImageGenProvider):
 
         image_url = data.get("output") or data.get("image_url")
         if image_url:
+            validate_url_ssrf(image_url)  # F052: SSRF-validate before fetch
             img_resp = await http.get(image_url, timeout=self._request_timeout)
             img_resp.raise_for_status()
             return img_resp.content
