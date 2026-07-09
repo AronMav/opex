@@ -2,20 +2,20 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Заменить жёстко зашитый `match` slash-команд декларативным `CommandRegistry` в ядре, отдать список команд через `GET /api/commands` и включить автодополнение `/` в web-композере — с полным паритетом поведения 14 существующих команд.
+**Goal:** Ввести декларативный `CommandRegistry` в ядре (единый источник истины о командах), отдать список через `GET /api/commands` и включить автодополнение `/` в web-композере — с полным паритетом поведения 14 существующих команд.
 
-**Architecture:** Реестр в Rust-ядре — единый источник истины. `CommandSpec`-дескрипторы агрегируются из `CommandSource` (в Фазе 1 — только `BuiltinCommandSource`), диспетчер резолвит команду по реестру и вызывает привязанный Rust-обработчик. Тела обработчиков переезжают из `commands.rs` без изменения логики. Контракт вывода расширяется до `CommandOutcome { Text | Menu }` (Menu задействуется в Фазе 2). `GET /api/commands` отдаёт локализованный, отфильтрованный по агенту список; UI фетчит его для автодополнения.
+**Architecture:** Реестр builtins статичен, поэтому в Фазе 1 живёт как `LazyLock<CommandRegistry>`-синглтон (без проводки через `AppState`/`EngineConfig`). Дескрипторы агрегируются из `CommandSource` (в Фазе 1 — только `BuiltinCommandSource`). Диспетч slash-команд **остаётся текущим `match`** — реестр в Фазе 1 не исполняет, а только описывает (питает `/api/commands` + автодополнение) и валидируется. `/help` и `/commands` остаются локализованными как сегодня; их регенерация из реестра — Фаза 2. Контракт вывода расширяется до `CommandOutcome { Text | Menu }` (вариант `Menu` задействуется в Фазе 2).
 
-**Tech Stack:** Rust 2024 (opex-core), Axum 0.8, sqlx, serde; Next.js 16 / React 19 / Zustand (ui). Только rustls, без OpenSSL.
+**Tech Stack:** Rust 2024 (opex-core), Axum 0.8, serde; Next.js 16 / React 19 / React Query 5 / Zustand (ui). Только rustls, без OpenSSL.
 
-**Спек:** [2026-07-09-chat-commands-registry-design.md](2026-07-09-chat-commands-registry-design.md) (находки F1–F10 учтены).
+**Спек:** [2026-07-09-chat-commands-registry-design.md](2026-07-09-chat-commands-registry-design.md) (F1–F10 учтены). **Ревью-фиксы плана:** P1 (LazyLock), P2 (`/help` без изменений в Фазе 1), P3 (все команды `Visibility::All` — чистый паритет), P4 (гард дрейфа), P5 (`apiGet`).
 
 ## Global Constraints
 
 - Rust 2024 edition; только `rustls-tls`, никакого OpenSSL. Никаких новых ключей в `.env`.
 - Имена команд/алиасов: `[a-zA-Z0-9_-]` (анти-traversal инвариант, как у tool/MCP-имён). `nativeName` дополнительно: `[a-z0-9_]{1,32}`.
-- Паритет: 14 существующих команд (`/status`, `/new`, `/reset`, `/compact`, `/rollback`, `/model`, `/think`, `/voice`, `/usage`, `/export`, `/help`, `/memory`, `/goal`, `/subgoal`) обязаны вести себя байт-в-байт как сегодня (кроме `/help` и `/commands`, которые становятся генерируемыми).
-- Тесты Rust авторитетно гоняются на сервере (`make test-db`); локальный Windows Rust-тест ненадёжен. CI: `cargo test --workspace` + tsc + gen-types drift.
+- **Паритет — приоритет Фазы 1.** Все 14 команд (`/status`, `/new`, `/reset`, `/compact`, `/rollback`, `/model`, `/think`, `/voice`, `/usage`, `/export`, `/help`, `/memory`, `/goal`, `/subgoal`) ведут себя байт-в-байт как сегодня. Все — `Visibility::All` (base-гейтинг НЕ вводим в Фазе 1).
+- Тесты Rust авторитетно гоняются на сервере (`make test-db`); локальный Windows Rust-тест ненадёжен. CI: `cargo test --workspace` + tsc + `make gen-types` drift.
 - Билд на сервере (`make remote-deploy`); деплой только на 188.x. UI — отдельным `scripts/deploy-ui.sh` абсолютным путём.
 - Коммиты: 1 на задачу, без `Co-Authored-By`, работа прямо в `master`. Push — только с явного разрешения пользователя.
 
@@ -24,28 +24,30 @@
 ## Файловая структура (Фаза 1)
 
 **Создаётся:**
-- `crates/opex-core/src/agent/commands/mod.rs` — реэкспорт модуля команд.
-- `crates/opex-core/src/agent/commands/spec.rs` — типы `CommandSpec`, `CommandArg`, enum-ы, `CommandOutcome`, валидация реестра.
-- `crates/opex-core/src/agent/commands/registry.rs` — `CommandRegistry`, трейт `CommandSource`, резолв/фильтрация/сериализация.
-- `crates/opex-core/src/agent/commands/builtin.rs` — `BuiltinCommandSource`: `CommandSpec`-дескрипторы 14 команд + карта имя→обработчик.
+- `crates/opex-core/src/agent/commands/mod.rs` — реэкспорт + `LazyLock`-синглтон `command_registry()`.
+- `crates/opex-core/src/agent/commands/spec.rs` — типы `CommandSpec`, `CommandArg`, enum-ы, `CommandOutcome`, `validate_registry`, `sanitize_native_name`.
+- `crates/opex-core/src/agent/commands/registry.rs` — `CommandRegistry`, трейт `CommandSource`, резолв/фильтрация.
+- `crates/opex-core/src/agent/commands/builtin.rs` — `BuiltinCommandSource`: дескрипторы 14 команд + `BUILTIN_NAMES`.
 - `crates/opex-core/src/gateway/handlers/commands.rs` — `GET /api/commands`.
-- `ui/src/components/chat/command-autocomplete.tsx` — выпадашка автодополнения.
 - `ui/src/hooks/use-commands.ts` — фетч `/api/commands` (React Query).
+- `ui/src/components/chat/command-autocomplete.tsx` — выпадашка автодополнения.
+- `ui/src/components/chat/command-autocomplete.test.tsx` — vitest.
 
 **Модифицируется:**
-- `crates/opex-core/src/agent/pipeline/commands.rs` — тела обработчиков остаются, но `handle_command` становится тонким диспетчером через реестр; возвращает `CommandOutcome`.
-- `crates/opex-core/src/agent/engine/context_builder.rs:170-196` — обёртка `handle_command` возвращает `CommandOutcome`.
-- `crates/opex-core/src/agent/pipeline/bootstrap.rs:29,351-354,394` — `command_output: Option<CommandOutcome>`.
-- `crates/opex-core/src/agent/engine/run.rs:172,394,574` — ранний выход разбирает `CommandOutcome::{Text,Menu}`.
-- `crates/opex-core/src/agent/mod.rs` — `pub mod commands;` (реестр в дерево модулей).
-- `crates/opex-core/src/gateway/handlers/mod.rs` — `.merge(commands::routes())`.
-- `crates/opex-core/src/gateway/state.rs` (`AppState`) — `command_registry: Arc<CommandRegistry>`.
+- `crates/opex-core/src/agent/pipeline/commands.rs` — тела `match` НЕ трогаем; меняем только тип успеха `String` → `CommandOutcome::Text`; добавляем `const DISPATCH_NAMES` + drift-гард-тест.
+- `crates/opex-core/src/agent/engine/context_builder.rs:170` — обёртка возвращает `CommandOutcome`.
+- `crates/opex-core/src/agent/pipeline/bootstrap.rs:29,351-354` — `command_output: Option<CommandOutcome>`.
+- `crates/opex-core/src/agent/engine/run.rs:172,394,574` — три early-exit блока разбирают `CommandOutcome::{Text,Menu}`.
+- `crates/opex-core/src/agent/mod.rs` — `pub mod commands;`.
+- `crates/opex-core/src/gateway/handlers/mod.rs` — `mod commands;` + `.merge(commands::routes())`.
 - `ui/src/components/chat/` composer — интеграция автодополнения.
-- `ui/src/types/api.ts` — тип `CommandInfo`.
+- `ui/src/types/api.ts` — тип `CommandInfo` (hand-mirror gateway-DTO, как `AgentInfo`; ts-rs НЕ участвует — см. P7).
+
+> **P1:** `AppState`, `EngineConfig`, `CommandContext` НЕ меняются — реестр берётся из `LazyLock`-синглтона. **P2:** `/help`/`/commands` в Фазе 1 не трогаем. **P6:** хендлер `/api/commands` извлекает `State<AppState>` напрямую (роутер-стейт = `AppState`) — допустимо; sub-state-извлечение не требуется, т.к. реестр берётся из синглтона, а не из стейта.
 
 ---
 
-## Task 1: Типы `CommandSpec` + `CommandOutcome` + валидация
+## Task 1: Типы `CommandSpec` + `CommandOutcome` + валидация + санитайзер
 
 **Files:**
 - Create: `crates/opex-core/src/agent/commands/mod.rs`
@@ -56,20 +58,20 @@
 **Interfaces:**
 - Produces:
   - `enum CommandScope { Text, Native, Both }`
-  - `enum CommandCategory { Session, Options, Status, Management, Media, Tools }`
+  - `enum CommandCategory { Session, Options, Status, Management, Media, Tools }` (derive `PartialEq`)
   - `enum ArgType { String, Number, Boolean }`
-  - `enum Choices { Static(Vec<Choice>), Dynamic(String) }`, `struct Choice { value: String, label: String }`
-  - `enum Visibility { All, BaseOnly }`
+  - `enum Choices { Static { values: Vec<Choice> }, Dynamic { provider: String } }`, `struct Choice { value, label: String }`
+  - `enum Visibility { All, BaseOnly }` (derive `PartialEq`)
   - `enum CommandSourceKind { Builtin, Handler { handler_id: String } }`
   - `struct CommandArg { name, description: String, arg_type: ArgType, required: bool, choices: Option<Choices>, capture_remaining: bool, menu: bool }`
-  - `struct CommandSpec { name, aliases, description, category, scope, args, visibility, source }`
+  - `struct CommandSpec { name, aliases, description, category, scope, args, visibility, source }` (все derive `Serialize`)
   - `enum CommandOutcome { Text(String), Menu { card: serde_json::Value } }`
   - `fn validate_registry(specs: &[CommandSpec]) -> Result<(), String>`
-  - `fn sanitize_native_name(name: &str) -> Option<String>` — `[a-z0-9_]`, обрезка до 32, `None` если пусто.
+  - `fn sanitize_native_name(name: &str) -> Option<String>`
 
 - [ ] **Step 1: Написать падающий тест валидатора и санитайзера**
 
-В `crates/opex-core/src/agent/commands/spec.rs` (в конце файла):
+В `crates/opex-core/src/agent/commands/spec.rs`:
 
 ```rust
 #[cfg(test)]
@@ -78,29 +80,21 @@ mod tests {
 
     fn spec(name: &str, scope: CommandScope) -> CommandSpec {
         CommandSpec {
-            name: name.to_string(),
-            aliases: vec![],
-            description: "d".into(),
-            category: CommandCategory::Status,
-            scope,
-            args: vec![],
-            visibility: Visibility::All,
-            source: CommandSourceKind::Builtin,
+            name: name.to_string(), aliases: vec![], description: "d".into(),
+            category: CommandCategory::Status, scope, args: vec![],
+            visibility: Visibility::All, source: CommandSourceKind::Builtin,
         }
     }
 
     #[test]
     fn duplicate_names_rejected() {
-        let specs = vec![spec("status", CommandScope::Both), spec("status", CommandScope::Text)];
-        assert!(validate_registry(&specs).is_err());
+        assert!(validate_registry(&[spec("status", CommandScope::Both), spec("status", CommandScope::Text)]).is_err());
     }
 
     #[test]
     fn duplicate_alias_rejected() {
-        let mut a = spec("status", CommandScope::Text);
-        a.aliases = vec!["st".into()];
-        let mut b = spec("start", CommandScope::Text);
-        b.aliases = vec!["st".into()];
+        let mut a = spec("status", CommandScope::Text); a.aliases = vec!["st".into()];
+        let mut b = spec("start", CommandScope::Text); b.aliases = vec!["st".into()];
         assert!(validate_registry(&[a, b]).is_err());
     }
 
@@ -118,9 +112,9 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Прогнать тест — убедиться, что не компилируется/падает**
+- [ ] **Step 2: Прогнать — падает**
 
-Run (на сервере): `cargo test -p opex-core commands::spec -- --nocapture`
+Run (сервер): `cargo test -p opex-core commands::spec -- --nocapture`
 Expected: FAIL — типы/функции не определены.
 
 - [ ] **Step 3: Реализовать типы + валидатор + санитайзер**
@@ -129,12 +123,21 @@ Expected: FAIL — типы/функции не определены.
 
 ```rust
 //! Единый реестр команд чата (спек 2026-07-09).
+use std::sync::LazyLock;
+
 pub mod spec;
 pub mod registry;
 pub mod builtin;
+
+/// Синглтон реестра builtins. Валидируется при первом обращении;
+/// панике при невалидности — конфигурация команд статична и обязана быть корректной.
+pub static COMMAND_REGISTRY: LazyLock<registry::CommandRegistry> = LazyLock::new(|| {
+    registry::CommandRegistry::from_sources(&[&builtin::BuiltinCommandSource])
+        .expect("builtin command registry must validate")
+});
 ```
 
-`crates/opex-core/src/agent/commands/spec.rs` (шапка + типы + функции):
+`crates/opex-core/src/agent/commands/spec.rs`:
 
 ```rust
 use serde::Serialize;
@@ -196,11 +199,8 @@ pub enum CommandOutcome { Text(String), Menu { card: serde_json::Value } }
 
 /// Санитизация в допустимое нативное имя Telegram: `[a-z0-9_]`, максимум 32.
 pub fn sanitize_native_name(name: &str) -> Option<String> {
-    let s: String = name
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect::<String>();
+    let s: String = name.to_lowercase().chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
     let s = s.trim_matches('_').to_string();
     let s: String = s.chars().take(32).collect();
     if s.is_empty() { None } else { Some(s) }
@@ -227,9 +227,9 @@ pub fn validate_registry(specs: &[CommandSpec]) -> Result<(), String> {
 }
 ```
 
-Добавить в `crates/opex-core/src/agent/mod.rs` строку `pub mod commands;` (рядом с прочими `pub mod`).
+Добавить в `crates/opex-core/src/agent/mod.rs` строку `pub mod commands;`.
 
-- [ ] **Step 4: Прогнать тесты — зелёные**
+- [ ] **Step 4: Прогнать — зелёные**
 
 Run: `cargo test -p opex-core commands::spec -- --nocapture`
 Expected: PASS (4 теста).
@@ -250,12 +250,12 @@ git commit -m "feat(commands): CommandSpec types + registry validation + native-
 - Test: инлайн `#[cfg(test)]` в `registry.rs`
 
 **Interfaces:**
-- Consumes: типы из Task 1.
+- Consumes: типы Task 1.
 - Produces:
   - `trait CommandSource { fn specs(&self) -> Vec<CommandSpec>; }`
   - `struct CommandRegistry { specs: Vec<CommandSpec> }`
-  - `CommandRegistry::from_sources(sources: &[&dyn CommandSource]) -> Result<Self, String>` (валидирует)
-  - `fn resolve(&self, name: &str) -> Option<&CommandSpec>` (по имени ИЛИ алиасу, без ведущего `/`)
+  - `fn from_sources(sources: &[&dyn CommandSource]) -> Result<Self, String>` (валидирует)
+  - `fn resolve(&self, name: &str) -> Option<&CommandSpec>` (по имени ИЛИ алиасу, ведущий `/` игнорируется)
   - `fn visible_for(&self, is_base: bool) -> Vec<&CommandSpec>` (фильтр по `Visibility`)
   - `fn all(&self) -> &[CommandSpec]`
 
@@ -272,8 +272,7 @@ mod tests {
 
     fn s(name: &str, aliases: &[&str], vis: Visibility) -> CommandSpec {
         CommandSpec {
-            name: name.into(),
-            aliases: aliases.iter().map(|a| a.to_string()).collect(),
+            name: name.into(), aliases: aliases.iter().map(|a| a.to_string()).collect(),
             description: "d".into(), category: CommandCategory::Status,
             scope: CommandScope::Both, args: vec![], visibility: vis,
             source: CommandSourceKind::Builtin,
@@ -336,9 +335,7 @@ impl CommandRegistry {
     }
 
     pub fn visible_for(&self, is_base: bool) -> Vec<&CommandSpec> {
-        self.specs.iter()
-            .filter(|c| is_base || c.visibility == Visibility::All)
-            .collect()
+        self.specs.iter().filter(|c| is_base || c.visibility == Visibility::All).collect()
     }
 
     pub fn all(&self) -> &[CommandSpec] { &self.specs }
@@ -359,21 +356,21 @@ git commit -m "feat(commands): CommandRegistry with alias resolve + visibility f
 
 ---
 
-## Task 3: `BuiltinCommandSource` — дескрипторы 14 команд
+## Task 3: `BuiltinCommandSource` — дескрипторы 14 команд (все `Visibility::All`)
 
 **Files:**
 - Create: `crates/opex-core/src/agent/commands/builtin.rs`
 - Test: инлайн `#[cfg(test)]` в `builtin.rs`
 
 **Interfaces:**
-- Consumes: типы Task 1, трейт `CommandSource` Task 2.
+- Consumes: типы Task 1, трейт `CommandSource` Task 2, синглтон `COMMAND_REGISTRY` Task 1.
 - Produces:
   - `struct BuiltinCommandSource;` реализует `CommandSource`.
-  - `pub const BUILTIN_NAMES: &[&str]` — канонический перечень (для теста паритета в Task 4).
+  - `pub const BUILTIN_NAMES: &[&str]` — канонический перечень (для drift-гарда Task 4).
 
-**Примечание для инженера:** дескрипторы описывают ТОЛЬКО метаданные (имя/арги/категория) — логика остаётся в `commands.rs`. `visibility`: `/goal`, `/subgoal`, `/rollback` помечаем `BaseOnly` (системные операции); остальные — `All`. `scope`: все `Both`, кроме тех, у кого имя не проходит `sanitize_native_name` (таких среди 14 нет — все snake_case).
+**Правила (P2/P3):** `description` — непустые статичные **английские** строки (питают `/api/commands` + автодополнение; локализация описаний — Фаза 2 вместе с регенерацией `/help`). Все 14 команд — `Visibility::All` (base-гейтинг не вводим). `scope` — `Both` (все 14 имён проходят `sanitize_native_name`). `args`/`choices` — точно по текущему парсингу в `commands.rs` (`parse_rollback_command`, `parse_voice_command`, `parse_goal_command`, `/think`-матчинг).
 
-- [ ] **Step 1: Написать падающий тест состава**
+- [ ] **Step 1: Написать падающий тест состава + choices**
 
 ```rust
 #[cfg(test)]
@@ -383,20 +380,23 @@ mod tests {
 
     #[test]
     fn builtin_source_has_all_14_and_validates() {
-        let src = BuiltinCommandSource;
-        let reg = CommandRegistry::from_sources(&[&src]).expect("registry valid");
-        for name in BUILTIN_NAMES {
-            assert!(reg.resolve(name).is_some(), "missing builtin: {name}");
-        }
+        let reg = CommandRegistry::from_sources(&[&BuiltinCommandSource]).expect("registry valid");
+        for name in BUILTIN_NAMES { assert!(reg.resolve(name).is_some(), "missing builtin: {name}"); }
         assert_eq!(reg.all().len(), BUILTIN_NAMES.len());
     }
 
     #[test]
-    fn think_has_choices() {
-        let src = BuiltinCommandSource;
-        let reg = CommandRegistry::from_sources(&[&src]).unwrap();
+    fn all_builtins_are_visible_to_everyone() {
+        let reg = CommandRegistry::from_sources(&[&BuiltinCommandSource]).unwrap();
+        assert_eq!(reg.visible_for(false).len(), BUILTIN_NAMES.len(), "no base-only builtins in Phase 1");
+    }
+
+    #[test]
+    fn think_has_choices_and_nonempty_description() {
+        let reg = CommandRegistry::from_sources(&[&BuiltinCommandSource]).unwrap();
         let think = reg.resolve("think").unwrap();
         assert!(!think.args.is_empty());
+        for c in reg.all() { assert!(!c.description.is_empty(), "empty description: {}", c.name); }
     }
 }
 ```
@@ -408,7 +408,7 @@ Expected: FAIL — `BuiltinCommandSource` не определён.
 
 - [ ] **Step 3: Реализовать дескрипторы**
 
-`crates/opex-core/src/agent/commands/builtin.rs` (пример полных дескрипторов для 4 команд; остальные 10 — по тому же шаблону; описания — статичные en-строки, локализация подключается в Task 6):
+`crates/opex-core/src/agent/commands/builtin.rs`:
 
 ```rust
 use super::registry::CommandSource;
@@ -419,28 +419,28 @@ pub const BUILTIN_NAMES: &[&str] = &[
     "voice", "usage", "export", "help", "memory", "goal", "subgoal",
 ];
 
-fn simple(name: &str, cat: CommandCategory, vis: Visibility) -> CommandSpec {
+fn simple(name: &str, desc: &str, cat: CommandCategory) -> CommandSpec {
     CommandSpec {
-        name: name.into(), aliases: vec![], description: String::new(),
+        name: name.into(), aliases: vec![], description: desc.into(),
         category: cat, scope: CommandScope::Both, args: vec![],
-        visibility: vis, source: CommandSourceKind::Builtin,
+        visibility: Visibility::All, source: CommandSourceKind::Builtin,
     }
 }
 
-fn think_spec() -> CommandSpec {
-    let levels = ["off", "minimal", "low", "medium", "high", "max"];
-    CommandSpec {
-        name: "think".into(), aliases: vec!["t".into()], description: String::new(),
-        category: CommandCategory::Options, scope: CommandScope::Both,
-        args: vec![CommandArg {
-            name: "level".into(), description: "off..max".into(),
-            arg_type: ArgType::String, required: false,
-            choices: Some(Choices::Static {
-                values: levels.iter().map(|l| Choice { value: l.to_string(), label: l.to_string() }).collect(),
-            }),
-            capture_remaining: false, menu: true,
-        }],
-        visibility: Visibility::All, source: CommandSourceKind::Builtin,
+fn choice(v: &str) -> Choice { Choice { value: v.into(), label: v.into() } }
+
+fn arg_choices(name: &str, desc: &str, values: &[&str], menu: bool) -> CommandArg {
+    CommandArg {
+        name: name.into(), description: desc.into(), arg_type: ArgType::String,
+        required: false, choices: Some(Choices::Static { values: values.iter().map(|v| choice(v)).collect() }),
+        capture_remaining: false, menu,
+    }
+}
+
+fn arg_free(name: &str, desc: &str) -> CommandArg {
+    CommandArg {
+        name: name.into(), description: desc.into(), arg_type: ArgType::String,
+        required: false, choices: None, capture_remaining: true, menu: false,
     }
 }
 
@@ -448,323 +448,216 @@ pub struct BuiltinCommandSource;
 
 impl CommandSource for BuiltinCommandSource {
     fn specs(&self) -> Vec<CommandSpec> {
+        let think = {
+            let mut c = simple("think", "Set thinking level", CommandCategory::Options);
+            c.aliases = vec!["t".into()];
+            c.args = vec![arg_choices("level", "off..max",
+                &["off", "minimal", "low", "medium", "high", "max"], true)];
+            c
+        };
+        let voice = {
+            let mut c = simple("voice", "Toggle voice replies for this chat", CommandCategory::Media);
+            c.args = vec![arg_choices("mode", "on|off|status", &["on", "off", "status"], true)];
+            c
+        };
+        let model = {
+            let mut c = simple("model", "Show or set the model", CommandCategory::Options);
+            c.args = vec![CommandArg { name: "model".into(),
+                description: "provider/model | reset | status".into(), arg_type: ArgType::String,
+                required: false, choices: Some(Choices::Dynamic { provider: "models".into() }),
+                capture_remaining: false, menu: false }];
+            c
+        };
+        let rollback = {
+            let mut c = simple("rollback", "Restore a checkpoint", CommandCategory::Management);
+            c.args = vec![arg_free("action", "list | N | diff N | N file <path>")];
+            c
+        };
+        let memory = {
+            let mut c = simple("memory", "Search or list agent memory", CommandCategory::Status);
+            c.args = vec![arg_free("query", "search query (empty = recent)")];
+            c
+        };
+        let goal = {
+            let mut c = simple("goal", "Set/inspect the autonomous goal", CommandCategory::Management);
+            c.args = vec![arg_free("text", "goal | status | pause | resume | clear")];
+            c
+        };
+        let subgoal = {
+            let mut c = simple("subgoal", "Manage subgoals", CommandCategory::Management);
+            c.args = vec![arg_free("action", "add <t> | list | remove <n>")];
+            c
+        };
+        let compact = {
+            let mut c = simple("compact", "Compact the session context", CommandCategory::Session);
+            c.args = vec![arg_free("instructions", "extra compaction instructions")];
+            c
+        };
         vec![
-            simple("status", CommandCategory::Status, Visibility::All),
-            simple("new", CommandCategory::Session, Visibility::All),
-            simple("reset", CommandCategory::Session, Visibility::All),
-            compact_spec(),
-            rollback_spec(),   // BaseOnly, arg "action" capture_remaining
-            model_spec(),      // arg "model" (Dynamic "models")
-            think_spec(),
-            voice_spec(),      // arg "mode" choices on/off/status
-            simple("usage", CommandCategory::Status, Visibility::All),
-            simple("export", CommandCategory::Status, Visibility::All),
-            simple("help", CommandCategory::Status, Visibility::All),
-            memory_spec(),     // arg "query" capture_remaining
-            goal_spec(),       // BaseOnly, arg "text" capture_remaining
-            subgoal_spec(),    // BaseOnly, arg "action" capture_remaining
+            simple("status", "Show current status", CommandCategory::Status),
+            simple("new", "Start a new session", CommandCategory::Session),
+            simple("reset", "Reset the session and unpinned memory", CommandCategory::Session),
+            compact,
+            rollback,
+            model,
+            think,
+            voice,
+            simple("usage", "Show token usage", CommandCategory::Status),
+            simple("export", "Export the current session transcript", CommandCategory::Status),
+            simple("help", "Show available commands", CommandCategory::Status),
+            memory,
+            goal,
+            subgoal,
         ]
     }
-}
-
-// compact_spec/rollback_spec/model_spec/voice_spec/memory_spec/goal_spec/subgoal_spec —
-// каждая по образцу think_spec/simple: имя, категория, visibility, args.
-// Точные choices/арги брать из текущего парсинга в commands.rs (parse_rollback_command,
-// parse_voice_command, parse_goal_command, /think-матчинг). Пример voice_spec:
-fn voice_spec() -> CommandSpec {
-    CommandSpec {
-        name: "voice".into(), aliases: vec![], description: String::new(),
-        category: CommandCategory::Media, scope: CommandScope::Both,
-        args: vec![CommandArg {
-            name: "mode".into(), description: "on|off|status".into(),
-            arg_type: ArgType::String, required: false,
-            choices: Some(Choices::Static { values: ["on","off","status"].iter()
-                .map(|v| Choice { value: v.to_string(), label: v.to_string() }).collect() }),
-            capture_remaining: false, menu: true,
-        }],
-        visibility: Visibility::All, source: CommandSourceKind::Builtin,
-    }
-}
-
-fn compact_spec() -> CommandSpec { simple("compact", CommandCategory::Session, Visibility::All) }
-fn rollback_spec() -> CommandSpec {
-    let mut c = simple("rollback", CommandCategory::Management, Visibility::BaseOnly);
-    c.args = vec![CommandArg { name: "action".into(), description: "list|N|diff N|N file <path>".into(),
-        arg_type: ArgType::String, required: false, choices: None, capture_remaining: true, menu: false }];
-    c
-}
-fn model_spec() -> CommandSpec {
-    let mut c = simple("model", CommandCategory::Options, Visibility::All);
-    c.args = vec![CommandArg { name: "model".into(), description: "provider/model|reset|status".into(),
-        arg_type: ArgType::String, required: false,
-        choices: Some(Choices::Dynamic { provider: "models".into() }), capture_remaining: false, menu: false }];
-    c
-}
-fn memory_spec() -> CommandSpec {
-    let mut c = simple("memory", CommandCategory::Status, Visibility::All);
-    c.args = vec![CommandArg { name: "query".into(), description: "search query".into(),
-        arg_type: ArgType::String, required: false, choices: None, capture_remaining: true, menu: false }];
-    c
-}
-fn goal_spec() -> CommandSpec {
-    let mut c = simple("goal", CommandCategory::Management, Visibility::BaseOnly);
-    c.args = vec![CommandArg { name: "text".into(), description: "goal | status | pause | resume | clear".into(),
-        arg_type: ArgType::String, required: false, choices: None, capture_remaining: true, menu: false }];
-    c
-}
-fn subgoal_spec() -> CommandSpec {
-    let mut c = simple("subgoal", CommandCategory::Management, Visibility::BaseOnly);
-    c.args = vec![CommandArg { name: "action".into(), description: "add <t> | list | remove <n>".into(),
-        arg_type: ArgType::String, required: false, choices: None, capture_remaining: true, menu: false }];
-    c
 }
 ```
 
 - [ ] **Step 4: Прогнать — зелёные**
 
 Run: `cargo test -p opex-core commands::builtin -- --nocapture`
-Expected: PASS (2 теста).
+Expected: PASS (3 теста).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add crates/opex-core/src/agent/commands/builtin.rs
-git commit -m "feat(commands): BuiltinCommandSource descriptors for 14 slash commands"
+git commit -m "feat(commands): BuiltinCommandSource descriptors for 14 slash commands (all visible)"
 ```
 
 ---
 
-## Task 4: Диспетчер через реестр + `CommandOutcome` (паритет)
+## Task 4: `CommandOutcome`-контракт (паритет) + гард дрейфа
 
 **Files:**
-- Modify: `crates/opex-core/src/agent/pipeline/commands.rs` (тела остаются; вход становится диспетчером; тип возврата → `CommandOutcome`)
-- Modify: `crates/opex-core/src/agent/engine/context_builder.rs:170-196`
-- Modify: `crates/opex-core/src/agent/pipeline/bootstrap.rs:29,351-354`
-- Modify: `crates/opex-core/src/agent/engine/run.rs:172-207,394-417,574+`
-- Test: инлайн в `commands.rs` (паритет + резолв неизвестной → None)
+- Modify: `crates/opex-core/src/agent/pipeline/commands.rs` (тип успеха `String` → `CommandOutcome::Text`; `const DISPATCH_NAMES` + drift-тест)
+- Modify: `crates/opex-core/src/agent/engine/context_builder.rs:170`
+- Modify: `crates/opex-core/src/agent/pipeline/bootstrap.rs:29`
+- Modify: `crates/opex-core/src/agent/engine/run.rs:172,394,574`
+- Test: инлайн в `commands.rs` (drift-гард)
 
 **Interfaces:**
-- Consumes: `CommandRegistry` (Task 2), `CommandOutcome` (Task 1).
+- Consumes: `CommandOutcome` (Task 1), `BUILTIN_NAMES` (Task 3).
 - Produces:
-  - `commands::handle_command(...) -> Option<Result<CommandOutcome>>` (сигнатура сохраняется, меняется только тип успеха: `String` → `CommandOutcome`).
-  - `AgentEngine::handle_command(...) -> Option<Result<CommandOutcome>>`.
+  - `commands::handle_command(...) -> Option<Result<CommandOutcome>>`
+  - `AgentEngine::handle_command(...) -> Option<Result<CommandOutcome>>`
+  - `const DISPATCH_NAMES: &[&str]` в `commands.rs` — имена, реально обрабатываемые `match` (без ведущего `/`).
 
-**Ключевая идея:** существующий `match command { ... }` В САМИХ ТЕЛАХ не трогаем. Меняем только: (1) каждая ветка теперь возвращает `Some(Ok(CommandOutcome::Text(...)))` вместо `Some(Ok(String))`; (2) перед `match` можно добавить ранний резолв по реестру для отклонения неизвестных `/xxx` (сегодня это делает `_ => None`). Реестр в Фазе 1 используется как источник метаданных и валидатор; диспетч остаётся `match`, чтобы гарантировать паритет. `/help` и `/commands` — см. Task 5.
+**Ключевая идея:** тела `match` НЕ трогаем — меняем только тип возврата (`Some(Ok(String))` → `Some(Ok(CommandOutcome::Text(String)))`). `/help` остаётся как есть (возвращает `s.help_text`). Диспетч остаётся `match`; реестр в Фазе 1 не исполняет. **P4:** drift-гард сверяет `DISPATCH_NAMES` (стороны `match`) с `BUILTIN_NAMES` (реестр) — рассинхрон ловится тестом.
 
-- [ ] **Step 1: Написать тест: возврат `CommandOutcome::Text`, неизвестная → None**
+- [ ] **Step 1: Написать drift-гард тест**
 
-Дополнить `#[cfg(test)] mod tests` в `commands.rs`:
+В `#[cfg(test)] mod tests` в `commands.rs`:
 
 ```rust
 #[test]
-fn unknown_command_returns_none_via_prefix() {
-    // /foobar не в реестре → None (текущее поведение _ => None сохранено)
-    // (юнит на уровне match; интеграцию с реестром проверяет тест ниже)
-    assert!("/foobar".starts_with('/'));
+fn dispatch_names_match_registry_builtins() {
+    use crate::agent::commands::builtin::BUILTIN_NAMES;
+    let mut dispatch: Vec<&str> = super::DISPATCH_NAMES.to_vec();
+    let mut builtin: Vec<&str> = BUILTIN_NAMES.to_vec();
+    dispatch.sort_unstable();
+    builtin.sort_unstable();
+    assert_eq!(dispatch, builtin,
+        "match-диспетч и BUILTIN_NAMES разъехались — обновите обе стороны");
 }
 ```
 
-**Примечание:** глубокий паритет каждой ветки покрывается существующими тестами (`rollback_parse`, `goal_and_subgoal_parsers`, `parse_voice_command_maps_args`) — они остаются зелёными без изменений. Тип возврата меняется механически.
+- [ ] **Step 2: Прогнать — падает (DISPATCH_NAMES не определён)**
 
-- [ ] **Step 2: Прогнать существующие тесты — зафиксировать зелёный базлайн**
+Run: `cargo test -p opex-core commands::pipeline commands::tests::dispatch_names -- --nocapture`
+(либо `cargo test -p opex-core dispatch_names_match_registry`)
+Expected: FAIL.
 
-Run: `cargo test -p opex-core commands:: -- --nocapture`
-Expected: PASS (текущие тесты парсеров).
-
-- [ ] **Step 3: Заменить тип возврата на `CommandOutcome` во всех ветках**
+- [ ] **Step 3: Добавить `DISPATCH_NAMES` + сменить тип возврата**
 
 В `commands.rs`:
-1. Сигнатуру `handle_command<F, Fut>(...) -> Option<Result<String>>` → `-> Option<Result<CommandOutcome>>` (импорт `use super::super::commands::spec::CommandOutcome;` или корректный путь `crate::agent::commands::spec::CommandOutcome`).
-2. Каждый `Some(Ok(x))`, где `x: String`, обернуть: `Some(Ok(CommandOutcome::Text(x)))`. Для веток, возвращающих `return Some(Ok(...))` внутри — так же. `Some(Err(e))` и `None` не трогаем.
 
-Механическая замена (пример для `/status`):
+1. Рядом с `handle_command` добавить:
+   ```rust
+   /// Имена, реально обрабатываемые `match` в `handle_command` (без ведущего `/`).
+   /// Держать синхронно с ветками ниже; drift-гард-тест сверяет с BUILTIN_NAMES.
+   pub const DISPATCH_NAMES: &[&str] = &[
+       "status", "new", "reset", "compact", "rollback", "model", "think",
+       "voice", "usage", "export", "help", "memory", "goal", "subgoal",
+   ];
+   ```
+2. Импорт: `use crate::agent::commands::spec::CommandOutcome;`
+3. Сигнатура: `-> Option<Result<String>>` → `-> Option<Result<CommandOutcome>>`.
+4. Механически обернуть каждый успех: `Some(Ok(x))` где `x: String` → `Some(Ok(CommandOutcome::Text(x)))`; аналогично для `return Some(Ok(...))` внутри веток. `Some(Err(_))`, `None`, `_ => None` — не трогать.
 
+Пример (`/status`):
 ```rust
 Some(Ok(CommandOutcome::Text(
-    localization::fmt(s.status_format, &[/* … */])
+    localization::fmt(s.status_format, &[/* … без изменений */])
 )))
 ```
 
-- [ ] **Step 4: Обновить обёртку в `context_builder.rs`**
+- [ ] **Step 4: Обновить обёртку `context_builder.rs:170`**
 
-Строка 170: `-> Option<Result<String>>` → `-> Option<Result<CommandOutcome>>` (импорт типа). Тело не меняется — делегирует в `commands::handle_command`.
+`-> Option<Result<String>>` → `-> Option<Result<CommandOutcome>>` (+ импорт типа). Тело не меняется.
 
-- [ ] **Step 5: Обновить `BootstrapOutcome` и вызов в `bootstrap.rs`**
+- [ ] **Step 5: Обновить `BootstrapOutcome` `bootstrap.rs:29`**
 
-Строка 29: `pub command_output: Option<String>,` → `pub command_output: Option<CommandOutcome>,` (импорт `use crate::agent::commands::spec::CommandOutcome;`). Строки 351-354 — без изменений по форме (`Some(result) => Some(result?)`), т.к. `result?` теперь даёт `CommandOutcome`.
+`pub command_output: Option<String>,` → `pub command_output: Option<CommandOutcome>,` (+ `use crate::agent::commands::spec::CommandOutcome;`). Строки 351-354 (`Some(result) => Some(result?)`) не меняются.
 
-- [ ] **Step 6: Обновить ранний выход в `run.rs` (3 места: SSE, каналы, chunk)**
+- [ ] **Step 6: Обновить три early-exit блока `run.rs` (172, 394, 574)**
 
-В каждом блоке `if let Some(text) = command_output.take()` заменить на разбор `CommandOutcome`:
+В КАЖДОМ из трёх блоков `if let Some(text) = command_output.take() { … }` заменить связывание:
 
 ```rust
 if let Some(outcome) = command_output.take() {
     let text = match outcome {
         CommandOutcome::Text(t) => t,
-        CommandOutcome::Menu { card } => {
-            // Фаза 1: Menu не порождается builtin-командами; безопасный фолбэк —
-            // сериализовать карту как текст. Реальную эмиссию RichCard добавит Фаза 2.
-            card.to_string()
-        }
+        // Фаза 1: builtin-команды не порождают Menu; безопасный фолбэк.
+        // Реальную RichCard-эмиссию добавит Фаза 2.
+        CommandOutcome::Menu { card } => card.to_string(),
     };
-    // …далее существующий код: MessageStart → TextDelta(text) → Finish → finalize
+    // …остальной код блока без изменений (использует `text`)
 }
 ```
 
-Импортировать `use crate::agent::commands::spec::CommandOutcome;` в `run.rs`.
+Импорт `use crate::agent::commands::spec::CommandOutcome;` в `run.rs`.
 
-- [ ] **Step 7: Собрать + прогнать все тесты команд**
+- [ ] **Step 7: Собрать + все тесты команд**
 
 Run: `cargo test -p opex-core commands:: -- --nocapture && cargo check -p opex-core --all-targets`
-Expected: PASS + чистая компиляция.
+Expected: PASS (включая drift-гард и существующие парсер-тесты) + чистая компиляция.
 
 - [ ] **Step 8: Commit**
 
 ```bash
 git add crates/opex-core/src/agent/pipeline/commands.rs crates/opex-core/src/agent/engine/context_builder.rs crates/opex-core/src/agent/pipeline/bootstrap.rs crates/opex-core/src/agent/engine/run.rs
-git commit -m "refactor(commands): CommandOutcome contract (Text|Menu) end-to-end, parity preserved"
+git commit -m "refactor(commands): CommandOutcome contract + registry/dispatch drift guard, parity preserved"
 ```
 
 ---
 
-## Task 5: `/help` и `/commands` из реестра + регистрация реестра в `AppState`
-
-**Files:**
-- Modify: `crates/opex-core/src/gateway/state.rs` (`AppState` + конструктор) — добавить `command_registry: Arc<CommandRegistry>`
-- Modify: `crates/opex-core/src/agent/pipeline/commands.rs` (`/help`, `/commands` генерируются)
-- Modify: `crates/opex-core/src/agent/commands/spec.rs` — `fn render_help(specs: &[&CommandSpec], lang: &str) -> String`
-- Test: инлайн в `spec.rs` (рендер help не пустой, содержит имена)
-
-**Interfaces:**
-- Consumes: `CommandRegistry`, `CommandSpec`.
-- Produces:
-  - `AppState.command_registry: Arc<CommandRegistry>` (единожды строится при старте из `&[&BuiltinCommandSource]`).
-  - `fn render_help(specs: &[&CommandSpec], lang: &str) -> String` — сгруппированный по категориям список.
-  - `CommandContext` получает поле `command_registry: &'a CommandRegistry` (для `/help`, `/commands`).
-
-- [ ] **Step 1: Тест рендера help**
-
-В `spec.rs` тесты:
-
-```rust
-#[test]
-fn help_lists_visible_commands_grouped() {
-    let specs = vec![
-        CommandSpec { name: "status".into(), aliases: vec![], description: "Show status".into(),
-            category: CommandCategory::Status, scope: CommandScope::Both, args: vec![],
-            visibility: Visibility::All, source: CommandSourceKind::Builtin },
-    ];
-    let refs: Vec<&CommandSpec> = specs.iter().collect();
-    let out = render_help(&refs, "en");
-    assert!(out.contains("/status"));
-    assert!(out.contains("Show status"));
-}
-```
-
-- [ ] **Step 2: Прогнать — падает**
-
-Run: `cargo test -p opex-core commands::spec::tests::help -- --nocapture`
-Expected: FAIL — `render_help` не определён.
-
-- [ ] **Step 3: Реализовать `render_help`**
-
-В `spec.rs`:
-
-```rust
-pub fn render_help(specs: &[&CommandSpec], _lang: &str) -> String {
-    let mut out = String::from("Команды:\n");
-    let cats = [
-        (CommandCategory::Session, "Сессия"),
-        (CommandCategory::Options, "Опции"),
-        (CommandCategory::Status, "Статус"),
-        (CommandCategory::Management, "Управление"),
-        (CommandCategory::Media, "Медиа"),
-        (CommandCategory::Tools, "Инструменты"),
-    ];
-    for (cat, title) in cats {
-        let group: Vec<&&CommandSpec> = specs.iter().filter(|c| c.category == cat).collect();
-        if group.is_empty() { continue; }
-        out.push_str(&format!("\n{title}:\n"));
-        for c in group {
-            let args = if c.args.is_empty() { String::new() }
-                else { format!(" {}", c.args.iter().map(|a| format!("<{}>", a.name)).collect::<Vec<_>>().join(" ")) };
-            out.push_str(&format!("  /{}{} — {}\n", c.name, args, c.description));
-        }
-    }
-    out
-}
-```
-
-Добавить `PartialEq` в derive `CommandCategory` (для `filter`).
-
-- [ ] **Step 4: Прогнать — зелёный**
-
-Run: `cargo test -p opex-core commands::spec::tests::help -- --nocapture`
-Expected: PASS.
-
-- [ ] **Step 5: Подключить реестр в `AppState` + `CommandContext`, заменить `/help` и `/commands`**
-
-1. В `state.rs`: поле `pub command_registry: std::sync::Arc<crate::agent::commands::registry::CommandRegistry>` + в конструкторе `AppState`:
-   ```rust
-   let command_registry = std::sync::Arc::new(
-       crate::agent::commands::registry::CommandRegistry::from_sources(
-           &[&crate::agent::commands::builtin::BuiltinCommandSource]
-       ).expect("builtin command registry must validate")
-   );
-   ```
-2. В `CommandContext` добавить `pub command_registry: &'a crate::agent::commands::registry::CommandRegistry,` и прокинуть его в `context_builder.rs::handle_command` из `self.state()`/`AppState` (реестр доступен через engine cfg/state; если нет — прокинуть `Arc` в `EngineConfig`).
-3. Ветку `"/help"` заменить:
-   ```rust
-   "/help" | "/commands" => {
-       let is_base = /* агент base? из ctx или cfg */ false;
-       let visible = ctx.command_registry.visible_for(is_base);
-       Some(Ok(CommandOutcome::Text(
-           crate::agent::commands::spec::render_help(&visible, ctx.agent_language)
-       )))
-   }
-   ```
-   (флаг base — из `cfg().agent.base`, прокинуть в `CommandContext` как `is_base: bool`.)
-
-- [ ] **Step 6: Собрать + тесты**
-
-Run: `cargo check -p opex-core --all-targets && cargo test -p opex-core commands:: -- --nocapture`
-Expected: чисто + PASS.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add crates/opex-core/src/gateway/state.rs crates/opex-core/src/agent/commands/spec.rs crates/opex-core/src/agent/pipeline/commands.rs crates/opex-core/src/agent/engine/context_builder.rs
-git commit -m "feat(commands): registry-generated /help + /commands, registry in AppState"
-```
-
----
-
-## Task 6: `GET /api/commands` эндпоинт
+## Task 5: `GET /api/commands` эндпоинт
 
 **Files:**
 - Create: `crates/opex-core/src/gateway/handlers/commands.rs`
-- Modify: `crates/opex-core/src/gateway/handlers/mod.rs` (`.merge(commands::routes())`)
-- Test: инлайн — сериализация spec в JSON стабильна
+- Modify: `crates/opex-core/src/gateway/handlers/mod.rs` (`mod commands;` + `.merge(commands::routes())`)
+- Test: инлайн — сериализация реестра в JSON
 
 **Interfaces:**
-- Consumes: `AppState.command_registry`.
+- Consumes: синглтон `COMMAND_REGISTRY` (Task 1).
 - Produces:
-  - `pub(crate) fn routes() -> Router<AppState>` с `GET /api/commands`.
-  - Query: `?agent=<name>&lang=<L>&scope=<text|native|both>` (все опциональны).
-  - Ответ: `{ "commands": [CommandSpec…], "version": "<etag>" }` (F8: version = hash списка).
+  - `pub(crate) fn routes() -> Router<AppState>` c `GET /api/commands`.
+  - Query: `?scope=<text|native|both>` (опционально; в Фазе 1 фильтр по scope, без per-agent — все команды `All`).
+  - Ответ: `{ "commands": [CommandSpec…], "version": "<n>" }`.
 
-- [ ] **Step 1: Тест сериализации CommandSpec**
+> **P3/P1:** per-agent-фильтр (`agent`/`is_base`) в Фазе 1 не нужен — все команды `Visibility::All`. Параметр `agent` принимается, но игнорируется (совместимость с UI-хуком). Реестр — из синглтона, не из `AppState`.
 
-В `commands.rs` (handler) инлайн-тест:
+- [ ] **Step 1: Тест сериализации**
+
+`crates/opex-core/src/gateway/handlers/commands.rs`:
 
 ```rust
 #[cfg(test)]
 mod tests {
-    use crate::agent::commands::{builtin::BuiltinCommandSource, registry::CommandRegistry};
-
     #[test]
     fn commands_serialize_to_json_array() {
-        let reg = CommandRegistry::from_sources(&[&BuiltinCommandSource]).unwrap();
+        let reg = &*crate::agent::commands::COMMAND_REGISTRY;
         let json = serde_json::to_value(reg.all()).unwrap();
         assert!(json.as_array().unwrap().len() >= 14);
         assert!(json[0].get("name").is_some());
@@ -772,42 +665,37 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Прогнать — падает (или компилится но модуля routes нет)**
+- [ ] **Step 2: Прогнать — падает (модуль/тест не найден)**
 
 Run: `cargo test -p opex-core gateway::handlers::commands -- --nocapture`
-Expected: FAIL — модуль/тест не найден.
+Expected: FAIL.
 
 - [ ] **Step 3: Реализовать handler**
 
 `crates/opex-core/src/gateway/handlers/commands.rs`:
 
 ```rust
-use axum::{extract::{Query, State}, response::IntoResponse, routing::get, Json, Router};
+use axum::{extract::Query, response::IntoResponse, routing::get, Json, Router};
 use serde::Deserialize;
+use crate::agent::commands::spec::CommandScope;
 use crate::gateway::state::AppState;
 
 #[derive(Deserialize)]
 struct CommandsQuery {
-    agent: Option<String>,
+    #[allow(dead_code)] agent: Option<String>,
     #[allow(dead_code)] lang: Option<String>,
     scope: Option<String>,
 }
 
-async fn list_commands(State(state): State<AppState>, Query(q): Query<CommandsQuery>) -> impl IntoResponse {
-    // Видимость: base-агент → все; иначе только Visibility::All.
-    let is_base = q.agent.as_deref()
-        .map(|a| state.agent_is_base(a))   // helper на AppState; вернуть false если неизвестен
-        .unwrap_or(false);
-    let mut specs = state.command_registry.visible_for(is_base);
-    if let Some(scope) = q.scope.as_deref() {
-        if scope == "native" {
-            specs.retain(|c| matches!(c.scope,
-                crate::agent::commands::spec::CommandScope::Native | crate::agent::commands::spec::CommandScope::Both));
-        }
+async fn list_commands(Query(q): Query<CommandsQuery>) -> impl IntoResponse {
+    let reg = &*crate::agent::commands::COMMAND_REGISTRY;
+    // Фаза 1: все команды Visibility::All → visible_for(false) == все.
+    let mut specs = reg.visible_for(false);
+    if q.scope.as_deref() == Some("native") {
+        specs.retain(|c| matches!(c.scope, CommandScope::Native | CommandScope::Both));
     }
-    let body: Vec<&crate::agent::commands::spec::CommandSpec> = specs;
-    let version = format!("{:x}", body.len()); // F8: простой version-tag (уточнить hash в Фазе 2)
-    Json(serde_json::json!({ "commands": body, "version": version }))
+    let version = specs.len().to_string(); // F8: простой version-tag; ETag-версия — Фаза 2
+    Json(serde_json::json!({ "commands": specs, "version": version }))
 }
 
 pub(crate) fn routes() -> Router<AppState> {
@@ -815,42 +703,42 @@ pub(crate) fn routes() -> Router<AppState> {
 }
 ```
 
-Добавить в `state.rs` helper `pub fn agent_is_base(&self, name: &str) -> bool` (по загруженным агентам). Auth: `/api/commands` под общим auth-middleware (как остальной `/api/*`), отдельной настройки не требует.
+В `handlers/mod.rs`: `mod commands;` + в композиции роутера `.merge(commands::routes())`. Auth: `/api/commands` попадает под общий auth-middleware `/api/*` (как остальные), отдельной настройки не требует.
 
-В `handlers/mod.rs` — `.merge(commands::routes())` и `mod commands;`.
-
-- [ ] **Step 4: Прогнать — зелёный + curl-smoke на сервере после деплоя**
+- [ ] **Step 4: Прогнать — зелёный + curl-smoke после деплоя**
 
 Run: `cargo test -p opex-core gateway::handlers::commands -- --nocapture`
 Expected: PASS.
-После деплоя: `curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:18789/api/commands | jq '.commands | length'` → ≥14.
+После деплоя: `curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:18789/api/commands | jq '.commands | length'` → 14.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/opex-core/src/gateway/handlers/commands.rs crates/opex-core/src/gateway/handlers/mod.rs crates/opex-core/src/gateway/state.rs
-git commit -m "feat(api): GET /api/commands returns per-agent visible command list"
+git add crates/opex-core/src/gateway/handlers/commands.rs crates/opex-core/src/gateway/handlers/mod.rs
+git commit -m "feat(api): GET /api/commands returns the command registry"
 ```
 
 ---
 
-## Task 7: Web-автодополнение `/` в композере
+## Task 6: Web-автодополнение `/` в композере
 
 **Files:**
 - Create: `ui/src/hooks/use-commands.ts`
 - Create: `ui/src/components/chat/command-autocomplete.tsx`
-- Modify: композер (найти по `ui/src/components/chat/` — компонент с `textarea`/`Composer`)
+- Create: `ui/src/components/chat/command-autocomplete.test.tsx`
+- Modify: композер (компонент с `textarea` в `ui/src/components/chat/`)
 - Modify: `ui/src/types/api.ts` (тип `CommandInfo`)
-- Test: `ui/src/components/chat/command-autocomplete.test.tsx` (vitest)
 
 **Interfaces:**
-- Consumes: `GET /api/commands`.
+- Consumes: `GET /api/commands`, хелпер `apiGet<T>` из `@/lib/api` (P5).
 - Produces:
-  - `useCommands(agent: string): { data: CommandInfo[] }`
-  - `<CommandAutocomplete input={string} agent={string} onPick={(name:string)=>void} />`
+  - `useCommands(agent: string): { data?: CommandInfo[] }`
+  - `<CommandAutocomplete input={string} commands={CommandInfo[]} onPick={(name:string)=>void} />`
   - `interface CommandInfo { name, description, category, aliases, args }` в `types/api.ts`.
 
-- [ ] **Step 1: Написать падающий тест компонента (vitest — ТОЛЬКО из `ui/`)**
+> **Vitest-готча:** запускать **только из `ui/`** (не из корня репо).
+
+- [ ] **Step 1: Написать падающий тест компонента**
 
 `ui/src/components/chat/command-autocomplete.test.tsx`:
 
@@ -866,7 +754,7 @@ const cmds = [
 it("filters commands by prefix after slash", () => {
   render(<CommandAutocomplete input="/sum" commands={cmds} onPick={() => {}} />);
   expect(screen.getByText(/summarize_video/)).toBeInTheDocument();
-  expect(screen.queryByText(/^\/?status/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/status/)).not.toBeInTheDocument();
 });
 
 it("renders nothing without leading slash", () => {
@@ -880,9 +768,9 @@ it("renders nothing without leading slash", () => {
 Run (из `ui/`): `npm test -- command-autocomplete`
 Expected: FAIL — компонент не существует.
 
-- [ ] **Step 3: Реализовать компонент + хук + тип**
+- [ ] **Step 3: Реализовать тип + хук + компонент**
 
-`ui/src/types/api.ts` — добавить:
+`ui/src/types/api.ts` — добавить (hand-mirror gateway-DTO, как `AgentInfo`; ts-rs не участвует):
 
 ```ts
 export interface CommandArgInfo { name: string; description?: string; required?: boolean; }
@@ -892,19 +780,18 @@ export interface CommandInfo {
 }
 ```
 
-`ui/src/hooks/use-commands.ts`:
+`ui/src/hooks/use-commands.ts` (P5 — `apiGet<T>` возвращает распарсенный `T`):
 
 ```ts
 import { useQuery } from "@tanstack/react-query";
-import { apiFetch } from "@/lib/api";
+import { apiGet } from "@/lib/api";
 import type { CommandInfo } from "@/types/api";
 
 export function useCommands(agent: string) {
   return useQuery({
     queryKey: ["commands", agent],
     queryFn: async (): Promise<CommandInfo[]> => {
-      const r = await apiFetch(`/api/commands?agent=${encodeURIComponent(agent)}`);
-      const j = await r.json();
+      const j = await apiGet<{ commands: CommandInfo[] }>(`/api/commands?agent=${encodeURIComponent(agent)}`);
       return j.commands ?? [];
     },
     staleTime: 60_000,
@@ -953,12 +840,12 @@ Expected: PASS (2 теста).
 
 - [ ] **Step 5: Интегрировать в композер**
 
-В компоненте композера: подключить `useCommands(agent)`, обернуть `textarea` в `relative`-контейнер, рендерить `<CommandAutocomplete input={draft} commands={data ?? []} onPick={(n)=>setDraft(`/${n} `)} />`. Стрелки/Enter — опционально (клик достаточно для Фазы 1).
+В компоненте композера: `const { data } = useCommands(agent);`, обернуть `textarea` в `relative`-контейнер, рендерить `<CommandAutocomplete input={draft} commands={data ?? []} onPick={(n) => setDraft(`/${n} `)} />`. Клавиатурная навигация — опционально (клик достаточно для Фазы 1).
 
 - [ ] **Step 6: Билд UI**
 
 Run (из `ui/`): `npm run build`
-Expected: успешная сборка, без TS-ошибок.
+Expected: сборка без TS-ошибок.
 
 - [ ] **Step 7: Commit**
 
@@ -969,14 +856,14 @@ git commit -m "feat(ui): slash-command autocomplete in chat composer"
 
 ---
 
-## Task 8: Интеграция, деплой, E2E-паритет
+## Task 7: Интеграция, деплой, E2E-паритет
 
 **Files:** нет новых — сборка/деплой/проверка.
 
-- [ ] **Step 1: Полная сборка ядра + воркспейс-тесты (сервер)**
+- [ ] **Step 1: Воркспейс-тесты + gen-types drift (P7)**
 
-Run: `make remote-build` (или на сервере `cargo test --workspace`)
-Expected: сборка ок; тесты зелёные (кроме DB-тестов без PG — ожидаемо).
+Run (сервер): `cargo test --workspace` и `make gen-types` (проверить, что рабочее дерево чисто — `CommandSpec` не деривит `TS`, drift быть не должно).
+Expected: тесты зелёные (DB-тесты без PG падают ожидаемо — гонять `make test-db` при наличии PG); `git status` после `gen-types` — без изменений.
 
 - [ ] **Step 2: Деплой**
 
@@ -985,20 +872,20 @@ Expected: атомарный своп + рестарт; `make doctor` зелён
 
 - [ ] **Step 3: E2E-паритет 14 команд (Telegram + web)**
 
-Проверить вручную/скриптом каждую: `/status`, `/new`, `/reset`, `/compact`, `/rollback`, `/model`, `/think medium`, `/voice status`, `/usage`, `/export`, `/help`, `/memory`, `/goal`, `/subgoal list`.
-Expected: вывод идентичен до-рефактору; `/help` теперь генерируется из реестра (список сгруппирован по категориям).
+Прогнать каждую: `/status`, `/new`, `/reset`, `/compact`, `/rollback`, `/model`, `/think medium`, `/voice status`, `/usage`, `/export`, `/help`, `/memory`, `/goal`, `/subgoal list`.
+Expected: вывод **идентичен** до-рефактору (включая локализованный `/help` — он не менялся). Это же покрывает drift-гард на живых данных.
 
 - [ ] **Step 4: E2E автодополнения**
 
-В web-чате ввести `/` → появляется список; `/st` → фильтрует до `/status`; клик подставляет `/status `.
+В web-чате ввести `/` → список; `/st` → фильтр до `/status`; клик подставляет `/status `.
 Expected: работает.
 
 - [ ] **Step 5: `/api/commands` smoke**
 
-Run: `curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:18789/api/commands?agent=<base>" | jq '.commands|length'`
-Expected: ≥14; для non-base агента `/goal`,`/subgoal`,`/rollback` отсутствуют.
+Run: `curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:18789/api/commands" | jq '.commands|length'`
+Expected: 14. `?scope=native` — тоже 14 (все `Both`).
 
-- [ ] **Step 6: Финальный коммит-маркер фазы**
+- [ ] **Step 6: Маркер завершения Фазы 1**
 
 ```bash
 git commit --allow-empty -m "chore(commands): Phase 1 complete — registry + builtins + /api/commands + web autocomplete"
@@ -1008,18 +895,21 @@ git commit --allow-empty -m "chore(commands): Phase 1 complete — registry + bu
 
 ## Фаза 2 и Фаза 3 (task-level outline — детальный под-план перед исполнением)
 
-Интерфейсы Фазы 1 (`CommandSpec`, `CommandRegistry`, `CommandSource`, `CommandOutcome`, `/api/commands`) затвердевают в Фазе 1; детальные bite-sized под-планы Фаз 2–3 пишутся отдельно перед их запуском.
+Интерфейсы Фазы 1 (`CommandSpec`, `CommandRegistry`, `CommandSource`, `CommandOutcome`, `/api/commands`) затвердевают в Фазе 1; детальные bite-sized под-планы Фаз 2–3 пишутся отдельно.
 
-**Фаза 2 — handlers-as-commands + меню (задачи):**
-1. `HandlerCommandSource` — деривация `CommandSpec` из `HandlerRegistry` (имя=id, arg `source`, валвсы→арги, `<command>`-оверрайд). Приоритет builtin, отброс конфликтных алиасов.
-2. Резолв источника: арг → `msg.attachments` → джойн `uploads`↔`messages` (F4) → argsMenu.
-3. Диспетч handler-команды → `insert_handler_job` + трастовый гейт `match_buttons`/`match_url_handlers` (F6 SSRF/allowlist).
-4. `CommandOutcome::Menu` эмиссия в `run.rs` через `StreamEvent::RichCard`; card-type `command_args_menu` в [sink.rs:144](../../crates/opex-core/src/agent/pipeline/sink.rs) + web `card-registry.tsx` (F1, F7).
-5. Обобщённый run-эндпоинт (`/api/files/menu-run` → команды) + Telegram inline-callback `(command, arg, value)`.
-6. Telegram `setMyCommands` из `GET /api/commands?scope=native` после handshake; удаление статического списка [telegram.ts:200](../../channels/src/drivers/telegram.ts); выпил channel-side `cmd*`-строк (F2, F5).
-7. Версионирование `/api/commands` по ETag `HandlerRegistry` (F8).
+**Фаза 2 — handlers-as-commands + меню + локализованный `/help`:**
+1. **Проводка динамического реестра.** `LazyLock`-синглтон Фазы 1 расширяется до реестра, знающего о `HandlerRegistry`. Диспетч handler-команд в bootstrap достаёт `toolgate_url`/`http_client`/`db` тем же путём, что тул `file_handler` (через `ToolDeps`-подобные зависимости) — движок сам их не держит.
+2. `HandlerCommandSource` — деривация из манифестов (имя=id, arg `source`, валвсы→арги, `<command>`-оверрайд). Приоритет builtin; конфликтные алиасы отбрасываются.
+3. Резолв источника: арг → `msg.attachments` → джойн `uploads`↔`messages` (F4) → argsMenu.
+4. Диспетч handler-команды → `insert_handler_job` + трастовый гейт `match_buttons`/`match_url_handlers` (F6).
+5. `CommandOutcome::Menu` эмиссия через `StreamEvent::RichCard` в трёх блоках `run.rs`; card-type `command_args_menu` в [sink.rs:144](../../crates/opex-core/src/agent/pipeline/sink.rs) + web `card-registry.tsx` (F1, F7).
+6. **Регенерация `/help` + новый `/commands` из реестра, локализованные** (перенос описаний builtin в `localization`; заголовки категорий из `get_strings(lang)`) — то, что отложено из Фазы 1 (P2).
+7. Обобщённый run-эндпоинт (`/api/files/menu-run` → команды) + Telegram inline-callback `(command, arg, value)`.
+8. Telegram `setMyCommands` из `GET /api/commands?scope=native` после handshake; удаление статического списка [telegram.ts:200](../../channels/src/drivers/telegram.ts); выпил channel-side `cmd*`-строк (F2, F5).
+9. Per-agent видимость + возможный base-гейтинг команд (enforce в диспетче через реестр) — если решим вводить (P3 отложено).
+10. Версионирование `/api/commands` по ETag `HandlerRegistry` (F8).
 
-**Фаза 3 — Discord (задачи):**
+**Фаза 3 — Discord:**
 1. Регистрация application-commands при старте адаптера (F10 — greenfield).
 2. `interactionCreate` → ack/deferReply → трансляция в inbound `/cmd args` → тот же диспетчер.
 3. Типизированные options + choices из `CommandSpec.args`.
@@ -1028,6 +918,7 @@ git commit --allow-empty -m "chore(commands): Phase 1 complete — registry + bu
 
 ## Self-Review (Фаза 1)
 
-- **Покрытие спека (Фаза 1):** реестр+валидация (Task 1-2 ✓), builtins (Task 3 ✓), `CommandOutcome`-контракт F1 (Task 4 ✓), `/help`/`/commands` из реестра (Task 5 ✓), `/api/commands` + видимость + F8-version (Task 6 ✓), web-автодополнение (Task 7 ✓), native-name-санитайзер F3 (Task 1 ✓), паритет E2E (Task 8 ✓). F2/F4/F5/F6/F7/F10 — Фаза 2/3 (явно вынесены).
-- **Плейсхолдеры:** дескрипторы 10 из 14 builtins в Task 3 заданы по образцу (`compact/rollback/model/voice/memory/goal/subgoal` показаны полностью; `usage/export/status/new/reset/help` — через `simple(...)`) — не плейсхолдер, а явный шаблон с готовыми примерами каждой формы (с choices, с capture_remaining, простые).
-- **Согласованность типов:** `CommandOutcome`, `CommandSpec`, `visible_for`, `resolve`, `from_sources`, `render_help`, `sanitize_native_name` — имена совпадают между Task 1→7.
+- **Покрытие спека (Фаза 1):** типы+валидация (Task 1 ✓), реестр+резолв (Task 2 ✓), builtins все-`All` (Task 3 ✓), `CommandOutcome`-контракт F1 + drift-гард P4 (Task 4 ✓), `/api/commands` + scope-фильтр + version F8-базово (Task 5 ✓), web-автодополнение P5 (Task 6 ✓), native-name-санитайзер F3 (Task 1 ✓), паритет E2E + gen-types P7 (Task 7 ✓). Отложено в Фазу 2: регенерация/локализация `/help` (P2), handler-команды, меню (F1-эмиссия), Telegram/Discord (F2/F5/F10), per-agent/base-гейтинг (P3).
+- **Плейсхолдеры:** все 14 дескрипторов в Task 3 заданы полностью (с choices / capture_remaining / простые). Описания — непустые английские (тест это проверяет).
+- **Согласованность типов:** `CommandOutcome`, `CommandSpec`, `visible_for`, `resolve`, `from_sources`, `sanitize_native_name`, `COMMAND_REGISTRY`, `BUILTIN_NAMES`, `DISPATCH_NAMES`, `CommandInfo`/`apiGet` — имена совпадают между задачами.
+- **Ревью-фиксы:** P1 (LazyLock, без правок `AppState`/`EngineConfig`/`CommandContext`) ✓, P2 (`/help` не меняется в Фазе 1) ✓, P3 (все `All`, тест `all_builtins_are_visible_to_everyone`) ✓, P4 (drift-гард) ✓, P5 (`apiGet`) ✓, P6 (`State<AppState>` не нужен — синглтон) ✓, P7 (gen-types проверка в Task 7) ✓.
