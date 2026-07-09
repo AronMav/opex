@@ -232,19 +232,8 @@ async fn update_rolling_summary(
         return;
     }
 
-    // Strip think blocks from summary
-    let new_summary = {
-        let mut s = new_summary;
-        while let Some(start) = s.find("<think>") {
-            if let Some(end) = s.find("</think>") {
-                s = format!("{}{}", &s[..start], &s[end + 8..]);
-            } else {
-                s = s[..start].to_string();
-                break;
-            }
-        }
-        s.trim().to_string()
-    };
+    // Strip think blocks from summary (F001-safe)
+    let new_summary = strip_think_blocks(&new_summary).trim().to_string();
 
     // Delete ALL old summary chunks (limit=10 prevents orphaned duplicates)
     if let Ok(chunks) = memory_store.get(None, Some(&summary_source), 10).await {
@@ -260,21 +249,32 @@ async fn update_rolling_summary(
     }
 }
 
-/// Parse the LLM response into ExtractedKnowledge.
-/// Handles markdown fences, <think> blocks, and partial JSON.
-// reviewed: offsets from find("<think>")/+8 and find('{')/rfind('}') (ASCII) — char boundaries
+/// Remove `<think>...</think>` blocks. The closing tag is searched for only
+/// AFTER the opening tag, so a stray leading `</think>` cannot produce a
+/// non-terminating / unbounded-growth rewrite (F001). Tags are ASCII, so the
+/// byte-offset slices are char-boundary-safe.
 #[allow(clippy::string_slice)]
-fn parse_extraction(content: &str) -> Result<ExtractedKnowledge> {
-    // Strip <think>...</think> blocks
-    let mut cleaned = content.to_string();
-    while let Some(start) = cleaned.find("<think>") {
-        if let Some(end) = cleaned.find("</think>") {
-            cleaned = format!("{}{}", &cleaned[..start], &cleaned[end + 8..]);
+fn strip_think_blocks(input: &str) -> String {
+    let mut s = input.to_string();
+    while let Some(start) = s.find("<think>") {
+        if let Some(rel) = s[start..].find("</think>") {
+            let end = start + rel + "</think>".len();
+            s = format!("{}{}", &s[..start], &s[end..]);
         } else {
-            cleaned = cleaned[..start].to_string();
+            s.truncate(start);
             break;
         }
     }
+    s
+}
+
+/// Parse the LLM response into ExtractedKnowledge.
+/// Handles markdown fences, <think> blocks, and partial JSON.
+// reviewed: find('{')/rfind('}') (ASCII) — char boundaries safe
+#[allow(clippy::string_slice)]
+fn parse_extraction(content: &str) -> Result<ExtractedKnowledge> {
+    // Strip <think>...</think> blocks (F001-safe)
+    let cleaned = strip_think_blocks(content);
 
     // Strip markdown fences
     let cleaned = cleaned
@@ -363,6 +363,17 @@ mod tests {
         let input = "<think>thinking forever... {\"user_facts\":[\"should not parse\"]}";
         // Unclosed think — everything after <think> is stripped
         assert!(parse_extraction(input).is_err());
+    }
+
+    #[test]
+    fn strip_think_blocks_reversed_tags_terminate() {
+        // </think> before <think> must NOT loop forever / grow unbounded (F001).
+        assert_eq!(strip_think_blocks("</think><think>"), "</think>");
+        assert_eq!(strip_think_blocks("a</think>b<think>c</think>d"), "a</think>bd");
+        // well-ordered still works
+        assert_eq!(strip_think_blocks("x<think>secret</think>y"), "xy");
+        // unclosed truncates at the opening tag
+        assert_eq!(strip_think_blocks("keep<think>dropped"), "keep");
     }
 
     #[test]
