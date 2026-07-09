@@ -177,6 +177,27 @@ impl ProcessManager {
         self.spawn_process(name).await
     }
 
+    /// Send `signal` (e.g. "-KILL") to the child's WHOLE process group (F089).
+    /// `process_group(0)` at spawn makes the child a group leader (PGID == PID),
+    /// so `kill <signal> -<pid>` reaches grandchildren (uvicorn workers, adapter
+    /// subprocesses) too — unlike tokio `Child::kill`, which SIGKILLs only the
+    /// direct child PID and orphans grandchildren that keep holding the port.
+    #[cfg(unix)]
+    async fn kill_process_group(child: &mut tokio::process::Child, signal: &str) {
+        if let Some(pid) = child.id() {
+            let _ = tokio::process::Command::new("kill")
+                .args([signal, &format!("-{pid}")])
+                .status()
+                .await;
+        } else {
+            let _ = child.kill().await;
+        }
+    }
+    #[cfg(not(unix))]
+    async fn kill_process_group(child: &mut tokio::process::Child, _signal: &str) {
+        let _ = child.kill().await;
+    }
+
     /// Kill a running process (SIGKILL → wait 3 s).
     pub async fn kill(&self, name: &str) -> anyhow::Result<()> {
         let mut states = self.states.lock().await;
@@ -184,7 +205,8 @@ impl ProcessManager {
             .get_mut(name)
             .ok_or_else(|| anyhow::anyhow!("unknown managed process: {name}"))?;
         if let Some(mut child) = state.child.take() {
-            let _ = child.kill().await;
+            // F089: group-kill so grandchildren die too (restart/health-kill path).
+            Self::kill_process_group(&mut child, "-KILL").await;
             let _ = tokio::time::timeout(Duration::from_secs(3), child.wait()).await;
         }
         Ok(())
@@ -342,7 +364,8 @@ impl ProcessManager {
                 if let Some(ref mut child) = ps.child
                     && child.try_wait().ok().flatten().is_none() {
                         tracing::warn!(process = %name, "force-killing (still running after 5s)");
-                        let _ = child.kill().await;
+                        // F089: SIGKILL the whole group, not just the direct child.
+                        Self::kill_process_group(child, "-KILL").await;
                         // Reap the process to avoid zombies
                         let _ = child.wait().await;
                     }
