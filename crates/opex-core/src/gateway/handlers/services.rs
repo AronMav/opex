@@ -180,6 +180,18 @@ pub(crate) async fn api_service_action(
             "tree", "pwd", "sort", "uniq", "diff", "md5sum", "sha256sum",
             "pip", "pip3", "env", "printenv",
         ];
+        // F125: reject control characters FIRST. The command is executed via
+        // `sh -c`, and the per-segment metachar guard below has no newline in its
+        // list while split_whitespace/split('|') treat '\n' as whitespace — so
+        // `id\ncat /etc/shadow` passed with first token `id` and ran BOTH lines.
+        // A newline/CR/tab has no legitimate place in an allow-listed read-only
+        // command; blocking them closes the multi-command injection.
+        if command.contains(['\n', '\r', '\t']) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"ok": false, "error": "control characters (newline/CR/tab) are not allowed"})),
+            ).into_response();
+        }
         // Block shell substitution/expansion metacharacters
         if command.contains("$(") || command.contains('`') || command.contains("${") {
             return (
@@ -272,14 +284,20 @@ pub(crate) async fn api_service_action(
                     .into_iter()
                     .map(|e| {
                         if let Some((k, v)) = e.split_once('=') {
-                            let lower = k.to_lowercase();
-                            let is_sensitive = lower.contains("key") || lower.contains("secret")
-                                || lower.contains("token") || lower.contains("password")
-                                || lower.contains("url") || lower.contains("dsn");
-                            if is_sensitive || v.len() > 64 {
-                                format!("{}={}", k, super::secrets::mask_secret_value(v))
-                            } else {
+                            // F129: deny-by-default. The old keyword+>64 heuristic
+                            // leaked short secrets with non-keyword names
+                            // (CREDENTIALS, PASSPHRASE, PWD, AUTH, COOKIE, …). Mask
+                            // every value except an explicit allowlist of known-benign
+                            // infra keys.
+                            const BENIGN: &[&str] = &[
+                                "PATH", "HOME", "HOSTNAME", "LANG", "LC_ALL", "TZ",
+                                "TERM", "PYTHONPATH", "PYTHONUNBUFFERED", "PYTHON_VERSION",
+                                "NODE_VERSION", "LD_LIBRARY_PATH", "DEBIAN_FRONTEND",
+                            ];
+                            if BENIGN.contains(&k.to_ascii_uppercase().as_str()) {
                                 e
+                            } else {
+                                format!("{}={}", k, super::secrets::mask_secret_value(v))
                             }
                         } else {
                             e
