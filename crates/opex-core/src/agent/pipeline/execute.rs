@@ -286,7 +286,7 @@ pub async fn execute<S: EventSink>(
                 engine.cfg().compaction_provider
                     .as_deref()
                     .unwrap_or_else(|| engine.cfg().provider.as_ref());
-            if let Err(e) = crate::agent::history::compress_messages(
+            match crate::agent::history::compress_messages(
                 &mut messages,
                 compressor,
                 cmp_cfg,
@@ -295,7 +295,18 @@ pub async fn execute<S: EventSink>(
                 &engine.cfg().db,
                 session_id,
             ).await {
-                tracing::warn!(error = %e, "proactive compression failed, continuing");
+                Ok(_) => {
+                    // F109: compression shrank `messages` in place. Recompute
+                    // context_chars (mirroring the session-recovery reset below) so
+                    // the next compact_tool_results budgets on the true
+                    // post-compression size — the stale inflated count otherwise
+                    // prematurely replaces still-fresh tool results with '[compacted]'.
+                    context_chars =
+                        messages.iter().map(|m| m.content.chars().count()).sum();
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "proactive compression failed, continuing");
+                }
             }
         }
 
