@@ -139,10 +139,16 @@ pub async fn trace_context_middleware(mut req: Request, next: Next) -> Response 
 
     // Scope the downstream execution in a span tagged with the trace_id.
     // `info_span!` is zero-cost when tracing is disabled.
-    let span = tracing::info_span!("http_request", trace_id = %trace_id.0);
-    let _enter = span.enter();
-
-    next.run(req).await
+    //
+    // F034: instrument the future rather than holding a manual `span.enter()`
+    // guard across the await. An `Entered` guard is a live local that is NOT
+    // dropped when the future yields (returns Pending), so the span's current-
+    // ness leaked onto whatever OTHER request the tokio worker polled next —
+    // tagging its log lines with THIS request's trace_id. `.instrument(span)`
+    // enters on each poll and exits on each yield, so the span never bleeds
+    // across tasks (mirrors trace_propagation.rs).
+    use tracing::Instrument as _;
+    next.run(req).instrument(span).await
 }
 
 // ── Unit tests (inline) ─────────────────────────────────────────────────────
