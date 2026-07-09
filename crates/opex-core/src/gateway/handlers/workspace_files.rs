@@ -65,10 +65,16 @@ pub(crate) async fn serve_workspace_file(
     // localStorage. Mirror uploads_serve: never MIME-sniff, and force any
     // non-inlineable type (html, svg, pdf, text, application/*) to download.
     let inlineable = super::uploads_serve::is_inlineable_mime(mime);
-    let body = match tokio::fs::read(&abs).await {
-        Ok(b) => b,
+    // F093: stream the file instead of buffering the whole thing into RAM. The
+    // workspace serves arbitrary-size binaries (mp4/webm/zip/tar dropped by the
+    // video pipeline / code_exec / backups); a `tokio::fs::read` of a multi-GB
+    // file — or several concurrent large loads — drove OOM on the single-binary
+    // home-lab box. ReaderStream reads in bounded chunks.
+    let file = match tokio::fs::File::open(&abs).await {
+        Ok(f) => f,
         Err(_) => return (StatusCode::NOT_FOUND, "not found").into_response(),
     };
+    let body = axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file));
 
     let mut builder = Response::builder()
         .status(StatusCode::OK)
@@ -86,7 +92,7 @@ pub(crate) async fn serve_workspace_file(
         );
     }
     builder
-        .body(axum::body::Body::from(body))
+        .body(body)
         .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "build response").into_response())
 }
 
