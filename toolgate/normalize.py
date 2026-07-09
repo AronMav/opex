@@ -16,6 +16,7 @@ import logging
 import re
 import subprocess
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import httpx
@@ -286,7 +287,11 @@ _IPA_SINGLE = {
 }
 
 # Cache of word → Cyrillic from espeak (persists across requests).
-_G2P_CACHE: dict[str, str] = {}
+# F119: bounded FIFO cache — TTS text is agent/user-controlled and can contain
+# arbitrarily many unique Latin tokens (hashes, identifiers, code), so an
+# unbounded dict grew monotonically until the container hit its mem_limit (OOM/502).
+_G2P_CACHE_MAX = 10_000
+_G2P_CACHE: "OrderedDict[str, str]" = OrderedDict()
 
 
 def _ipa_to_cyrillic(ipa: str) -> str:
@@ -368,6 +373,8 @@ def transliterate_latin(text: str) -> str:
             if not cyr:
                 cyr = _translit_word(w)  # rule-based fallback
             _G2P_CACHE[w] = cyr
+            if len(_G2P_CACHE) > _G2P_CACHE_MAX:
+                _G2P_CACHE.popitem(last=False)  # F119: evict oldest (FIFO)
             resolved[w] = cyr
 
     return _TRANSLIT_WORD_RE.sub(
