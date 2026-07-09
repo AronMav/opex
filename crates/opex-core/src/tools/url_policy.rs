@@ -3,7 +3,10 @@
 /// Case-insensitive host match. `*.evil.tld` matches `evil.tld` and any subdomain;
 /// otherwise an exact host match.
 pub fn host_blocked(host: &str, globs: &[String]) -> bool {
-    let host = host.trim().to_lowercase();
+    // Strip a trailing root dot: `ads.tracker.com.` resolves identically to
+    // `ads.tracker.com` in DNS but would otherwise slip past both the exact and
+    // `*.`-glob matches (F110). Mirrors net/ssrf.rs's metadata-blocklist guard.
+    let host = host.trim().trim_end_matches('.').to_lowercase();
     if host.is_empty() {
         return false;
     }
@@ -45,6 +48,15 @@ mod tests {
         assert!(!host_blocked("good.tld", &globs()));
         assert!(!host_blocked("notevil.tld", &globs()));
         assert!(!host_blocked("x.tld", &[]));
+    }
+
+    #[test]
+    fn trailing_dot_fqdn_still_blocked() {
+        // F110: a trailing root dot must not bypass the blocklist.
+        assert!(host_blocked("ads.example.com.", &globs()));
+        assert!(host_blocked("a.evil.tld.", &globs()));
+        assert!(host_blocked("evil.tld.", &globs()));
+        assert!(url_blocked("https://sub.evil.tld./x", &globs()));
     }
 
     #[test]
