@@ -32,7 +32,21 @@ impl RecoveryState {
         flap_window_secs: u64,
         flap_threshold: u32,
     ) -> bool {
-        if self.is_flapping(name) || self.in_cooldown(name) {
+        // F108: flapping used to be terminal — is_flapping short-circuited before
+        // in_cooldown, and flapping was only ever cleared by mark_recovered (which
+        // needs the service to recover on its own). So a service that flapped and
+        // stayed down could never be auto-restarted even after cooldown_secs,
+        // making the configured cooldown inert. Now, once a flapping service's
+        // cooldown elapses, clear the flapping state and allow a fresh attempt
+        // (back off, then retry).
+        if self.is_flapping(name) {
+            if self.in_cooldown(name) {
+                return false;
+            }
+            self.flapping.remove(name);
+            self.cooldown_until.remove(name);
+            self.restart_times.remove(name);
+        } else if self.in_cooldown(name) {
             return false;
         }
         let now = Instant::now();
@@ -112,6 +126,37 @@ mod tests {
         assert!(!state.is_flapping("svc"));
         // Can restart again
         assert!(state.can_restart("svc", 600, 3));
+    }
+
+    #[test]
+    fn flapping_clears_after_cooldown_expires() {
+        // F108: once cooldown elapses, a previously-flapping service must be
+        // restartable again (was terminal before — cooldown had no effect).
+        let mut state = RecoveryState::new();
+        for _ in 0..3 {
+            state.can_restart("svc", 600, 3);
+        }
+        assert!(!state.can_restart("svc", 600, 3)); // flapping detected
+        assert!(state.is_flapping("svc"));
+        // The main loop enters cooldown on flapping; simulate it already expired.
+        state.enter_cooldown("svc", 0);
+        assert!(!state.in_cooldown("svc"));
+        // Cooldown elapsed → flapping cleared, restart allowed.
+        assert!(state.can_restart("svc", 600, 3));
+        assert!(!state.is_flapping("svc"));
+    }
+
+    #[test]
+    fn flapping_still_blocks_during_cooldown() {
+        // Still terminal WHILE cooling down.
+        let mut state = RecoveryState::new();
+        for _ in 0..3 {
+            state.can_restart("svc", 600, 3);
+        }
+        assert!(!state.can_restart("svc", 600, 3));
+        state.enter_cooldown("svc", 300);
+        assert!(!state.can_restart("svc", 600, 3));
+        assert!(state.is_flapping("svc"));
     }
 
     #[test]
