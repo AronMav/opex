@@ -341,7 +341,11 @@ export function createTelegramDriver(
     if (fileId) {
       try {
         const file = await bot.api.getFile(fileId);
-        const url = `https://api.telegram.org/file/bot${credential}/${file.file_path}`;
+        // F120: honor the configured api_url (self-hosted Bot API server) for the
+        // file-download URL too — uploads already use apiRoot, but this leg was
+        // hardcoded to api.telegram.org, breaking all inbound media on self-hosted.
+        const fileApiRoot = apiUrl ?? "https://api.telegram.org";
+        const url = `${fileApiRoot}/file/bot${credential}/${file.file_path}`;
         attachments.push({
           url,
           media_type: getMediaType(msg),
