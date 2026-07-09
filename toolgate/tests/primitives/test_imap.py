@@ -60,7 +60,7 @@ def test_imap_fetch_happy_path(mock_imap_cls, client):
     assert data["messages"][0]["subject"] == "hi"
     assert data["messages"][0]["from"] == "sender@test.com"
 
-    mock_imap_cls.assert_called_once_with("imap.test.com", 993)
+    mock_imap_cls.assert_called_once_with("imap.test.com", 993, timeout=15)
     mock_imap.login.assert_called_once_with("me@test.com", "secret")
 
 

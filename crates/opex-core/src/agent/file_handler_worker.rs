@@ -141,16 +141,6 @@ pub async fn dispatch_async_job(
     Ok(())
 }
 
-/// Spawn the background async-handler worker (concurrency = 1 in v1).
-///
-/// The worker:
-/// 1. Recovers stale 'processing' rows from a previous crash on startup.
-/// 2. Claims one job at a time from the durable `handler_jobs` queue.
-/// 3. For upload-based jobs: downloads the upload bytes over loopback and
-///    POSTs them to toolgate /handlers/{id}/run as multipart (R12).
-/// 4. For url-based jobs: sends the source_url form field instead.
-/// 5. A 202 response means the runner was spawned; the job stays 'processing'
-///    until the runner's /complete callback marks it done.
 /// Runtime stale-processing deadline (F014). A healthy job bumps `updated_at`
 /// on every claim / progress post, so a 'processing' row untouched for this long
 /// means its runner died without posting `/complete`. Sized well above the
@@ -164,6 +154,16 @@ const SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 /// worker must not keep dispatching new jobs while old ones are still running.
 const MAX_CONCURRENT_RUNNERS: i64 = 3;
 
+/// Spawn the background async-handler worker (concurrency = 1 in v1).
+///
+/// The worker:
+/// 1. Recovers stale 'processing' rows from a previous crash on startup.
+/// 2. Claims one job at a time from the durable `handler_jobs` queue.
+/// 3. For upload-based jobs: downloads the upload bytes over loopback and
+///    POSTs them to toolgate /handlers/{id}/run as multipart (R12).
+/// 4. For url-based jobs: sends the source_url form field instead.
+/// 5. A 202 response means the runner was spawned; the job stays 'processing'
+///    until the runner's /complete callback marks it done.
 pub fn spawn_file_handler_worker(state: &AppState, shutdown: CancellationToken) {
     let state = state.clone();
     let db = state.infra.db.clone();

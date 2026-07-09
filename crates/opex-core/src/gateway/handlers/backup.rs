@@ -865,10 +865,10 @@ pub(crate) async fn api_restore(
         // backup are removed (not merged). Only when the rollback snapshot exists,
         // so a mid-restore failure can restore the prior state; else fall back to
         // merge rather than clearing with no safety net.
-        if workspace_bak_ok {
-            if let Err(e) = clear_dir_contents(std::path::Path::new("workspace")).await {
-                tracing::warn!(error = %e, "workspace clear-before-restore failed — copying as merge");
-            }
+        if workspace_bak_ok
+            && let Err(e) = clear_dir_contents(std::path::Path::new("workspace")).await
+        {
+            tracing::warn!(error = %e, "workspace clear-before-restore failed — copying as merge");
         }
         let workspace_src_str = workspace_src.to_string_lossy().into_owned();
         if let Err(e) = copy_dir_to(&workspace_src_str, std::path::Path::new("workspace")).await {
@@ -889,10 +889,10 @@ pub(crate) async fn api_restore(
         // F090: faithful restore — clear config/ so a stale agent TOML (e.g. an
         // agent created after the backup) doesn't survive and get restarted from
         // disk with no DB backing. Gated on the snapshot for rollback safety.
-        if config_bak_ok {
-            if let Err(e) = clear_dir_contents(std::path::Path::new("config")).await {
-                tracing::warn!(error = %e, "config clear-before-restore failed — copying as merge");
-            }
+        if config_bak_ok
+            && let Err(e) = clear_dir_contents(std::path::Path::new("config")).await
+        {
+            tracing::warn!(error = %e, "config clear-before-restore failed — copying as merge");
         }
         let config_src_str = config_src.to_string_lossy().into_owned();
         // F091: check the config copy (was `let _ = ...`). A failed copy left the

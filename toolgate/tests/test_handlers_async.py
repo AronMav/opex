@@ -24,9 +24,35 @@ class _UploadFile:
 
 
 class _FakeRequest:
-    """Minimal stand-in for fastapi.Request exposing app.state.handlers."""
+    """Minimal stand-in for fastapi.Request exposing app.state.handlers.
+
+    F050: run_handler also reads app.state.registry (for the runner's
+    workspace_dir), so expose it too — getattr defaults tolerate a missing
+    .config/.workspace_dir."""
     def __init__(self, registry):
-        self.app = type("A", (), {"state": type("S", (), {"handlers": registry})()})()
+        self.app = type("A", (), {"state": type("S", (), {"handlers": registry, "registry": registry})()})()
+
+
+# F026/F095: run_handler writes the spec to the runner's STDIN (not argv), so the
+# fake subprocess must expose a captured stdin.
+class _FakeStdin:
+    def __init__(self):
+        self.buf = b""
+
+    def write(self, b):
+        self.buf += b
+
+    async def drain(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class _FakeProc:
+    def __init__(self):
+        self.pid = 4242
+        self.stdin = _FakeStdin()
 
 
 @pytest.mark.asyncio
@@ -48,10 +74,9 @@ async def test_async_handler_run_returns_202_and_spawns_runner_with_tempfile(mon
 
     async def fake_exec(*args, **kwargs):
         spawned["argv"] = args
-
-        class _Proc:
-            pid = 4242
-        return _Proc()
+        proc = _FakeProc()
+        spawned["proc"] = proc
+        return proc
 
     monkeypatch.setattr(router_mod.asyncio, "create_subprocess_exec", fake_exec)
 
@@ -73,9 +98,10 @@ async def test_async_handler_run_returns_202_and_spawns_runner_with_tempfile(mon
 
     argv = " ".join(str(a) for a in spawned["argv"])
     assert "runner" in argv
-    # The spawned spec must reference a real temp path holding the bytes (NOT a URL).
-    spec_arg = spawned["argv"][-1]
-    spec = json.loads(spec_arg)
+    # F026/F095: the spec is written to the runner's STDIN (not argv), keeping the
+    # master token out of the process table. It must reference a real temp path
+    # holding the bytes (NOT a URL).
+    spec = json.loads(spawned["proc"].stdin.buf)
     assert spec["job_id"] == "job-123"
     assert spec["temp_path"]
     assert Path(spec["temp_path"]).read_bytes() == b"VIDEOBYTES"
@@ -133,7 +159,7 @@ async def test_runner_reads_tempfile_then_posts_progress_and_complete(monkeypatc
         async def progress(self, phase, pct):
             pass
 
-    monkeypatch.setattr(runner_mod, "_load_registry", lambda http: FakeReg())
+    monkeypatch.setattr(runner_mod, "_load_registry", lambda http, workspace_dir=None: FakeReg())
     monkeypatch.setattr(runner_mod, "build_context", lambda *a, **k: FakeCtx())
 
     temp = tmp_path / "upload.bin"
@@ -200,7 +226,7 @@ async def test_runner_builds_ctx_with_provider_registry_not_handler_registry(mon
     class FakeHandlerReg:
         def load_all(self, **k): pass
         def get(self, _id): return FakeLoaded()
-    monkeypatch.setattr(runner_mod, "_load_registry", lambda http: FakeHandlerReg())
+    monkeypatch.setattr(runner_mod, "_load_registry", lambda http, workspace_dir=None: FakeHandlerReg())
 
     def fake_build_context(registry, http, **k):
         captured["registry"] = registry
@@ -255,10 +281,9 @@ async def test_run_handler_includes_callback_token_in_spec(monkeypatch, tmp_path
 
     async def fake_exec(*args, **kwargs):
         spawned["argv"] = args
-
-        class _Proc:
-            pid = 7777
-        return _Proc()
+        proc = _FakeProc()
+        spawned["proc"] = proc
+        return proc
 
     monkeypatch.setattr(router_mod.asyncio, "create_subprocess_exec", fake_exec)
 
@@ -276,8 +301,8 @@ async def test_run_handler_includes_callback_token_in_spec(monkeypatch, tmp_path
     )
     assert resp.status_code == 202
 
-    spec_arg = spawned["argv"][-1]
-    spec = json.loads(spec_arg)
+    # F026/F095: spec goes over stdin, not argv.
+    spec = json.loads(spawned["proc"].stdin.buf)
     assert spec.get("callback_token") == "abc.token123", (
         f"callback_token missing or wrong in spec: {spec}"
     )
@@ -327,7 +352,7 @@ async def test_runner_sends_x_job_token_header_when_spec_has_callback_token(monk
         async def progress(self, phase, pct):
             pass
 
-    monkeypatch.setattr(runner_mod, "_load_registry", lambda http: FakeReg())
+    monkeypatch.setattr(runner_mod, "_load_registry", lambda http, workspace_dir=None: FakeReg())
     monkeypatch.setattr(runner_mod, "build_context", lambda *a, **k: FakeCtx())
 
     temp = tmp_path / "upload.bin"

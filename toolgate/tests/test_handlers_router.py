@@ -167,8 +167,15 @@ def test_run_async_handler_returns_202_and_accepted(tmp_path, monkeypatch):
     import handlers.router as rmod
 
     async def _fake_exec(*args, **kwargs):
+        # F026/F095: run_handler writes the spec to the runner's stdin.
+        class _Stdin:
+            def write(self, b): pass
+            async def drain(self): pass
+            def close(self): pass
+
         class _Proc:
             pid = 9999
+            stdin = _Stdin()
         return _Proc()
 
     monkeypatch.setattr(rmod.asyncio, "create_subprocess_exec", _fake_exec)

@@ -42,7 +42,7 @@ def test_smtp_send_happy_path(mock_smtp_cls, client):
     data = resp.json()
     assert data["status"] == "sent"
 
-    mock_smtp_cls.assert_called_once_with("smtp.test.com", 587)
+    mock_smtp_cls.assert_called_once_with("smtp.test.com", 587, timeout=15)
     mock_smtp.starttls.assert_called_once()
     mock_smtp.login.assert_called_once_with("me@test.com", "secret")
     mock_smtp.sendmail.assert_called_once()
