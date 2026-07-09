@@ -1129,13 +1129,27 @@ async fn extract_tool_result_events<S: EventSink>(
                         .get("mediaType")
                         .and_then(|v| v.as_str())
                         .unwrap_or("application/octet-stream");
-                    if !url.is_empty() {
+                    // F042: only honor a File marker whose URL is a signed
+                    // local upload path (`/api/uploads/…`, what
+                    // save_binary_to_uploads produces). An untrusted tool
+                    // (web/browser/MCP) can splice a `__file__:` line into its
+                    // output with an ARBITRARY absolute URL; emitting it verbatim
+                    // would load an attacker-controlled resource inline in the
+                    // operator's browser (IP/UA leak, phishing, forged "tool
+                    // produced this file" UI). Reject anything not root-relative
+                    // /api/uploads/.
+                    if url.starts_with("/api/uploads/") {
                         let _ = sink
                             .emit(PipelineEvent::Stream(StreamEvent::File {
                                 url: url.to_string(),
                                 media_type: media_type.to_string(),
                             }))
                             .await;
+                    } else if !url.is_empty() {
+                        tracing::warn!(
+                            url = %url,
+                            "rejected File marker URL (not a signed /api/uploads path) — possible forged marker in untrusted tool output"
+                        );
                     }
                 }
             } else if let Some(json_str) = line.strip_prefix(TOOL_CALL_PREFIX) {
