@@ -151,7 +151,17 @@ pub async fn dispatch_async_job(
 /// 4. For url-based jobs: sends the source_url form field instead.
 /// 5. A 202 response means the runner was spawned; the job stays 'processing'
 ///    until the runner's /complete callback marks it done.
+/// Runtime stale-processing deadline (F014). A healthy job bumps `updated_at`
+/// on every claim / progress post, so a 'processing' row untouched for this long
+/// means its runner died without posting `/complete`. Sized well above the
+/// runner's own wall-clock cap (F016) plus the largest gap between progress
+/// posts of a long-video job, so legitimate jobs are never falsely reaped.
+const STALE_PROCESSING_DEADLINE_SECS: i64 = 4 * 3600; // 4h
+/// Minimum spacing between stale-sweeps (the poll loop ticks every 5s).
+const SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub fn spawn_file_handler_worker(state: &AppState, shutdown: CancellationToken) {
+    let state = state.clone();
     let db = state.infra.db.clone();
     let toolgate_url = state
         .config
@@ -185,11 +195,44 @@ pub fn spawn_file_handler_worker(state: &AppState, shutdown: CancellationToken) 
         }
 
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        // F014: throttle the stale-processing sweep so it runs ~once a minute,
+        // not on every 5s poll tick. `None` forces a sweep on the first tick.
+        let mut last_sweep: Option<std::time::Instant> = None;
         loop {
             tokio::select! {
                 biased;
                 _ = shutdown.cancelled() => break,
                 _ = interval.tick() => {}
+            }
+
+            // F014: runtime sweep for jobs whose out-of-process runner died
+            // without posting /complete — the once-at-startup recovery above
+            // never revisits in-flight rows, so without this a stuck row (and
+            // the chat's "…готовлю сводку") hangs until a full core restart.
+            if last_sweep.is_none_or(|t| t.elapsed() >= SWEEP_INTERVAL) {
+                last_sweep = Some(std::time::Instant::now());
+                match handler_jobs::list_stale_processing_jobs(&db, STALE_PROCESSING_DEADLINE_SECS)
+                    .await
+                {
+                    Ok(stale) => {
+                        for job in &stale {
+                            tracing::warn!(
+                                job_id = %job.id,
+                                handler = %job.handler_id,
+                                "file_handler_worker: reaping stale 'processing' job (runner never posted /complete)"
+                            );
+                            crate::gateway::handlers::files::fail_stuck_job_and_notify(
+                                &state,
+                                job,
+                                "handler timed out — the background job stopped responding",
+                            )
+                            .await;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "file_handler_worker: stale sweep failed")
+                    }
+                }
             }
 
             let job = match handler_jobs::claim_next_handler_job(&db).await {

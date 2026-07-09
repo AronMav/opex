@@ -155,6 +155,28 @@ pub async fn recover_stale_handler_jobs(db: &PgPool) -> anyhow::Result<u64> {
     Ok(res.rows_affected())
 }
 
+/// List rows stuck in 'processing' whose `updated_at` is older than
+/// `older_than_secs` — a healthy in-flight job bumps `updated_at` on every
+/// claim / progress post, so an aged row means its out-of-process runner died
+/// (crash / OOM / network partition) without posting `/complete`. Used by the
+/// worker's runtime sweep (F014) to surface a terminal chat failure instead of
+/// leaving the job — and the chat — hanging forever. Deadline must exceed the
+/// runner's own wall-clock cap (F016) plus the largest gap between progress
+/// posts, so long-video jobs are never falsely reaped.
+pub async fn list_stale_processing_jobs(
+    db: &PgPool,
+    older_than_secs: i64,
+) -> anyhow::Result<Vec<HandlerJob>> {
+    let jobs: Vec<HandlerJob> = sqlx::query_as(&format!(
+        "SELECT {COLS} FROM handler_jobs \
+         WHERE status='processing' AND updated_at < now() - make_interval(secs => $1)"
+    ))
+    .bind(older_than_secs as f64)
+    .fetch_all(db)
+    .await?;
+    Ok(jobs)
+}
+
 pub async fn get_handler_job(db: &PgPool, id: Uuid) -> anyhow::Result<Option<HandlerJob>> {
     let job: Option<HandlerJob> =
         sqlx::query_as(&format!("SELECT {COLS} FROM handler_jobs WHERE id=$1"))

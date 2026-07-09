@@ -877,6 +877,35 @@ async fn deliver_async_outcome(
 /// turn — and length-capped. Mirrors `deliver_async_outcome`'s persist step; the
 /// terminal `file_job_progress` WS event (emitted by the caller afterwards) makes
 /// the UI refetch and render this row.
+/// Fail a stuck 'processing' job and notify the chat + UI — the full terminal
+/// failure path (transition → persist chat message → terminal WS event), shared
+/// by the `/complete` callback and the worker's runtime stale-sweep (F014). Only
+/// delivers if the row actually transitioned (idempotent against a racing
+/// `/complete`). Returns whether it transitioned.
+pub(crate) async fn fail_stuck_job_and_notify(
+    state: &AppState,
+    job: &handler_jobs::HandlerJob,
+    reason: &str,
+) -> bool {
+    let transitioned = handler_jobs::mark_handler_job_failed(&state.infra.db, job.id, reason)
+        .await
+        .unwrap_or(false);
+    if !transitioned {
+        return false;
+    }
+    deliver_async_failure(state, job, reason).await;
+    let ev = file_job_progress_event(
+        &job.id.to_string(),
+        &job.handler_id,
+        &job.session_id.to_string(),
+        "done",
+        100,
+        true,
+    );
+    let _ = state.channels.ui_event_tx.send(ev.to_string());
+    true
+}
+
 async fn deliver_async_failure(state: &AppState, job: &handler_jobs::HandlerJob, reason: &str) {
     let upload_id = job.upload_id.map(|u| u.to_string()).unwrap_or_default();
     // Cap on char boundaries (yt-dlp errors can be long / contain multi-byte).
