@@ -71,11 +71,15 @@ struct ProcessState {
     /// it (backoff / circuit-breaker window) instead of sleeping inline, so one
     /// flapping process's cooldown never blocks detection+restart of its peers.
     next_retry_at: Option<Instant>,
+    /// F097: set while an API-triggered `restart()` is mid-flight (kill → wait for
+    /// port release → respawn). monitor_loop must NOT treat the transient
+    /// child==None during this window as a crash and race its own duplicate spawn.
+    intended_down: bool,
 }
 
 impl ProcessState {
     fn new() -> Self {
-        Self { child: None, restart_count: 0, last_started: None, health_failures: 0, next_retry_at: None }
+        Self { child: None, restart_count: 0, last_started: None, health_failures: 0, next_retry_at: None, intended_down: false }
     }
 
     /// Stamp the next allowed respawn instant based on `restart_count`
@@ -161,20 +165,44 @@ impl ProcessManager {
 
     /// Restart a named process: kill → wait for port release → respawn.
     pub async fn restart(&self, name: &str) -> anyhow::Result<()> {
-        self.kill(name).await?;
-
-        // Wait for port to be released (max 5 s)
-        if let Some(port) = self.port_for(name) {
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while Instant::now() < deadline {
-                if TcpListener::bind(("0.0.0.0", port)).is_ok() {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(200)).await;
+        // F097: mark intentionally-down BEFORE releasing any lock, so monitor_loop
+        // doesn't observe the transient child==None (during kill + the 5s
+        // port-release wait) as a crash and spawn a racing duplicate that then
+        // holds the port and stalls our own respawn.
+        {
+            let mut states = self.states.lock().await;
+            if let Some(state) = states.get_mut(name) {
+                state.intended_down = true;
             }
         }
 
-        self.spawn_process(name).await
+        let result = async {
+            self.kill(name).await?;
+
+            // Wait for port to be released (max 5 s)
+            if let Some(port) = self.port_for(name) {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while Instant::now() < deadline {
+                    if TcpListener::bind(("0.0.0.0", port)).is_ok() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+
+            self.spawn_process(name).await
+        }
+        .await;
+
+        // Clear the flag regardless of outcome — on spawn failure the monitor
+        // should resume its normal crash-respawn behavior.
+        {
+            let mut states = self.states.lock().await;
+            if let Some(state) = states.get_mut(name) {
+                state.intended_down = false;
+            }
+        }
+        result
     }
 
     /// Send `signal` (e.g. "-KILL") to the child's WHOLE process group (F089).
@@ -517,6 +545,10 @@ impl ProcessManager {
                                 false
                             }
                         }
+                    } else if state.intended_down {
+                        // F097: an API restart() owns this process right now
+                        // (kill → port-wait → respawn). Don't race a duplicate.
+                        false
                     } else {
                         // No child → needs spawn, but only once the cooldown has
                         // elapsed (skip-not-sleep so peers aren't blocked).
