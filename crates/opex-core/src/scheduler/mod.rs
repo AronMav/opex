@@ -191,6 +191,12 @@ pub struct Scheduler {
     scheduler: JobScheduler,
     /// Maps job DB id → scheduler job UUID for removal.
     dynamic_jobs: RwLock<HashMap<Uuid, Uuid>>,
+    /// Pending one-shot (run_once) task handles, keyed by DB id (F066). One-shots
+    /// are detached tokio tasks, not cron jobs, so they need their own
+    /// cancellation path: an edit/delete of a not-yet-fired one-shot must abort
+    /// the sleeping task, else deletion leaves a ghost that still fires and each
+    /// edit spawns a duplicate. Finished handles are pruned on insert.
+    once_tasks: RwLock<HashMap<Uuid, tokio::task::JoinHandle<()>>>,
     /// Maps agent name → scheduler job UUIDs (heartbeat) for hot removal.
     agent_jobs: RwLock<HashMap<String, Vec<Uuid>>>,
     /// Broadcast channel to notify UI about session updates.
@@ -209,6 +215,7 @@ impl Scheduler {
         Ok(Self {
             scheduler,
             dynamic_jobs: RwLock::new(HashMap::new()),
+            once_tasks: RwLock::new(HashMap::new()),
             agent_jobs: RwLock::new(HashMap::new()),
             ui_event_tx,
             agent_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -226,6 +233,7 @@ impl Scheduler {
         Arc::new(Self {
             scheduler,
             dynamic_jobs: RwLock::new(HashMap::new()),
+            once_tasks: RwLock::new(HashMap::new()),
             agent_jobs: RwLock::new(HashMap::new()),
             ui_event_tx: tx,
             agent_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -936,7 +944,7 @@ impl Scheduler {
             let agent_name2 = agent_name.clone();
             let ui_tx = self.ui_event_tx.clone();
 
-            tokio::spawn(async move {
+            let once_handle = tokio::spawn(async move {
                 tokio::time::sleep(delay).await;
 
                 // One-shot cron-goal: spawn a durable goal-driven session, drop the
@@ -1049,6 +1057,15 @@ impl Scheduler {
                 // above, before the side effect ran — nothing left to clean
                 // up here (see comment above `handle_isolated_via_pipeline`).
             });
+
+            // F066: register the one-shot so an edit/delete can cancel it before
+            // it fires. Prune already-finished handles first so the map does not
+            // grow unbounded across many fired one-shots.
+            {
+                let mut once = self.once_tasks.write().await;
+                once.retain(|_, h| !h.is_finished());
+                once.insert(db_id, once_handle);
+            }
             return Ok(());
         }
 
@@ -1327,7 +1344,19 @@ impl Scheduler {
     }
 
     /// Remove a dynamic job by its DB id.
+    ///
+    /// Handles both recurring jobs (registered in `dynamic_jobs` as a cron job)
+    /// and pending one-shots (tracked in `once_tasks` as a detached task) — F066.
+    /// A one-shot's sleeping task is aborted so a deleted/edited one-shot cannot
+    /// still fire (or fire twice after a re-add).
     pub async fn remove_dynamic_job(&self, db_id: Uuid) -> Result<()> {
+        // One-shot: abort the pending task if present.
+        if let Some(handle) = self.once_tasks.write().await.remove(&db_id) {
+            handle.abort();
+            tracing::info!(db_id = %db_id, "one-shot job cancelled");
+            return Ok(());
+        }
+
         let scheduler_uuid = self
             .dynamic_jobs
             .write()
@@ -1847,6 +1876,27 @@ pub fn convert_cron_to_utc(cron: &str, timezone: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn remove_dynamic_job_aborts_pending_one_shot() {
+        // F066: a pending one-shot tracked in once_tasks must be cancellable via
+        // remove_dynamic_job (deletion/edit), not error "not found in scheduler".
+        let sched = Scheduler::new_noop().await;
+        let db_id = Uuid::new_v4();
+        let handle = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        });
+        sched.once_tasks.write().await.insert(db_id, handle);
+
+        sched
+            .remove_dynamic_job(db_id)
+            .await
+            .expect("remove must succeed for a pending one-shot");
+        assert!(
+            sched.once_tasks.read().await.get(&db_id).is_none(),
+            "one-shot handle must be removed after cancellation"
+        );
+    }
 
     #[test]
     fn cron_goal_target_resolves_channel_and_chat() {
