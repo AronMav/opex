@@ -16,8 +16,9 @@ fn desc_for(m: &HandlerManifest, lang: &str) -> String {
         .unwrap_or_else(|| m.id.clone())
 }
 
-/// True for a non-empty token matching `[a-zA-Z0-9_-]+` — the same charset
-/// commands and aliases are validated against elsewhere in this module.
+/// True for a non-empty token matching `[a-zA-Z0-9_-]+` — the charset a
+/// command name/alias must satisfy. Used both to filter `<command>` override
+/// aliases and to validate an override's `name` before it's trusted.
 fn is_valid_command_token(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
@@ -76,7 +77,7 @@ pub fn derive_handler_commands(manifests: &[HandlerManifest], enabled: &[String]
             }];
             args.extend(valve_args(&m.config, lang));
             let (name, aliases) = match &m.command {
-                Some(ov) => (
+                Some(ov) if is_valid_command_token(&ov.name) => (
                     ov.name.clone(),
                     ov.aliases
                         .iter()
@@ -84,7 +85,7 @@ pub fn derive_handler_commands(manifests: &[HandlerManifest], enabled: &[String]
                         .cloned()
                         .collect(),
                 ),
-                None => (m.id.clone(), vec![]),
+                _ => (m.id.clone(), vec![]),
             };
             CommandSpec {
                 name,
@@ -154,6 +155,24 @@ mod tests {
         let specs = derive_handler_commands(&[m], &[], "en");
         assert_eq!(specs[0].name, "sumvid");
         assert_eq!(specs[0].aliases, vec!["sv".to_string()]);
+        match &specs[0].source {
+            CommandSourceKind::Handler { handler_id } => assert_eq!(handler_id, "summarize_video"),
+            _ => panic!("expected Handler source"),
+        }
+    }
+
+    #[test]
+    fn command_override_with_invalid_name_falls_back_to_handler_id() {
+        use serde_json::json;
+        let m: crate::agent::handler_registry::HandlerManifest = serde_json::from_value(json!({
+            "id":"summarize_video","execution":"async","tier":"workspace",
+            "descriptions":{"en":"d"},"config":[],
+            "command":{"name":"bad name!","aliases":[]}
+        }))
+        .unwrap();
+        let specs = derive_handler_commands(&[m], &[], "en");
+        assert_eq!(specs[0].name, "summarize_video");
+        assert!(specs[0].aliases.is_empty());
         match &specs[0].source {
             CommandSourceKind::Handler { handler_id } => assert_eq!(handler_id, "summarize_video"),
             _ => panic!("expected Handler source"),
