@@ -265,19 +265,22 @@ export function createDiscordDriver(
   client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
+    // Discord requires the interaction to be acknowledged within 3s or its
+    // token becomes invalid ("Unknown interaction"). bridge.checkAccess() is
+    // a WS round-trip to core (fails closed after ~10s), so defer FIRST —
+    // before any await that could outlast the 3s window — then run the
+    // access check against the already-acked (ephemeral) reply.
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+
     const userId = interaction.user.id;
     const displayName = interaction.user.globalName ?? interaction.user.username;
 
     const { allowed, isOwner } = await bridge.checkAccess(userId);
     if (!allowed && !isOwner) {
       const code = await bridge.createPairingCode(userId, displayName);
-      await interaction
-        .reply({ content: strings.accessRestricted(code), flags: MessageFlags.Ephemeral })
-        .catch(() => {});
+      await interaction.editReply(strings.accessRestricted(code)).catch(() => {});
       return;
     }
-
-    await interaction.deferReply().catch(() => {});
 
     // Reconstruct "/name <values>" from the provided options (declared order).
     const values: Record<string, string> = {};
@@ -301,16 +304,25 @@ export function createDiscordDriver(
     const { onChunk, result } = bridge.sendMessage(dto);
 
     let acc = "";
+    let dirty = false;
     onChunk((chunk: string) => {
       acc += chunk;
-      interaction.editReply(acc.slice(0, MAX_MESSAGE_LEN) || "…").catch(() => {});
+      dirty = true;
     });
+
+    const streamTimer = setInterval(async () => {
+      if (!dirty || acc.length > MAX_MESSAGE_LEN) return;
+      dirty = false;
+      await interaction.editReply(acc.slice(0, MAX_MESSAGE_LEN) || "…").catch(() => {});
+    }, STREAM_EDIT_INTERVAL_MS);
 
     try {
       const final = await result;
+      clearInterval(streamTimer);
       const out = (final && final.length ? final : acc) || "✓";
       await interaction.editReply(out.slice(0, MAX_MESSAGE_LEN)).catch(() => {});
     } catch (err) {
+      clearInterval(streamTimer);
       await interaction.editReply(strings.errorMessage((err as Error)?.message ?? "error")).catch(() => {});
     }
   });
