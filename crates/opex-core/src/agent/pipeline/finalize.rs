@@ -382,6 +382,10 @@ pub struct FinalizeContext {
     /// for this session so they don't hang until timeout when the turn ends
     /// (Done / Failed / Interrupted all release the waiter).
     pub clarify_manager: Arc<ClarifyManager>,
+    /// Agent soul config (spec §2/§5) — threaded through to knowledge
+    /// extraction so it can gate the extended (events) extraction prompt and
+    /// event persistence on `[agent.soul].enabled`.
+    pub soul: crate::config::SoulConfig,
 }
 
 // ── finalize() ────────────────────────────────────────────────────────────────
@@ -460,6 +464,7 @@ pub async fn finalize<S: EventSink>(
                 ctx.provider.clone(),
                 ctx.memory_store.clone(),
                 ctx.message_count,
+                ctx.soul.clone(),
                 &ctx.bg_tasks,
             );
             if let Some(sr_cfg) = &ctx.skill_review
@@ -709,11 +714,13 @@ pub fn finalize_context_from_engine(
         skill_review: engine.cfg().agent.skill_review.clone(),
         assistant_message_id,
         clarify_manager: engine.cfg().clarify_manager.clone(),
+        soul: engine.cfg().agent.soul.clone(),
     }
 }
 
 // ── spawn_knowledge_extraction() ─────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_knowledge_extraction(
     db: PgPool,
     session_id: Uuid,
@@ -721,12 +728,13 @@ pub(crate) fn spawn_knowledge_extraction(
     provider: Arc<dyn LlmProvider>,
     memory_store: Arc<dyn MemoryService>,
     message_count: usize,
+    soul: crate::config::SoulConfig,
     tracker: &TaskTracker,
 ) {
     if message_count >= 2 {
         tracker.spawn(async move {
             crate::agent::knowledge_extractor::extract_and_save(
-                db, session_id, agent_name, provider, memory_store,
+                db, session_id, agent_name, provider, memory_store, soul,
             )
             .await;
         });
@@ -931,6 +939,7 @@ mod tests {
             skill_review: None,
             assistant_message_id: uuid::Uuid::nil(),
             clarify_manager: Arc::new(crate::agent::clarify_manager::ClarifyManager::new_for_test()),
+            soul: crate::config::SoulConfig::default(),
         }
     }
 
