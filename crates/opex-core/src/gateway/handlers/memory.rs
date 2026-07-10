@@ -325,11 +325,53 @@ pub(crate) async fn api_get_document(
     }
 }
 
+/// Fail-closed biography guard for the UI-facing delete/patch routes (spec §5.2).
+/// Returns `Some(refusal)` when the chunk is a soul biography row (`kind != 'fact'`)
+/// OR when its kind cannot be verified (DB error) — never let a mutation through on
+/// an unverifiable kind. Returns `None` only when it is safe to proceed (`kind = 'fact'`,
+/// or the row is absent — the caller's own `rows_affected` check reports NOT_FOUND).
+/// Deliberate biography removal uses the raw-SQL quarantine runbook, not these endpoints.
+async fn refuse_if_biography(
+    db: &sqlx::PgPool,
+    id: uuid::Uuid,
+) -> Option<axum::response::Response> {
+    let kind: Option<String> = match sqlx::query_scalar("SELECT kind FROM memory_chunks WHERE id = $1")
+        .bind(id)
+        .fetch_optional(db)
+        .await
+    {
+        Ok(k) => k,
+        Err(e) => {
+            return Some(
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": format!("cannot verify chunk kind: {e}")})),
+                )
+                    .into_response(),
+            );
+        }
+    };
+    if matches!(kind.as_deref(), Some(k) if k != "fact") {
+        return Some(
+            (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "biography chunks (event/reflection) are immutable via this endpoint"})),
+            )
+                .into_response(),
+        );
+    }
+    None
+}
+
 pub(crate) async fn api_patch_document(
     State(state): State<InfraServices>,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
     Json(req): Json<PatchMemoryRequest>,
 ) -> impl IntoResponse {
+    // Fail-closed: soul biography rows are immutable via the UI patch route.
+    if let Some(refusal) = refuse_if_biography(&state.db, id).await {
+        return refusal;
+    }
     if let Some(pinned) = req.pinned {
         let result = sqlx::query("UPDATE memory_chunks SET pinned = $2 WHERE id = $1")
             .bind(id).bind(pinned).execute(&state.db).await;
@@ -393,6 +435,11 @@ pub(crate) async fn api_delete_memory(
     State(state): State<InfraServices>,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
 ) -> impl IntoResponse {
+    // Fail-closed: soul biography rows cannot be destroyed via the UI delete route
+    // (spec §5.2, revised — operator quarantine goes through the raw-SQL runbook).
+    if let Some(refusal) = refuse_if_biography(&state.db, id).await {
+        return refusal;
+    }
     let result = sqlx::query("DELETE FROM memory_chunks WHERE id = $1")
         .bind(id)
         .execute(&state.db)
@@ -437,28 +484,10 @@ pub(crate) async fn api_patch_memory(
             return (StatusCode::BAD_REQUEST, Json(json!({"error": "content must not be empty"}))).into_response();
         }
 
-    // Spec §5.2: UI patch must not rewrite biography chunks. FAIL-CLOSED:
-    // a DB error while reading kind refuses the patch instead of letting it through.
-    let kind: Option<String> = match sqlx::query_scalar("SELECT kind FROM memory_chunks WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-    {
-        Ok(k) => k,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("cannot verify chunk kind: {e}")})),
-            )
-                .into_response();
-        }
-    };
-    if matches!(kind.as_deref(), Some(k) if k != "fact") {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "biography chunks (event/reflection) are immutable via PATCH"})),
-        )
-            .into_response();
+    // Spec §5.2: biography chunks (event/reflection) are immutable via the API.
+    // FAIL-CLOSED shared guard (also covers api_patch_document / api_delete_memory).
+    if let Some(refusal) = refuse_if_biography(&state.db, id).await {
+        return refusal;
     }
 
     // Update pinned flag if provided
