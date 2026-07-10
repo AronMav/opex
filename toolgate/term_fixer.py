@@ -470,7 +470,8 @@ async def fix_terms(
                 try:
                     return await ctx.llm.complete(_detect_messages(window))
                 except Exception as exc:
-                    ctx.log.warning("term_fixer: detect window failed: %s", exc)
+                    ctx.log.warning("term_fixer: detect window failed: %s: %s",
+                                    type(exc).__name__, exc)
                     return None
 
         # Окна независимы — параллелим как search. gather сохраняет порядок
@@ -541,12 +542,12 @@ async def fix_terms(
                         ctx.log.warning(
                             "term_fixer: websearch provider deactivated mid-run: %s", exc)
                     else:
-                        ctx.log.warning("term_fixer: search failed for %r: %s",
-                                        cand["heard"], exc)
+                        ctx.log.warning("term_fixer: search failed for %r: %s: %s",
+                                        cand["heard"], type(exc).__name__, exc)
                     return []
                 except Exception as exc:
-                    ctx.log.warning("term_fixer: search failed for %r: %s",
-                                    cand["heard"], exc)
+                    ctx.log.warning("term_fixer: search failed for %r: %s: %s",
+                                    cand["heard"], type(exc).__name__, exc)
                     return []
                 return _normalize_search_results(res)
 
@@ -562,7 +563,7 @@ async def fix_terms(
         try:
             raw = await ctx.llm.complete(_verify_messages(candidates, results))
         except Exception as exc:
-            ctx.log.warning("term_fixer: verify failed: %s", exc)
+            ctx.log.warning("term_fixer: verify failed: %s: %s", type(exc).__name__, exc)
             return noop
         verdicts = parse_detect_json(raw)
         if verdicts is None:
@@ -585,7 +586,7 @@ async def fix_terms(
         )
     except Exception as exc:
         try:
-            ctx.log.warning("term_fixer failed: %s", exc)
+            ctx.log.warning("term_fixer failed: %s: %s", type(exc).__name__, exc)
         except Exception:
             pass
         return noop
