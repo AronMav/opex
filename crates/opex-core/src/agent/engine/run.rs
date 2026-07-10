@@ -445,19 +445,12 @@ impl AgentEngine {
         if let Some(outcome) = command_output.take() {
             match outcome {
                 CommandOutcome::Menu { card } => {
-                    let card_type = card
-                        .get("card_type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("command_args_menu")
-                        .to_string();
+                    // Channels transport can't render the RichCard; deliver the
+                    // prompt text instead so the user isn't left with a silent
+                    // no-op turn (e.g. bare `/summarize_video` on Telegram).
+                    let text = card.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     let _ = s
-                        .emit(PipelineEvent::Stream(StreamEvent::RichCard { card_type, data: card }))
-                        .await;
-                    let _ = s
-                        .emit(PipelineEvent::Stream(StreamEvent::Finish {
-                            finish_reason: "command".to_string(),
-                            continuation: false,
-                        }))
+                        .emit(PipelineEvent::Stream(StreamEvent::TextDelta(text.clone())))
                         .await;
                     let fin_ctx = finalize::finalize_context_from_engine(
                         self,
@@ -467,11 +460,10 @@ impl AgentEngine {
                         compressor,
                         uuid::Uuid::new_v4(), // slash-command path: no MessageStart was sent
                     );
-                    // The card IS the response — no assistant text to persist.
                     return finalize::finalize(
                         fin_ctx,
                         finalize::FinalizeOutcome::Done {
-                            assistant_text: String::new(),
+                            assistant_text: text,
                             thinking_json: None,
                             turn_limited: false,
                         },
@@ -665,19 +657,12 @@ impl AgentEngine {
         if let Some(outcome) = command_output.take() {
             match outcome {
                 CommandOutcome::Menu { card } => {
-                    let card_type = card
-                        .get("card_type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("command_args_menu")
-                        .to_string();
+                    // Chunk transport can't render the RichCard; deliver the
+                    // prompt text instead so the user isn't left with a silent
+                    // no-op turn.
+                    let text = card.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     let _ = s
-                        .emit(PipelineEvent::Stream(StreamEvent::RichCard { card_type, data: card }))
-                        .await;
-                    let _ = s
-                        .emit(PipelineEvent::Stream(StreamEvent::Finish {
-                            finish_reason: "command".to_string(),
-                            continuation: false,
-                        }))
+                        .emit(PipelineEvent::Stream(StreamEvent::TextDelta(text.clone())))
                         .await;
                     let fin_ctx = finalize::finalize_context_from_engine(
                         self,
@@ -687,11 +672,10 @@ impl AgentEngine {
                         compressor,
                         uuid::Uuid::new_v4(), // slash-command path: no MessageStart was sent
                     );
-                    // The card IS the response — no assistant text to persist.
                     return finalize::finalize(
                         fin_ctx,
                         finalize::FinalizeOutcome::Done {
-                            assistant_text: String::new(),
+                            assistant_text: text,
                             thinking_json: None,
                             turn_limited: false,
                         },
