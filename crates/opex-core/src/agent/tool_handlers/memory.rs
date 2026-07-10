@@ -35,7 +35,9 @@ impl SystemToolHandler for MemoryToolHandler {
                 .await
             }
             "get" => pm::handle_memory_get(deps.memory_store.as_ref(), arguments).await,
-            "delete" => pm::handle_memory_delete(deps.memory_store.as_ref(), arguments).await,
+            "delete" => {
+                pm::handle_memory_delete(deps.memory_store.as_ref(), deps.db, arguments).await
+            }
             "update" => {
                 let mut args = arguments.clone();
                 if let Some(sa) = arguments.get("sub_action").cloned()

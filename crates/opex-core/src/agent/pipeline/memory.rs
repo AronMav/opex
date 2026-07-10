@@ -119,6 +119,11 @@ pub async fn handle_memory_search(
     }
 }
 
+/// Spec §5.2: soul_* source namespace is reserved for internal writers.
+pub(crate) fn is_reserved_soul_source(source: &str) -> bool {
+    source == "soul_reflection" || source.starts_with("soul_")
+}
+
 /// Internal tool: index content into long-term memory.
 pub async fn handle_memory_index(
     memory_store: &dyn MemoryService,
@@ -132,6 +137,13 @@ pub async fn handle_memory_index(
         true => "shared",
         false => "private",
     };
+
+    // Spec §5.2: soul_* source namespace is reserved for the internal
+    // extraction/reflection writers — agents fully control `source`, so
+    // provenance-by-source is only trustworthy if this namespace is closed.
+    if is_reserved_soul_source(source) {
+        return "Error: source namespace 'soul_*' is reserved for the reflection engine".to_string();
+    }
 
     if content.is_empty() {
         return "Error: 'content' is required".to_string();
@@ -248,12 +260,25 @@ pub async fn handle_memory_get(
 /// Internal tool: delete a memory chunk by UUID.
 pub async fn handle_memory_delete(
     memory_store: &dyn MemoryService,
+    db: &sqlx::PgPool,
     args: &serde_json::Value,
 ) -> String {
     let chunk_id = match args.get("chunk_id").and_then(|v| v.as_str()) {
         Some(id) if !id.is_empty() => id,
         _ => return "Error: 'chunk_id' is required".to_string(),
     };
+
+    // Spec §5.2: agents must not purge their own biography. FAIL-CLOSED:
+    // if kind cannot be verified, refuse rather than delete blindly.
+    match crate::db::memory_queries::chunk_kind(db, chunk_id).await {
+        Ok(Some(kind)) if kind != "fact" => {
+            return format!("Error: memory chunk {chunk_id} is part of the agent's biography (kind='{kind}') and cannot be deleted via the memory tool");
+        }
+        Ok(_) => {}
+        Err(e) => {
+            return format!("Error: cannot verify chunk kind ({e}) — refusing to delete");
+        }
+    }
 
     match memory_store.delete(chunk_id).await {
         Ok(true) => format!("Deleted memory chunk {}", chunk_id),
@@ -464,5 +489,29 @@ mod tests {
         let at_limit = "b".repeat(crate::agent::pipeline::chunk_truncate::MEMORY_CHUNK_MAX_CHARS);
         let out = truncate_chunk_content(&at_limit);
         assert_eq!(out.len(), crate::agent::pipeline::chunk_truncate::MEMORY_CHUNK_MAX_CHARS);
+    }
+
+    #[tokio::test]
+    async fn memory_index_rejects_reserved_soul_source() {
+        let mock = crate::agent::memory_service::mock::MockMemoryService::available();
+        let args = serde_json::json!({"content": "x", "source": "soul_event:abc"});
+        let out = super::handle_memory_index(&mock, "A", &args).await;
+        assert!(out.contains("reserved"), "soul_* namespace must be rejected, got: {out}");
+
+        let args2 = serde_json::json!({"content": "x", "source": "soul_reflection"});
+        let out2 = super::handle_memory_index(&mock, "A", &args2).await;
+        assert!(out2.contains("reserved"));
+    }
+
+    #[test]
+    fn reserved_soul_source_predicate() {
+        // Один helper используют И handle_memory_index, И api_create_memory —
+        // юнит на предикат покрывает оба (спека §9).
+        assert!(super::is_reserved_soul_source("soul_event:abc"));
+        assert!(super::is_reserved_soul_source("soul_reflection"));
+        assert!(super::is_reserved_soul_source("soul_anything"));
+        assert!(!super::is_reserved_soul_source("manual"));
+        assert!(!super::is_reserved_soul_source("rolling_summary:A"));
+        assert!(!super::is_reserved_soul_source("my_soul_notes")); // префикс, не подстрока
     }
 }

@@ -352,6 +352,13 @@ pub(crate) async fn api_create_memory(
             .into_response();
     }
     let source = req.source.as_deref().unwrap_or("ui");
+    if crate::agent::pipeline::memory::is_reserved_soul_source(source) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "source namespace 'soul_*' is reserved"})),
+        )
+            .into_response();
+    }
     let pinned = req.pinned.unwrap_or(false);
     // Admin-created chunks are shared so all agents can see them
     match state.memory_store.index(&req.content, source, pinned, "shared", "").await {
@@ -419,6 +426,30 @@ pub(crate) async fn api_patch_memory(
         && content.trim().is_empty() {
             return (StatusCode::BAD_REQUEST, Json(json!({"error": "content must not be empty"}))).into_response();
         }
+
+    // Spec §5.2: UI patch must not rewrite biography chunks. FAIL-CLOSED:
+    // a DB error while reading kind refuses the patch instead of letting it through.
+    let kind: Option<String> = match sqlx::query_scalar("SELECT kind FROM memory_chunks WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+    {
+        Ok(k) => k,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("cannot verify chunk kind: {e}")})),
+            )
+                .into_response();
+        }
+    };
+    if matches!(kind.as_deref(), Some(k) if k != "fact") {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "biography chunks (event/reflection) are immutable via PATCH"})),
+        )
+            .into_response();
+    }
 
     // Update pinned flag if provided
     if let Some(pinned) = req.pinned {
