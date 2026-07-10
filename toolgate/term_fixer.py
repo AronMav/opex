@@ -371,17 +371,23 @@ def split_windows(transcript: str) -> list[str]:
 
 
 def _normalize_search_results(res) -> list[dict]:
+    """Недоверенные поисковые сниппеты попадают в однострочный verify-промпт
+    (`_verify_messages`), где перевод строки в title/content/url подделал бы
+    построчную структуру («Кандидат id=N: …») чужой записью. Сплющиваем всё
+    в одну строку и капаем content до 500 символов — иначе один раздутый
+    сниппет раздувает verify-вызов без пользы для качества решения."""
     out = []
     if not isinstance(res, list):
         return out
     for r in res:
         if not isinstance(r, dict):
             continue
-        title = str(r.get("title") or "")
-        content = str(r.get("content") or "")
+        title = " ".join(str(r.get("title") or "").split())
+        content = " ".join(str(r.get("content") or "").split())[:500]
+        url = " ".join(str(r.get("url") or "").split())
         if not title and not content:
             continue
-        out.append({"title": title, "url": str(r.get("url") or ""), "content": content})
+        out.append({"title": title, "url": url, "content": content})
     return out
 
 

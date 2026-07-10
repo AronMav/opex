@@ -335,6 +335,30 @@ def test_sanitize_non_list_returns_empty():
     assert tf.sanitize_verdicts("не список", _cands()) == []
 
 
+# ── split_windows / _normalize_search_results ───────────────────────────────
+
+def test_split_windows_char_fallback_without_timecodes():
+    # Без таймкодов transcript_minutes() == 0 → окна по DETECT_WINDOW_CHARS
+    text = "слово " * 8000  # ~48k символов, без [MM:SS]
+    windows = tf.split_windows(text)
+    assert len(windows) == 2
+    assert "".join(windows) == text
+    assert all(len(w) <= tf.DETECT_WINDOW_CHARS for w in windows)
+
+
+def test_split_windows_short_text_single_window():
+    assert tf.split_windows("короткий текст") == ["короткий текст"]
+
+
+def test_normalize_search_results_flattens_and_caps():
+    rows = [{"title": "T\nX", "url": "u\nv", "content": "a\nb" + "х" * 600}]
+    out = tf._normalize_search_results(rows)
+    assert out[0]["title"] == "T X"
+    assert out[0]["url"] == "u v"
+    assert "\n" not in out[0]["content"]
+    assert len(out[0]["content"]) <= 500
+
+
 # ── fix_terms orchestrator ───────────────────────────────────────────────────
 
 LONG_TEXT = "Использую амбассадор для суб-баса, он делает низ плотнее. " * 10  # > 300 chars
