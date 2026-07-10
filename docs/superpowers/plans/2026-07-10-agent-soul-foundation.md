@@ -2326,7 +2326,23 @@ audit_log tool_name='soul_reflection').
 7. Регрессия: у агента с `enabled=false` — `context-breakdown.soul == 0`, SELF.md нет, событий не пишется.
 8. Memory-страница UI: бейджи/фильтр работают.
 
-- [ ] **Step 4:** Наблюдение ~неделю → решение о `enabled=true` в дефолтном TOML новых агентов (чистый конфиг-дефолт).
+- [ ] **Step 4: Документация** (после успешного E2E, до наблюдения):
+
+**CLAUDE.md** — обновить затронутые фичей утверждения (сейчас они станут неполными/неверными):
+
+1. Секция «Memory (`src/memory.rs`)»: дополнить абзацем про soul-слой — колонки `kind`/`importance`/`lineage` в `memory_chunks`, kind='fact'-фильтр генерического поиска, `soul_retrieve` (recency×importance×relevance от `created_at`), события пишет knowledge extractor, рефлексия in-core, биография исключена из всех четырёх hard-delete путей.
+2. Упоминание identity-файлов / «SOUL.md + IDENTITY.md are immutable»: добавить SELF.md — пишется только рефлексией (write-protect от агентских тулов, rename-гард), в промпт попадает через ре-сериализацию в рамке, НЕ через WORKSPACE_FILES.
+3. Секция «Agent config»: строка про `[agent.soul]` (opt-in, дефолт off) со ссылкой на спеку.
+4. Сверить попутно: утверждение CLAUDE.md «editing MEMORY.md updates memory_chunks» уже противоречит коду (watcher исключает `agents/**` — находка ревью спеки) — поправить заодно.
+
+**README** — НЕ обновлять в этом плане: по research позиционирования (reference_competitor_positioning, 2026-07-10) «душу» в README не заявлять; после обкатки фичи — отдельным решением оператора добавить аккуратную формулировку («автобиографическая память + рефлексия»), без слова «душа».
+
+```bash
+git add CLAUDE.md
+git commit -m "docs: CLAUDE.md — soul foundation (memory kind/importance, SELF.md, [agent.soul])"
+```
+
+- [ ] **Step 5:** Наблюдение ~неделю → решение о `enabled=true` в дефолтном TOML новых агентов (чистый конфиг-дефолт) и об упоминании в README (см. Step 4).
 
 ---
 
