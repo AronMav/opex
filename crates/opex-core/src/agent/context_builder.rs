@@ -29,6 +29,9 @@ pub struct ContextBreakdown {
     pub multi_agent: usize,
     /// Pinned memory chunks (L0 budget) injected into the system prompt.
     pub memory: usize,
+    /// Soul context blocks: SELF portrait re-serialization + L1 "biography"
+    /// block (autobiographical memory retrieved by relevance). Spec §4/§6.
+    pub soul: usize,
     /// Session TODO list block.
     pub todo: usize,
     /// Serialized tool definitions sent to the provider (builtin + YAML +
@@ -40,7 +43,7 @@ pub struct ContextBreakdown {
 
 impl ContextBreakdown {
     pub fn total(&self) -> usize {
-        self.system_prompt + self.skills + self.multi_agent + self.memory + self.todo + self.tools + self.conversation
+        self.system_prompt + self.skills + self.multi_agent + self.memory + self.soul + self.todo + self.tools + self.conversation
     }
 }
 
@@ -164,6 +167,10 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     async fn store_pinned_chunk_ids(&self, ids: Vec<String>);
     /// Render this session's TODO list as a context block, or `None` if empty.
     async fn session_todo_block(&self, session_id: Uuid) -> Option<String>;
+
+    /// Soul context blocks (spec §4/§6): (SELF portrait, L1 biography).
+    /// (None, None) when [agent.soul] is disabled. Fail-soft inside.
+    async fn soul_blocks(&self, user_text: &str, session_id: Uuid) -> (Option<String>, Option<String>);
 
     // Workspace
     fn workspace_dir(&self) -> &str;
@@ -349,6 +356,14 @@ impl ContextBuilder for DefaultContextBuilder {
             extension_catalogue.as_deref(),
         );
 
+        // Soul: SELF portrait — сразу после workspace-промпта (spec §4)
+        let (self_block, l1_block) = deps.soul_blocks(&user_text, session_id).await;
+        let pre_self_len = system_prompt.len();
+        if let Some(b) = self_block {
+            system_prompt.push_str(&b);
+        }
+        let self_len = system_prompt.len() - pre_self_len;
+
         // T17: base prompt size before any request-specific blocks are appended.
         let base_prompt_len = system_prompt.len();
 
@@ -496,6 +511,13 @@ impl ContextBuilder for DefaultContextBuilder {
         }
         deps.store_pinned_chunk_ids(pinned_ids).await;
         let memory_len = system_prompt.len() - pre_memory_len;
+
+        // Soul: L1 biography — после L0 pinned (spec §6)
+        let pre_l1_len = system_prompt.len();
+        if let Some(b) = l1_block {
+            system_prompt.push_str(&b);
+        }
+        let soul_len = self_len + (system_prompt.len() - pre_l1_len);
         let pre_todo_len = system_prompt.len();
 
         // Session TODO list (persists across turns and context compaction)
@@ -671,10 +693,15 @@ impl ContextBuilder for DefaultContextBuilder {
         // T17: estimate-only per-category breakdown, exposed via
         // GET /api/agents/{name}/context-breakdown. All values chars/4.
         let breakdown = ContextBreakdown {
-            system_prompt: base_prompt_len / 4,
+            // `base_prompt_len` was captured AFTER the SELF block was appended
+            // (spec §4 requires SELF right after the workspace prompt), so
+            // `self_len` must be subtracted back out here to keep this
+            // category limited to the workspace/capability/runtime prompt.
+            system_prompt: (base_prompt_len - self_len) / 4,
             skills: skills_len / 4,
             multi_agent: multi_agent_len / 4,
             memory: memory_len / 4,
+            soul: soul_len / 4,
             todo: todo_len / 4,
             tools: tools_tokens,
             conversation: conversation_chars / 4,
@@ -1178,6 +1205,12 @@ mod tests {
     fn mock_context_builder_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<MockContextBuilder>();
+    }
+
+    #[test]
+    fn breakdown_total_includes_soul() {
+        let b = ContextBreakdown { system_prompt: 1, skills: 2, multi_agent: 3, memory: 4, soul: 7, todo: 5, tools: 6, conversation: 8 };
+        assert_eq!(b.total(), 36);
     }
 
 }
