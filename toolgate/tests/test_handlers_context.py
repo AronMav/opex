@@ -232,3 +232,27 @@ def test_ctx_llm_is_llm_client_instance():
 
     import asyncio
     asyncio.run(_run())
+
+
+# ── has_capability probe ─────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_has_capability_true_when_provider_active():
+    ctx = build_context(_FakeRegistry({"websearch": object()}), http_client=None)
+    assert await ctx.has_capability("websearch") is True
+
+
+@pytest.mark.asyncio
+async def test_has_capability_false_when_provider_absent():
+    ctx = build_context(_FakeRegistry({}), http_client=None)
+    assert await ctx.has_capability("websearch") is False
+
+
+@pytest.mark.asyncio
+async def test_has_capability_false_when_registry_raises():
+    class _BoomRegistry:
+        async def aget_active(self, capability):
+            raise RuntimeError("boom")
+
+    ctx = build_context(_BoomRegistry(), http_client=None)
+    assert await ctx.has_capability("websearch") is False

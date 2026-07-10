@@ -296,6 +296,7 @@ class HandlerContext:
     _job_id: str | None = None
     _core_url: str | None = None
     _auth_token: str | None = None
+    _registry: object | None = None
 
     async def progress(self, phase: str, pct: int) -> None:
         """Post progress to the core progress callback when a job_id is set;
@@ -317,6 +318,20 @@ class HandlerContext:
             )
         except Exception as e:  # progress is best-effort
             self.log.warning("progress callback failed: %s", e)
+
+    async def has_capability(self, capability: str) -> bool:
+        """True when an active provider for `capability` is configured.
+
+        Resolve-only probe (no provider call) so handlers can skip an optional
+        stage cheaply — e.g. term_fixer skips entirely without websearch,
+        BEFORE paying for its detect LLM call.
+        """
+        if self._registry is None:
+            return False
+        try:
+            return await self._registry.aget_active(capability) is not None
+        except Exception:
+            return False
 
 
 def build_context(
@@ -344,4 +359,5 @@ def build_context(
         _job_id=job_id,
         _core_url=core_url,
         _auth_token=auth_token,
+        _registry=registry,
     )
