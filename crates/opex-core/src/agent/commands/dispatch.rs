@@ -90,6 +90,22 @@ fn resolve_command_to_handler_id(manifests: &[HandlerManifest], name: &str) -> O
         .map(|m| m.id.clone())
 }
 
+/// First operator valve (in `HandlerManifest.config`) that declares
+/// `choices` (MVP: only the first choice-valve per command is honored — a
+/// handler with multiple choice-valves gets a menu for the first one only).
+pub(crate) fn first_choice_valve(m: &HandlerManifest) -> Option<(String, Vec<String>)> {
+    m.config.as_array()?.iter().find_map(|f| {
+        let name = f.get("name")?.as_str()?.to_string();
+        let choices: Vec<String> = f
+            .get("choices")?
+            .as_array()?
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        (!choices.is_empty()).then_some((name, choices))
+    })
+}
+
 /// Dispatch a `/name [args]` command that the builtin registry didn't handle.
 ///
 /// Returns `None` when:
@@ -181,6 +197,35 @@ pub async fn try_handler_command(
         ))));
     }
 
+    // Choice-valve gate (Task 2): if the resolved handler declares an
+    // operator valve with `choices`, stash the run context and ask the user
+    // to pick a value instead of enqueuing immediately. Task 3 adds the
+    // endpoint that completes the stashed run on button click.
+    if let Some(rm) = manifests.iter().find(|m| m.id == handler_id)
+        && let Some((valve, choices)) = first_choice_valve(rm)
+    {
+        let stash = serde_json::json!({
+            "kind": "command_choice",
+            "handler_id": handler_id,
+            "source_url": source_ref,
+            "upload_id": upload_id.map(|u| u.to_string()),
+            "session_id": session_id.to_string(),
+            "agent": deps.agent_name,
+            "valve": valve,
+            "choices": choices,
+            "language": lang,
+        });
+        let token = crate::gateway::handlers::files::store_menu_ctx(stash);
+        let card = serde_json::json!({
+            "card_type": "command_args_menu",
+            "command": name,
+            "text": format!("Выберите значение «{valve}» для /{name}:"),
+            "options": choices.iter().map(|c| serde_json::json!({"value": c, "label": c})).collect::<Vec<_>>(),
+            "token": token,
+        });
+        return Some(Ok(CommandOutcome::Menu { card }));
+    }
+
     let params = serde_json::json!({ "language": lang });
     match opex_db::handler_jobs::insert_handler_job(
         deps.db,
@@ -219,9 +264,38 @@ async fn resolve_recent_upload(deps: &HandlerDispatchDeps<'_>, session_id: Uuid)
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_command_line, resolve_command_to_handler_id};
+    use super::{first_choice_valve, parse_command_line, resolve_command_to_handler_id};
     use crate::agent::handler_registry::HandlerManifest;
     use serde_json::json;
+
+    #[test]
+    fn first_choice_valve_detected() {
+        let m: HandlerManifest = serde_json::from_value(json!({
+            "id": "summarize_video", "execution": "async", "tier": "workspace",
+            "descriptions": {"en": "d"},
+            "config": [{"name": "summary_length", "type": "string", "choices": ["short", "medium", "long"]}]
+        }))
+        .unwrap();
+        let got = first_choice_valve(&m);
+        assert_eq!(
+            got,
+            Some((
+                "summary_length".to_string(),
+                vec!["short".into(), "medium".into(), "long".into()]
+            ))
+        );
+    }
+
+    #[test]
+    fn no_choice_valve_is_none() {
+        let m: HandlerManifest = serde_json::from_value(json!({
+            "id": "x", "execution": "async", "tier": "workspace",
+            "descriptions": {"en": "d"},
+            "config": [{"name": "lang", "type": "string"}]
+        }))
+        .unwrap();
+        assert_eq!(first_choice_valve(&m), None);
+    }
 
     #[test]
     fn parses_name_and_args() {
