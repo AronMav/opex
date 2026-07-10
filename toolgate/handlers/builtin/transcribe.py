@@ -2,8 +2,8 @@
 #   <id>transcribe</id>
 #   <label lang="ru">Транскрибировать</label>
 #   <label lang="en">Transcribe</label>
-#   <description lang="ru">Речь из аудио/видео в текст (без конспекта)</description>
-#   <description lang="en">Speech from audio/video to text (raw, no summary)</description>
+#   <description lang="ru">Речь из аудио/видео в текст (без конспекта; названия могут быть автоисправлены)</description>
+#   <description lang="en">Speech from audio/video to text (raw, no summary; product names may be auto-corrected)</description>
 #   <icon>mic</icon>
 #   <match>
 #     <mime>audio/*</mime>
@@ -26,6 +26,7 @@
 #   </params>
 #   <config>
 #     <field name="default_language" type="string" default="ru" label="Язык по умолчанию" description="Язык распознавания, если модель не указала его явно (ru, en, auto, …)"/>
+#     <field name="fix_terms" type="bool" default="true" label="Исправлять названия" description="Определять искажённые STT названия (бренды, плагины, термины) и исправлять их через веб-поиск. Транскрипты короче 300 символов пропускаются."/>
 #   </config>
 #   <order>10</order>
 #   <enabled>true</enabled>
@@ -37,7 +38,9 @@ downloads the media and extracts audio (same seam as summarize_video), then
 transcribes. For an uploaded file it transcribes the bytes directly. Returns the
 RAW transcript (no summary) — the lighter alternative to summarize_video.
 R12: upload bytes arrive on file.bytes; the provider wrapper passes the shared
-raw client to the STT backend (a trusted provider endpoint)."""
+raw client to the STT backend (a trusted provider endpoint).
+With fix_terms=on the transcript is post-processed (garbled product names
+corrected via web search) — not strictly verbatim."""
 
 async def run(ctx, file, params):
     # Model-supplied language wins; otherwise the operator's default valve.
@@ -79,5 +82,19 @@ async def run(ctx, file, params):
             "нет разборчивой речи (только музыка) или язык распознавания не совпадает"
         )
 
+    glossary = ""
+    fix_enabled = (
+        str(ctx.config.get("fix_terms") or "true").strip().lower()
+        not in ("false", "0", "no")
+    )
+    if fix_enabled:
+        try:
+            from term_fixer import fix_terms  # runner puts toolgate root on sys.path
+            fx = await fix_terms(ctx, text, language, progress_pcts=(60, 70, 80))
+            text, glossary = fx.transcript, fx.glossary_md
+        except Exception as exc:  # fix_terms сам fail-soft; это страховка импорта
+            ctx.log.warning("transcribe: fix_terms unavailable: %s", exc)
+
     await ctx.progress("saving", 90)
-    return ctx.result.text(text)
+    # Глоссарий отделён --- , чтобы читающий агент не считал его частью речи.
+    return ctx.result.text(text + (f"\n\n---\n{glossary}" if glossary else ""))

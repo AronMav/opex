@@ -107,3 +107,71 @@ async def test_extract_document_respects_max_chars():
                     filename="d.txt", size=100)
     out = await lh.run(ctx, f, {"max_chars": 10})
     assert len(out.to_dict()["summary_text"]) == 10
+
+
+# ── transcribe × fix_terms ───────────────────────────────────────────────────
+
+def _transcribe_ctx(config=None):
+    from unittest.mock import AsyncMock, MagicMock
+    from handlers.context import HandlerResult
+
+    ctx = MagicMock()
+    ctx.progress = AsyncMock()
+    ctx.stt.transcribe = AsyncMock(return_value="Использую амбассадор для баса.")
+    ctx.result.text = MagicMock(
+        side_effect=lambda s: HandlerResult(status="ok", summary_text=s)
+    )
+    ctx.result.failed = MagicMock(
+        side_effect=lambda r: HandlerResult(status="failed", reason=r)
+    )
+    ctx.config = config or {}
+    ctx.log = MagicMock()
+    return ctx
+
+
+def _audio_file():
+    from handlers.context import HandlerFile
+    return HandlerFile(bytes=b"FAKEAUDIO", mime="audio/ogg",
+                       filename="voice.ogg", size=9)
+
+
+@pytest.mark.asyncio
+async def test_transcribe_fix_terms_on_appends_glossary_after_ruler(monkeypatch):
+    import term_fixer as tf
+    from handlers.builtin import transcribe as tr_mod
+
+    async def _fake_fix(ctx, text, language, progress_pcts=None):
+        return tf.FixResult(transcript="Использую MBassador для баса.",
+                            glossary_md="## Исправленные названия\n- «амбассадор» → **MBassador**")
+
+    monkeypatch.setattr(tf, "fix_terms", _fake_fix)
+    ctx = _transcribe_ctx()
+    res = await tr_mod.run(ctx, _audio_file(), {})
+    assert res.summary_text.startswith("Использую MBassador для баса.")
+    assert "\n\n---\n## Исправленные названия" in res.summary_text
+    # фаза saving сохранена
+    assert ("saving", 90) in [c.args for c in ctx.progress.await_args_list]
+
+
+@pytest.mark.asyncio
+async def test_transcribe_fix_terms_valve_off_skips(monkeypatch):
+    import term_fixer as tf
+    from handlers.builtin import transcribe as tr_mod
+
+    called = {"n": 0}
+
+    async def _fake_fix(*a, **k):
+        called["n"] += 1
+        return tf.FixResult(transcript="x")
+
+    monkeypatch.setattr(tf, "fix_terms", _fake_fix)
+    ctx = _transcribe_ctx(config={"fix_terms": "false"})
+    res = await tr_mod.run(ctx, _audio_file(), {})
+    assert called["n"] == 0
+    assert res.summary_text == "Использую амбассадор для баса."
+
+
+def test_transcribe_descriptor_declares_fix_terms_valve():
+    lh = _load("transcribe")
+    f = next((c for c in lh.descriptor.config if c["name"] == "fix_terms"), None)
+    assert f is not None and f["default"] == "true"
