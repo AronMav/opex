@@ -1,5 +1,5 @@
 export type ApiChoice = { value: string; label: string };
-export type ApiArg = { name: string; description?: string; arg_type?: string; required?: boolean; choices?: { kind: string; values?: ApiChoice[] } };
+export type ApiArg = { name: string; description?: string; arg_type?: string; required?: boolean; menu?: boolean; choices?: { kind: string; values?: ApiChoice[] } };
 export type ApiCommand = { name: string; description: string; scope?: string; args?: ApiArg[] };
 
 export type DiscordOpt = { type: 3; name: string; description: string; required: boolean; choices?: { name: string; value: string }[] };
@@ -12,13 +12,18 @@ const clampDesc = (d: string, fallback: string) => {
 };
 
 function argToOption(a: ApiArg): DiscordOpt | null {
+  // menu:true args are choice-valves collected via the interactive args-menu
+  // (/api/commands/menu-run), not inline Discord option text — exposing them
+  // here would let their values get concatenated into the command's free-text
+  // arg (e.g. corrupting summarize_video's source URL).
+  if (a.menu === true) return null;
   if (!NAME_RE.test(a.name) || (a.arg_type && a.arg_type !== "string")) return null;
   const opt: DiscordOpt = {
     type: 3, name: a.name, description: clampDesc(a.description ?? "", a.name), required: !!a.required,
   };
   const vals = a.choices?.values;
   if (vals && vals.length) {
-    opt.choices = vals.slice(0, 25).map((c) => ({ name: c.label ?? c.value, value: c.value }));
+    opt.choices = vals.slice(0, 25).map((c) => ({ name: (c.label ?? c.value).slice(0, 100), value: c.value.slice(0, 100) }));
   }
   return opt;
 }
