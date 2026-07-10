@@ -16,16 +16,22 @@ use crate::gateway::state::AppState;
 
 #[derive(Deserialize)]
 struct CommandsQuery {
-    // Accepted for UI/channel-adapter forward-compat; per-agent visibility
-    // filtering (base vs. non-base) is not yet wired to a caller identity here.
-    #[allow(dead_code)]
+    // Per-agent visibility filtering (base vs. non-base) is not yet wired to
+    // a caller identity here; `agent` is currently only used to resolve the
+    // agent's configured language for description localization.
     agent: Option<String>,
     lang: Option<String>,
     scope: Option<String>,
 }
 
 async fn list_commands(State(state): State<AppState>, Query(q): Query<CommandsQuery>) -> impl IntoResponse {
-    let lang = q.lang.as_deref().unwrap_or("en");
+    // Prefer the requested agent's configured language; fall back to the
+    // explicit `?lang=` query param, then to English.
+    let agent_lang = match &q.agent {
+        Some(name) => state.agents.get_engine(name).await.map(|e| e.cfg().agent.language.clone()),
+        None => None,
+    };
+    let lang = agent_lang.as_deref().or(q.lang.as_deref()).unwrap_or("en");
     let db = &state.infra.db;
     state.handlers.refresh().await;
     let manifests = state.handlers.manifests().await;

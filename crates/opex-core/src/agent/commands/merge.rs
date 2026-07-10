@@ -2,7 +2,7 @@
 //! `CommandRegistry`, enforcing that a handler command can never shadow a
 //! builtin (name or alias collision, case-insensitive → dropped + warn).
 
-use super::builtin::BuiltinCommandSource;
+use super::builtin::{BuiltinCommandSource, builtin_description};
 use super::handler_source::derive_handler_commands;
 use super::registry::{CommandRegistry, CommandSource};
 use super::spec::CommandSpec;
@@ -10,7 +10,12 @@ use crate::agent::handler_registry::HandlerManifest;
 use std::collections::HashSet;
 
 pub fn build_registry(manifests: &[HandlerManifest], enabled: &[String], lang: &str) -> CommandRegistry {
-    let builtins = BuiltinCommandSource.specs();
+    let mut builtins = BuiltinCommandSource.specs();
+    for spec in &mut builtins {
+        if let Some(desc) = builtin_description(&spec.name, lang) {
+            spec.description = desc.to_string();
+        }
+    }
     let mut taken: HashSet<String> = HashSet::new();
     for b in &builtins {
         taken.insert(b.name.to_lowercase());
@@ -56,5 +61,23 @@ mod tests {
         assert!(matches!(new_cmd.source, crate::agent::commands::spec::CommandSourceKind::Builtin));
         // registry still validates (no dup names)
         assert!(reg.resolve("status").is_some());
+    }
+
+    #[test]
+    fn builtin_descriptions_are_localized_by_lang() {
+        let reg_ru = build_registry(&[], &[], "ru");
+        assert_eq!(reg_ru.resolve("status").unwrap().description, "Показать текущий статус");
+
+        let reg_en = build_registry(&[], &[], "en");
+        assert_eq!(reg_en.resolve("status").unwrap().description, "Show current status");
+    }
+
+    #[test]
+    fn builtin_description_fallback() {
+        use super::super::builtin::builtin_description;
+        // Known builtin, unsupported/unknown lang → EN fallback.
+        assert_eq!(builtin_description("status", "fr"), Some("Show current status"));
+        // Not a builtin name → None.
+        assert_eq!(builtin_description("not_a_builtin", "ru"), None);
     }
 }

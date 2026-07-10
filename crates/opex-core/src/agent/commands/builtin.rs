@@ -41,6 +41,52 @@ fn arg_free(name: &str, desc: &str) -> CommandArg {
     }
 }
 
+/// Localized description for a builtin command by name + language.
+///
+/// `"ru"` returns the Russian translation; any other lang (including
+/// `"en"`) falls back to the existing English string. Returns `None` if
+/// `name` is not a known builtin.
+pub fn builtin_description(name: &str, lang: &str) -> Option<&'static str> {
+    let en = match name {
+        "status" => "Show current status",
+        "new" => "Start a new session",
+        "reset" => "Reset the session and unpinned memory",
+        "compact" => "Compact the session context",
+        "rollback" => "Restore a checkpoint",
+        "model" => "Show or set the model",
+        "think" => "Set thinking level",
+        "voice" => "Toggle voice replies for this chat",
+        "usage" => "Show token usage",
+        "export" => "Export the current session transcript",
+        "help" => "Show available commands",
+        "memory" => "Search or list agent memory",
+        "goal" => "Set/inspect the autonomous goal",
+        "subgoal" => "Manage subgoals",
+        _ => return None,
+    };
+    if lang == "ru" {
+        let ru = match name {
+            "status" => "Показать текущий статус",
+            "new" => "Начать новую сессию",
+            "reset" => "Сбросить сессию и незакреплённую память",
+            "compact" => "Сжать контекст сессии",
+            "rollback" => "Восстановить чекпойнт",
+            "model" => "Показать или сменить модель",
+            "think" => "Задать уровень размышления",
+            "voice" => "Голосовые ответы для этого чата",
+            "usage" => "Показать расход токенов",
+            "export" => "Экспорт транскрипта сессии",
+            "help" => "Показать доступные команды",
+            "memory" => "Поиск и список памяти агента",
+            "goal" => "Задать или посмотреть автономную цель",
+            "subgoal" => "Управление подцелями",
+            _ => unreachable!("name already validated against en match above"),
+        };
+        return Some(ru);
+    }
+    Some(en)
+}
+
 pub struct BuiltinCommandSource;
 
 impl CommandSource for BuiltinCommandSource {
