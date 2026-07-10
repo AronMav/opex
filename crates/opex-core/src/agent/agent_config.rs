@@ -73,6 +73,11 @@ pub struct AgentConfig {
     /// Shared checkpoint manager (process-wide singleton). `None` for engines
     /// created outside `AgentCore` (test helpers). Cloned from `AgentDeps.checkpoint_mgr`.
     pub checkpoint_manager: Option<Arc<crate::agent::checkpoint_manager::CheckpointManager>>,
+    /// Per-agent soul reflection runtime state (reflection lock + failure
+    /// backoff). One instance per agent, injected into `SoulDeps` at finalize
+    /// time so the reflection engine's lock/backoff is NOT a global static
+    /// (spec §3/§9). `Arc::default()` at construction.
+    pub soul_runtime: Arc<crate::agent::soul::reflection::SoulRuntime>,
     /// Shared LSP manager (process-wide singleton). `None` when LSP is disabled or
     /// for engines created outside `AgentCore` (test helpers).
     /// Cloned from `AgentDeps.lsp_manager`.

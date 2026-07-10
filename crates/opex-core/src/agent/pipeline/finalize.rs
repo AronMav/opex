@@ -382,10 +382,11 @@ pub struct FinalizeContext {
     /// for this session so they don't hang until timeout when the turn ends
     /// (Done / Failed / Interrupted all release the waiter).
     pub clarify_manager: Arc<ClarifyManager>,
-    /// Agent soul config (spec §2/§5) — threaded through to knowledge
-    /// extraction so it can gate the extended (events) extraction prompt and
-    /// event persistence on `[agent.soul].enabled`.
-    pub soul: crate::config::SoulConfig,
+    /// Agent soul deps (spec §2/§3/§5) — threaded through to knowledge
+    /// extraction so it can gate the extended (events) extraction prompt +
+    /// event persistence on `soul.cfg.enabled`, and drive the reflection engine
+    /// (lock/backoff runtime, checkpoint manager, workspace dir, ui_event_tx).
+    pub soul_deps: crate::agent::soul::reflection::SoulDeps,
 }
 
 // ── finalize() ────────────────────────────────────────────────────────────────
@@ -464,7 +465,7 @@ pub async fn finalize<S: EventSink>(
                 ctx.provider.clone(),
                 ctx.memory_store.clone(),
                 ctx.message_count,
-                ctx.soul.clone(),
+                ctx.soul_deps.clone(),
                 &ctx.bg_tasks,
             );
             if let Some(sr_cfg) = &ctx.skill_review
@@ -714,7 +715,13 @@ pub fn finalize_context_from_engine(
         skill_review: engine.cfg().agent.skill_review.clone(),
         assistant_message_id,
         clarify_manager: engine.cfg().clarify_manager.clone(),
-        soul: engine.cfg().agent.soul.clone(),
+        soul_deps: crate::agent::soul::reflection::SoulDeps {
+            cfg: engine.cfg().agent.soul.clone(),
+            workspace_dir: engine.cfg().workspace_dir.clone(),
+            checkpoint: engine.cfg().checkpoint_manager.clone(),
+            ui_event_tx: engine.state().ui_event_tx.clone(),
+            runtime: engine.cfg().soul_runtime.clone(),
+        },
     }
 }
 
@@ -728,13 +735,13 @@ pub(crate) fn spawn_knowledge_extraction(
     provider: Arc<dyn LlmProvider>,
     memory_store: Arc<dyn MemoryService>,
     message_count: usize,
-    soul: crate::config::SoulConfig,
+    soul_deps: crate::agent::soul::reflection::SoulDeps,
     tracker: &TaskTracker,
 ) {
     if message_count >= 2 {
         tracker.spawn(async move {
             crate::agent::knowledge_extractor::extract_and_save(
-                db, session_id, agent_name, provider, memory_store, soul,
+                db, session_id, agent_name, provider, memory_store, soul_deps,
             )
             .await;
         });
@@ -939,7 +946,13 @@ mod tests {
             skill_review: None,
             assistant_message_id: uuid::Uuid::nil(),
             clarify_manager: Arc::new(crate::agent::clarify_manager::ClarifyManager::new_for_test()),
-            soul: crate::config::SoulConfig::default(),
+            soul_deps: crate::agent::soul::reflection::SoulDeps {
+                cfg: crate::config::SoulConfig::default(),
+                workspace_dir: "workspace".to_string(),
+                checkpoint: None,
+                ui_event_tx: None,
+                runtime: Arc::default(),
+            },
         }
     }
 

@@ -56,13 +56,13 @@ pub async fn extract_and_save(
     agent_name: String,
     provider: Arc<dyn LlmProvider>,
     memory_store: Arc<dyn MemoryService>,
-    soul: crate::config::SoulConfig,
+    soul_deps: crate::agent::soul::reflection::SoulDeps,
 ) {
     if !memory_store.is_available() {
         return;
     }
 
-    if let Err(e) = extract_and_save_inner(&db, session_id, &agent_name, &provider, &memory_store, &soul).await {
+    if let Err(e) = extract_and_save_inner(&db, session_id, &agent_name, &provider, &memory_store, &soul_deps).await {
         tracing::warn!(
             session_id = %session_id,
             agent = %agent_name,
@@ -78,7 +78,7 @@ async fn extract_and_save_inner(
     agent_name: &str,
     provider: &Arc<dyn LlmProvider>,
     memory_store: &Arc<dyn MemoryService>,
-    soul: &crate::config::SoulConfig,
+    soul_deps: &crate::agent::soul::reflection::SoulDeps,
 ) -> Result<()> {
     // 1. Load messages
     let rows = crate::db::sessions::load_messages(db, session_id, None).await?;
@@ -117,7 +117,7 @@ async fn extract_and_save_inner(
     }
 
     // 4. Call LLM for extraction
-    let prompt = extraction_prompt(&conversation, soul.enabled);
+    let prompt = extraction_prompt(&conversation, soul_deps.cfg.enabled);
 
     let messages = vec![
         Message {
@@ -144,9 +144,18 @@ async fn extract_and_save_inner(
     update_rolling_summary(agent_name, provider, memory_store, &extracted).await;
 
     // 7. Soul events (spec §2) — only when [agent.soul] enabled.
-    if soul.enabled && !extracted.events.is_empty() {
-        let n = save_events(session_id, agent_name, memory_store, soul, extracted.events).await;
+    if soul_deps.cfg.enabled && !extracted.events.is_empty() {
+        let n = save_events(session_id, agent_name, memory_store, &soul_deps.cfg, extracted.events).await;
         tracing::info!(agent = agent_name, saved = n, "soul events indexed");
+    }
+
+    // 8. Reflection (spec §3) — trigger check + cycle, gated on soul.enabled.
+    // Self-contained (lock + trigger + cycle + backoff); never propagates errors.
+    if soul_deps.cfg.enabled {
+        crate::agent::soul::reflection::maybe_reflect(
+            db, agent_name, provider, memory_store, soul_deps,
+        )
+        .await;
     }
 
     Ok(())
