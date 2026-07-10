@@ -475,19 +475,35 @@ impl AgentEngine {
                     // buttons via the existing send_buttons channel action
                     // (mirrors the handler_menu flow below) instead of dumping
                     // the prompt as plain text.
-                    if let (Some(buttons), Some(router)) =
-                        (argsmenu_buttons(&card), self.channel_router_ref())
-                    {
-                        let text = card.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                        let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
-                        let action = crate::agent::channel_actions::ChannelAction {
-                            name: "send_buttons".to_string(),
-                            params: serde_json::json!({ "text": text, "buttons": buttons }),
-                            context: msg.context.clone(),
-                            reply: reply_tx,
-                            target_channel: Some(msg.channel.clone()),
+                    let text = card.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    if let Some(buttons) = argsmenu_buttons(&card) {
+                        // `channel_router_ref()` is constructed per-agent
+                        // unconditionally, so it's essentially always `Some`
+                        // regardless of whether a channel is actually
+                        // connected. The real signal is `router.send()`
+                        // returning `Err` when the target channel has no
+                        // registered adapter. Fall back to plain text on
+                        // either `None` router or a failed send, so the
+                        // caller is never left with a silent no-op turn.
+                        let delivered = match self.channel_router_ref() {
+                            Some(router) => {
+                                let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+                                let action = crate::agent::channel_actions::ChannelAction {
+                                    name: "send_buttons".to_string(),
+                                    params: serde_json::json!({ "text": text, "buttons": buttons }),
+                                    context: msg.context.clone(),
+                                    reply: reply_tx,
+                                    target_channel: Some(msg.channel.clone()),
+                                };
+                                router.send(action).await.is_ok()
+                            }
+                            None => false,
                         };
-                        let _ = router.send(action).await;
+                        if !delivered {
+                            let _ = s
+                                .emit(PipelineEvent::Stream(StreamEvent::TextDelta(text.clone())))
+                                .await;
+                        }
                         let fin_ctx = finalize::finalize_context_from_engine(
                             self,
                             session_id,
@@ -499,7 +515,7 @@ impl AgentEngine {
                         return finalize::finalize(
                             fin_ctx,
                             finalize::FinalizeOutcome::Done {
-                                assistant_text: String::new(),
+                                assistant_text: if delivered { String::new() } else { text },
                                 thinking_json: None,
                                 turn_limited: false,
                             },
@@ -508,11 +524,9 @@ impl AgentEngine {
                         )
                         .await;
                     }
-                    // No options/token (e.g. the missing-source prompt), or no
-                    // channel router configured: fall back to plain text so
-                    // the user isn't left with a silent no-op turn (e.g. bare
-                    // `/summarize_video` on Telegram).
-                    let text = card.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    // No options/token (e.g. the missing-source prompt): fall
+                    // back to plain text so the user isn't left with a silent
+                    // no-op turn (e.g. bare `/summarize_video` on Telegram).
                     let _ = s
                         .emit(PipelineEvent::Stream(StreamEvent::TextDelta(text.clone())))
                         .await;
@@ -726,19 +740,37 @@ impl AgentEngine {
                     // channel router when the card carries options+token and
                     // a router is available, else fall back to plain text
                     // (chunk transport can't render the RichCard).
-                    if let (Some(buttons), Some(router)) =
-                        (argsmenu_buttons(&card), self.channel_router_ref())
-                    {
-                        let text = card.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                        let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
-                        let action = crate::agent::channel_actions::ChannelAction {
-                            name: "send_buttons".to_string(),
-                            params: serde_json::json!({ "text": text, "buttons": buttons }),
-                            context: msg.context.clone(),
-                            reply: reply_tx,
-                            target_channel: Some(msg.channel.clone()),
+                    let text = card.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    if let Some(buttons) = argsmenu_buttons(&card) {
+                        // `channel_router_ref()` is constructed per-agent
+                        // unconditionally, so it's essentially always `Some`
+                        // regardless of whether a channel is actually
+                        // connected — notably `handle_streaming` also serves
+                        // the admin "Chat" WS test surface with
+                        // `channel = "ui"`, which no adapter registers. The
+                        // real signal is `router.send()` returning `Err`.
+                        // Fall back to plain text on either `None` router or
+                        // a failed send so the caller is never left with a
+                        // silent no-op turn.
+                        let delivered = match self.channel_router_ref() {
+                            Some(router) => {
+                                let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+                                let action = crate::agent::channel_actions::ChannelAction {
+                                    name: "send_buttons".to_string(),
+                                    params: serde_json::json!({ "text": text, "buttons": buttons }),
+                                    context: msg.context.clone(),
+                                    reply: reply_tx,
+                                    target_channel: Some(msg.channel.clone()),
+                                };
+                                router.send(action).await.is_ok()
+                            }
+                            None => false,
                         };
-                        let _ = router.send(action).await;
+                        if !delivered {
+                            let _ = s
+                                .emit(PipelineEvent::Stream(StreamEvent::TextDelta(text.clone())))
+                                .await;
+                        }
                         let fin_ctx = finalize::finalize_context_from_engine(
                             self,
                             session_id,
@@ -750,7 +782,7 @@ impl AgentEngine {
                         return finalize::finalize(
                             fin_ctx,
                             finalize::FinalizeOutcome::Done {
-                                assistant_text: String::new(),
+                                assistant_text: if delivered { String::new() } else { text },
                                 thinking_json: None,
                                 turn_limited: false,
                             },
@@ -762,7 +794,6 @@ impl AgentEngine {
                     // Chunk transport can't render the RichCard; deliver the
                     // prompt text instead so the user isn't left with a silent
                     // no-op turn.
-                    let text = card.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     let _ = s
                         .emit(PipelineEvent::Stream(StreamEvent::TextDelta(text.clone())))
                         .await;

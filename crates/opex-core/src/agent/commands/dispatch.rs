@@ -204,7 +204,7 @@ pub async fn try_handler_command(
     if let Some(rm) = manifests.iter().find(|m| m.id == handler_id)
         && let Some((valve, choices)) = first_choice_valve(rm)
     {
-        let stash = serde_json::json!({
+        let mut stash = serde_json::json!({
             "kind": "command_choice",
             "handler_id": handler_id,
             "source_url": source_ref,
@@ -215,6 +215,18 @@ pub async fn try_handler_command(
             "choices": choices,
             "language": lang,
         });
+        // Bind the menu to the originating chat, mirroring the `hm:`
+        // handler-menu stash (run.rs) — activates the existing `_chat_id`
+        // origin-binding check in `command_menu_run`
+        // (gateway/handlers/files.rs), blocking replay of a leaked `cm:`
+        // token from another chat. Only inserted when a chat_id is present
+        // (web/UI turns carry none) — the check is `if let Some(stored_chat)
+        // = ctx.get("_chat_id")`, so a `null` value would wrongly trigger it.
+        if let Some(chat) = msg.context.get("chat_id").cloned()
+            && let Some(obj) = stash.as_object_mut()
+        {
+            obj.insert("_chat_id".to_string(), chat);
+        }
         let token = crate::gateway::handlers::files::store_menu_ctx(stash);
         let card = serde_json::json!({
             "card_type": "command_args_menu",
