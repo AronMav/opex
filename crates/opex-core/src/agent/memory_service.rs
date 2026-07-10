@@ -96,6 +96,41 @@ pub trait MemoryService: Send + Sync {
 
     /// Rebuild the FTS column for all existing memory chunks.
     async fn rebuild_fts(&self) -> anyhow::Result<u64> { Ok(0) }
+
+    // ── Soul (autobiographical memory) ─────────────────────────────────────
+
+    /// Soul retrieval (spec §1). Default: no soul support — empty result.
+    async fn soul_retrieve(
+        &self,
+        _query: &str,
+        _top_k: usize,
+        _agent_id: &str,
+        _exclude_source: Option<&str>,
+    ) -> Result<Vec<crate::memory::SoulCandidate>> {
+        Ok(vec![])
+    }
+
+    /// Index one soul chunk. Default: unsupported (mocks/null stores).
+    async fn index_soul(
+        &self,
+        _content: &str,
+        _source: &str,
+        _agent_id: &str,
+        _kind: &str,
+        _importance: f32,
+        _lineage: Option<Vec<uuid::Uuid>>,
+    ) -> Result<String> {
+        anyhow::bail!("soul indexing not supported by this MemoryService")
+    }
+
+    /// Transactional reflection-batch indexing. Default: unsupported.
+    async fn index_soul_batch_tx(
+        &self,
+        _items: &[crate::memory::soul::SoulInsert],
+        _agent_id: &str,
+    ) -> Result<Vec<String>> {
+        anyhow::bail!("soul indexing not supported by this MemoryService")
+    }
 }
 
 // ── MemoryStore impl ─────────────────────────────────────────────────────────
@@ -179,6 +214,36 @@ impl MemoryService for crate::memory::MemoryStore {
 
     async fn rebuild_fts(&self) -> anyhow::Result<u64> {
         crate::memory::MemoryStore::rebuild_fts(self).await
+    }
+
+    async fn soul_retrieve(
+        &self,
+        query: &str,
+        top_k: usize,
+        agent_id: &str,
+        exclude_source: Option<&str>,
+    ) -> Result<Vec<crate::memory::SoulCandidate>> {
+        crate::memory::MemoryStore::soul_retrieve(self, query, top_k, agent_id, exclude_source).await
+    }
+
+    async fn index_soul(
+        &self,
+        content: &str,
+        source: &str,
+        agent_id: &str,
+        kind: &str,
+        importance: f32,
+        lineage: Option<Vec<uuid::Uuid>>,
+    ) -> Result<String> {
+        crate::memory::MemoryStore::index_soul(self, content, source, agent_id, kind, importance, lineage).await
+    }
+
+    async fn index_soul_batch_tx(
+        &self,
+        items: &[crate::memory::soul::SoulInsert],
+        agent_id: &str,
+    ) -> Result<Vec<String>> {
+        crate::memory::MemoryStore::index_soul_batch_tx(self, items, agent_id).await
     }
 }
 

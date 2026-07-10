@@ -665,6 +665,7 @@ pub async fn enqueue_reindex_task(db: &PgPool, params: serde_json::Value) -> Res
 // ── Soul (autobiographical memory) ──────────────────────────────────────────
 
 /// Candidate row for soul retrieval scoring (recency×importance×relevance in Rust).
+#[derive(Debug, Clone)]
 pub struct SoulCandidate {
     pub id: uuid::Uuid,
     pub content: String,

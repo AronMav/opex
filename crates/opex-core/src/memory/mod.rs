@@ -7,6 +7,7 @@
 
 pub mod admin;
 pub mod embedding;
+pub mod soul;
 pub mod store;
 pub mod watcher;
 
@@ -55,3 +56,4 @@ fn default_compression_age_days() -> u32 {
 
 // Types moved to opex-db so integration tests can access them.
 pub use opex_db::memory_queries::{MemoryChunk, MemoryResult};
+pub use opex_db::memory_queries::SoulCandidate;

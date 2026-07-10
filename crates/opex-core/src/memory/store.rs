@@ -365,6 +365,85 @@ impl MemoryStore {
         Ok(ids)
     }
 
+    // ── Soul (autobiographical memory) ───────────────────────────────────────
+
+    /// Soul retrieval (spec §1): embed query → top-50 candidates → Rust scoring.
+    /// No touch_accessed (recency is created_at-based).
+    pub async fn soul_retrieve(
+        &self,
+        query: &str,
+        top_k: usize,
+        agent_id: &str,
+        exclude_source: Option<&str>,
+    ) -> Result<Vec<crate::memory::SoulCandidate>> {
+        if query.trim().is_empty() || !self.is_available() || self.embedder.dim_mismatch() {
+            return Ok(vec![]);
+        }
+        let embedding = self.embedder.embed(query).await?;
+        let vec_str = fmt_vec(&embedding);
+        let cands = crate::db::memory_queries::soul_candidates(
+            &self.db, &vec_str, agent_id, exclude_source,
+            crate::memory::soul::SOUL_CANDIDATE_LIMIT,
+        ).await?;
+        Ok(crate::memory::soul::score_and_select(cands, chrono::Utc::now(), top_k))
+    }
+
+    /// Index one soul chunk (event). Internal-only path — agent-facing writers
+    /// always write kind='fact' (spec §5.2 spoofing invariant).
+    pub async fn index_soul(
+        &self,
+        content: &str,
+        source: &str,
+        agent_id: &str,
+        kind: &str,
+        importance: f32,
+        lineage: Option<Vec<uuid::Uuid>>,
+    ) -> Result<String> {
+        if self.embedder.dim_mismatch() {
+            anyhow::bail!("dim_mismatch: reindex required (POST /api/memory/reindex)");
+        }
+        let lang = self.validated_fts_language()?;
+        let embedding = self.embedder.embed(content).await?;
+        let vec_str = fmt_vec(&embedding);
+        let id = uuid::Uuid::new_v4().to_string();
+        crate::db::memory_queries::insert_chunk(
+            &self.db, &id, content, &vec_str, source, false, &lang, "private", agent_id,
+            kind, importance, lineage.as_deref(),
+        ).await?;
+        Ok(id)
+    }
+
+    /// Transactionally index a reflection batch: all-or-nothing commit is the
+    /// cycle-success marker (spec §3 — partial failure must not move MAX(created_at)).
+    pub async fn index_soul_batch_tx(
+        &self,
+        items: &[crate::memory::soul::SoulInsert],
+        agent_id: &str,
+    ) -> Result<Vec<String>> {
+        if items.is_empty() {
+            return Ok(vec![]);
+        }
+        if self.embedder.dim_mismatch() {
+            anyhow::bail!("dim_mismatch: reindex required (POST /api/memory/reindex)");
+        }
+        let lang = self.validated_fts_language()?;
+        let texts: Vec<&str> = items.iter().map(|i| i.content.as_str()).collect();
+        let embeddings = self.embedder.embed_batch(&texts).await?;
+        let mut tx = self.db.begin().await.context("begin soul batch tx")?;
+        let mut ids = Vec::with_capacity(items.len());
+        for (n, item) in items.iter().enumerate() {
+            let vec_str = fmt_vec(&embeddings[n]);
+            let id = uuid::Uuid::new_v4().to_string();
+            crate::db::memory_queries::insert_chunk_tx(
+                &mut tx, &id, &item.content, &vec_str, &item.source, false, &lang,
+                "private", agent_id, &item.kind, item.importance, item.lineage.as_deref(),
+            ).await?;
+            ids.push(id);
+        }
+        tx.commit().await.context("commit soul batch tx")?;
+        Ok(ids)
+    }
+
     // ── Get ──────────────────────────────────────────────────────────────────
 
     /// Retrieve chunks by ID, by source, or most-recently-accessed (when both empty).
@@ -855,5 +934,43 @@ mod search_hybrid_rrf_tests {
         assert!(!results.is_empty(), "FTS branch alone must surface the matching chunk");
         sqlx::query("DELETE FROM memory_chunks WHERE agent_id = $1")
             .bind(&agent).execute(&db).await.ok();
+    }
+
+    /// Спека §9 (rev3): soul-чанки не текут ни через hybrid, ни через
+    /// ЧИСТЫЙ FTS-fallback при недоступном embedder'е.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn generic_search_excludes_soul_kinds_in_hybrid_and_fts_fallback(db: PgPool) {
+        let agent = format!("test-soul-leak-{}", uuid::Uuid::new_v4());
+        // событие с embedding + tsv — матчится всеми ветками, будь оно kind='fact'
+        sqlx::query(
+            "INSERT INTO memory_chunks (id, agent_id, content, source, pinned, scope, kind, embedding, tsv) \
+             VALUES (gen_random_uuid(), $1, 'секретное событие биографии', 'soul_event:s', false, 'private', 'event', \
+                     '[0.5,0.5,0.5,0.5]'::vector, to_tsvector('russian', 'секретное событие биографии'))",
+        ).bind(&agent).execute(&db).await.unwrap();
+
+        // hybrid-режим
+        let store = MemoryStore::new(db.clone(), Arc::new(RrfFakeEmbedder), "russian".to_string());
+        let (results, _mode) = store.search("событие биографии", 10, &[], &agent).await.unwrap();
+        assert!(results.is_empty(), "hybrid must not surface soul kinds: {results:?}",
+                results = results.iter().map(|r| &r.content).collect::<Vec<_>>());
+
+        // FTS-fallback (embedder down)
+        let store2 = MemoryStore::new(db.clone(), Arc::new(DisabledEmbedder), "russian".to_string());
+        let (results2, mode2) = store2.search("событие биографии", 10, &[], &agent).await.unwrap();
+        assert_eq!(mode2, "fts");
+        assert!(results2.is_empty(), "FTS fallback must not surface soul kinds");
+        sqlx::query("DELETE FROM memory_chunks WHERE agent_id = $1").bind(&agent).execute(&db).await.ok();
+    }
+
+    /// Инвариант §5.2: обычный index-путь пишет kind='fact' (kind незадаваем снаружи).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn plain_index_writes_kind_fact(db: PgPool) {
+        let agent = format!("test-kind-fact-{}", uuid::Uuid::new_v4());
+        let store = MemoryStore::new(db.clone(), Arc::new(RrfFakeEmbedder), "russian".to_string());
+        let id = store.index("обычный факт", "manual", false, "private", &agent).await.unwrap();
+        let kind: String = sqlx::query_scalar("SELECT kind FROM memory_chunks WHERE id = $1::uuid")
+            .bind(&id).fetch_one(&db).await.unwrap();
+        assert_eq!(kind, "fact");
+        sqlx::query("DELETE FROM memory_chunks WHERE agent_id = $1").bind(&agent).execute(&db).await.ok();
     }
 }
