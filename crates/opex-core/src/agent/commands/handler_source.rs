@@ -81,14 +81,29 @@ pub fn derive_handler_commands(manifests: &[HandlerManifest], enabled: &[String]
             }];
             args.extend(valve_args(&m.config, lang));
             let (name, aliases) = match &m.command {
-                Some(ov) if is_valid_command_token(&ov.name) => (
-                    ov.name.clone(),
-                    ov.aliases
+                Some(ov) if is_valid_command_token(&ov.name) => {
+                    // Sanitize the alias list so the derived spec is internally
+                    // consistent: drop any alias equal to the command name and
+                    // dedup case-insensitively. `validate_registry` treats names
+                    // and aliases as one namespace, so a self-referential or
+                    // duplicated alias here would make `build_registry`'s
+                    // `.expect("merged registry must validate")` panic (a 500 for
+                    // the whole command system) — merge only dedups ACROSS specs.
+                    let name = ov.name.clone();
+                    let name_lc = name.to_lowercase();
+                    let mut seen = std::collections::HashSet::new();
+                    let aliases = ov
+                        .aliases
                         .iter()
                         .filter(|a| is_valid_command_token(a))
+                        .filter(|a| {
+                            let lc = a.to_lowercase();
+                            lc != name_lc && seen.insert(lc)
+                        })
                         .cloned()
-                        .collect(),
-                ),
+                        .collect();
+                    (name, aliases)
+                }
                 _ => (m.id.clone(), vec![]),
             };
             CommandSpec {
@@ -181,5 +196,24 @@ mod tests {
             CommandSourceKind::Handler { handler_id } => assert_eq!(handler_id, "summarize_video"),
             _ => panic!("expected Handler source"),
         }
+    }
+
+    #[test]
+    fn override_aliases_are_deduped_and_exclude_the_name() {
+        // A self-referential alias (== name) and a duplicate alias must be
+        // stripped so the derived spec passes validate_registry (single
+        // name/alias namespace) — otherwise build_registry's .expect panics.
+        let m: crate::agent::handler_registry::HandlerManifest = serde_json::from_value(json!({
+            "id":"summarize_video","execution":"async","tier":"workspace",
+            "descriptions":{"en":"d"},"config":[],
+            "command":{"name":"sv","aliases":["sv","SV","x","x"]}
+        }))
+        .unwrap();
+        let specs = derive_handler_commands(&[m], &[], "en");
+        assert_eq!(specs[0].name, "sv");
+        // "sv"/"SV" (== name, case-insensitive) dropped; "x" deduped to one.
+        assert_eq!(specs[0].aliases, vec!["x".to_string()]);
+        // The derived spec must validate on its own (the invariant merge relies on).
+        assert!(crate::agent::commands::spec::validate_registry(&specs).is_ok());
     }
 }

@@ -73,6 +73,23 @@ mod tests {
     }
 
     #[test]
+    fn self_referential_override_alias_does_not_panic() {
+        // Regression guard: a <command> whose alias repeats its own name once
+        // corrupted build_registry into a validate panic (whole /api/commands
+        // 500). derive_handler_commands now sanitizes aliases, so this builds.
+        let m: HandlerManifest = serde_json::from_value(json!({
+            "id":"summarize_video","execution":"async","tier":"workspace",
+            "descriptions":{"en":"d"},"config":[],
+            "command":{"name":"sv","aliases":["sv","dup","dup"]}
+        }))
+        .unwrap();
+        let reg = build_registry(&[m], &[], "en");
+        assert!(reg.resolve("sv").is_some());
+        assert!(reg.resolve("dup").is_some());
+        assert!(reg.resolve("status").is_some());
+    }
+
+    #[test]
     fn builtin_description_fallback() {
         use super::super::builtin::builtin_description;
         // Known builtin, unsupported/unknown lang → EN fallback.
