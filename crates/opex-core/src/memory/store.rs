@@ -298,7 +298,7 @@ impl MemoryStore {
         let vec_str = fmt_vec(&embedding);
         let id = uuid::Uuid::new_v4().to_string();
         crate::db::memory_queries::insert_chunk(
-            &self.db, &id, content, &vec_str, source, pinned, &lang, scope, agent_id,
+            &self.db, &id, content, &vec_str, source, pinned, &lang, scope, agent_id, "fact", 5.0, None,
         ).await?;
         Ok(id)
     }
@@ -328,7 +328,7 @@ impl MemoryStore {
         self.delete_by_source(source).await?;
         let id = uuid::Uuid::new_v4().to_string();
         crate::db::memory_queries::insert_chunk(
-            &self.db, &id, content, &vec_str, source, pinned, &lang, scope, agent_id,
+            &self.db, &id, content, &vec_str, source, pinned, &lang, scope, agent_id, "fact", 5.0, None,
         )
         .await?;
         Ok(id)
@@ -356,7 +356,7 @@ impl MemoryStore {
             let vec_str = fmt_vec(&embeddings[i]);
             let id = uuid::Uuid::new_v4().to_string();
             crate::db::memory_queries::insert_chunk_tx(
-                &mut tx, &id, content, &vec_str, source, *pinned, &lang, scope, agent_id,
+                &mut tx, &id, content, &vec_str, source, *pinned, &lang, scope, agent_id, "fact", 5.0, None,
             ).await
             .context("failed to insert memory chunk in batch")?;
             ids.push(id);

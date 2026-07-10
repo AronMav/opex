@@ -25,6 +25,8 @@ pub struct MemoryChunk {
     // (decay formula uses `now() - accessed_at`); the Rust struct copy is
     // currently unread. Kept for future use when struct-side decay runs locally.
     pub accessed_at: DateTime<Utc>,
+    pub kind: String,
+    pub importance: f32,
 }
 
 /// Shared INSERT SQL for `memory_chunks`. Lang is bound as `$8::regconfig` so
@@ -33,9 +35,9 @@ pub struct MemoryChunk {
 /// mapped to a domain error by [`map_fts_lang_error`].
 const INSERT_CHUNK_SQL: &str = r"
     INSERT INTO memory_chunks
-        (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, scope)
+        (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, scope, kind, importance, lineage)
     VALUES
-        ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector($8::regconfig, $3), $7)
+        ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector($8::regconfig, $3), $7, $9, $10, $11)
 ";
 
 /// Translate Postgres errors raised by an unknown text-search config
@@ -82,6 +84,8 @@ fn row_to_memory_chunk(r: &sqlx::postgres::PgRow) -> MemoryChunk {
         relevance_score: r.get("relevance_score"),
         created_at: r.get("created_at"),
         accessed_at: r.get("accessed_at"),
+        kind: r.get("kind"),
+        importance: r.get::<f32, _>("importance"),
     }
 }
 
@@ -195,9 +199,10 @@ pub async fn fetch_pinned(db: &PgPool, agent_id: &str) -> Result<Vec<MemoryChunk
     let rows = sqlx::query(
         r"SELECT id::text, content, COALESCE(source,'') AS source, pinned,
                   COALESCE(relevance_score, 1.0)::float8 AS relevance_score,
-                  created_at, accessed_at
+                  created_at, accessed_at, kind, importance
            FROM memory_chunks
            WHERE ($1 = '' OR agent_id = $1 OR scope = 'shared') AND pinned = true
+             AND kind = 'fact'
            ORDER BY created_at ASC
            LIMIT $2",
     )
@@ -237,6 +242,7 @@ pub async fn search_semantic(
            FROM memory_chunks
            WHERE embedding IS NOT NULL
              AND ($3 = '' OR agent_id = $3 OR scope = 'shared')
+             AND kind = 'fact'
            ORDER BY embedding <=> $1::vector
            LIMIT $2",
     )
@@ -358,6 +364,7 @@ pub async fn search_trigram(
            FROM memory_chunks
            WHERE content % $1
              AND ($3 = '' OR agent_id = $3 OR scope = 'shared')
+             AND kind = 'fact'
            ORDER BY similarity DESC
            LIMIT $2",
     )
@@ -402,6 +409,7 @@ async fn search_fts_inner(
            FROM memory_chunks
            WHERE tsv @@ {tsquery_fn}($4::regconfig, $1)
              AND ($3 = '' OR agent_id = $3 OR scope = 'shared')
+             AND kind = 'fact'
            ORDER BY ts_rank_cd(tsv, {tsquery_fn}($4::regconfig, $1)) DESC,
                     relevance_score DESC
            LIMIT $2",
@@ -481,6 +489,9 @@ async fn insert_chunk_inner<'e, E>(
     lang: &str,
     scope: &str,
     agent_id: &str,
+    kind: &str,
+    importance: f32,
+    lineage: Option<&[uuid::Uuid]>,
 ) -> Result<()>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
@@ -494,6 +505,9 @@ where
         .bind(pinned)       // $6
         .bind(scope)        // $7
         .bind(lang)         // $8 (regconfig)
+        .bind(kind)         // $9
+        .bind(importance)   // $10
+        .bind(lineage)      // $11
         .execute(executor)
         .await
         .map_err(|e| map_fts_lang_error(lang, e))
@@ -513,8 +527,11 @@ pub async fn insert_chunk(
     lang: &str,
     scope: &str,
     agent_id: &str,
+    kind: &str,
+    importance: f32,
+    lineage: Option<&[uuid::Uuid]>,
 ) -> Result<()> {
-    insert_chunk_inner(db, id, content, vec_str, source, pinned, lang, scope, agent_id).await
+    insert_chunk_inner(db, id, content, vec_str, source, pinned, lang, scope, agent_id, kind, importance, lineage).await
 }
 
 /// Insert a new memory chunk within an existing transaction.
@@ -530,8 +547,11 @@ pub async fn insert_chunk_tx(
     lang: &str,
     scope: &str,
     agent_id: &str,
+    kind: &str,
+    importance: f32,
+    lineage: Option<&[uuid::Uuid]>,
 ) -> Result<()> {
-    insert_chunk_inner(&mut **tx, id, content, vec_str, source, pinned, lang, scope, agent_id).await
+    insert_chunk_inner(&mut **tx, id, content, vec_str, source, pinned, lang, scope, agent_id, kind, importance, lineage).await
 }
 
 // ── Get ──────────────────────────────────────────────────────────────────────
@@ -541,7 +561,7 @@ pub async fn get_chunk_by_id(db: &PgPool, id: &str) -> Result<Vec<MemoryChunk>> 
     let rows = sqlx::query(
         r"SELECT id::text, content, COALESCE(source,'') AS source, pinned,
                   COALESCE(relevance_score,1.0)::float8 AS relevance_score,
-                  created_at, accessed_at
+                  created_at, accessed_at, kind, importance
            FROM memory_chunks WHERE id = $1::uuid",
     )
     .bind(id)
@@ -560,7 +580,7 @@ pub async fn get_chunks_by_source(
     let rows = sqlx::query(
         r"SELECT id::text, content, COALESCE(source,'') AS source, pinned,
                   COALESCE(relevance_score,1.0)::float8 AS relevance_score,
-                  created_at, accessed_at
+                  created_at, accessed_at, kind, importance
            FROM memory_chunks WHERE source = $1
            ORDER BY created_at DESC LIMIT $2",
     )
@@ -577,7 +597,7 @@ pub async fn get_chunks_recent(db: &PgPool, limit: i64) -> Result<Vec<MemoryChun
     let rows = sqlx::query(
         r"SELECT id::text, content, COALESCE(source,'') AS source, pinned,
                   COALESCE(relevance_score,1.0)::float8 AS relevance_score,
-                  created_at, accessed_at
+                  created_at, accessed_at, kind, importance
            FROM memory_chunks
            ORDER BY accessed_at DESC LIMIT $1",
     )
@@ -640,6 +660,123 @@ pub async fn enqueue_reindex_task(db: &PgPool, params: serde_json::Value) -> Res
     .fetch_one(db)
     .await
     .context("failed to enqueue reindex task")
+}
+
+// ── Soul (autobiographical memory) ──────────────────────────────────────────
+
+/// Candidate row for soul retrieval scoring (recency×importance×relevance in Rust).
+pub struct SoulCandidate {
+    pub id: uuid::Uuid,
+    pub content: String,
+    pub source: String,
+    pub kind: String,
+    pub importance: f32,
+    pub created_at: DateTime<Utc>,
+    pub similarity: f64,
+}
+
+fn row_to_soul_candidate(r: &sqlx::postgres::PgRow) -> SoulCandidate {
+    use sqlx::Row;
+    SoulCandidate {
+        id: r.get("id"),
+        content: r.get("content"),
+        source: r.get("source"),
+        kind: r.get("kind"),
+        importance: r.get("importance"),
+        created_at: r.get("created_at"),
+        similarity: r.try_get("similarity").unwrap_or(0.0),
+    }
+}
+
+/// Top-N soul chunks (event/reflection) by cosine distance. No touch_accessed —
+/// soul recency is computed from created_at (spec §1: write-on-read disabled).
+pub async fn soul_candidates(
+    db: &PgPool,
+    vec_str: &str,
+    agent_id: &str,
+    exclude_source: Option<&str>,
+    limit: i64,
+) -> Result<Vec<SoulCandidate>> {
+    let rows = sqlx::query(
+        r"SELECT id, content, COALESCE(source,'') AS source, kind, importance,
+                  created_at,
+                  (1.0 - (embedding <=> $1::vector))::float8 AS similarity
+           FROM memory_chunks
+           WHERE embedding IS NOT NULL
+             AND agent_id = $2
+             AND kind IN ('event', 'reflection')
+             AND ($3::text IS NULL OR source <> $3)
+           ORDER BY embedding <=> $1::vector
+           LIMIT $4",
+    )
+    .bind(vec_str)
+    .bind(agent_id)
+    .bind(exclude_source)
+    .bind(limit)
+    .fetch_all(db)
+    .await
+    .context("soul candidates query failed")?;
+    Ok(rows.iter().map(row_to_soul_candidate).collect())
+}
+
+/// Marker of the last successfully committed reflection cycle (spec §3):
+/// reflections are written in one transaction, so MAX(created_at) is safe.
+pub async fn latest_reflection_at(db: &PgPool, agent_id: &str) -> Result<Option<DateTime<Utc>>> {
+    sqlx::query_scalar(
+        "SELECT MAX(created_at) FROM memory_chunks WHERE agent_id = $1 AND kind = 'reflection'",
+    )
+    .bind(agent_id)
+    .fetch_one(db)
+    .await
+    .context("latest_reflection_at query failed")
+}
+
+/// (source, importance) of events created after `since` (all events when None).
+/// Per-session contribution capping happens in Rust (spec §3).
+pub async fn event_importance_since(
+    db: &PgPool,
+    agent_id: &str,
+    since: Option<DateTime<Utc>>,
+) -> Result<Vec<(String, f32)>> {
+    let rows: Vec<(String, f32)> = sqlx::query_as(
+        r"SELECT COALESCE(source,''), importance FROM memory_chunks
+           WHERE agent_id = $1 AND kind = 'event'
+             AND ($2::timestamptz IS NULL OR created_at > $2)",
+    )
+    .bind(agent_id)
+    .bind(since)
+    .fetch_all(db)
+    .await
+    .context("event_importance_since query failed")?;
+    Ok(rows)
+}
+
+/// Freshest soul chunks for the reflection window (created_at DESC).
+pub async fn recent_soul_chunks(db: &PgPool, agent_id: &str, limit: i64) -> Result<Vec<SoulCandidate>> {
+    let rows = sqlx::query(
+        r"SELECT id, content, COALESCE(source,'') AS source, kind, importance,
+                  created_at, 0.0::float8 AS similarity
+           FROM memory_chunks
+           WHERE agent_id = $1 AND kind IN ('event', 'reflection')
+           ORDER BY created_at DESC
+           LIMIT $2",
+    )
+    .bind(agent_id)
+    .bind(limit)
+    .fetch_all(db)
+    .await
+    .context("recent_soul_chunks query failed")?;
+    Ok(rows.iter().map(row_to_soul_candidate).collect())
+}
+
+/// kind of a single chunk (None when the id does not exist / is not a UUID).
+pub async fn chunk_kind(db: &PgPool, id: &str) -> Result<Option<String>> {
+    let Ok(uuid) = id.parse::<uuid::Uuid>() else { return Ok(None) };
+    sqlx::query_scalar("SELECT kind FROM memory_chunks WHERE id = $1")
+        .bind(uuid)
+        .fetch_optional(db)
+        .await
+        .context("chunk_kind query failed")
 }
 
 #[cfg(test)]
@@ -742,6 +879,9 @@ mod tests {
             "russian",
             "shared",
             "test_agent",
+            "fact",
+            5.0,
+            None,
         ).await;
         assert!(result.is_ok(), "russian lang insert failed: {:?}", result);
     }
@@ -759,6 +899,9 @@ mod tests {
             "english",
             "shared",
             "test_agent",
+            "fact",
+            5.0,
+            None,
         ).await;
         assert!(result.is_ok(), "english lang insert failed: {:?}", result);
     }
@@ -776,6 +919,9 @@ mod tests {
             "klingon",
             "shared",
             "test_agent",
+            "fact",
+            5.0,
+            None,
         ).await;
         assert!(result.is_err(), "klingon should be rejected");
         // Use {:#} so anyhow's alternate display walks the full chain — the
@@ -800,6 +946,9 @@ mod tests {
             attack,
             "shared",
             "test_agent",
+            "fact",
+            5.0,
+            None,
         ).await;
         assert!(result.is_err(), "injection attempt should be rejected");
         let count: (i64,) = sqlx::query_as("SELECT count(*) FROM memory_chunks")
@@ -821,11 +970,95 @@ mod tests {
             "russian",
             "shared",
             "test_agent",
+            "fact",
+            5.0,
+            None,
         ).await;
         assert!(result.is_ok(), "tx insert failed: {:?}", result);
         tx.commit().await.unwrap();
         let row: (String,) = sqlx::query_as("SELECT content FROM memory_chunks WHERE id = $1::uuid")
             .bind(&id).fetch_one(&pool).await.unwrap();
         assert_eq!(row.0, "tx test content");
+    }
+
+    // ── Soul kind-filtering tests (T2) ───────────────────────────────
+
+    async fn insert_soul_row(pool: &sqlx::PgPool, agent: &str, kind: &str, source: &str, importance: f32) -> uuid::Uuid {
+        sqlx::query_scalar(
+            "INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, scope, kind, importance, tsv) \
+             VALUES (gen_random_uuid(), $1, 'событие тест', '[0.5,0.5,0.5,0.5]'::vector, $2, false, 'private', $3, $4, to_tsvector('simple','событие тест')) \
+             RETURNING id",
+        )
+        .bind(agent).bind(source).bind(kind).bind(importance)
+        .fetch_one(pool).await.unwrap()
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn generic_search_paths_exclude_soul_kinds(pool: sqlx::PgPool) {
+        insert_soul_row(&pool, "A", "event", "soul_event:s1", 9.0).await;
+        insert_soul_row(&pool, "A", "reflection", "soul_reflection", 9.0).await;
+        insert_soul_row(&pool, "A", "fact", "manual", 5.0).await;
+
+        let sem = super::search_semantic(&pool, "[0.5,0.5,0.5,0.5]", 50, "A").await.unwrap();
+        assert!(sem.iter().all(|r| r.source == "manual"), "semantic must only see kind='fact'");
+
+        let fts = super::search_fts(&pool, "событие", 50, "simple", "A").await.unwrap();
+        assert!(fts.iter().all(|r| r.source == "manual"), "fts must only see kind='fact'");
+
+        let fts_or = super::search_fts_or(&pool, "событие тест", 50, "simple", "A").await.unwrap();
+        assert!(fts_or.iter().all(|r| r.source == "manual"), "fts_or must only see kind='fact'");
+
+        let trgm = super::search_trigram(&pool, "событие", 50, 0.1, "A").await.unwrap();
+        assert!(trgm.iter().all(|r| r.source == "manual"), "trigram must only see kind='fact'");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn fetch_pinned_excludes_soul_kinds(pool: sqlx::PgPool) {
+        sqlx::query(
+            "INSERT INTO memory_chunks (id, agent_id, content, source, pinned, scope, kind) \
+             VALUES (gen_random_uuid(), 'A', 'pinned event', 'soul_event:s', true, 'private', 'event')",
+        ).execute(&pool).await.unwrap();
+        let pinned = super::fetch_pinned(&pool, "A").await.unwrap();
+        assert!(pinned.is_empty(), "pinned soul chunk must not enter L0");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn soul_candidates_filters_agent_kind_and_exclude_source(pool: sqlx::PgPool) {
+        insert_soul_row(&pool, "A", "event", "soul_event:s1", 7.0).await;
+        insert_soul_row(&pool, "A", "event", "soul_event:s2", 7.0).await;
+        insert_soul_row(&pool, "A", "fact", "manual", 5.0).await;
+        insert_soul_row(&pool, "B", "event", "soul_event:s3", 7.0).await;
+
+        let all = super::soul_candidates(&pool, "[0.5,0.5,0.5,0.5]", "A", None, 50).await.unwrap();
+        assert_eq!(all.len(), 2);
+        let excl = super::soul_candidates(&pool, "[0.5,0.5,0.5,0.5]", "A", Some("soul_event:s1"), 50).await.unwrap();
+        assert_eq!(excl.len(), 1);
+        assert_eq!(excl[0].source, "soul_event:s2");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn migration_defaults_cover_legacy_rows(pool: sqlx::PgPool) {
+        // Строка «до-076 формы» (kind/importance/lineage не указаны) получает дефолты —
+        // эмуляция legacy-данных, по которым прокатилась миграция (спека §9).
+        sqlx::query(
+            "INSERT INTO memory_chunks (id, agent_id, content, source, pinned, scope) \
+             VALUES (gen_random_uuid(), 'A', 'legacy', 'manual', false, 'private')",
+        ).execute(&pool).await.unwrap();
+        let (kind, importance): (String, f32) = sqlx::query_as(
+            "SELECT kind, importance FROM memory_chunks WHERE agent_id = 'A'",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(kind, "fact");
+        assert_eq!(importance, 5.0);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn reflection_marker_and_event_counter(pool: sqlx::PgPool) {
+        assert!(super::latest_reflection_at(&pool, "A").await.unwrap().is_none());
+        insert_soul_row(&pool, "A", "event", "soul_event:s1", 8.0).await;
+        insert_soul_row(&pool, "A", "event", "soul_event:s1", 6.0).await;
+        let pairs = super::event_importance_since(&pool, "A", None).await.unwrap();
+        assert_eq!(pairs.len(), 2);
+        insert_soul_row(&pool, "A", "reflection", "soul_reflection", 7.0).await;
+        assert!(super::latest_reflection_at(&pool, "A").await.unwrap().is_some());
     }
 }
