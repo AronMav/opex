@@ -285,6 +285,7 @@ pub async fn start_agent_from_config(
         &workspace_dir,
         name,
         agent_cfg.agent.base,
+        agent_cfg.agent.soul.enabled,
     ).await {
         tracing::warn!(agent = %name, error = %e, "failed to scaffold workspace");
     }

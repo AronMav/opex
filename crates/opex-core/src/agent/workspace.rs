@@ -122,7 +122,7 @@ const PRIVILEGED_ROOT_FILES: &[&str] = &["TOOLS.md"];
 const TOOLS_DIR: &str = "tools";
 
 /// Per-agent identity files that cannot be deleted (but can be edited).
-const IDENTITY_FILES: &[&str] = &["SOUL.md", "IDENTITY.md", "MEMORY.md", "HEARTBEAT.md"];
+const IDENTITY_FILES: &[&str] = &["SOUL.md", "IDENTITY.md", "MEMORY.md", "HEARTBEAT.md", "SELF.md"];
 
 /// Extract the filename component from a path (e.g. "agents/main/SOUL.md" → "SOUL.md").
 ///
@@ -152,6 +152,11 @@ fn is_read_only(workspace_dir: &str, resolved: &Path, base: bool) -> bool {
     }
     // Root-level base files (only base agents can modify)
     if !base && PRIVILEGED_ROOT_FILES.iter().any(|name| resolved == root.join(name)) {
+        return true;
+    }
+    // SELF.md is written only by the reflection engine (spec §5.1) — read-only
+    // for agent tools regardless of base status.
+    if resolved.file_name().and_then(|n| n.to_str()) == Some("SELF.md") {
         return true;
     }
     // Base agent: SOUL.md and IDENTITY.md are always read-only (even for the agent itself).
@@ -265,6 +270,7 @@ pub async fn load_workspace_prompt(workspace_dir: &str, agent_name: &str) -> Res
             if name.ends_with(".md")
                 && !WORKSPACE_FILES.contains(&name.as_str())
                 && name != "HEARTBEAT.md"
+                && name != "SELF.md"
             {
                 extra_files.push(name);
             }
@@ -363,6 +369,7 @@ pub async fn load_workspace_prompt_excluding_claude_md(
                 && !WORKSPACE_FILES.contains(&name.as_str())
                 && name != "HEARTBEAT.md"
                 && name != "CLAUDE.md"
+                && name != "SELF.md"
             {
                 extra_files.push(name);
             }
@@ -898,6 +905,15 @@ pub async fn rename_workspace_file(
     old_path: &str,
     new_path: &str,
 ) -> Result<()> {
+    // Identity files are pinned by NAME on both ends: renaming one away breaks
+    // identity; renaming an arbitrary file INTO one of these names overwrites
+    // a protected file, bypassing write-protection (spec §5.1 rev3).
+    for (label, p) in [("old_path", old_path), ("new_path", new_path)] {
+        if IDENTITY_FILES.contains(&file_basename(p)?) {
+            anyhow::bail!("'{p}' ({label}) is a protected identity file and cannot be renamed");
+        }
+    }
+
     let src = validate_workspace_path(workspace_dir, agent_name, old_path).await?;
     let dst = validate_workspace_path(workspace_dir, agent_name, new_path).await?;
 
@@ -1000,7 +1016,12 @@ pub async fn edit_workspace_file(
 
 /// Ensure workspace directory for an agent exists with default scaffold files.
 /// Only creates files that don't already exist — safe to call on every start.
-pub async fn ensure_workspace_scaffold(workspace_dir: &str, agent_name: &str, is_base: bool) -> Result<()> {
+pub async fn ensure_workspace_scaffold(
+    workspace_dir: &str,
+    agent_name: &str,
+    is_base: bool,
+    soul_enabled: bool,
+) -> Result<()> {
     let agent_dir = agent_dir(workspace_dir, agent_name);
     fs::create_dir_all(&agent_dir).await?;
 
@@ -1070,6 +1091,16 @@ pub async fn ensure_workspace_scaffold(workspace_dir: &str, agent_name: &str, is
     if !skills_dir.exists() {
         fs::create_dir_all(&skills_dir).await?;
         tracing::info!(dir = %skills_dir.display(), "created shared skills directory");
+    }
+
+    // SELF.md: created lazily ONLY when the soul is enabled — a disabled agent's
+    // prompt must not change by a byte (spec §4/§9 regression invariant).
+    if soul_enabled {
+        let self_path = agent_dir.join("SELF.md");
+        if !self_path.exists() {
+            fs::write(&self_path, crate::agent::soul::self_md::self_template(agent_name)).await?;
+            tracing::info!(agent = %agent_name, "created SELF.md from template");
+        }
     }
 
     tracing::info!(agent = %agent_name, dir = %agent_dir.display(), "workspace scaffold ensured");
@@ -1274,6 +1305,21 @@ mod tests {
         assert!(is_read_only(ws.to_str().unwrap(), &soul, true));
     }
 
+    /// SELF.md is written only by the reflection engine — protected for ALL
+    /// agents, base and non-base alike (unlike SOUL.md/IDENTITY.md, which are
+    /// only protected for base agents).
+    #[test]
+    fn is_read_only_blocks_self_md_for_base_and_non_base() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().join("workspace");
+        let agent_dir_path = ws.join("agents").join("TestAgent");
+        std::fs::create_dir_all(&agent_dir_path).unwrap();
+        let self_md = agent_dir_path.join("SELF.md");
+        std::fs::write(&self_md, "original").unwrap();
+        assert!(is_read_only(ws.to_str().unwrap(), &self_md, true), "base agent must not write SELF.md");
+        assert!(is_read_only(ws.to_str().unwrap(), &self_md, false), "non-base agent must not write SELF.md");
+    }
+
     #[test]
     fn is_read_only_allows_normal_file_for_base() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1363,6 +1409,42 @@ mod tests {
         // Verify SOUL.md was NOT modified
         let content = std::fs::read_to_string(agent_dir_path.join("SOUL.md")).unwrap();
         assert_eq!(content, "original soul", "SOUL.md must not be modified");
+    }
+
+    // ── rename_workspace_file — identity-file guard (both ends) ─────────────
+
+    /// Renaming a protected identity file AWAY (e.g. hiding SELF.md from the
+    /// reflection engine's own read path) must be rejected.
+    #[tokio::test]
+    async fn rename_workspace_file_rejects_identity_file_as_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().join("workspace");
+        let agent_dir_path = ws.join("agents").join("TestAgent");
+        std::fs::create_dir_all(&agent_dir_path).unwrap();
+        std::fs::write(agent_dir_path.join("SELF.md"), "original").unwrap();
+
+        let ws_str = ws.to_str().unwrap();
+        let result = rename_workspace_file(ws_str, "TestAgent", "SELF.md", "note.md").await;
+        assert!(result.is_err(), "renaming SELF.md away must be rejected");
+        assert!(agent_dir_path.join("SELF.md").exists(), "SELF.md must remain in place");
+    }
+
+    /// Renaming an arbitrary file INTO a protected identity name (overwriting
+    /// it via rename, bypassing write-protection) must be rejected.
+    #[tokio::test]
+    async fn rename_workspace_file_rejects_identity_file_as_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().join("workspace");
+        let agent_dir_path = ws.join("agents").join("TestAgent");
+        std::fs::create_dir_all(&agent_dir_path).unwrap();
+        std::fs::write(agent_dir_path.join("note.md"), "attacker content").unwrap();
+        std::fs::write(agent_dir_path.join("SELF.md"), "original").unwrap();
+
+        let ws_str = ws.to_str().unwrap();
+        let result = rename_workspace_file(ws_str, "TestAgent", "note.md", "SELF.md").await;
+        assert!(result.is_err(), "renaming a file INTO SELF.md must be rejected");
+        let content = std::fs::read_to_string(agent_dir_path.join("SELF.md")).unwrap();
+        assert_eq!(content, "original", "SELF.md must not be overwritten via rename");
     }
 
     // ── validate_workspace_path — subdirectory redirect regression ──────────
