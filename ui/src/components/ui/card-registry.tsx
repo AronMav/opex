@@ -4,6 +4,7 @@ import React, { createElement, Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { TableCard, MetricCard } from "@/components/ui/rich-card";
 import { HandlerMenuCard } from "@/components/ui/handler-menu-card";
+import { CommandArgsMenuCard } from "@/components/ui/command-args-menu-card";
 
 // ── Card component type ────────────────────────────────────────────────────
 
@@ -15,6 +16,7 @@ export const CARD_REGISTRY = new Map<string, CardComponent>([
   ["table", TableCard],
   ["metric", MetricCard],
   ["handler_menu", HandlerMenuCard],
+  ["command_args_menu", CommandArgsMenuCard],
 ]);
 
 // ── Error boundary ─────────────────────────────────────────────────────────
