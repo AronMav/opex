@@ -145,6 +145,10 @@ def parse_descriptor(source: str, tier: str) -> HandlerDescriptor:
                     "default": f.get("default"),
                     "label": f.get("label") or name,
                     "description": f.get("description", ""),
+                    "choices": (
+                        [c.strip() for c in f.get("choices", "").split(",") if c.strip()]
+                        or None
+                    ),
                 }
             )
 

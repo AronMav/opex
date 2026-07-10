@@ -297,3 +297,35 @@ def test_no_command_is_none():
         "# </handler>"
     )
     assert parse_descriptor(src, tier="workspace").command is None
+
+
+def test_config_field_choices_parsed():
+    src = """
+# <handler>
+#   <id>x</id>
+#   <label lang="en">X</label>
+#   <match><mime>audio/*</mime></match>
+#   <execution>async</execution>
+#   <config>
+#     <field name="quality" type="string" default="high" label="Q" choices="low,high"/>
+#   </config>
+# </handler>
+"""
+    d = parse_descriptor(src, tier="workspace")
+    field = d.config[0]
+    assert field["choices"] == ["low", "high"]
+
+
+def test_config_field_no_choices_is_none():
+    src = """
+# <handler>
+#   <id>x</id>
+#   <label lang="en">X</label>
+#   <match><mime>audio/*</mime></match>
+#   <execution>async</execution>
+#   <config>
+#     <field name="lang" type="string" default="ru" label="L"/>
+#   </config>
+# </handler>
+"""
+    assert parse_descriptor(src, tier="workspace").config[0]["choices"] is None

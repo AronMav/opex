@@ -27,6 +27,7 @@
 #     <field name="output_dir" type="string" default="" label="Полный путь к каталогу" description="Абсолютный путь к папке для конспектов (напр. /home/user/Notes). Если пусто — папка внутри workspace/zettelkasten (см. Папка в хранилище)"/>
 #     <field name="summary_folder" type="string" default="Summary" label="Папка в хранилище" description="Подпапка внутри workspace/zettelkasten, используется когда полный путь не задан"/>
 #     <field name="include_transcript" type="bool" default="true" label="Вставлять транскрипт" description="Добавлять полный транскрипт в свёрнутом блоке в конце заметки"/>
+#     <field name="summary_length" type="string" default="medium" label="Длина конспекта" description="short | medium | long" choices="short,medium,long"/>
 #   </config>
 #   <order>20</order>
 #   <enabled>true</enabled>
@@ -196,6 +197,35 @@ REDUCE_SYSTEM_PROMPT: str = (
     "НЕ добавляй таймкоды. НЕ вставляй изображения или embed-строки. По-русски."
 )
 
+# ── summary_length valve: adjusts the final digest instruction ────────────────
+# Appended to SYSTEM_PROMPT / REDUCE_SYSTEM_PROMPT (the FINAL digest step —
+# single-pass or reduce). Chunk map-step prompts stay untouched since they're
+# intermediate material that the reduce step re-shapes to the requested length.
+# "medium" (default) adds nothing — current behavior is preserved exactly.
+LENGTH_INSTRUCTIONS: dict[str, str] = {
+    "short": (
+        "\n\nВАЖНО — ЗАПРОШЕНА КРАТКАЯ ВЕРСИЯ: раздел ## Конспект должен быть "
+        "КОРОТКИМ — всего 5-7 пунктов списком (-), только самое главное и "
+        "практически применимое. Это ПЕРЕОПРЕДЕЛЯЕТ инструкцию о развёрнутости "
+        "выше — не расписывай второстепенные детали и нюансы."
+    ),
+    "long": (
+        "\n\nВАЖНО — ЗАПРОШЕНА МАКСИМАЛЬНО ПОДРОБНАЯ ВЕРСИЯ: раздел ## Конспект "
+        "должен быть МАКСИМАЛЬНО ПОДРОБНЫМ — не пропускай ни одной детали, "
+        "включай все нюансы, примеры, числа и пояснения из транскрипта, даже "
+        "второстепенные."
+    ),
+}
+
+
+def _length_suffix(length: str) -> str:
+    """Extra system-prompt instruction for `length` ('short'/'medium'/'long').
+
+    Unknown values behave like "medium" (no-op) — fail-soft, never breaks the
+    digest.
+    """
+    return LENGTH_INSTRUCTIONS.get(length, "")
+
 
 # ── data types ────────────────────────────────────────────────────────────────
 
@@ -318,8 +348,12 @@ def _strip_image_embeds(body: str) -> str:
 def build_single_pass_messages(
     transcript: str,
     duration: float = 0.0,
+    length: str = "medium",
 ) -> list[dict]:
     """Messages for the single-pass digest (short transcripts).
+
+    `length` ('short'/'medium'/'long') is the operator-set `summary_length`
+    valve; "medium" is the default and matches the original prompt exactly.
 
     NOTE: Frame descriptions are DEFERRED — the Rust version passes vision
     frame descriptions here. This implementation is transcript-only.
@@ -331,7 +365,7 @@ def build_single_pass_messages(
     user_parts.append(strip_transcript_timecodes(transcript))
     user_parts.append("\n\nСделай конспект по инструкции.")
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": SYSTEM_PROMPT + _length_suffix(length)},
         {"role": "user", "content": "\n".join(user_parts)},
     ]
 
@@ -358,8 +392,12 @@ def build_chunk_messages(
     ]
 
 
-def build_reduce_messages(partials: list[str]) -> list[dict]:
-    """Messages for the reduce step: merge per-chunk partial conspects."""
+def build_reduce_messages(partials: list[str], length: str = "medium") -> list[dict]:
+    """Messages for the reduce step: merge per-chunk partial conspects.
+
+    `length` ('short'/'medium'/'long') is the operator-set `summary_length`
+    valve; "medium" is the default and matches the original prompt exactly.
+    """
     total = len(partials)
     user_parts = [
         f"Ниже {total} конспектов последовательных фрагментов лекции (по порядку времени). "
@@ -369,7 +407,7 @@ def build_reduce_messages(partials: list[str]) -> list[dict]:
         user_parts.append(f"===== Фрагмент {i + 1}/{total} =====\n{p.strip()}\n\n")
     user_parts.append("Склей фрагменты в единый конспект, сохранив все детали.")
     return [
-        {"role": "system", "content": REDUCE_SYSTEM_PROMPT},
+        {"role": "system", "content": REDUCE_SYSTEM_PROMPT + _length_suffix(length)},
         {"role": "user", "content": "".join(user_parts)},
     ]
 
@@ -525,6 +563,12 @@ async def run(ctx, file, params):
     # ── 3. digest ─────────────────────────────────────────────────────────────
     await ctx.progress("digest", 50)
 
+    # Operator-set per-agent valve (see <config> above). Defaults to "medium",
+    # which reproduces the original prompt byte-for-byte (no suffix added).
+    summary_length = str(ctx.config.get("summary_length") or "medium").strip().lower()
+    if summary_length not in ("short", "medium", "long"):
+        summary_length = "medium"
+
     if should_chunk(transcript):
         # Map-reduce path (long video: > DIGEST_CHUNK_THRESHOLD_MIN minutes)
         chunks = split_transcript_by_time(transcript, DIGEST_CHUNK_MINUTES)
@@ -539,16 +583,16 @@ async def run(ctx, file, params):
             partials = await asyncio.gather(
                 *[_map_chunk(c, i) for i, c in enumerate(chunks)]
             )
-            # reduce
-            reduce_msgs = build_reduce_messages(list(partials))
+            # reduce (length valve applies to the FINAL merged digest)
+            reduce_msgs = build_reduce_messages(list(partials), length=summary_length)
             llm_body = await ctx.llm.complete(reduce_msgs)
         else:
             # Degenerate: only one chunk despite should_chunk=True; go single-pass
-            msgs = build_single_pass_messages(transcript)
+            msgs = build_single_pass_messages(transcript, length=summary_length)
             llm_body = await ctx.llm.complete(msgs)
     else:
         # Single-pass path (short video)
-        msgs = build_single_pass_messages(transcript)
+        msgs = build_single_pass_messages(transcript, length=summary_length)
         llm_body = await ctx.llm.complete(msgs)
 
     # ── 4. assemble note + return ─────────────────────────────────────────────
