@@ -39,6 +39,10 @@ vi.mock("@/lib/queries", () => ({
   useProviderModelsDetailed: () => ({ data: [] }),
 }));
 
+vi.mock("@/hooks/use-commands", () => ({
+  useCommands: () => ({ data: [] }),
+}));
+
 vi.mock("@/stores/auth-store", () => ({
   useAuthStore: Object.assign(
     (selector?: (s: Record<string, unknown>) => unknown) => {

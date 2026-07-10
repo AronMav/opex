@@ -509,6 +509,52 @@ export interface HandlerSourceDto {
   source_kind: "builtin" | "override" | "workspace";
 }
 
+// ── Command registry (slash-command autocomplete) ──────────────────────────────
+// Source: crates/opex-core/src/agent/commands/spec.rs (CommandSpec / CommandArg)
+// GET /api/commands → { commands: CommandInfo[], version: string }
+// Hand-mirrored (no ts-rs codegen for this gateway DTO yet). Fields beyond
+// name/description/category/aliases/args are optional here because the web
+// composer (Phase 1) only needs the core fields to render the dropdown.
+
+export interface CommandChoice {
+  value: string;
+  label: string;
+}
+
+export type CommandChoices =
+  | { kind: "static"; values: CommandChoice[] }
+  | { kind: "dynamic"; provider: string };
+
+export interface CommandArgInfo {
+  name: string;
+  description?: string;
+  arg_type?: "string" | "number" | "boolean";
+  required?: boolean;
+  choices?: CommandChoices;
+  capture_remaining?: boolean;
+  menu?: boolean;
+}
+
+export type CommandSource =
+  | { kind: "builtin" }
+  | { kind: "handler"; handler_id: string };
+
+export interface CommandInfo {
+  name: string;
+  description: string;
+  category: string;
+  aliases: string[];
+  args: CommandArgInfo[];
+  scope?: "text" | "native" | "both";
+  visibility?: "all" | "base_only";
+  source?: CommandSource;
+}
+
+export interface CommandListResponse {
+  commands: CommandInfo[];
+  version: string;
+}
+
 /** One entry from GET /api/handlers/allowlist — the 5 FSE_DEFAULT_ALLOWLIST members. */
 export interface HandlerAllowlistRow {
   action_ref: string;

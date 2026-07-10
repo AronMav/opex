@@ -2,7 +2,10 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "@/hooks/use-translation";
 
-const SLASH_COMMAND_KEYS = [
+// Exported so ChatComposer can check whether a given query is already covered
+// by this legacy hardcoded menu before falling back to the registry-backed
+// CommandAutocomplete (avoids both dropdowns rendering for the same query).
+export const SLASH_COMMAND_KEYS = [
   { cmd: "/new",     key: "chat.slash_new" },
   { cmd: "/reset",   key: "chat.slash_reset" },
   { cmd: "/compact", key: "chat.slash_compact" },

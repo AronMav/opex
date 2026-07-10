@@ -8,12 +8,14 @@ import { uuid, getLiveMessages, type MessageSource } from "@/stores/chat-types";
 import { useTranslation } from "@/hooks/use-translation";
 import { useAuthStore } from "@/stores/auth-store";
 import { Button } from "@/components/ui/button";
-import { SlashMenu } from "../parts/SlashMenu";
+import { SlashMenu, SLASH_COMMAND_KEYS } from "../parts/SlashMenu";
 import { MentionAutocomplete } from "./MentionAutocomplete";
+import { CommandAutocomplete } from "@/components/chat/command-autocomplete";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { ModelDropdown } from "./ModelDropdown";
 import { useVoiceRecorder } from "../hooks/use-voice-recorder";
 import { useProviderActive } from "@/lib/queries";
+import { useCommands } from "@/hooks/use-commands";
 import {
   Send,
   Square,
@@ -124,6 +126,14 @@ export function ChatComposer() {
   const isStreaming = isActivePhase(connectionPhase);
   const pendingMessage = useChatStore((s) => s.agents[s.currentAgent]?.pendingMessage ?? null);
   const hasMessages = messageSource.mode !== "new-chat";
+
+  // ── Slash-command registry (server-backed autocomplete) ───────────────────
+  // Fallback for the legacy hardcoded SlashMenu below: only rendered when the
+  // current query isn't already covered by SLASH_COMMAND_KEYS, so the two
+  // dropdowns never overlap. Lets any command from the /api/commands registry
+  // (e.g. media/status commands added in later phases) surface in the composer
+  // without hand-maintaining SLASH_COMMAND_KEYS.
+  const { data: registryCommands } = useCommands(currentAgent);
 
   // ── Voice recorder ───────────────────────────────────────────────────────
   const { data: activeProviders } = useProviderActive();
@@ -472,6 +482,19 @@ export function ChatComposer() {
     setSlashQuery(null);
   }, []);
 
+  // Registry-backed pick: insert "/name " and leave it for the user to add
+  // args + Enter (unlike handleSlashSelect, which sends the fixed no-arg
+  // legacy commands immediately).
+  const handleCommandPick = useCallback((name: string) => {
+    setSlashQuery(null);
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    setter?.call(ta, `/${name} `);
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+    ta.focus();
+  }, []);
+
   const handleFileAdd = useCallback(async (file: File) => {
     setUploadingCount(c => c + 1);
     try {
@@ -672,11 +695,18 @@ export function ChatComposer() {
               </div>
             </div>
           )}
-          {slashQuery !== null && (
+          {slashQuery !== null && SLASH_COMMAND_KEYS.some((c) => c.cmd.startsWith(slashQuery)) && (
             <SlashMenu
               query={slashQuery}
               onSelect={handleSlashSelect}
               onClose={handleSlashClose}
+            />
+          )}
+          {slashQuery !== null && !SLASH_COMMAND_KEYS.some((c) => c.cmd.startsWith(slashQuery)) && (
+            <CommandAutocomplete
+              input={slashQuery}
+              commands={registryCommands ?? []}
+              onPick={handleCommandPick}
             />
           )}
           {mentionQuery !== null && agents.length > 1 && (

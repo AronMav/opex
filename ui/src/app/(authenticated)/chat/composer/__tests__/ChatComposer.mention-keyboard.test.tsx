@@ -36,6 +36,10 @@ vi.mock("@/lib/queries", () => ({
   useProviderModelsDetailed: () => ({ data: [] }),
 }));
 
+vi.mock("@/hooks/use-commands", () => ({
+  useCommands: () => ({ data: [] }),
+}));
+
 // Two agents so MentionAutocomplete renders (filtered peers = ["Beta"]).
 vi.mock("@/stores/auth-store", () => ({
   useAuthStore: Object.assign(
