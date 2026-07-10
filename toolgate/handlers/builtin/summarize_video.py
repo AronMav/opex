@@ -227,6 +227,23 @@ def _length_suffix(length: str) -> str:
     return LENGTH_INSTRUCTIONS.get(length, "")
 
 
+def _resolve_summary_length(params: Optional[dict], ctx_config: dict) -> str:
+    """Resolve the `summary_length` valve with the correct precedence.
+
+    `params` (the per-invocation `run()` argument) carries a one-off menu
+    choice made via `/summarize_video <url>` → [short][medium][long] buttons
+    (see `/api/commands/menu-run`). `ctx_config` carries the operator's
+    per-agent default (DB valve, see `<config>` above). The menu choice must
+    win when present; the operator default is the fallback; "medium"
+    reproduces the original prompt byte-for-byte when neither is set.
+    """
+    chosen = (params.get("summary_length") if isinstance(params, dict) else None) \
+        or ctx_config.get("summary_length") \
+        or "medium"
+    length = str(chosen).strip().lower()
+    return length if length in ("short", "medium", "long") else "medium"
+
+
 # ── data types ────────────────────────────────────────────────────────────────
 
 class TranscriptChunk:
@@ -563,11 +580,11 @@ async def run(ctx, file, params):
     # ── 3. digest ─────────────────────────────────────────────────────────────
     await ctx.progress("digest", 50)
 
-    # Operator-set per-agent valve (see <config> above). Defaults to "medium",
-    # which reproduces the original prompt byte-for-byte (no suffix added).
-    summary_length = str(ctx.config.get("summary_length") or "medium").strip().lower()
-    if summary_length not in ("short", "medium", "long"):
-        summary_length = "medium"
+    # Menu choice (params, from /summarize_video [short][medium][long] click)
+    # wins over the operator-set per-agent valve (ctx.config), which wins
+    # over "medium" — which reproduces the original prompt byte-for-byte
+    # (no suffix added) when neither is set.
+    summary_length = _resolve_summary_length(params, ctx.config)
 
     if should_chunk(transcript):
         # Map-reduce path (long video: > DIGEST_CHUNK_THRESHOLD_MIN minutes)

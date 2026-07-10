@@ -469,3 +469,53 @@ def test_build_reduce_messages():
     assert 0 <= a_pos < b_pos, "partials must be in order"
     assert "Фрагмент 1/2" in u
     assert "Фрагмент 2/2" in u
+
+
+# ── _resolve_summary_length precedence (menu params > ctx.config > default) ────
+
+
+def test_resolve_summary_length_params_wins_over_config():
+    """Menu choice (params) must win even when ctx.config has a different value."""
+    from handlers.builtin.summarize_video import _resolve_summary_length
+    assert _resolve_summary_length(
+        {"summary_length": "long"}, {"summary_length": "short"}
+    ) == "long"
+
+
+def test_resolve_summary_length_falls_back_to_config():
+    """No params value → falls back to the operator's ctx.config valve."""
+    from handlers.builtin.summarize_video import _resolve_summary_length
+    assert _resolve_summary_length({}, {"summary_length": "short"}) == "short"
+    assert _resolve_summary_length(None, {"summary_length": "short"}) == "short"
+
+
+def test_resolve_summary_length_defaults_to_medium():
+    """Neither params nor ctx.config set it → "medium" (backward-compatible)."""
+    from handlers.builtin.summarize_video import _resolve_summary_length
+    assert _resolve_summary_length({}, {}) == "medium"
+    assert _resolve_summary_length(None, {}) == "medium"
+
+
+def test_resolve_summary_length_invalid_value_falls_back_to_medium():
+    """An unrecognised value (either source) is treated as fail-soft "medium"."""
+    from handlers.builtin.summarize_video import _resolve_summary_length
+    assert _resolve_summary_length({"summary_length": "bogus"}, {}) == "medium"
+    assert _resolve_summary_length({}, {"summary_length": "bogus"}) == "medium"
+
+
+@pytest.mark.asyncio
+async def test_run_uses_menu_summary_length_over_config_valve():
+    """End-to-end: run() must honor params['summary_length'] over ctx.config."""
+    ctx = _make_ctx()
+    ctx.config = {"summary_length": "short"}
+    file = _video_file()
+
+    with patch.object(sv_mod, "extract_audio_from_file", _fake_extract_audio), \
+            patch.object(sv_mod, "build_single_pass_messages") as mock_build:
+        mock_build.return_value = [{"role": "system", "content": "x"}]
+        await sv_mod.run(ctx, file, {"language": "ru", "summary_length": "long"})
+
+    _, kwargs = mock_build.call_args
+    assert kwargs.get("length") == "long", (
+        f"expected menu choice 'long' to override config 'short', got {kwargs}"
+    )
