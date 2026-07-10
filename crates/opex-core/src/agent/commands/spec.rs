@@ -104,16 +104,23 @@ pub fn sanitize_native_name(name: &str) -> Option<String> {
 }
 
 /// Порт `assertCommandRegistry`: нет дублей имён/алиасов, консистентность scope.
+///
+/// Names and aliases share one namespace — a typed `/token` resolves against
+/// either, so a name that collides with a different spec's alias is ambiguous
+/// and must be rejected. Both are seeded into a single `taken` set (names
+/// first, so a name↔alias clash surfaces regardless of spec order); this is the
+/// airtightness `merge.rs`'s `.expect("merged registry must validate")` relies on.
 pub fn validate_registry(specs: &[CommandSpec]) -> Result<(), String> {
-    let mut names = std::collections::HashSet::new();
-    let mut aliases = std::collections::HashSet::new();
+    let mut taken = std::collections::HashSet::new();
     for spec in specs {
-        if !names.insert(spec.name.to_lowercase()) {
+        if !taken.insert(spec.name.to_lowercase()) {
             return Err(format!("duplicate command name: {}", spec.name));
         }
+    }
+    for spec in specs {
         for a in &spec.aliases {
-            if !aliases.insert(a.to_lowercase()) {
-                return Err(format!("duplicate command alias: {a}"));
+            if !taken.insert(a.to_lowercase()) {
+                return Err(format!("alias collides with an existing name or alias: {a}"));
             }
         }
         if spec.scope == CommandScope::Native && !spec.aliases.is_empty() {
@@ -150,6 +157,18 @@ mod tests {
     #[test]
     fn valid_registry_ok() {
         assert!(validate_registry(&[spec("status", CommandScope::Both), spec("new", CommandScope::Text)]).is_ok());
+    }
+
+    #[test]
+    fn name_colliding_with_other_specs_alias_rejected() {
+        // `/t` would be ambiguous: it's `think`'s alias AND a command name.
+        let mut think = spec("think", CommandScope::Both); think.aliases = vec!["t".into()];
+        let t = spec("t", CommandScope::Both);
+        assert!(validate_registry(&[think, t]).is_err());
+        // Order-independent: name before or after the aliasing spec both reject.
+        let mut think2 = spec("think", CommandScope::Both); think2.aliases = vec!["t".into()];
+        let t2 = spec("t", CommandScope::Both);
+        assert!(validate_registry(&[t2, think2]).is_err());
     }
 
     #[test]

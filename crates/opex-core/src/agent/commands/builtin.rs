@@ -16,9 +16,15 @@ pub const BUILTIN_NAMES: &[&str] = &[
     "voice", "usage", "export", "help", "memory", "goal", "subgoal",
 ];
 
-fn simple(name: &str, desc: &str, cat: CommandCategory) -> CommandSpec {
+/// Builds a builtin spec, sourcing its English description from the single
+/// `builtin_description` table (not a second hand-written copy). `build_registry`
+/// overwrites `description` per-lang anyway, so this only feeds the direct
+/// `specs()`/test paths — keeping it table-driven removes the drift trap where
+/// the inline EN string and `builtin_description("en")` could silently diverge.
+fn simple(name: &str, cat: CommandCategory) -> CommandSpec {
     CommandSpec {
-        name: name.into(), aliases: vec![], description: desc.into(),
+        name: name.into(), aliases: vec![],
+        description: builtin_description(name, "en").unwrap_or("").into(),
         category: cat, scope: CommandScope::Both, args: vec![],
         visibility: Visibility::All, source: CommandSourceKind::Builtin,
     }
@@ -92,19 +98,19 @@ pub struct BuiltinCommandSource;
 impl CommandSource for BuiltinCommandSource {
     fn specs(&self) -> Vec<CommandSpec> {
         let think = {
-            let mut c = simple("think", "Set thinking level", CommandCategory::Options);
+            let mut c = simple("think", CommandCategory::Options);
             c.aliases = vec!["t".into()];
             c.args = vec![arg_choices("level", "off..max",
                 &["off", "minimal", "low", "medium", "high", "max"], true)];
             c
         };
         let voice = {
-            let mut c = simple("voice", "Toggle voice replies for this chat", CommandCategory::Media);
+            let mut c = simple("voice", CommandCategory::Media);
             c.args = vec![arg_choices("mode", "on|off|status", &["on", "off", "status"], true)];
             c
         };
         let model = {
-            let mut c = simple("model", "Show or set the model", CommandCategory::Options);
+            let mut c = simple("model", CommandCategory::Options);
             c.args = vec![CommandArg { name: "model".into(),
                 description: "provider/model | reset | status".into(), arg_type: ArgType::String,
                 required: false, choices: Some(Choices::Dynamic { provider: "models".into() }),
@@ -112,42 +118,42 @@ impl CommandSource for BuiltinCommandSource {
             c
         };
         let rollback = {
-            let mut c = simple("rollback", "Restore a checkpoint", CommandCategory::Management);
+            let mut c = simple("rollback", CommandCategory::Management);
             c.args = vec![arg_free("action", "list | N | diff N | N file <path>")];
             c
         };
         let memory = {
-            let mut c = simple("memory", "Search or list agent memory", CommandCategory::Status);
+            let mut c = simple("memory", CommandCategory::Status);
             c.args = vec![arg_free("query", "search query (empty = recent)")];
             c
         };
         let goal = {
-            let mut c = simple("goal", "Set/inspect the autonomous goal", CommandCategory::Management);
+            let mut c = simple("goal", CommandCategory::Management);
             c.args = vec![arg_free("text", "goal | status | pause | resume | clear")];
             c
         };
         let subgoal = {
-            let mut c = simple("subgoal", "Manage subgoals", CommandCategory::Management);
+            let mut c = simple("subgoal", CommandCategory::Management);
             c.args = vec![arg_free("action", "add <t> | list | remove <n>")];
             c
         };
         let compact = {
-            let mut c = simple("compact", "Compact the session context", CommandCategory::Session);
+            let mut c = simple("compact", CommandCategory::Session);
             c.args = vec![arg_free("instructions", "extra compaction instructions")];
             c
         };
         vec![
-            simple("status", "Show current status", CommandCategory::Status),
-            simple("new", "Start a new session", CommandCategory::Session),
-            simple("reset", "Reset the session and unpinned memory", CommandCategory::Session),
+            simple("status", CommandCategory::Status),
+            simple("new", CommandCategory::Session),
+            simple("reset", CommandCategory::Session),
             compact,
             rollback,
             model,
             think,
             voice,
-            simple("usage", "Show token usage", CommandCategory::Status),
-            simple("export", "Export the current session transcript", CommandCategory::Status),
-            simple("help", "Show available commands", CommandCategory::Status),
+            simple("usage", CommandCategory::Status),
+            simple("export", CommandCategory::Status),
+            simple("help", CommandCategory::Status),
             memory,
             goal,
             subgoal,
@@ -179,5 +185,20 @@ mod tests {
         let think = reg.resolve("think").unwrap();
         assert!(!think.args.is_empty());
         for c in reg.all() { assert!(!c.description.is_empty(), "empty description: {}", c.name); }
+    }
+
+    /// Guards the drift trap: `simple()` now sources its EN string from
+    /// `builtin_description`, so every builtin name MUST resolve there for both
+    /// languages — otherwise a command would ship with an empty description.
+    #[test]
+    fn every_builtin_has_localized_description() {
+        for name in BUILTIN_NAMES {
+            let en = builtin_description(name, "en").unwrap_or_else(|| panic!("no en desc: {name}"));
+            let ru = builtin_description(name, "ru").unwrap_or_else(|| panic!("no ru desc: {name}"));
+            assert!(!en.is_empty(), "empty en desc: {name}");
+            assert!(!ru.is_empty(), "empty ru desc: {name}");
+        }
+        // A non-builtin name yields None (not an empty string).
+        assert!(builtin_description("definitely_not_a_command", "en").is_none());
     }
 }

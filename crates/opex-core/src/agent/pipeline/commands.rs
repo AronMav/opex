@@ -152,14 +152,40 @@ fn append_handlers_section(
 // ── handle_command ─────────────────────────────────────────────────────────
 
 /// Имена, реально обрабатываемые `match` в `handle_command` (без ведущего `/`).
-/// Держать синхронно с ветками ниже; drift-гард-тест сверяет с BUILTIN_NAMES.
-// consumed by the registry/dispatch drift-guard test below (`dispatch_names_match_registry_builtins`);
-// production match arms are exercised directly, not via this list.
+/// Держать синхронно с ветками ниже.
+///
+/// NB: the drift-guard test only asserts `DISPATCH_NAMES == BUILTIN_NAMES` — it
+/// pins this hand-maintained list to the registry, NOT to the literal `match`
+/// arms below. Adding a `match` arm without adding it here (or vice versa) is
+/// not caught mechanically; the arms are exercised directly by the per-command
+/// behaviour tests. Keep all three (this list, the arms, BUILTIN_NAMES) in sync
+/// when adding a builtin.
+// consumed by the registry drift-guard test below (`dispatch_names_match_registry_builtins`).
 #[allow(dead_code)]
 pub const DISPATCH_NAMES: &[&str] = &[
     "status", "new", "reset", "compact", "rollback", "model", "think",
     "voice", "usage", "export", "help", "memory", "goal", "subgoal",
 ];
+
+/// Parse a trimmed `/command [args]` line into `("/command", args)` where the
+/// command token is lowercased and stripped of an `@botname` suffix. Pure and
+/// unit-testable in isolation.
+///
+/// - Splits on any whitespace (matching `dispatch.rs::parse_command_line`), so a
+///   tab/newline after the command still separates it from its args.
+/// - Lowercases the command so case-variant builtins (`/Status`) still hit the
+///   builtin `match` and don't slip past builtin precedence into handler dispatch.
+///
+/// Returns `None` if `text` (after trimming) doesn't start with `/`.
+fn parse_builtin_command(text: &str) -> Option<(String, &str)> {
+    let cmd = text.trim();
+    if !cmd.starts_with('/') {
+        return None;
+    }
+    let (raw_command, args) = cmd.split_once(char::is_whitespace).unwrap_or((cmd, ""));
+    let command = raw_command.split('@').next().unwrap_or(raw_command).to_lowercase();
+    Some((command, args))
+}
 
 /// Handle /slash commands. Returns `Some(result)` if a command matched, `None` otherwise.
 ///
@@ -175,14 +201,10 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = ()>,
 {
-    let cmd = text.trim();
-    if !cmd.starts_with('/') {
+    let Some((command, args)) = parse_builtin_command(text) else {
         return None;
-    }
-    let (raw_command, args) = cmd.split_once(' ').unwrap_or((cmd, ""));
-    // Strip @botname suffix (Telegram sends /status@my_bot)
-    let command = raw_command.split('@').next().unwrap_or(raw_command);
-    tracing::debug!(command = %command, raw = %raw_command, "slash command received");
+    };
+    tracing::debug!(command = %command, "slash command received");
 
     // T03 triage Point 5: scope session lookups by chat, not just by
     // platform, so /status, /new, /reset, etc. act on the session for THIS
@@ -191,7 +213,7 @@ where
 
     let s = localization::get_strings(ctx.agent_language);
 
-    match command {
+    match command.as_str() {
         "/status" => {
             let session_info = match sessions::find_active_session(
                 ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope, chat_scope.as_deref(),
@@ -777,5 +799,20 @@ mod tests {
         builtin.sort_unstable();
         assert_eq!(dispatch, builtin,
             "match-диспетч и BUILTIN_NAMES разъехались — обновите обе стороны");
+    }
+
+    #[test]
+    fn parse_builtin_command_lowercases_and_splits_on_any_whitespace() {
+        // Case-insensitive: `/Status` normalises to `/status` so the builtin
+        // `match` fires instead of falling through to handler dispatch.
+        assert_eq!(super::parse_builtin_command("/Status"), Some(("/status".into(), "")));
+        assert_eq!(super::parse_builtin_command("  /RESET  "), Some(("/reset".into(), "")));
+        // @botname suffix stripped (Telegram group form).
+        assert_eq!(super::parse_builtin_command("/status@my_bot"), Some(("/status".into(), "")));
+        // Tab separates command from args, matching parse_command_line.
+        assert_eq!(super::parse_builtin_command("/compact\textra"), Some(("/compact".into(), "extra")));
+        assert_eq!(super::parse_builtin_command("/model gpt-4"), Some(("/model".into(), "gpt-4")));
+        // Not a slash command.
+        assert_eq!(super::parse_builtin_command("hello"), None);
     }
 }

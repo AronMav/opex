@@ -72,19 +72,24 @@ pub fn parse_command_line(text: &str) -> Option<(String, String)> {
 /// no manifest resolves, so the caller falls through to ordinary (non-command)
 /// processing exactly as it does today for an unrecognized `/name`.
 fn resolve_command_to_handler_id(manifests: &[HandlerManifest], name: &str) -> Option<String> {
+    // `name` arrives already lowercased from `parse_command_line`, while
+    // `derive_handler_commands` advertises the id/override verbatim (an override
+    // name may legally contain uppercase per `is_valid_command_token`). Compare
+    // case-insensitively so an advertised `/SumVid` is actually dispatchable —
+    // otherwise the command is dead (advertised but never matches).
     manifests
         .iter()
         .filter(|m| m.execution == "async")
         .find(|m| {
-            m.id == name
+            m.id.eq_ignore_ascii_case(name)
                 || m.command.as_ref().is_some_and(|ov| {
                     is_valid_command_token(&ov.name)
-                        && (ov.name == name
+                        && (ov.name.eq_ignore_ascii_case(name)
                             || ov
                                 .aliases
                                 .iter()
                                 .filter(|a| is_valid_command_token(a))
-                                .any(|a| a == name))
+                                .any(|a| a.eq_ignore_ascii_case(name)))
                 })
         })
         .map(|m| m.id.clone())
@@ -154,6 +159,20 @@ pub async fn try_handler_command(
     };
 
     let enabled = crate::agent::fse::get_enabled_allowlist(deps.db).await;
+
+    // Mirror `derive_handler_commands`' advertising rule: a builtin-tier handler
+    // outside the operator allowlist is NOT advertised as a command (absent from
+    // `/help` and `/api/commands`), so a typed `/name` for it must fall through
+    // to ordinary LLM processing — not resolve here and then reject with a
+    // confusing "недоступен для этого источника".
+    if manifests
+        .iter()
+        .find(|m| m.id == handler_id)
+        .is_some_and(|m| m.tier == "builtin" && !enabled.iter().any(|e| e == &handler_id))
+    {
+        return None;
+    }
+
     let lang = deps.agent_language;
 
     // ── Source resolution (F4) ──────────────────────────────────────────
@@ -219,10 +238,11 @@ pub async fn try_handler_command(
         // handler-menu stash (run.rs) — activates the existing `_chat_id`
         // origin-binding check in `command_menu_run`
         // (gateway/handlers/files.rs), blocking replay of a leaked `cm:`
-        // token from another chat. Only inserted when a chat_id is present
-        // (web/UI turns carry none) — the check is `if let Some(stored_chat)
-        // = ctx.get("_chat_id")`, so a `null` value would wrongly trigger it.
-        if let Some(chat) = msg.context.get("chat_id").cloned()
+        // token from another chat. Only inserted when a chat_id is actually
+        // present (web/UI turns carry none) — the check is `if let Some(
+        // stored_chat) = ctx.get("_chat_id")`, so a JSON `null` value would
+        // wrongly arm it; `!is_null()` filters that out.
+        if let Some(chat) = msg.context.get("chat_id").filter(|v| !v.is_null()).cloned()
             && let Some(obj) = stash.as_object_mut()
         {
             obj.insert("_chat_id".to_string(), chat);
@@ -396,5 +416,25 @@ mod tests {
             Some(json!({"name": "sumvid", "aliases": ["bad alias!"]})),
         )];
         assert_eq!(resolve_command_to_handler_id(&m, "bad alias!"), None);
+    }
+
+    #[test]
+    fn resolves_case_insensitively_matching_lowercased_input() {
+        // `parse_command_line` lowercases the typed name, so an uppercase-
+        // containing override must still resolve against that lowercased form —
+        // otherwise the advertised `/SumVid` is advertised-but-dead.
+        let m = vec![manifest_with_override(
+            "summarize_video",
+            "async",
+            Some(json!({"name": "SumVid", "aliases": ["SV"]})),
+        )];
+        assert_eq!(
+            resolve_command_to_handler_id(&m, "sumvid"),
+            Some("summarize_video".to_string())
+        );
+        assert_eq!(
+            resolve_command_to_handler_id(&m, "sv"),
+            Some("summarize_video".to_string())
+        );
     }
 }
