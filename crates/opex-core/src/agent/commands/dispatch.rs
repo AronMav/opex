@@ -19,9 +19,10 @@ use anyhow::Result;
 use opex_types::IncomingMessage;
 use uuid::Uuid;
 
+use super::handler_source::is_valid_command_token;
 use super::spec::CommandOutcome;
 use crate::agent::handler_registry::{
-    HandlerRegistry, match_buttons, match_url_handlers, retain_async_handlers,
+    HandlerManifest, HandlerRegistry, match_buttons, match_url_handlers, retain_async_handlers,
 };
 
 /// Dependencies for handler-command dispatch, built by the engine wrapper
@@ -56,6 +57,39 @@ pub fn parse_command_line(text: &str) -> Option<(String, String)> {
     Some((name.to_lowercase(), args.trim().to_string()))
 }
 
+/// Resolve a parsed command `name` to the target handler id.
+///
+/// `derive_handler_commands` advertises a handler under its `<command>`
+/// override name/aliases when present (falling back to the handler id when
+/// there's no override, or the override `name` is invalid). Dispatch must
+/// agree with that: a name typed by the user can be either the raw handler
+/// id (still live for handlers without an override, or as a fallback) OR a
+/// valid override name/alias — never a bare substring match, and never an
+/// alias `derive_handler_commands` itself dropped as invalid.
+///
+/// Only `execution == "async"` handlers are candidates (sync handlers never
+/// become dispatchable commands here — see module doc). Returns `None` when
+/// no manifest resolves, so the caller falls through to ordinary (non-command)
+/// processing exactly as it does today for an unrecognized `/name`.
+fn resolve_command_to_handler_id(manifests: &[HandlerManifest], name: &str) -> Option<String> {
+    manifests
+        .iter()
+        .filter(|m| m.execution == "async")
+        .find(|m| {
+            m.id == name
+                || m.command.as_ref().is_some_and(|ov| {
+                    is_valid_command_token(&ov.name)
+                        && (ov.name == name
+                            || ov
+                                .aliases
+                                .iter()
+                                .filter(|a| is_valid_command_token(a))
+                                .any(|a| a == name))
+                })
+        })
+        .map(|m| m.id.clone())
+}
+
 /// Dispatch a `/name [args]` command that the builtin registry didn't handle.
 ///
 /// Returns `None` when:
@@ -78,10 +112,11 @@ pub async fn try_handler_command(
     let manifests = deps.handlers.manifests().await;
 
     // Only async handlers become commands — sync handlers strand on the
-    // async-only handler_jobs queue (F070; see module doc).
-    if !manifests.iter().any(|m| m.execution == "async" && m.id == name) {
-        return None;
-    }
+    // async-only handler_jobs queue (F070; see module doc). `name` may be
+    // the raw handler id OR a live `<command>` override name/alias
+    // (derive_handler_commands advertises the override, so dispatch must
+    // resolve it back to the handler id it enqueues under).
+    let handler_id = resolve_command_to_handler_id(&manifests, &name)?;
 
     // Session resolution mirrors the builtin commands (`pipeline::commands`):
     // scoped by chat, not just user_id, so a group chat's /new doesn't act on
@@ -116,7 +151,7 @@ pub async fn try_handler_command(
     let (upload_id, source_ref, gated_ok) = if !args.is_empty() {
         let ok = match_url_handlers(&manifests, &args, &enabled, lang)
             .iter()
-            .any(|b| b.id == name);
+            .any(|b| b.id == handler_id);
         (None, Some(args.clone()), ok)
     } else if let Some(uid) = resolve_recent_upload(deps, session_id).await {
         match crate::db::uploads::get_by_id(deps.db, uid).await.ok().flatten() {
@@ -124,7 +159,7 @@ pub async fn try_handler_command(
                 let size = u64::try_from(row.size_bytes.max(0)).unwrap_or(0);
                 let mut buttons = match_buttons(&manifests, &row.mime, size, &enabled, lang);
                 retain_async_handlers(&mut buttons, &manifests);
-                (Some(uid), None, buttons.iter().any(|b| b.id == name))
+                (Some(uid), None, buttons.iter().any(|b| b.id == handler_id))
             }
             None => (None, None, false),
         }
@@ -142,7 +177,7 @@ pub async fn try_handler_command(
     // never enqueue a handler that wasn't offered for it.
     if !gated_ok {
         return Some(Ok(CommandOutcome::Text(format!(
-            "Обработчик `{name}` недоступен для этого источника."
+            "Обработчик `{handler_id}` недоступен для этого источника."
         ))));
     }
 
@@ -151,7 +186,7 @@ pub async fn try_handler_command(
         deps.db,
         upload_id,
         source_ref.as_deref(),
-        &name,
+        &handler_id,
         deps.agent_name,
         session_id,
         &params,
@@ -184,7 +219,9 @@ async fn resolve_recent_upload(deps: &HandlerDispatchDeps<'_>, session_id: Uuid)
 
 #[cfg(test)]
 mod tests {
-    use super::parse_command_line;
+    use super::{parse_command_line, resolve_command_to_handler_id};
+    use crate::agent::handler_registry::HandlerManifest;
+    use serde_json::json;
 
     #[test]
     fn parses_name_and_args() {
@@ -208,5 +245,70 @@ mod tests {
     fn bare_slash_is_not_a_command() {
         assert_eq!(parse_command_line("/"), None);
         assert_eq!(parse_command_line("/  "), None);
+    }
+
+    fn manifest_with_override(id: &str, exec: &str, command: Option<serde_json::Value>) -> HandlerManifest {
+        let mut v = json!({
+            "id": id, "execution": exec, "tier": "workspace",
+            "descriptions": {"en": format!("{id} desc")}, "config": []
+        });
+        if let Some(c) = command {
+            v["command"] = c;
+        }
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn resolves_by_handler_id() {
+        let m = vec![manifest_with_override("summarize_video", "async", None)];
+        assert_eq!(
+            resolve_command_to_handler_id(&m, "summarize_video"),
+            Some("summarize_video".to_string())
+        );
+    }
+
+    #[test]
+    fn resolves_by_override_name_and_valid_alias() {
+        let m = vec![manifest_with_override(
+            "summarize_video",
+            "async",
+            Some(json!({"name": "sumvid", "aliases": ["sv"]})),
+        )];
+        assert_eq!(
+            resolve_command_to_handler_id(&m, "sumvid"),
+            Some("summarize_video".to_string())
+        );
+        assert_eq!(
+            resolve_command_to_handler_id(&m, "sv"),
+            Some("summarize_video".to_string())
+        );
+        // The id itself is no longer the advertised name, but must still
+        // resolve — dispatch stays a superset of what's advertised.
+        assert_eq!(
+            resolve_command_to_handler_id(&m, "summarize_video"),
+            Some("summarize_video".to_string())
+        );
+    }
+
+    #[test]
+    fn unknown_name_and_sync_handler_return_none() {
+        let m = vec![
+            manifest_with_override("summarize_video", "async", None),
+            manifest_with_override("describe", "sync", None),
+        ];
+        assert_eq!(resolve_command_to_handler_id(&m, "does_not_exist"), None);
+        // A sync handler's own id must not resolve — sync handlers never
+        // become dispatchable commands (F070).
+        assert_eq!(resolve_command_to_handler_id(&m, "describe"), None);
+    }
+
+    #[test]
+    fn invalid_alias_derive_dropped_is_not_dispatchable() {
+        let m = vec![manifest_with_override(
+            "summarize_video",
+            "async",
+            Some(json!({"name": "sumvid", "aliases": ["bad alias!"]})),
+        )];
+        assert_eq!(resolve_command_to_handler_id(&m, "bad alias!"), None);
     }
 }

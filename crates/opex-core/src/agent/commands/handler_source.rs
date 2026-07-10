@@ -19,7 +19,11 @@ fn desc_for(m: &HandlerManifest, lang: &str) -> String {
 /// True for a non-empty token matching `[a-zA-Z0-9_-]+` — the charset a
 /// command name/alias must satisfy. Used both to filter `<command>` override
 /// aliases and to validate an override's `name` before it's trusted.
-fn is_valid_command_token(s: &str) -> bool {
+///
+/// `pub(crate)` so `dispatch.rs::resolve_command_to_handler_id` agrees with
+/// this module on which override aliases are "live" — an alias derive drops
+/// as invalid must never be dispatchable either.
+pub(crate) fn is_valid_command_token(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
