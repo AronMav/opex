@@ -52,6 +52,15 @@ it("ArrowDown moves the active option, Enter picks it", () => {
   expect(onPick).toHaveBeenCalledWith("summarize_video");
 });
 
+it("Tab picks the active option, like Enter", () => {
+  const onPick = vi.fn();
+  render(<CommandAutocomplete input="/s" commands={cmds} onPick={onPick} onClose={() => {}} />);
+
+  fireEvent.keyDown(window, { key: "ArrowDown" });
+  fireEvent.keyDown(window, { key: "Tab" });
+  expect(onPick).toHaveBeenCalledWith("summarize_video");
+});
+
 it("ArrowUp wraps to the last option", () => {
   render(<CommandAutocomplete input="/s" commands={cmds} onPick={() => {}} onClose={() => {}} />);
   const options = screen.getAllByRole("option");

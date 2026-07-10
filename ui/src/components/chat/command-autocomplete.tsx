@@ -19,8 +19,8 @@ interface Props {
 
 /** Registry-backed slash-command dropdown — the single slash menu in the composer,
  *  100% driven by the /api/commands registry (no hardcoded command list). Keyboard
- *  nav: ArrowUp/ArrowDown moves the active item (scrolling it into view), Enter picks
- *  it, Escape closes. The active item gets a strong, distinct highlight (not just the
+ *  nav: ArrowUp/ArrowDown moves the active item (scrolling it into view), Enter/Tab
+ *  picks it, Escape closes. The active item gets a strong, distinct highlight (not just the
  *  subtle hover tint) so keyboard selection is clearly visible. */
 export function CommandAutocomplete({ input, commands, onPick, onClose, onActiveChange, listboxId }: Props) {
   const [activeIdx, setActiveIdx] = useState(0);
@@ -67,7 +67,7 @@ export function CommandAutocomplete({ input, commands, onPick, onClose, onActive
       if (e.target instanceof HTMLElement && !e.target.closest("[data-composer-input]")) return;
       if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx((i) => (i + 1) % matches.length); }
       else if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx((i) => (i - 1 + matches.length) % matches.length); }
-      else if (e.key === "Enter") {
+      else if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
         const safeIdx = Math.min(activeIdx, matches.length - 1);
         if (matches[safeIdx]) onPick(matches[safeIdx].name);
