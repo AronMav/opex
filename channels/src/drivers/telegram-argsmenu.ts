@@ -17,3 +17,19 @@ export function parseCmCallback(data: string): { token: string; value: string } 
   if (!token || !value) return null;
   return { token, value };
 }
+
+/**
+ * Pure parsing helper for the `hm:<token>:<handler_id>` handler-menu callback_data
+ * (Core `handler_menu` → `send_buttons`). Same shape/guards as `parseCmCallback`;
+ * rejoins a colon-containing handler_id and rejects empty token/id — replacing the
+ * hand-rolled inline `data.split(":")` that had no such guard.
+ */
+export function parseHmCallback(data: string): { token: string; handlerId: string } | null {
+  if (!data.startsWith("hm:")) return null;
+  const parts = data.split(":");
+  if (parts.length < 3) return null;
+  const token = parts[1];
+  const handlerId = parts.slice(2).join(":");
+  if (!token || !handlerId) return null;
+  return { token, handlerId };
+}

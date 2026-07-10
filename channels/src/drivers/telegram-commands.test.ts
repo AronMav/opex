@@ -28,4 +28,15 @@ describe("commandsToTelegram", () => {
     const out = commandsToTelegram([{ name: "x", description: "d".repeat(300) }]);
     expect(out[0].description.length).toBe(256);
   });
+
+  it("falls back to the command name when description is empty or whitespace (Telegram rejects empty desc → whole batch fails)", () => {
+    const out = commandsToTelegram([
+      { name: "blank", description: "" },
+      { name: "spaces", description: "   " },
+    ]);
+    expect(out).toEqual([
+      { command: "blank", description: "blank" },
+      { command: "spaces", description: "spaces" },
+    ]);
+  });
 });

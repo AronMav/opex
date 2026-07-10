@@ -247,8 +247,12 @@ export function createDiscordDriver(
       );
       if (resp.ok) {
         const body = (await resp.json()) as { commands?: ApiCommand[] };
-        const cmds = commandsToDiscord(body.commands ?? []);
-        if (cmds.length && client.application) {
+        // Register the fetched set even when empty: a successful fetch yielding
+        // zero commands is a legitimate "clear the menu", distinct from a
+        // network/parse failure (resp not ok / malformed body / catch) which
+        // leaves whatever command menu Discord already has.
+        if (Array.isArray(body.commands) && client.application) {
+          const cmds = commandsToDiscord(body.commands);
           await client.application.commands
             .set(cmds as unknown as ApplicationCommandDataResolvable[])
             .catch((e) => console.error("[discord] command register failed:", e));
@@ -320,7 +324,19 @@ export function createDiscordDriver(
       const final = await result;
       clearInterval(streamTimer);
       const out = (final && final.length ? final : acc) || "✓";
-      await interaction.editReply(out.slice(0, MAX_MESSAGE_LEN)).catch(() => {});
+      // Split instead of hard-truncating: a long reply (e.g. a summarize_video
+      // digest) delivered via the plain-message path is split with follow-ups,
+      // so the slash-command path must not silently drop the overflow. Extra
+      // parts go out as ephemeral follow-ups (matching the deferred reply).
+      if (out.length <= MAX_MESSAGE_LEN) {
+        await interaction.editReply(out).catch(() => {});
+      } else {
+        const parts = splitText(out, MAX_MESSAGE_LEN, true);
+        await interaction.editReply(parts[0]).catch(() => {});
+        for (let i = 1; i < parts.length; i++) {
+          await interaction.followUp({ content: parts[i], flags: MessageFlags.Ephemeral }).catch(() => {});
+        }
+      }
     } catch (err) {
       clearInterval(streamTimer);
       await interaction.editReply(strings.errorMessage((err as Error)?.message ?? "error")).catch(() => {});

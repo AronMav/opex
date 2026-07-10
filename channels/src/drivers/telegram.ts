@@ -11,7 +11,7 @@ import type { ChannelActionDto, IncomingMessageDto, MediaAttachment } from "../t
 import { getStrings, type Strings } from "../localization";
 import { splitText, toolEmoji, parseDirectives, parseUserCommand, reUploadAttachments, commonMarkToMarkdownV2, isTgPermanentError, extractTgErrorCode, extractTgRetryAfter, exponentialDelay, chatCooldownKey } from "./common";
 import { registerTelegramCommands } from "./telegram-commands";
-import { parseCmCallback } from "./telegram-argsmenu";
+import { parseCmCallback, parseHmCallback } from "./telegram-argsmenu";
 
 /** Builds reply_parameters with allow_sending_without_reply for resilient replies */
 function safeReplyParams(messageId: number | undefined): { message_id: number; allow_sending_without_reply: true } | undefined {
@@ -458,10 +458,9 @@ export function createTelegramDriver(
     // Handler-menu button: hm:<token>:<handler_id> → run the chosen handler via
     // Core (deterministic, no LLM round-trip). Token maps to the stashed
     // source/session/agent on the Core side (POST /api/files/menu-run).
-    if (data.startsWith("hm:")) {
-      const parts = data.split(":");
-      const token = parts[1];
-      const handlerId = parts.slice(2).join(":");
+    const hmParsed = parseHmCallback(data);
+    if (hmParsed) {
+      const { token, handlerId } = hmParsed;
       const coreUrl = (process.env.OPEX_CORE_WS || "ws://localhost:18789").replace("ws://", "http://");
       const authToken = process.env.OPEX_AUTH_TOKEN || "";
       try {
@@ -1204,13 +1203,23 @@ async function executeAction(
       const buttons = action.params.buttons as Array<{ text: string; data: string }>;
       if (buttons) {
         const keyboard = new InlineKeyboard();
+        let dropped = 0;
         for (const btn of buttons) {
+          // Telegram hard-limits callback_data to 64 bytes; a single oversized
+          // value makes sendMessage reject the WHOLE keyboard. Skip the offender
+          // instead of losing every button.
+          if (Buffer.byteLength(btn.data, "utf8") > 64) { dropped++; continue; }
           keyboard.text(btn.text, btn.data);
         }
-        await bot.api.sendMessage(chatId, (action.params.text as string) ?? strings?.choose ?? "Choose:", {
-          reply_markup: keyboard,
-          reply_parameters: safeReplyParams(messageId),
-        });
+        if (dropped) console.warn(`[tg] send_buttons: dropped ${dropped} button(s) over 64-byte callback_data limit`);
+        try {
+          await bot.api.sendMessage(chatId, (action.params.text as string) ?? strings?.choose ?? "Choose:", {
+            reply_markup: keyboard,
+            reply_parameters: safeReplyParams(messageId),
+          });
+        } catch (err) {
+          console.error("[tg] send_buttons sendMessage failed:", err);
+        }
       }
       break;
     }

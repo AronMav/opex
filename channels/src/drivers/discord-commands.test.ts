@@ -17,11 +17,25 @@ describe("commandsToDiscord", () => {
     }]);
   });
 
-  it("a command whose only args are menu:true valves produces no options key", () => {
+  it("a command whose ONLY arg is a menu:true choice-valve surfaces it as a native Discord dropdown (I7: /think, /voice stay usable on Discord)", () => {
+    const out = commandsToDiscord([{
+      name: "think", description: "Set thinking level",
+      args: [{ name: "level", arg_type: "string", required: false, menu: true,
+               choices: { kind: "static", values: [{value:"low",label:"low"},{value:"high",label:"high"}] } }],
+    }]);
+    expect(out).toEqual([{
+      name: "think", description: "Set thinking level",
+      options: [
+        { type: 3, name: "level", description: "level", required: false,
+          choices: [{ name: "low", value: "low" }, { name: "high", value: "high" }] },
+      ],
+    }]);
+  });
+
+  it("a sole menu:true arg WITHOUT choices renders nothing (no dropdown to show)", () => {
     const out = commandsToDiscord([{
       name: "only_menu", description: "Only a menu valve",
-      args: [{ name: "summary_length", arg_type: "string", required: false, menu: true,
-               choices: { kind: "static", values: [{value:"short",label:"short"}] } }],
+      args: [{ name: "flag", arg_type: "string", required: false, menu: true }],
     }]);
     expect(out).toEqual([{ name: "only_menu", description: "Only a menu valve" }]);
   });
