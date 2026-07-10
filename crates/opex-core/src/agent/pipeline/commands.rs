@@ -201,9 +201,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = ()>,
 {
-    let Some((command, args)) = parse_builtin_command(text) else {
-        return None;
-    };
+    let (command, args) = parse_builtin_command(text)?;
     tracing::debug!(command = %command, "slash command received");
 
     // T03 triage Point 5: scope session lookups by chat, not just by
