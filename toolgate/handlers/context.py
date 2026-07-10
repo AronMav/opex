@@ -107,6 +107,18 @@ class ResultBuilder:
         return HandlerResult(status="too_large", reason=reason)
 
 
+def parse_bool_valve(value, default: bool = True) -> bool:
+    """Operator-valve → bool. Config-значения приходят из JSON: UI пишет строки
+    ("true"/"false"), но прямой API-вызов может прислать настоящий boolean —
+    паттерн `str(value or "true")` молча глотал JSON-`false` (False falsy →
+    подставлялся дефолт "true"). Единая точка для всех bool-полей <config>."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() not in ("false", "0", "no")
+
+
 class _LlmClient:
     """Thin helper for calling the core raw-LLM endpoint `POST /api/llm/complete`.
 

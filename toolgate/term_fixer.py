@@ -18,6 +18,8 @@ MIN_FIX_CHARS = 300
 MAX_CANDIDATES = 8
 MAX_VARIANTS = 10
 MIN_VARIANT_LEN = 3
+MAX_TERM_LEN = 120
+MAX_DESCRIPTION_LEN = 300
 MAX_CORRECTED_LEN = 80
 MAX_QUERY_LEN = 200
 DETECT_WINDOW_MIN = 45
@@ -75,14 +77,23 @@ def parse_detect_json(raw: str) -> list[dict] | None:
         data = data.get("candidates")
     if isinstance(data, list):
         return [x for x in data if isinstance(x, dict)]
+    # Fallback: сканируем ВСЕ позиции «[», а не только первую — иначе цитата
+    # вида «Кандидат [0] найден: [...]» съедала бы реальный массив: raw_decode
+    # успешно парсит [0] → список без dict → ложный «честный пустой», а мусор
+    # «[ниже]» до массива давал бы None, хотя валидный блок есть дальше.
     idx = text.find("[")
-    if idx != -1:
+    scans = 0
+    while idx != -1 and scans < 20:
+        scans += 1
         try:
             data, _ = json.JSONDecoder().raw_decode(text[idx:])
         except ValueError:
-            return None
+            data = None
         if isinstance(data, list):
-            return [x for x in data if isinstance(x, dict)]
+            dicts = [x for x in data if isinstance(x, dict)]
+            if dicts:
+                return dicts
+        idx = text.find("[", idx + 1)
     return None
 
 
@@ -94,8 +105,14 @@ def _clean_variants(heard: str, variants: list) -> list[str]:
     for v in [heard, *variants]:
         if not isinstance(v, str):
             continue
-        v = v.strip()
-        if len(v) < MIN_VARIANT_LEN or _DIGITS_ONLY_RE.match(v):
+        # Сплющивание \n обязательно: словоформы из недоверенного detect-выхода
+        # уходят в regex-альтернатор и (через heard) в построчные промпты.
+        v = " ".join(v.split())
+        if (
+            len(v) < MIN_VARIANT_LEN
+            or len(v) > MAX_TERM_LEN
+            or _DIGITS_ONLY_RE.match(v)
+        ):
             continue
         key = v.casefold()
         if key in seen:
@@ -120,13 +137,20 @@ def normalize_candidate(item: dict) -> dict | None:
     query = query.strip()
     if not query or "\n" in query or len(query) > MAX_QUERY_LEN:
         return None
-    cleaned = _clean_variants(heard.strip(), variants if isinstance(variants, list) else [])
+    # heard — из недоверенного detect-выхода и уходит сырым в построчный
+    # verify-промпт («Кандидат id=N: услышано «{heard}»…») и в term_notes →
+    # SYSTEM-промпт digest: \n подделал бы чужую строку-карточку, поэтому
+    # сплющиваем и ограничиваем длину так же, как variants.
+    heard = " ".join(heard.split())
+    if not heard or len(heard) > MAX_TERM_LEN:
+        return None
+    cleaned = _clean_variants(heard, variants if isinstance(variants, list) else [])
     if not cleaned:
         return None
     return {
-        "heard": heard.strip(),
+        "heard": heard,
         "variants": cleaned,
-        "description": " ".join(description.split()),
+        "description": " ".join(description.split())[:MAX_DESCRIPTION_LEN],
         "query": query,
     }
 
@@ -210,6 +234,15 @@ def apply_replacements(text: str, reps: list[Replacement], language: str = "ru")
         def _sub(m: re.Match) -> str:
             found = m.group(1)
             rep = by_variant.get(found.casefold())
+            if rep is None:
+                # re.IGNORECASE (простое посимвольное сворачивание движка) может
+                # заматчить форму, чей str.casefold() НЕ совпадает с ключом
+                # словаря (турецкая İ: движок матчит «i», а ключ — «i̇»).
+                # Добираем тем же движком, чтобы матч не остался без замены.
+                for v, r in pairs:
+                    if re.fullmatch(re.escape(v), found, re.IGNORECASE):
+                        rep = r
+                        break
             if rep is None:
                 return found
             if not isinstance(rep.corrected, str):
@@ -363,11 +396,22 @@ def split_windows(transcript: str) -> list[str]:
         split_transcript_by_time, transcript_minutes,
     )
     if transcript_minutes(transcript) > DETECT_WINDOW_MIN:
-        return [c.text for c in split_transcript_by_time(transcript, DETECT_WINDOW_MIN)]
-    if len(transcript) > DETECT_WINDOW_CHARS:
-        return [transcript[i:i + DETECT_WINDOW_CHARS]
-                for i in range(0, len(transcript), DETECT_WINDOW_CHARS)]
-    return [transcript]
+        # 45-мин окно плотной речи легко превышает 24k символов — char-кап
+        # применяется и к тайм-окнам, иначе он был бы мёртвым кодом для
+        # обычного (таймкодного) STT-выхода.
+        return [
+            slab
+            for c in split_transcript_by_time(transcript, DETECT_WINDOW_MIN)
+            for slab in _char_slabs(c.text)
+        ]
+    return _char_slabs(transcript)
+
+
+def _char_slabs(text: str) -> list[str]:
+    if len(text) <= DETECT_WINDOW_CHARS:
+        return [text]
+    return [text[i:i + DETECT_WINDOW_CHARS]
+            for i in range(0, len(text), DETECT_WINDOW_CHARS)]
 
 
 def _normalize_search_results(res) -> list[dict]:
@@ -382,9 +426,12 @@ def _normalize_search_results(res) -> list[dict]:
     for r in res:
         if not isinstance(r, dict):
             continue
-        title = " ".join(str(r.get("title") or "").split())
+        # Капы на ВСЕ поля: заявленный докстрингом инвариант «раздутый сниппет
+        # не раздувает verify-вызов» держался только для content — раздутый
+        # title/url обходил его.
+        title = " ".join(str(r.get("title") or "").split())[:200]
         content = " ".join(str(r.get("content") or "").split())[:500]
-        url = " ".join(str(r.get("url") or "").split())
+        url = " ".join(str(r.get("url") or "").split())[:300]
         if not title and not content:
             continue
         out.append({"title": title, "url": url, "content": content})
@@ -416,13 +463,24 @@ async def fix_terms(
 
         # ── detect (по окнам, dedup по heard casefold) ────────────────────
         await _prog(0)
+        llm_sem = asyncio.Semaphore(SEARCH_CONCURRENCY)
+
+        async def _detect_one(window: str) -> str | None:
+            async with llm_sem:
+                try:
+                    return await ctx.llm.complete(_detect_messages(window))
+                except Exception as exc:
+                    ctx.log.warning("term_fixer: detect window failed: %s", exc)
+                    return None
+
+        # Окна независимы — параллелим как search. gather сохраняет порядок
+        # результатов = порядок окон, поэтому dedup по heard и кап «первые 8»
+        # остаются детерминированными (первое окно выигрывает).
+        raws = await asyncio.gather(*[_detect_one(w) for w in split_windows(transcript)])
         candidates: list[dict] = []
         seen: set[str] = set()
-        for window in split_windows(transcript):
-            try:
-                raw = await ctx.llm.complete(_detect_messages(window))
-            except Exception as exc:
-                ctx.log.warning("term_fixer: detect window failed: %s", exc)
+        for raw in raws:
+            if raw is None:
                 continue
             items = parse_detect_json(raw)
             if items is None:
@@ -465,13 +523,27 @@ async def fix_terms(
         # ── search (параллельно, semaphore) ──────────────────────────────
         await _prog(1)
         sem = asyncio.Semaphore(SEARCH_CONCURRENCY)
+        provider_gone = False
 
         async def _search_one(cand: dict) -> list[dict]:
+            nonlocal provider_gone
             async with sem:
                 try:
                     # ctx.search — _CapabilityWrapper (НЕ callable!); метод —
                     # ctx.search.search(...), как ctx.stt.transcribe(...)
                     res = await ctx.search.search(cand["query"], max_results=5)
+                except RuntimeError as exc:
+                    # Гейт has_capability прошли, но registry (TTL 30с) успел
+                    # потерять провайдера за минуты detect-фазы — отличаем от
+                    # транзиентной ошибки поиска, чтобы не гадать без grounding.
+                    if "no active websearch provider" in str(exc):
+                        provider_gone = True
+                        ctx.log.warning(
+                            "term_fixer: websearch provider deactivated mid-run: %s", exc)
+                    else:
+                        ctx.log.warning("term_fixer: search failed for %r: %s",
+                                        cand["heard"], exc)
+                    return []
                 except Exception as exc:
                     ctx.log.warning("term_fixer: search failed for %r: %s",
                                     cand["heard"], exc)
@@ -479,6 +551,11 @@ async def fix_terms(
                 return _normalize_search_results(res)
 
         results = list(await asyncio.gather(*[_search_one(c) for c in candidates]))
+        if provider_gone and not any(results):
+            # Совсем без веб-сверки verify гадал бы вслепую — тот режим, который
+            # шаг 0 существует чтобы исключить.
+            ctx.log.warning("term_fixer: no search grounding at all, skipping correction")
+            return noop
 
         # ── verify (один батч) ────────────────────────────────────────────
         await _prog(2)

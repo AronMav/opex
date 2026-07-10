@@ -625,10 +625,8 @@ async def run(ctx, file, params):
     # ── 2b. term correction (spec 2026-07-10-transcript-term-correction) ────
     term_notes = ""
     glossary = ""
-    fix_enabled = (
-        str(ctx.config.get("fix_terms") or "true").strip().lower()
-        not in ("false", "0", "no")
-    )
+    from handlers.context import parse_bool_valve  # runner puts toolgate root on sys.path
+    fix_enabled = parse_bool_valve(ctx.config.get("fix_terms"))
     if fix_enabled:
         try:
             from term_fixer import fix_terms  # runner puts toolgate root on sys.path
@@ -692,10 +690,8 @@ async def run(ctx, file, params):
     content_hash = hashlib.sha256(transcript.encode()).hexdigest()[:8]
     slug = latin_slug(title, content_hash)
 
-    include_transcript = (
-        str(ctx.config.get("include_transcript") or "true").strip().lower()
-        not in ("false", "0", "no")
-    )
+    from handlers.context import parse_bool_valve as _pbv  # noqa: PLC0415
+    include_transcript = _pbv(ctx.config.get("include_transcript"))
     note = build_note(
         title=title,
         duration=0.0,  # duration not available from bytes-only path; 0 is safe

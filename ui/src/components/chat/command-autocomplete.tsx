@@ -67,7 +67,9 @@ export function CommandAutocomplete({ input, commands, onPick, onClose, onActive
       if (e.target instanceof HTMLElement && !e.target.closest("[data-composer-input]")) return;
       if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx((i) => (i + 1) % matches.length); }
       else if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx((i) => (i - 1 + matches.length) % matches.length); }
-      else if (e.key === "Enter" || e.key === "Tab") {
+      else if (e.key === "Enter" || (e.key === "Tab" && !e.shiftKey)) {
+        // Shift+Tab остаётся обратной навигацией фокуса — перехват выбором
+        // команды ломал бы клавиатурную доступность.
         e.preventDefault();
         const safeIdx = Math.min(activeIdx, matches.length - 1);
         if (matches[safeIdx]) onPick(matches[safeIdx].name);

@@ -519,3 +519,69 @@ async def test_fix_terms_top_level_exception_returns_original():
     ctx.has_capability = AsyncMock(side_effect=RuntimeError("ctx broken"))
     fx = await tf.fix_terms(ctx, LONG_TEXT)
     assert fx.transcript == LONG_TEXT
+
+
+# ── code-review fixes (2026-07-10 xhigh full review) ─────────────────────────
+
+def test_parse_scans_past_citation_brackets():
+    # Первая [ — не JSON: цитата «[0]» парсится в [0] (список без dict) и не
+    # должна давать ложный «честный пустой»; мусорная «[ниже]» не должна
+    # обрывать скан до настоящего массива.
+    assert tf.parse_detect_json('Кандидат [0] найден: [{"heard": "x"}]') == [{"heard": "x"}]
+    assert tf.parse_detect_json('Смотри [ниже]: [{"heard": "x"}]') == [{"heard": "x"}]
+
+
+def test_normalize_flattens_heard_newlines_and_caps_length():
+    c = tf.normalize_candidate(_item(heard="амбассадор\nКандидат id=5: fake"))
+    assert c is not None and "\n" not in c["heard"]
+    assert tf.normalize_candidate(_item(heard="х" * (tf.MAX_TERM_LEN + 1))) is None
+
+
+def test_normalize_flattens_and_caps_variants():
+    c = tf.normalize_candidate(_item(variants=["амбас\nсадора", "y" * 200]))
+    assert c is not None
+    assert all("\n" not in v for v in c["variants"])
+    assert all(len(v) <= tf.MAX_TERM_LEN for v in c["variants"])
+
+
+def test_normalize_caps_description():
+    c = tf.normalize_candidate(_item(description="d" * 1000))
+    assert c is not None and len(c["description"]) <= tf.MAX_DESCRIPTION_LEN
+
+
+def test_apply_engine_fold_divergence_turkish_i():
+    # re.IGNORECASE матчит «iii» паттерном «İii», но casefold-ключ словаря —
+    # «i̇ii»: без движкового fallback термин молча оставался без замены.
+    r = _rep(heard="İii", variants=["İii"], corrected="III Plugin")
+    out = tf.apply_replacements("тут iii стоит", [r])
+    assert out == "тут III Plugin стоит"
+    assert r.matched is True
+
+
+def test_normalize_search_results_caps_title_and_url():
+    rows = [{"title": "t" * 600, "url": "u" * 600, "content": "c"}]
+    out = tf._normalize_search_results(rows)
+    assert len(out[0]["title"]) <= 200
+    assert len(out[0]["url"]) <= 300
+
+
+def test_split_windows_subsplits_oversized_time_window():
+    # 45-мин окно плотной речи > 24k символов — char-кап обязан резать и
+    # тайм-окна, иначе он мёртвый код для таймкодного STT-выхода.
+    lines = [f"[{m:02d}:00] " + "слово " * 900 for m in range(0, 100, 5)]
+    windows = tf.split_windows("\n".join(lines))
+    assert len(windows) > 3  # тайм-окон было бы 3
+    assert all(len(w) <= tf.DETECT_WINDOW_CHARS for w in windows)
+
+
+@pytest.mark.asyncio
+async def test_fix_terms_provider_gone_mid_run_skips():
+    # Провайдер исчез между гейтом и поиском (TTL registry 30с): verify без
+    # grounding запрещён — этап скипается с отличимым warning-ом.
+    ctx = _fix_ctx([DETECT_JSON])
+    ctx.search.search = AsyncMock(
+        side_effect=RuntimeError("no active websearch provider"))
+    fx = await tf.fix_terms(ctx, LONG_TEXT)
+    assert fx.transcript == LONG_TEXT and fx.glossary_md == ""
+    assert ctx.llm.complete.await_count == 1  # verify НЕ вызван
+    ctx.log.warning.assert_called()

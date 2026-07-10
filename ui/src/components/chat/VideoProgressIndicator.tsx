@@ -5,7 +5,7 @@ import type { TranslationKey } from "@/i18n/types";
 import { Loader2 } from "lucide-react";
 
 // Machine phase keys emitted by file handlers via ctx.progress(phase, pct)
-// (summarize_video / transcribe: fetch → transcribe → digest → saving). The
+// (summarize_video / transcribe: fetch → transcribe → fix_terms → digest → saving). The
 // backend sends the raw key over the `file_job_progress` WS event; we localise
 // it here so the indicator never shows an untranslated "fetch" to the user.
 // Unknown phases fall through to the raw text the store already holds.

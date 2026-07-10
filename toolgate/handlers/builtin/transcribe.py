@@ -83,10 +83,8 @@ async def run(ctx, file, params):
         )
 
     glossary = ""
-    fix_enabled = (
-        str(ctx.config.get("fix_terms") or "true").strip().lower()
-        not in ("false", "0", "no")
-    )
+    from handlers.context import parse_bool_valve  # runner puts toolgate root on sys.path
+    fix_enabled = parse_bool_valve(ctx.config.get("fix_terms"))
     if fix_enabled:
         try:
             from term_fixer import fix_terms  # runner puts toolgate root on sys.path

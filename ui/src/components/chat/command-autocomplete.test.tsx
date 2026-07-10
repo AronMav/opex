@@ -61,6 +61,14 @@ it("Tab picks the active option, like Enter", () => {
   expect(onPick).toHaveBeenCalledWith("summarize_video");
 });
 
+it("Shift+Tab does NOT pick — reverse focus navigation stays native", () => {
+  const onPick = vi.fn();
+  render(<CommandAutocomplete input="/s" commands={cmds} onPick={onPick} onClose={() => {}} />);
+
+  fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+  expect(onPick).not.toHaveBeenCalled();
+});
+
 it("ArrowUp wraps to the last option", () => {
   render(<CommandAutocomplete input="/s" commands={cmds} onPick={() => {}} onClose={() => {}} />);
   const options = screen.getAllByRole("option");
