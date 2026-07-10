@@ -218,6 +218,14 @@ LENGTH_INSTRUCTIONS: dict[str, str] = {
 }
 
 
+# Valid `summary_length` values = the LENGTH_INSTRUCTIONS keys plus the implicit
+# no-op "medium". Derived (not a second hand-written tuple) so adding a length in
+# one place can't silently desync the validator; the descriptor's
+# `choices="short,medium,long"` is pinned to this set by
+# `test_descriptor_choices_match_valid_lengths`.
+VALID_SUMMARY_LENGTHS: frozenset[str] = frozenset(LENGTH_INSTRUCTIONS) | {"medium"}
+
+
 def _length_suffix(length: str) -> str:
     """Extra system-prompt instruction for `length` ('short'/'medium'/'long').
 
@@ -241,7 +249,7 @@ def _resolve_summary_length(params: Optional[dict], ctx_config: dict) -> str:
         or ctx_config.get("summary_length") \
         or "medium"
     length = str(chosen).strip().lower()
-    return length if length in ("short", "medium", "long") else "medium"
+    return length if length in VALID_SUMMARY_LENGTHS else "medium"
 
 
 # ── data types ────────────────────────────────────────────────────────────────

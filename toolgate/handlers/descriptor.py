@@ -6,10 +6,13 @@ whose leading "# <handler> ... # </handler>" comment block describes it.
 
 from __future__ import annotations
 
+import logging
 import re
 
 import defusedxml.ElementTree as ET
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 class DescriptorError(Exception):
@@ -31,8 +34,10 @@ class HandlerDescriptor:
     params: list[dict]
     # Operator-configurable settings (OpenWebUI-style "valves"), distinct from
     # `params` (which the model fills per call). Each: {name, type, default,
-    # label, description}. Values are set per-agent in the tool settings UI and
-    # injected as `ctx.config` at run time.
+    # label, description, choices}. `choices` is an optional list[str] (parsed
+    # from a comma-separated `choices="a,b,c"` attribute; None when absent) that
+    # surfaces the valve as a menu/dropdown. Values are set per-agent in the tool
+    # settings UI and injected as `ctx.config` at run time.
     config: list[dict]
     order: int
     enabled: bool
@@ -160,6 +165,15 @@ def parse_descriptor(source: str, tier: str) -> HandlerDescriptor:
         cmd_aliases = [a.strip() for a in (cmd_el.get("aliases") or "").split(",") if a.strip()]
         if cmd_name:
             command = {"name": cmd_name, "aliases": cmd_aliases}
+        else:
+            # Fail-soft (Rust's derive_handler_commands falls back to the handler
+            # id), but a missing/blank name= is almost always an authoring typo —
+            # log it so the dropped override isn't silently invisible.
+            logger.warning(
+                "handler descriptor <command> block has no valid name= "
+                "(aliases=%r); ignoring the override and using the handler id",
+                cmd_aliases,
+            )
 
     order_txt = _text(root, "order")
     # F118: guard the <order> cast (mirrors max_size_mb above). An unguarded

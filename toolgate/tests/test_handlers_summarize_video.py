@@ -503,6 +503,24 @@ def test_resolve_summary_length_invalid_value_falls_back_to_medium():
     assert _resolve_summary_length({}, {"summary_length": "bogus"}) == "medium"
 
 
+def test_descriptor_choices_match_valid_lengths():
+    """Drift guard: the descriptor's advertised `choices` for the summary_length
+    valve must equal the validator's accepted set. If someone adds a 4th choice
+    to the descriptor without teaching LENGTH_INSTRUCTIONS/VALID_SUMMARY_LENGTHS,
+    the advertised button would silently fall back to "medium" — this fails first.
+    """
+    from pathlib import Path
+    from handlers.descriptor import parse_descriptor
+    from handlers.builtin.summarize_video import VALID_SUMMARY_LENGTHS
+
+    src = Path(sv_mod.__file__).read_text(encoding="utf-8")
+    d = parse_descriptor(src, tier="builtin")
+    field = next(f for f in d.config if f["name"] == "summary_length")
+    assert set(field["choices"]) == set(VALID_SUMMARY_LENGTHS), (
+        f"descriptor choices {field['choices']} != validator set {sorted(VALID_SUMMARY_LENGTHS)}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_run_uses_menu_summary_length_over_config_valve():
     """End-to-end: run() must honor params['summary_length'] over ctx.config."""
