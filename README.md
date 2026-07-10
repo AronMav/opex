@@ -3,10 +3,6 @@
 </h1>
 
 <p align="center">
-  <em>Pronounced "O-REKH" (walnut)</em>
-</p>
-
-<p align="center">
   <a href="https://github.com/AronMav/opex/actions/workflows/ci.yml?branch=master"><img src="https://img.shields.io/github/actions/workflow/status/AronMav/opex/ci.yml?branch=master&style=for-the-badge" alt="CI"></a>
   <a href="https://github.com/AronMav/opex/releases"><img src="https://img.shields.io/github/v/release/AronMav/opex?style=for-the-badge" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="MIT"></a>
@@ -22,7 +18,7 @@
   <a href="SECURITY.md">Security</a>
 </p>
 
-**OPEX is a self-hosted AI agent gateway built like infrastructure, not a chat app.** A single ~14 MB Rust binary runs the HTTP API, agent lifecycle, LLM calls, tools, memory, scheduler and secrets on any Linux box — x86_64 or ARM64, down to a Raspberry Pi-class board. Your agents live in Telegram, Discord, Slack, Matrix, IRC, WhatsApp and Email while working on your server — with an encrypted secrets vault, SSRF-guarded tool calls, sandboxed code execution and a watchdog that messages you when something breaks.
+**OPEX is a self-hosted AI agent gateway built like infrastructure, not a chat app.** A Rust core runs the HTTP API, agent lifecycle, LLM calls, tools, memory, scheduler and secrets on any Linux box — x86_64 or ARM64, down to a Raspberry Pi-class board. Your agents live in Telegram, Discord, Slack, Matrix, IRC, WhatsApp and Email while working on your server — with an encrypted secrets vault, SSRF-guarded tool calls, sandboxed code execution and a watchdog that messages you when something breaks.
 
 Everything above the core is a file you can edit: an agent's persona is Markdown, a tool is ten lines of YAML, a skill is a Markdown note. Change the file — behavior changes. No rebuild, no restart.
 
@@ -48,16 +44,16 @@ Updating later is one command: `~/opex/update.sh opex-v<VERSION>.tar.gz` — it 
 
 Self-hosted, multi-provider, web UI, RAG, voice, image generation, MCP — every project in this space has those, and so does OPEX. This list is what you *won't* find elsewhere:
 
-<table>
-<tr><td><b>One small binary</b></td><td>The core is a single ~14 MB Rust binary (rustls only, no OpenSSL) — no Node or Python runtime in the hot path. Three Rust services — core, watchdog, memory worker — plus PostgreSQL 17 + pgvector; channel adapters (Bun) and the media hub (Python) run as supervised child processes, Docker hosts the sandbox and MCP containers.</td></tr>
-<tr><td><b>Security on by default</b></td><td>Not plugins, not config flags — in the box and enabled: an authenticated-encryption vault (ChaCha20-Poly1305) that strips credentials out of configs, SSRF blocking at the DNS-resolver layer (immune to DNS-rebinding — not a URL-string check), default-on PII redaction that redacts rather than blocks, provenance tagging of untrusted content, Docker sandbox, deny-first tool policy. Full threat model below.</td></tr>
-<tr><td><b>Operations built in</b></td><td>A separate watchdog binary alerts you in your own chat channel when an agent stalls or a process dies. Self-healing process supervisor, <code>/api/doctor</code> with 15 health checks (including a credential-leak scan of the workspace), one-click <code>pg_dump</code> backups.</td></tr>
-<tr><td><b>A model catalog that doesn't go stale</b></td><td>Showing costs is common — the numbers usually come from a hand-maintained pricing file that lags reality. OPEX resolves context windows, prices and capabilities for thousands of models from a live external catalog (models.dev ∪ OpenRouter): per-session $ including cache and reasoning tokens, provider presets with auto-filled URL / type / model list, request params gated by actual model capabilities.</td></tr>
-<tr><td><b>Memory you can read</b></td><td>An agent's long-term memory is Markdown files — hand-editable, git-friendly, the source of truth. The rare part is the index behind them: pgvector + full-text + trigram search in one PostgreSQL query with MMR reranking, synced from the files automatically, in two tiers — raw with time decay and pinned permanent.</td></tr>
-<tr><td><b>Everything is a file</b></td><td>Personas and skills are Markdown, tools are YAML (vault-backed auth, JSONPath transforms, OpenAPI import), all hot-reloaded. A built-in Curator retires stale skills and repairs broken ones on a schedule.</td></tr>
-<tr><td><b>Works unattended</b></td><td>Cron with timezones and jitter and per-agent heartbeats are the baseline; the difference is the goal loop — a separate LLM-judge pass checks whether the stated goal is actually achieved, instead of stopping when the model stops calling tools. Results go to any channel; humans stay in the loop via approvals (countdown, editable arguments) and a mid-run <code>clarify</code> tool.</td></tr>
-<tr><td><b>A fleet, not a bot</b></td><td>Agents in a shared session are always-alive peers — you (or another agent) can message, poll and kill them mid-conversation (ask / status / kill), not fire one-shot subagent runs. @-mention routing, a hard tool denylist for subagents with no recursive spawning, shadow-git checkpoints of agent workspaces with <code>/rollback</code>.</td></tr>
-</table>
+| | |
+| --- | --- |
+| **Rust core** | The core is written in Rust (rustls only, no OpenSSL) — no Node or Python runtime in the hot path. Three Rust services — core, watchdog, memory worker — plus PostgreSQL 17 + pgvector; channel adapters (Bun) and the media hub (Python) run as supervised child processes, Docker hosts the sandbox and MCP containers. |
+| **Security on by default** | Not plugins, not config flags — in the box and enabled: an authenticated-encryption vault (ChaCha20-Poly1305) that strips credentials out of configs, SSRF blocking at the DNS-resolver layer (immune to DNS-rebinding — not a URL-string check), default-on PII redaction that redacts rather than blocks, provenance tagging of untrusted content, Docker sandbox, deny-first tool policy. Full threat model below. |
+| **Operations built in** | A separate watchdog binary alerts you in your own chat channel when an agent stalls or a process dies. Self-healing process supervisor, `/api/doctor` with 15 health checks (including a credential-leak scan of the workspace), one-click `pg_dump` backups. |
+| **A model catalog that doesn't go stale** | Showing costs is common — the numbers usually come from a hand-maintained pricing file that lags reality. OPEX resolves context windows, prices and capabilities for thousands of models from a live external catalog (models.dev ∪ OpenRouter): per-session $ including cache and reasoning tokens, provider presets with auto-filled URL / type / model list, request params gated by actual model capabilities. |
+| **Memory you can read** | An agent's long-term memory is Markdown files — hand-editable, git-friendly, the source of truth. The rare part is the index behind them: pgvector + full-text + trigram search in one PostgreSQL query with MMR reranking, synced from the files automatically, in two tiers — raw with time decay and pinned permanent. |
+| **Everything is a file** | Personas and skills are Markdown, tools are YAML (vault-backed auth, JSONPath transforms, OpenAPI import), all hot-reloaded. A built-in Curator retires stale skills and repairs broken ones on a schedule. |
+| **Works unattended** | Cron with timezones and jitter and per-agent heartbeats are the baseline; the difference is the goal loop — a separate LLM-judge pass checks whether the stated goal is actually achieved, instead of stopping when the model stops calling tools. Results go to any channel; humans stay in the loop via approvals (countdown, editable arguments) and a mid-run `clarify` tool. |
+| **A fleet, not a bot** | Agents in a shared session are always-alive peers — you (or another agent) can message, poll and kill them mid-conversation (ask / status / kill), not fire one-shot subagent runs. @-mention routing, a hard tool denylist for subagents with no recursive spawning, shadow-git checkpoints of agent workspaces with `/rollback`. |
 
 ---
 

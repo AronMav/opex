@@ -1,6 +1,6 @@
 {
   "MD013": false,
   "MD033": {
-    "allowed_elements": ["p", "strong", "a", "img", "picture", "source", "details", "summary"]
+    "allowed_elements": ["h1", "p", "strong", "a", "img", "picture", "source", "details", "summary"]
   }
 }
