@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { it, expect, vi, beforeEach } from "vitest";
 import { CommandArgsMenuCard } from "./command-args-menu-card";
 import { apiPost } from "@/lib/api";
 

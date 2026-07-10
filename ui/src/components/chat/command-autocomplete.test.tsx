@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { vi } from "vitest";
+import { it, expect, vi } from "vitest";
 import { CommandAutocomplete } from "./command-autocomplete";
 
 const cmds = [
