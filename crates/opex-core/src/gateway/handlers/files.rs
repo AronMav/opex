@@ -92,6 +92,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/files/{upload_id}/run", post(run_file_handler))
         .route("/api/files/run", post(run_menu_handler))
         .route("/api/files/menu-run", post(run_menu_token_handler))
+        .route("/api/commands/menu-run", post(command_menu_run))
         .route("/api/files/jobs/{job_id}/progress", post(job_progress))
         .route("/api/files/jobs/{job_id}/complete", post(job_complete))
 }
@@ -110,9 +111,28 @@ struct MenuRunRequest {
     agent: String,
 }
 
-/// Shared validate+enqueue for a menu run (web card `/api/files/run` and the
-/// Telegram callback `/api/files/menu-run`). Ownership guard + matched-set check
-/// (the same security boundary as the `file_handler` tool's `run`), then enqueue.
+/// Builds the `handler_jobs` params object: base `{"language": lang}` merged
+/// with the caller-supplied `extra` object fields (e.g. a chosen choice-valve
+/// value from `/api/commands/menu-run`). `extra` must be a JSON object — any
+/// non-object value (including the default `json!({})`) contributes nothing
+/// beyond the base language field.
+fn merge_job_params(lang: &str, extra: &serde_json::Value) -> serde_json::Value {
+    let mut params = json!({ "language": lang });
+    if let (Some(base), Some(extra_obj)) = (params.as_object_mut(), extra.as_object()) {
+        for (k, v) in extra_obj {
+            base.insert(k.clone(), v.clone());
+        }
+    }
+    params
+}
+
+/// Shared validate+enqueue for a menu run (web card `/api/files/run`, the
+/// Telegram callback `/api/files/menu-run`, and the choice-valve completion
+/// `/api/commands/menu-run`). Ownership guard + matched-set check (the same
+/// security boundary as the `file_handler` tool's `run`), then enqueue.
+/// `extra_params` is merged into the job params (e.g. a chosen valve value) —
+/// pass `json!({})` when there is nothing to add.
+#[allow(clippy::too_many_arguments)]
 async fn menu_run_core(
     infra: &InfraServices,
     handlers: &HandlerRegistry,
@@ -121,6 +141,7 @@ async fn menu_run_core(
     session_id: Uuid,
     agent: &str,
     handler_id: &str,
+    extra_params: serde_json::Value,
 ) -> axum::response::Response {
     // Ownership guard: the target session must belong to the calling agent
     // (mirrors the session-tool IDOR scoping; OPEX is single-token).
@@ -178,7 +199,7 @@ async fn menu_run_core(
             .into_response();
     }
 
-    let params = json!({ "language": lang });
+    let params = merge_job_params(lang, &extra_params);
     match handler_jobs::insert_handler_job(
         &infra.db, upload_id, source_url, handler_id, agent, session_id, &params,
     )
@@ -207,6 +228,7 @@ async fn run_menu_handler(
         req.session_id,
         &req.agent,
         &req.handler_id,
+        json!({}),
     )
     .await
 }
@@ -293,7 +315,112 @@ async fn run_menu_token_handler(
             .into_response();
     };
     let agent = params.get("agent").and_then(|v| v.as_str()).unwrap_or("");
-    menu_run_core(&infra, &handlers, source_url, upload_id, session_id, agent, &req.handler_id).await
+    menu_run_core(
+        &infra,
+        &handlers,
+        source_url,
+        upload_id,
+        session_id,
+        agent,
+        &req.handler_id,
+        json!({}),
+    )
+    .await
+}
+
+// ── Command choice-valve completion ────────────────────────────────────────────
+
+/// Request body for `POST /api/commands/menu-run` — completes a slash-command
+/// invocation whose handler exposes a choice-valve (Task 2's `command_args_menu`
+/// card). Mirrors `MenuTokenRunRequest` but carries the chosen `value` instead of
+/// a `handler_id` (the handler is recovered from the stash, same as the valve
+/// name and everything else needed to re-run the trust gate).
+#[derive(Deserialize)]
+struct CommandMenuRunRequest {
+    token: String,
+    value: String,
+    #[serde(default)]
+    chat_id: Option<serde_json::Value>,
+}
+
+/// `POST /api/commands/menu-run` — recovers the stash by `token`, validates
+/// `value` against the stashed `choices`, and enqueues via `menu_run_core` (same
+/// ownership + matched-set trust gate as every other menu-run path) with the
+/// chosen valve merged into the job params.
+async fn command_menu_run(
+    State(infra): State<InfraServices>,
+    State(handlers): State<HandlerRegistry>,
+    Json(req): Json<CommandMenuRunRequest>,
+) -> impl IntoResponse {
+    let ctx = menu_ctx()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&req.token).map(|(v, _)| v.clone()));
+    let Some(ctx) = ctx else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "expired or unknown token" })),
+        )
+            .into_response();
+    };
+
+    // Origin binding, mirroring `run_menu_token_handler`: if the menu was bound
+    // to a chat, the caller must present the matching chat_id.
+    if let Some(stored_chat) = ctx.get("_chat_id")
+        && req.chat_id.as_ref() != Some(stored_chat)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "callback chat does not match the menu" })),
+        )
+            .into_response();
+    }
+
+    let choices: Vec<String> = ctx
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    if !choices.iter().any(|c| c == &req.value) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid choice" })),
+        )
+            .into_response();
+    }
+
+    let handler_id = ctx.get("handler_id").and_then(|v| v.as_str()).unwrap_or_default();
+    let agent = ctx.get("agent").and_then(|v| v.as_str()).unwrap_or_default();
+    let valve = ctx.get("valve").and_then(|v| v.as_str()).unwrap_or_default();
+    let source_url = ctx.get("source_url").and_then(|v| v.as_str());
+    let upload_id = ctx
+        .get("upload_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok());
+    let Some(session_id) = ctx
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "stored menu missing session" })),
+        )
+            .into_response();
+    };
+
+    let extra = json!({ valve: req.value });
+    menu_run_core(
+        &infra,
+        &handlers,
+        source_url,
+        upload_id,
+        session_id,
+        agent,
+        handler_id,
+        extra,
+    )
+    .await
 }
 
 // ── Request / query types ─────────────────────────────────────────────────────
@@ -1075,6 +1202,28 @@ async fn run_post_action(job_id: uuid::Uuid, outcome: &ScenarioOutcome) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── merge_job_params tests (Phase 2d Task 3) ──────────────────────────────
+
+    #[test]
+    fn merge_job_params_merges_extra_object_fields() {
+        let got = merge_job_params("ru", &json!({ "summary_length": "long" }));
+        assert_eq!(got, json!({ "language": "ru", "summary_length": "long" }));
+    }
+
+    #[test]
+    fn merge_job_params_empty_extra_yields_language_only() {
+        let got = merge_job_params("ru", &json!({}));
+        assert_eq!(got, json!({ "language": "ru" }));
+    }
+
+    #[test]
+    fn merge_job_params_non_object_extra_is_ignored() {
+        // Defensive: a non-object extra_params (e.g. accidental scalar) must not
+        // panic or corrupt the base params — it contributes nothing.
+        let got = merge_job_params("ru", &json!("not-an-object"));
+        assert_eq!(got, json!({ "language": "ru" }));
+    }
 
     // ── Async callback helper tests (Task 3) ──────────────────────────────────
 

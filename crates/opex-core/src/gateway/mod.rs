@@ -128,7 +128,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(handlers::workspace_files::routes()) // /workspace-files/{*path}?sig=&exp=
         .merge(handlers::workspace::routes())       // /api/workspace/*
         .merge(handlers::clarify::routes())        // /api/clarify/{id}
-        .merge(handlers::files::routes())           // /api/files/{upload_id}/actions + /run
+        .merge(handlers::files::routes())           // /api/files/{upload_id}/actions + /run, /api/commands/menu-run
         .merge(handlers::handlers_admin::routes())  // /api/handlers, /api/handlers/allowlist (File Handlers tab)
         .merge(handlers::llm::routes())              // /api/llm/complete (raw LLM, auth-required)
         .merge(handlers::internal_creds::routes())    // /api/internal/its-credentials (ITS 1C login, auth-required)
