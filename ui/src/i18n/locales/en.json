@@ -1253,6 +1253,7 @@
   "chat.abort_reason_default": "Aborted.",
   "chat.video_phase_download": "Downloading…",
   "chat.video_phase_transcribe": "Transcribing…",
+  "chat.video_phase_fix_terms": "Verifying names…",
   "chat.video_phase_digest": "Summarizing…",
   "chat.video_phase_saving": "Saving…",
   "chat.previous_session": "Previous session",

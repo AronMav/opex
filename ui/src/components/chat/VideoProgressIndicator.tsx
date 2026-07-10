@@ -12,6 +12,7 @@ import { Loader2 } from "lucide-react";
 const PHASES: Record<string, { emoji: string; key: TranslationKey }> = {
   fetch: { emoji: "📥", key: "chat.video_phase_download" },
   transcribe: { emoji: "🎙️", key: "chat.video_phase_transcribe" },
+  fix_terms: { emoji: "🔎", key: "chat.video_phase_fix_terms" },
   digest: { emoji: "🧠", key: "chat.video_phase_digest" },
   saving: { emoji: "💾", key: "chat.video_phase_saving" },
 };

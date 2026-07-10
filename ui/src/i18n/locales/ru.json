@@ -1253,6 +1253,7 @@
   "chat.abort_reason_default": "Прервано.",
   "chat.video_phase_download": "Загружаю…",
   "chat.video_phase_transcribe": "Транскрибирую…",
+  "chat.video_phase_fix_terms": "Проверяю названия…",
   "chat.video_phase_digest": "Составляю конспект…",
   "chat.video_phase_saving": "Сохраняю…",
   "chat.previous_session": "Предыдущая сессия",
