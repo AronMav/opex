@@ -247,7 +247,20 @@ services:
     build: ./mcp/git
     ports:
       - "127.0.0.1:9046:8000"
+    # Host-uid + identity: git отказывает чужому uid («dubious ownership»), а
+    # root-контейнер оставлял бы root-овые .git/objects в хостовом репо; коммит
+    # без user.name/email падает «Please tell me who you are».
+    user: "${OPEX_UID:-1000}:${OPEX_GID:-1000}"
+    environment:
+      HOME: /tmp
+      GIT_AUTHOR_NAME: "Opex Agent"
+      GIT_AUTHOR_EMAIL: "opex@aronmav.ru"
+      GIT_COMMITTER_NAME: "Opex Agent"
+      GIT_COMMITTER_EMAIL: "opex@aronmav.ru"
     volumes:
+      # Без workspace-тома git-серверу физически нечего читать — каждая
+      # операция падала NoSuchPathError (текст ошибки = путь).
+      - ~/opex/workspace:/workspace:rw
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     profiles: [ "on-demand" ]

@@ -10,7 +10,7 @@ mod orchestrate;
 mod file_handler;
 mod secrets_tool;
 mod session;
-mod tool_use;
+pub(crate) mod tool_use;
 mod todo;
 pub(crate) mod clarify;
 

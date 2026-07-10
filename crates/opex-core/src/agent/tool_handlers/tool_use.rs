@@ -100,10 +100,33 @@ async fn handle_search(deps: ToolDeps<'_>, query: &str) -> String {
 
     let mut out = String::from("Found tools:\n");
     for t in &top_k {
-        let _ = writeln!(out, "- {} — {}", t.name, t.description);
+        let _ = writeln!(
+            out,
+            "- {} — {}{}",
+            t.name,
+            t.description,
+            required_params_suffix(&t.input_schema)
+        );
     }
     out.push_str("\nUse tool_use(action=\"describe\", name=\"X\") for full schema.");
     out
+}
+
+/// ` (required: a, b)` suffix from a JSON-schema `required` array; empty when
+/// none. Shown in the catalogue so the model doesn't guess mandatory params
+/// (a real session burned 4 LLM round-trips on `repo_path`/`branch_type`/
+/// `revision`/`files` validation errors before this).
+pub(crate) fn required_params_suffix(schema: &serde_json::Value) -> String {
+    let req: Vec<&str> = schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    if req.is_empty() {
+        String::new()
+    } else {
+        format!(" (required: {})", req.join(", "))
+    }
 }
 
 async fn handle_describe(deps: ToolDeps<'_>, name: &str) -> String {

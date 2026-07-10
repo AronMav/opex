@@ -279,14 +279,30 @@ impl McpRegistry {
                             .unwrap_or("unknown MCP error");
                         anyhow::bail!("MCP tool error: {msg}");
                     }
+                    // Join ALL text blocks: taking only the first silently dropped
+                    // the rest of a multi-block MCP response.
                     let content = body
                         .pointer("/result/content")
                         .and_then(|c| c.as_array())
-                        .and_then(|arr| arr.first())
-                        .and_then(|item| item.get("text"))
-                        .and_then(|t| t.as_str())
-                        .unwrap_or("");
-                    return Ok(content.to_string());
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                        .unwrap_or_default();
+                    // MCP tool-level failure: HTTP 200 + result.isError=true, error
+                    // text in content (e.g. GitPython NoSuchPathError renders as the
+                    // bare repo path). Masking it as success fed agents error strings
+                    // as if they were tool output — surface it as a tool error.
+                    let is_error = body
+                        .pointer("/result/isError")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if is_error {
+                        anyhow::bail!("MCP tool error: {content}");
+                    }
+                    return Ok(content);
                 }
             }
         }
@@ -750,6 +766,67 @@ mod tests {
         });
 
         format!("http://127.0.0.1:{port}")
+    }
+
+    #[tokio::test]
+    async fn call_tool_surfaces_result_is_error_as_tool_error() {
+        // Regression: mcp-server-git returns HTTP 200 + result.isError=true with
+        // the exception text in content (NoSuchPathError renders as the bare
+        // path). call_tool previously ignored isError and returned the error
+        // string as SUCCESSFUL output — agents saw "/workspace/zettelkasten"
+        // as the "result" of git_status/git_add/git_commit.
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "content": [{"type": "text", "text": "/workspace/zettelkasten"}],
+                "isError": true
+            }
+        });
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let (reg, _cm) = registry_with_url_mcp("test-mcp", &server.uri()).await;
+
+        let err = reg
+            .call_tool("test-mcp", "git_status", &serde_json::json!({}))
+            .await
+            .expect_err("result.isError=true must surface as Err");
+        let msg = err.to_string();
+        assert!(msg.contains("MCP tool error"), "{msg}");
+        assert!(msg.contains("/workspace/zettelkasten"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn call_tool_joins_all_content_blocks() {
+        // Multi-block responses previously lost everything after content[0].
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "content": [
+                    {"type": "text", "text": "block one"},
+                    {"type": "image", "data": "ignored-no-text-field"},
+                    {"type": "text", "text": "block two"}
+                ]
+            }
+        });
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let (reg, _cm) = registry_with_url_mcp("test-mcp", &server.uri()).await;
+
+        let result = reg
+            .call_tool("test-mcp", "any", &serde_json::json!({}))
+            .await
+            .expect("multi-block success");
+        assert_eq!(result, "block one\nblock two");
     }
 
     #[tokio::test]

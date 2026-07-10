@@ -455,9 +455,14 @@ impl ContextBuilder for DefaultContextBuilder {
                 {
                     system_prompt.push_str(&format!(
                         "\n\n## Relevant Tool Hint\n\
-                         Your task may need the **{}** tool: {}.\n\
+                         Your task may need the **{}** tool: {}{}.\n\
                          Call tool_use(action=\"describe\", name=\"{}\") to load its schema.\n",
-                        t.name, t.description, t.name,
+                        t.name,
+                        t.description,
+                        crate::agent::tool_handlers::tool_use::required_params_suffix(
+                            &t.input_schema
+                        ),
+                        t.name,
                     ));
                 }
             }
