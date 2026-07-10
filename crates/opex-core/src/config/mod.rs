@@ -968,6 +968,9 @@ pub struct AgentSettings {
     /// Section can be omitted from TOML — defaults are sane.
     #[serde(default)]
     pub delegation: DelegationConfig,
+    /// Agent soul: autobiographical memory + reflection (spec 2026-07-09).
+    #[serde(default)]
+    pub soul: SoulConfig,
     pub compaction: Option<CompactionConfig>,
     pub skill_review: Option<SkillReviewConfig>,
     pub session: Option<SessionConfig>,
@@ -1337,6 +1340,78 @@ impl DelegationConfig {
             }
         }
 
+        errors
+    }
+}
+
+/// Configuration for the agent soul (autobiographical memory + reflection).
+/// Maps to `[agent.soul]`. All fields default — section can be omitted.
+/// Spec: docs/superpowers/specs/2026-07-09-agent-soul-foundation-design.md
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SoulConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_reflection_threshold")]
+    pub reflection_threshold: f64,
+    #[serde(default = "default_reflection_cooldown_minutes")]
+    pub reflection_cooldown_minutes: u64,
+    #[serde(default = "default_soul_context_top_k")]
+    pub context_top_k: usize,
+    #[serde(default = "default_soul_context_budget_tokens")]
+    pub context_budget_tokens: u32,
+    #[serde(default = "default_max_events_per_session")]
+    pub max_events_per_session: usize,
+}
+
+fn default_reflection_threshold() -> f64 {
+    150.0
+}
+fn default_reflection_cooldown_minutes() -> u64 {
+    60
+}
+fn default_soul_context_top_k() -> usize {
+    6
+}
+fn default_soul_context_budget_tokens() -> u32 {
+    800
+}
+fn default_max_events_per_session() -> usize {
+    10
+}
+
+impl Default for SoulConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            reflection_threshold: default_reflection_threshold(),
+            reflection_cooldown_minutes: default_reflection_cooldown_minutes(),
+            context_top_k: default_soul_context_top_k(),
+            context_budget_tokens: default_soul_context_budget_tokens(),
+            max_events_per_session: default_max_events_per_session(),
+        }
+    }
+}
+
+impl SoulConfig {
+    /// Validate soul settings. Called from `AgentConfig::load()` after TOML
+    /// parse — covers startup, hot-reload AND the agents CRUD path (spec §7).
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if self.reflection_threshold <= 0.0 {
+            errors.push("soul.reflection_threshold must be > 0".to_string());
+        }
+        if self.reflection_cooldown_minutes > 1440 {
+            errors.push("soul.reflection_cooldown_minutes must be in [0, 1440]".to_string());
+        }
+        if !(1..=20).contains(&self.context_top_k) {
+            errors.push("soul.context_top_k must be in [1, 20]".to_string());
+        }
+        if !(100..=4000).contains(&self.context_budget_tokens) {
+            errors.push("soul.context_budget_tokens must be in [100, 4000]".to_string());
+        }
+        if !(1..=30).contains(&self.max_events_per_session) {
+            errors.push("soul.max_events_per_session must be in [1, 30]".to_string());
+        }
         errors
     }
 }
@@ -1756,6 +1831,17 @@ impl AgentConfig {
                 "agent {:?}: invalid [agent.delegation] section:\n  - {}",
                 config.agent.name,
                 delegation_errors.join("\n  - ")
+            );
+        }
+
+        // Validate soul policy. Errors here block agent load — same treatment
+        // as delegation (misconfiguration surfaced at startup, not runtime).
+        let soul_errors = config.agent.soul.validate();
+        if !soul_errors.is_empty() {
+            anyhow::bail!(
+                "agent {:?}: invalid [agent.soul] section:\n  - {}",
+                config.agent.name,
+                soul_errors.join("\n  - ")
             );
         }
 
@@ -2256,6 +2342,7 @@ model = "m2.5"
                 heartbeat: None,
                 tools: None,
                 delegation: DelegationConfig::default(),
+                soul: SoulConfig::default(),
                 compaction: Some(CompactionConfig {
                     enabled: true,
                     threshold: 0.9,
@@ -2337,6 +2424,7 @@ model = "m2.5"
                     },
                 }),
                 delegation: DelegationConfig::default(),
+                soul: SoulConfig::default(),
                 compaction: None,
                 skill_review: None,
                 session: None,
@@ -3042,6 +3130,41 @@ foo_bar_baz = 42
             subagent_dispatcher_enabled: None,
         };
         assert!(cfg.validate().is_empty());
+    }
+
+    // ── SoulConfig ──
+
+    #[test]
+    fn soul_config_defaults_when_section_absent() {
+        let toml_src = r#"
+[agent]
+name = "T"
+language = "ru"
+provider = "openai"
+model = "gpt-4o"
+"#;
+        let cfg: AgentConfig = toml::from_str(toml_src).unwrap();
+        assert!(!cfg.agent.soul.enabled);
+        assert_eq!(cfg.agent.soul.reflection_threshold, 150.0);
+        assert_eq!(cfg.agent.soul.reflection_cooldown_minutes, 60);
+        assert_eq!(cfg.agent.soul.context_top_k, 6);
+        assert_eq!(cfg.agent.soul.context_budget_tokens, 800);
+        assert_eq!(cfg.agent.soul.max_events_per_session, 10);
+    }
+
+    #[test]
+    fn soul_config_validate_rejects_out_of_range() {
+        let bad = SoulConfig {
+            enabled: true,
+            reflection_threshold: 0.0,
+            reflection_cooldown_minutes: 2000,
+            context_top_k: 0,
+            context_budget_tokens: 50,
+            max_events_per_session: 100,
+        };
+        let errs = bad.validate();
+        assert_eq!(errs.len(), 5, "each violated rule reports once: {errs:?}");
+        assert!(SoulConfig::default().validate().is_empty());
     }
 }
 
