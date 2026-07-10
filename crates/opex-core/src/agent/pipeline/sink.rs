@@ -140,8 +140,9 @@ impl EventSink for ChannelStatusSink {
                 } else { Ok(()) }
             }
             PipelineEvent::Stream(StreamEvent::RichCard { card_type, data }) => {
-                // Capture the handler-selection menu for channel rendering.
-                if card_type == "handler_menu" {
+                // Capture the handler-selection menu (file handlers) or a
+                // slash-command args menu for channel rendering.
+                if card_type == "handler_menu" || card_type == "command_args_menu" {
                     self.menu = Some(data);
                 }
                 Ok(())
@@ -297,5 +298,15 @@ mod tests {
         drop(rx);
         let err = sink.emit(StreamEvent::TextDelta("x".into()).into()).await;
         assert!(matches!(err, Err(SinkError::Closed)));
+    }
+
+    #[tokio::test]
+    async fn channel_sink_captures_command_args_menu() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(4);
+        let mut sink = ChannelStatusSink::new(None, Some(tx));
+        let card = serde_json::json!({"card_type":"command_args_menu","x":1});
+        sink.emit(PipelineEvent::Stream(StreamEvent::RichCard {
+            card_type: "command_args_menu".into(), data: card.clone() })).await.unwrap();
+        assert_eq!(sink.menu, Some(card));
     }
 }

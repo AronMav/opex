@@ -171,47 +171,90 @@ impl AgentEngine {
 
         // Slash-command early exit
         if let Some(outcome) = command_output.take() {
-            let text = match outcome {
-                CommandOutcome::Text(t) => t,
-                // Phase 1 fallback; real RichCard emission is Phase 2
-                CommandOutcome::Menu { card } => card.to_string(),
-            };
-            let slash_msg_id = opex_types::ids::MessageId::new();
-            let _ = s
-                .emit(PipelineEvent::Stream(StreamEvent::MessageStart {
-                    message_id: slash_msg_id,
-                }))
-                .await;
-            let _ = s
-                .emit(PipelineEvent::Stream(StreamEvent::TextDelta(text.clone())))
-                .await;
-            let _ = s
-                .emit(PipelineEvent::Stream(StreamEvent::Finish {
-                    finish_reason: "command".to_string(),
-                    continuation: false,
-                }))
-                .await;
+            match outcome {
+                CommandOutcome::Menu { card } => {
+                    let card_type = card
+                        .get("card_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("command_args_menu")
+                        .to_string();
+                    let slash_msg_id = opex_types::ids::MessageId::new();
+                    let _ = s
+                        .emit(PipelineEvent::Stream(StreamEvent::MessageStart {
+                            message_id: slash_msg_id,
+                        }))
+                        .await;
+                    let _ = s
+                        .emit(PipelineEvent::Stream(StreamEvent::RichCard { card_type, data: card }))
+                        .await;
+                    let _ = s
+                        .emit(PipelineEvent::Stream(StreamEvent::Finish {
+                            finish_reason: "command".to_string(),
+                            continuation: false,
+                        }))
+                        .await;
 
-            let fin_ctx = finalize::finalize_context_from_engine(
-                self,
-                session_id,
-                boot_for_execute.messages.len(),
-                Some(user_message_id),
-                compressor,
-                slash_msg_id.as_uuid(), // same UUID as MessageStart so DB row ID matches SSE event
-            );
-            finalize::finalize(
-                fin_ctx,
-                finalize::FinalizeOutcome::Done {
-                    assistant_text: text,
-                    thinking_json: None,
-                    turn_limited: false,
-                },
-                &mut s,
-                &mut lifecycle_guard,
-            )
-            .await?;
-            return Ok(session_id);
+                    let fin_ctx = finalize::finalize_context_from_engine(
+                        self,
+                        session_id,
+                        boot_for_execute.messages.len(),
+                        Some(user_message_id),
+                        compressor,
+                        slash_msg_id.as_uuid(), // same UUID as MessageStart so DB row ID matches SSE event
+                    );
+                    // The card IS the response — no assistant text to persist.
+                    finalize::finalize(
+                        fin_ctx,
+                        finalize::FinalizeOutcome::Done {
+                            assistant_text: String::new(),
+                            thinking_json: None,
+                            turn_limited: false,
+                        },
+                        &mut s,
+                        &mut lifecycle_guard,
+                    )
+                    .await?;
+                    return Ok(session_id);
+                }
+                CommandOutcome::Text(text) => {
+                    let slash_msg_id = opex_types::ids::MessageId::new();
+                    let _ = s
+                        .emit(PipelineEvent::Stream(StreamEvent::MessageStart {
+                            message_id: slash_msg_id,
+                        }))
+                        .await;
+                    let _ = s
+                        .emit(PipelineEvent::Stream(StreamEvent::TextDelta(text.clone())))
+                        .await;
+                    let _ = s
+                        .emit(PipelineEvent::Stream(StreamEvent::Finish {
+                            finish_reason: "command".to_string(),
+                            continuation: false,
+                        }))
+                        .await;
+
+                    let fin_ctx = finalize::finalize_context_from_engine(
+                        self,
+                        session_id,
+                        boot_for_execute.messages.len(),
+                        Some(user_message_id),
+                        compressor,
+                        slash_msg_id.as_uuid(), // same UUID as MessageStart so DB row ID matches SSE event
+                    );
+                    finalize::finalize(
+                        fin_ctx,
+                        finalize::FinalizeOutcome::Done {
+                            assistant_text: text,
+                            thinking_json: None,
+                            turn_limited: false,
+                        },
+                        &mut s,
+                        &mut lifecycle_guard,
+                    )
+                    .await?;
+                    return Ok(session_id);
+                }
+            }
         }
 
         // Full pipeline — `cancel` token is the same one registered with the
@@ -396,35 +439,72 @@ impl AgentEngine {
             claude_md_content,
         };
 
-        // Channel adapters render slash commands as plain TextDelta
+        // Channel adapters render slash commands as plain TextDelta (Text)
+        // or a rich menu card (Menu — emitted as a RichCard; button
+        // conversion is a later task).
         if let Some(outcome) = command_output.take() {
-            let text = match outcome {
-                CommandOutcome::Text(t) => t,
-                // Phase 1 fallback; real RichCard emission is Phase 2
-                CommandOutcome::Menu { card } => card.to_string(),
-            };
-            let _ = s
-                .emit(PipelineEvent::Stream(StreamEvent::TextDelta(text.clone())))
-                .await;
-            let fin_ctx = finalize::finalize_context_from_engine(
-                self,
-                session_id,
-                boot_for_execute.messages.len(),
-                Some(user_message_id),
-                compressor,
-                uuid::Uuid::new_v4(), // slash-command path: no MessageStart was sent
-            );
-            return finalize::finalize(
-                fin_ctx,
-                finalize::FinalizeOutcome::Done {
-                    assistant_text: text,
-                    thinking_json: None,
-                    turn_limited: false,
-                },
-                &mut s,
-                &mut lifecycle_guard,
-            )
-            .await;
+            match outcome {
+                CommandOutcome::Menu { card } => {
+                    let card_type = card
+                        .get("card_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("command_args_menu")
+                        .to_string();
+                    let _ = s
+                        .emit(PipelineEvent::Stream(StreamEvent::RichCard { card_type, data: card }))
+                        .await;
+                    let _ = s
+                        .emit(PipelineEvent::Stream(StreamEvent::Finish {
+                            finish_reason: "command".to_string(),
+                            continuation: false,
+                        }))
+                        .await;
+                    let fin_ctx = finalize::finalize_context_from_engine(
+                        self,
+                        session_id,
+                        boot_for_execute.messages.len(),
+                        Some(user_message_id),
+                        compressor,
+                        uuid::Uuid::new_v4(), // slash-command path: no MessageStart was sent
+                    );
+                    // The card IS the response — no assistant text to persist.
+                    return finalize::finalize(
+                        fin_ctx,
+                        finalize::FinalizeOutcome::Done {
+                            assistant_text: String::new(),
+                            thinking_json: None,
+                            turn_limited: false,
+                        },
+                        &mut s,
+                        &mut lifecycle_guard,
+                    )
+                    .await;
+                }
+                CommandOutcome::Text(text) => {
+                    let _ = s
+                        .emit(PipelineEvent::Stream(StreamEvent::TextDelta(text.clone())))
+                        .await;
+                    let fin_ctx = finalize::finalize_context_from_engine(
+                        self,
+                        session_id,
+                        boot_for_execute.messages.len(),
+                        Some(user_message_id),
+                        compressor,
+                        uuid::Uuid::new_v4(), // slash-command path: no MessageStart was sent
+                    );
+                    return finalize::finalize(
+                        fin_ctx,
+                        finalize::FinalizeOutcome::Done {
+                            assistant_text: text,
+                            thinking_json: None,
+                            turn_limited: false,
+                        },
+                        &mut s,
+                        &mut lifecycle_guard,
+                    )
+                    .await;
+                }
+            }
         }
 
         // Serialize this user turn against the goal driver for the session.
@@ -583,33 +663,68 @@ impl AgentEngine {
         };
 
         if let Some(outcome) = command_output.take() {
-            let text = match outcome {
-                CommandOutcome::Text(t) => t,
-                // Phase 1 fallback; real RichCard emission is Phase 2
-                CommandOutcome::Menu { card } => card.to_string(),
-            };
-            let _ = s
-                .emit(PipelineEvent::Stream(StreamEvent::TextDelta(text.clone())))
-                .await;
-            let fin_ctx = finalize::finalize_context_from_engine(
-                self,
-                session_id,
-                boot_for_execute.messages.len(),
-                Some(user_message_id),
-                compressor,
-                uuid::Uuid::new_v4(), // slash-command path: no MessageStart was sent
-            );
-            return finalize::finalize(
-                fin_ctx,
-                finalize::FinalizeOutcome::Done {
-                    assistant_text: text,
-                    thinking_json: None,
-                    turn_limited: false,
-                },
-                &mut s,
-                &mut lifecycle_guard,
-            )
-            .await;
+            match outcome {
+                CommandOutcome::Menu { card } => {
+                    let card_type = card
+                        .get("card_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("command_args_menu")
+                        .to_string();
+                    let _ = s
+                        .emit(PipelineEvent::Stream(StreamEvent::RichCard { card_type, data: card }))
+                        .await;
+                    let _ = s
+                        .emit(PipelineEvent::Stream(StreamEvent::Finish {
+                            finish_reason: "command".to_string(),
+                            continuation: false,
+                        }))
+                        .await;
+                    let fin_ctx = finalize::finalize_context_from_engine(
+                        self,
+                        session_id,
+                        boot_for_execute.messages.len(),
+                        Some(user_message_id),
+                        compressor,
+                        uuid::Uuid::new_v4(), // slash-command path: no MessageStart was sent
+                    );
+                    // The card IS the response — no assistant text to persist.
+                    return finalize::finalize(
+                        fin_ctx,
+                        finalize::FinalizeOutcome::Done {
+                            assistant_text: String::new(),
+                            thinking_json: None,
+                            turn_limited: false,
+                        },
+                        &mut s,
+                        &mut lifecycle_guard,
+                    )
+                    .await;
+                }
+                CommandOutcome::Text(text) => {
+                    let _ = s
+                        .emit(PipelineEvent::Stream(StreamEvent::TextDelta(text.clone())))
+                        .await;
+                    let fin_ctx = finalize::finalize_context_from_engine(
+                        self,
+                        session_id,
+                        boot_for_execute.messages.len(),
+                        Some(user_message_id),
+                        compressor,
+                        uuid::Uuid::new_v4(), // slash-command path: no MessageStart was sent
+                    );
+                    return finalize::finalize(
+                        fin_ctx,
+                        finalize::FinalizeOutcome::Done {
+                            assistant_text: text,
+                            thinking_json: None,
+                            turn_limited: false,
+                        },
+                        &mut s,
+                        &mut lifecycle_guard,
+                    )
+                    .await;
+                }
+            }
         }
 
         let cancel = tokio_util::sync::CancellationToken::new();
