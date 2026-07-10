@@ -21,9 +21,14 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Markdown } from "@/components/ui/markdown";
-import { Brain, Trash2, Pin, PinOff, ExternalLink, ArrowLeft, MessageSquare, FileText } from "lucide-react";
+import { Tabs } from "@/components/ui/tabs";
+import { FilterTabsList, type FilterTabItem } from "@/components/ui/filter-tabs";
+import { Brain, Trash2, Pin, PinOff, ExternalLink, ArrowLeft, MessageSquare, FileText, CalendarClock, Sparkles } from "lucide-react";
 import { useSearchParams, useRouter } from "next/navigation";
 import type { MemoryDocument } from "@/types/api";
+
+type MemoryKind = "fact" | "event" | "reflection";
+type KindFilter = "all" | MemoryKind;
 
 // ── Full document view ──────────────────────────────────────────
 
@@ -84,6 +89,7 @@ export default function MemoryPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [kindFilter, setKindFilter] = useState<KindFilter>("all");
 
   const limit = 20;
 
@@ -145,6 +151,34 @@ export default function MemoryPage() {
     setOffset(0);
   }, [search]);
 
+  // Kind filter is client-side (current page only) — mirrors the state-filter
+  // pattern used on the Skills page (FilterTabsList + local .filter()).
+  const filteredChunks = kindFilter === "all"
+    ? chunks
+    : chunks.filter((c) => (c.kind ?? "fact") === kindFilter);
+
+  const KIND_FILTERS: (FilterTabItem & { value: KindFilter })[] = [
+    { value: "all", label: t("memory.filter_all"), icon: <Brain />, count: chunks.length },
+    {
+      value: "fact",
+      label: t("memory.filter_fact"),
+      icon: <FileText />,
+      count: chunks.filter((c) => (c.kind ?? "fact") === "fact").length,
+    },
+    {
+      value: "event",
+      label: t("memory.filter_event"),
+      icon: <CalendarClock />,
+      count: chunks.filter((c) => c.kind === "event").length,
+    },
+    {
+      value: "reflection",
+      label: t("memory.filter_reflection"),
+      icon: <Sparkles />,
+      count: chunks.filter((c) => c.kind === "reflection").length,
+    },
+  ];
+
   // Full document view mode
   if (docId) {
     return <DocumentFullView id={docId} onBack={() => router.push("/memory")} />;
@@ -184,6 +218,13 @@ export default function MemoryPage() {
       {error && <ErrorBanner error={error} className="mb-4 shrink-0" />}
 
       <div className="flex flex-col flex-1 min-h-0">
+          {/* Kind filter */}
+          <div className="mb-4 shrink-0">
+            <Tabs value={kindFilter} onValueChange={(v) => setKindFilter(v as KindFilter)}>
+              <FilterTabsList items={KIND_FILTERS} />
+            </Tabs>
+          </div>
+
           {/* Search */}
           <div className="mb-6 shrink-0">
             <SearchInput
@@ -202,12 +243,13 @@ export default function MemoryPage() {
                   <Skeleton key={i} className="h-20 w-full rounded-xl" />
                 ))}
               </div>
-            ) : chunks.length === 0 ? (
+            ) : filteredChunks.length === 0 ? (
               <EmptyState icon={Brain} text={t("memory.nothing_found")} height="h-64" />
             ) : (
               <div className="grid gap-3">
-                {chunks.map((doc) => {
+                {filteredChunks.map((doc) => {
                   const isSession = doc.source?.startsWith("auto:session") || doc.source?.startsWith("Session:");
+                  const kind = doc.kind ?? "fact";
                   return (
                     <Card key={doc.id} interactive className="group relative flex flex-col p-4 min-w-0 overflow-hidden">
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
@@ -237,6 +279,11 @@ export default function MemoryPage() {
                             {doc.scope === "shared" && (
                               <Badge variant="secondary" size="sm">
                                 shared
+                              </Badge>
+                            )}
+                            {kind !== "fact" && (
+                              <Badge variant={kind === "reflection" ? "outline-warning" : "outline-primary"} size="sm">
+                                {kind === "reflection" ? t("memory.kind_reflection") : t("memory.kind_event")}
                               </Badge>
                             )}
                           </div>

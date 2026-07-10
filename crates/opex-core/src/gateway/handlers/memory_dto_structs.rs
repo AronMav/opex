@@ -31,6 +31,10 @@ pub struct MemoryDocumentDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-gen", ts(optional))]
     pub scope: Option<String>,
+    /// 'fact' | 'event' | 'reflection' (soul foundation, m076)
+    pub kind: String,
+    /// LLM importance 1-10 (soul retrieval scoring); 5.0 for legacy rows
+    pub importance: f32,
 }
 crate::register_ts_dto!(MemoryDocumentDto);
 

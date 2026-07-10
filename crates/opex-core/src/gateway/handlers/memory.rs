@@ -200,6 +200,8 @@ struct DocumentRow {
     total_chars: Option<i64>,
     #[sqlx(default)]
     scope: String,
+    kind: String,
+    importance: f32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -236,6 +238,8 @@ pub(crate) async fn api_list_documents(
                         preview: Some(r.content.chars().take(200).collect()),
                         total_chars: Some(r.content.len() as i64),
                         scope: None,
+                        kind: "fact".to_string(),
+                        importance: 5.0,
                     }).collect();
                     Json(json!({ "documents": documents, "total": total_found, "search_mode": mode })).into_response()
                 }
@@ -250,7 +254,7 @@ pub(crate) async fn api_list_documents(
            m.created_at, COALESCE(m.accessed_at, m.created_at) AS accessed_at, \
            LEFT(m.content, 200) AS preview, \
            LENGTH(m.content)::bigint AS total_chars, \
-           m.scope \
+           m.scope, m.kind, m.importance \
          FROM memory_chunks m \
          ORDER BY COALESCE(m.accessed_at, m.created_at) DESC \
          LIMIT $1 OFFSET $2";
@@ -276,6 +280,8 @@ pub(crate) async fn api_list_documents(
                 preview: r.preview.clone(),
                 total_chars: r.total_chars,
                 scope: if r.scope.is_empty() { None } else { Some(r.scope.clone()) },
+                kind: r.kind.clone(),
+                importance: r.importance,
             }).collect();
             Json(json!({ "documents": documents, "total": total })).into_response()
         }
