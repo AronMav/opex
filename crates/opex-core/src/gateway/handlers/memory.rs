@@ -238,6 +238,10 @@ pub(crate) async fn api_list_documents(
                         preview: Some(r.content.chars().take(200).collect()),
                         total_chars: Some(r.content.len() as i64),
                         scope: None,
+                        // Search results come from generic search, which is kind-filtered to
+                        // 'fact' (soul events/reflections are excluded), so hardcoding these
+                        // is correct by construction. If that upstream filter is ever loosened,
+                        // MemoryResult must carry kind/importance instead.
                         kind: "fact".to_string(),
                         importance: 5.0,
                     }).collect();
