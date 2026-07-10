@@ -5,6 +5,7 @@ pub mod spec;
 pub mod registry;
 pub mod builtin;
 pub mod handler_source;
+pub mod merge;
 
 /// Синглтон реестра builtins. Валидируется при первом обращении; паника при
 /// невалидности — конфигурация команд статична и обязана быть корректной.
