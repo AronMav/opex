@@ -188,12 +188,32 @@ impl AgentEngine {
             engine_arc: self.state().self_ref.get().and_then(|w| w.upgrade()),
         };
 
-        crate::agent::pipeline::commands::handle_command(
+        if let Some(res) = crate::agent::pipeline::commands::handle_command(
             &ctx,
             text,
             msg,
             || async { self.invalidate_yaml_tools_cache().await },
-        ).await
+        ).await {
+            return Some(res);
+        }
+
+        // Not a builtin — check if it's a typed handler command (Task 5,
+        // e.g. `/summarize_video <url>`). Requires toolgate to be configured;
+        // if it isn't, there's nothing to dispatch against.
+        if text.trim().starts_with('/') {
+            let toolgate_url = self.cfg().app_config.toolgate_url.clone()?;
+            let deps = crate::agent::commands::dispatch::HandlerDispatchDeps {
+                db: &self.cfg().db,
+                toolgate_url,
+                http: self.http_client().clone(),
+                agent_name: &self.cfg().agent.name,
+                agent_language: &self.cfg().agent.language,
+                dm_scope,
+            };
+            return crate::agent::commands::dispatch::try_handler_command(&deps, text, msg).await;
+        }
+
+        None
     }
 }
 

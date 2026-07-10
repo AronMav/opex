@@ -11,3 +11,4 @@ pub mod registry;
 pub mod builtin;
 pub mod handler_source;
 pub mod merge;
+pub mod dispatch;
