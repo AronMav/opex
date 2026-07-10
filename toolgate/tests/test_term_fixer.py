@@ -197,3 +197,59 @@ def test_apply_unmatched_variant_leaves_matched_false():
 
 def test_apply_empty_reps_returns_text():
     assert tf.apply_replacements("текст", []) == "текст"
+
+
+# ── glossary / term_notes ────────────────────────────────────────────────────
+
+def test_glossary_empty_without_matched():
+    r = _rep()  # matched=False по умолчанию
+    assert tf.build_glossary([r]) == ""
+
+
+def test_glossary_high_and_low_rows_ru():
+    hi = _rep(); hi.matched = True
+    lo = _rep(heard="T-G37", variants=["T-G37"], corrected="Arturia Tape J-37",
+              confidence="low", description=""); lo.matched = True
+    g = tf.build_glossary([hi, lo])
+    assert g.startswith("## Исправленные названия")
+    assert "- «амбассадор» → **MBassador** — суб-бас плагин" in g
+    assert "*вероятно* **Arturia Tape J-37** (не подтверждено)" in g
+
+
+def test_glossary_localized_en():
+    hi = _rep(); hi.matched = True
+    g = tf.build_glossary([hi], language="en")
+    assert g.startswith("## Corrected names")
+
+
+def test_glossary_escapes_markdown_and_flattens_newlines():
+    r = _rep(heard="a*b", variants=["a*b"], corrected="C_name",
+             description="line1\nline2 [x](y)")
+    r.matched = True
+    g = tf.build_glossary([r])
+    assert "a\\*b" in g
+    assert "C\\_name" in g
+    assert "\nline2" not in g          # description сплющен в одну строку
+    assert "\\[x\\]" in g
+
+
+def test_term_notes_high_and_low_ru():
+    hi = _rep(); hi.matched = True
+    lo = _rep(heard="T-G37", variants=["T-G37"], corrected="Tape J-37",
+              confidence="low"); lo.matched = True
+    n = tf.build_term_notes([hi, lo])
+    assert n.startswith("В транскрипте уже исправлены названия:")
+    assert '"MBassador" (было "амбассадор")' in n
+    assert '"T-G37" вероятно означает "Tape J-37"' in n
+    assert "вероятно" in n
+
+
+def test_term_notes_localized_en():
+    hi = _rep(); hi.matched = True
+    n = tf.build_term_notes([hi], language="en")
+    assert n.startswith("Product names were already corrected in the transcript:")
+    assert '"MBassador" (was "амбассадор")' in n
+
+
+def test_term_notes_empty_without_matched():
+    assert tf.build_term_notes([_rep()]) == ""

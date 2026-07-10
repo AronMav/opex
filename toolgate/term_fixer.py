@@ -184,3 +184,63 @@ def apply_replacements(text: str, reps: list[Replacement], language: str = "ru")
         for rep in reps:
             rep.matched = False
         return text
+
+
+# ── glossary / term_notes ────────────────────────────────────────────────────
+
+_MD_ESCAPE_RE = re.compile(r"([*_\[\]()!`#<>])")
+
+
+def _md_escape(s: str) -> str:
+    """Одна строка + экранирование markdown-спецсимволов (значения глоссария —
+    из недоверенного транскрипта и недоверенной поисковой выдачи)."""
+    return _MD_ESCAPE_RE.sub(r"\\\1", " ".join(s.split()))
+
+
+def build_glossary(reps: list[Replacement], language: str = "ru") -> str:
+    rows = [r for r in reps if r.matched]
+    if not rows:
+        return ""
+    ru = language == "ru"
+    lines = ["## Исправленные названия" if ru else "## Corrected names"]
+    for r in rows:
+        heard, corr, desc = _md_escape(r.heard), _md_escape(r.corrected), _md_escape(r.description)
+        if r.confidence == "high":
+            line = f"- «{heard}» → **{corr}**" + (f" — {desc}" if desc else "")
+        else:
+            mark = "вероятно" if ru else "likely"
+            note = " (не подтверждено)" if ru else " (unconfirmed)"
+            line = f"- «{heard}» → *{mark}* **{corr}**{note}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def build_term_notes(reps: list[Replacement], language: str = "ru") -> str:
+    """Сводка для digest-промптов: inline-пометка low видна только одному
+    map-чанку, поэтому конвенцию доносим через system-промпт."""
+    rows = [r for r in reps if r.matched]
+    if not rows:
+        return ""
+    ru = language == "ru"
+    parts = []
+    for r in rows:
+        if r.confidence == "high":
+            parts.append(
+                f'"{r.corrected}" (было "{r.heard}")' if ru
+                else f'"{r.corrected}" (was "{r.heard}")'
+            )
+        else:
+            parts.append(
+                f'"{r.heard}" вероятно означает "{r.corrected}" (не подтверждено)' if ru
+                else f'"{r.heard}" likely means "{r.corrected}" (unconfirmed)'
+            )
+    if ru:
+        return (
+            "В транскрипте уже исправлены названия: " + "; ".join(parts) +
+            '. Используй исправленные написания; названия с пометкой «вероятно» '
+            'упоминай с этой пометкой.'
+        )
+    return (
+        "Product names were already corrected in the transcript: " + "; ".join(parts) +
+        '. Use the corrected spellings; keep the "likely" mark for unconfirmed ones.'
+    )
