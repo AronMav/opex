@@ -30,6 +30,31 @@ impl Drop for SseSenderGuard {
     }
 }
 
+/// Builds Telegram `send_buttons` specs for a `command_args_menu` card that
+/// carries a choice-valve `options` + `token` (dispatch.rs `try_handler_command`,
+/// Task 2). Returns `None` when the card lacks either — e.g. the
+/// missing-source prompt card — so callers keep the plain-text fallback.
+///
+/// Button `data` is `cm:<token>:<value>` (mirrors the `hm:<token>:<id>` shape
+/// used by the handler-menu flow), recovered by `POST /api/commands/menu-run`.
+fn argsmenu_buttons(card: &serde_json::Value) -> Option<Vec<serde_json::Value>> {
+    let token = card.get("token").and_then(|v| v.as_str())?;
+    let options = card.get("options").and_then(|v| v.as_array())?;
+    if options.is_empty() {
+        return None;
+    }
+    Some(
+        options
+            .iter()
+            .map(|o| {
+                let value = o.get("value").and_then(|v| v.as_str()).unwrap_or("");
+                let label = o.get("label").and_then(|v| v.as_str()).unwrap_or(value);
+                serde_json::json!({ "text": label, "data": format!("cm:{token}:{value}") })
+            })
+            .collect(),
+    )
+}
+
 impl AgentEngine {
     /// Hard-error path helper: when `execute()`/`finalize()` bubble an `Err` out
     /// of an entry point, the normal `finalize` failure machinery never runs and
@@ -445,9 +470,48 @@ impl AgentEngine {
         if let Some(outcome) = command_output.take() {
             match outcome {
                 CommandOutcome::Menu { card } => {
-                    // Channels transport can't render the RichCard; deliver the
-                    // prompt text instead so the user isn't left with a silent
-                    // no-op turn (e.g. bare `/summarize_video` on Telegram).
+                    // Choice-valve command menu (Task 2's `command_args_menu`
+                    // card with `options` + `token`): render clickable inline
+                    // buttons via the existing send_buttons channel action
+                    // (mirrors the handler_menu flow below) instead of dumping
+                    // the prompt as plain text.
+                    if let (Some(buttons), Some(router)) =
+                        (argsmenu_buttons(&card), self.channel_router_ref())
+                    {
+                        let text = card.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+                        let action = crate::agent::channel_actions::ChannelAction {
+                            name: "send_buttons".to_string(),
+                            params: serde_json::json!({ "text": text, "buttons": buttons }),
+                            context: msg.context.clone(),
+                            reply: reply_tx,
+                            target_channel: Some(msg.channel.clone()),
+                        };
+                        let _ = router.send(action).await;
+                        let fin_ctx = finalize::finalize_context_from_engine(
+                            self,
+                            session_id,
+                            boot_for_execute.messages.len(),
+                            Some(user_message_id),
+                            compressor,
+                            uuid::Uuid::new_v4(), // slash-command path: no MessageStart was sent
+                        );
+                        return finalize::finalize(
+                            fin_ctx,
+                            finalize::FinalizeOutcome::Done {
+                                assistant_text: String::new(),
+                                thinking_json: None,
+                                turn_limited: false,
+                            },
+                            &mut s,
+                            &mut lifecycle_guard,
+                        )
+                        .await;
+                    }
+                    // No options/token (e.g. the missing-source prompt), or no
+                    // channel router configured: fall back to plain text so
+                    // the user isn't left with a silent no-op turn (e.g. bare
+                    // `/summarize_video` on Telegram).
                     let text = card.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     let _ = s
                         .emit(PipelineEvent::Stream(StreamEvent::TextDelta(text.clone())))
@@ -657,6 +721,44 @@ impl AgentEngine {
         if let Some(outcome) = command_output.take() {
             match outcome {
                 CommandOutcome::Menu { card } => {
+                    // Choice-valve command menu: same treatment as
+                    // handle_with_status — render inline buttons via the
+                    // channel router when the card carries options+token and
+                    // a router is available, else fall back to plain text
+                    // (chunk transport can't render the RichCard).
+                    if let (Some(buttons), Some(router)) =
+                        (argsmenu_buttons(&card), self.channel_router_ref())
+                    {
+                        let text = card.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+                        let action = crate::agent::channel_actions::ChannelAction {
+                            name: "send_buttons".to_string(),
+                            params: serde_json::json!({ "text": text, "buttons": buttons }),
+                            context: msg.context.clone(),
+                            reply: reply_tx,
+                            target_channel: Some(msg.channel.clone()),
+                        };
+                        let _ = router.send(action).await;
+                        let fin_ctx = finalize::finalize_context_from_engine(
+                            self,
+                            session_id,
+                            boot_for_execute.messages.len(),
+                            Some(user_message_id),
+                            compressor,
+                            uuid::Uuid::new_v4(), // slash-command path: no MessageStart was sent
+                        );
+                        return finalize::finalize(
+                            fin_ctx,
+                            finalize::FinalizeOutcome::Done {
+                                assistant_text: String::new(),
+                                thinking_json: None,
+                                turn_limited: false,
+                            },
+                            &mut s,
+                            &mut lifecycle_guard,
+                        )
+                        .await;
+                    }
                     // Chunk transport can't render the RichCard; deliver the
                     // prompt text instead so the user isn't left with a silent
                     // no-op turn.
@@ -916,11 +1018,52 @@ impl AgentEngine {
 
 #[cfg(test)]
 mod tests {
+    use super::argsmenu_buttons;
     use std::path::Path;
 
     fn source() -> String {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agent/engine/run.rs");
         std::fs::read_to_string(&path).expect("read engine/run.rs")
+    }
+
+    #[test]
+    fn argsmenu_buttons_builds_cm_callback_data() {
+        let card = serde_json::json!({
+            "card_type": "command_args_menu",
+            "command": "transcribe",
+            "text": "Выберите значение «lang» для /transcribe:",
+            "options": [
+                {"value": "ru", "label": "ru"},
+                {"value": "en", "label": "en"},
+            ],
+            "token": "abc123",
+        });
+        let buttons = argsmenu_buttons(&card).expect("options+token card must yield buttons");
+        assert_eq!(buttons.len(), 2);
+        assert_eq!(buttons[0]["text"], "ru");
+        assert_eq!(buttons[0]["data"], "cm:abc123:ru");
+        assert_eq!(buttons[1]["data"], "cm:abc123:en");
+    }
+
+    #[test]
+    fn argsmenu_buttons_none_without_token() {
+        let card = serde_json::json!({
+            "card_type": "command_args_menu",
+            "command": "transcribe",
+            "text": "Пришлите ссылку или файл для /transcribe.",
+        });
+        assert!(argsmenu_buttons(&card).is_none());
+    }
+
+    #[test]
+    fn argsmenu_buttons_none_with_empty_options() {
+        let card = serde_json::json!({
+            "card_type": "command_args_menu",
+            "text": "prompt",
+            "options": [],
+            "token": "abc123",
+        });
+        assert!(argsmenu_buttons(&card).is_none());
     }
 
     #[test]

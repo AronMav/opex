@@ -11,6 +11,7 @@ import type { ChannelActionDto, IncomingMessageDto, MediaAttachment } from "../t
 import { getStrings, type Strings } from "../localization";
 import { splitText, toolEmoji, parseDirectives, parseUserCommand, reUploadAttachments, commonMarkToMarkdownV2, isTgPermanentError, extractTgErrorCode, extractTgRetryAfter, exponentialDelay, chatCooldownKey } from "./common";
 import { registerTelegramCommands } from "./telegram-commands";
+import { parseCmCallback } from "./telegram-argsmenu";
 
 /** Builds reply_parameters with allow_sending_without_reply for resilient replies */
 function safeReplyParams(messageId: number | undefined): { message_id: number; allow_sending_without_reply: true } | undefined {
@@ -481,6 +482,39 @@ export function createTelegramDriver(
         }
       } catch (err) {
         console.error("[tg] menu-run HTTP error:", err);
+        await ctx.answerCallbackQuery({ text: "Ошибка связи" }).catch(() => { });
+      }
+      return;
+    }
+
+    // Choice-valve command menu button: cm:<token>:<value> → complete the
+    // stashed `/command` run via Core (deterministic, no LLM round-trip).
+    // Mirrors the hm: handler-menu branch above; token maps to the stashed
+    // handler/source/session/agent/valve on the Core side
+    // (POST /api/commands/menu-run).
+    const cmParsed = parseCmCallback(data);
+    if (cmParsed) {
+      const { token, value } = cmParsed;
+      const coreUrl = (process.env.OPEX_CORE_WS || "ws://localhost:18789").replace("ws://", "http://");
+      const authToken = process.env.OPEX_AUTH_TOKEN || "";
+      try {
+        const resp = await fetch(`${coreUrl}/api/commands/menu-run`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${authToken}` },
+          // chat_id binds the callback to the chat the menu was sent to (Core
+          // rejects a token replayed from another chat).
+          body: JSON.stringify({ token, value, chat_id: chatId }),
+          signal: AbortSignal.timeout(5000),
+        });
+        if (resp.ok) {
+          await ctx.answerCallbackQuery({ text: "Запускаю…" }).catch(() => { });
+          // Remove the keyboard so it can't be double-clicked.
+          await ctx.editMessageReplyMarkup().catch(() => { });
+        } else {
+          await ctx.answerCallbackQuery({ text: "Не удалось запустить" }).catch(() => { });
+        }
+      } catch (err) {
+        console.error("[tg] commands/menu-run HTTP error:", err);
         await ctx.answerCallbackQuery({ text: "Ошибка связи" }).catch(() => { });
       }
       return;
