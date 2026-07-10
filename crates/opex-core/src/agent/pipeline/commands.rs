@@ -90,6 +90,13 @@ pub struct CommandContext<'a> {
     /// Owned engine `Arc` (resolved from `state.self_ref`) so `/goal` can spawn a
     /// background driver that outlives the request. `None` when no self-ref is set.
     pub engine_arc: Option<std::sync::Arc<crate::agent::engine::AgentEngine>>,
+    /// Toolgate base URL, when configured. Used by `/help` to append the live
+    /// handler-command section. `None` disables the append (no regression —
+    /// `/help` falls back to the static localized text).
+    pub toolgate_url: Option<String>,
+    /// HTTP client used to fetch handler manifests for `/help`. `None` when
+    /// `toolgate_url` is also `None`.
+    pub http: Option<reqwest::Client>,
 }
 
 /// Spawn (replacing any existing) the goal driver for a session. Returns false when
@@ -117,6 +124,29 @@ fn stop_goal_driver(ctx: &CommandContext<'_>, session_id: uuid::Uuid) {
     {
         crate::agent::goal::pool::stop(&pool, session_id);
     }
+}
+
+/// Append a "file handler commands" section to the base `/help` text.
+///
+/// Pure/no-IO so it's cheap to unit-test in isolation from the live
+/// `HandlerRegistry` fetch. Returns `base` unchanged when `handlers` is empty
+/// (no regression to the static localized `/help`).
+fn append_handlers_section(
+    base: &str,
+    header: &str,
+    handlers: &[crate::agent::commands::spec::CommandSpec],
+) -> String {
+    if handlers.is_empty() {
+        return base.to_string();
+    }
+    let mut out = base.to_string();
+    out.push_str("\n\n");
+    out.push_str(header);
+    out.push('\n');
+    for h in handlers {
+        out.push_str(&format!("/{} — {}\n", h.name, h.description));
+    }
+    out
 }
 
 // ── handle_command ─────────────────────────────────────────────────────────
@@ -520,8 +550,19 @@ where
             }
             Some(Ok(CommandOutcome::Text(out)))
         }
-        "/help" => {
-            Some(Ok(CommandOutcome::Text(s.help_text.to_string())))
+        "/help" | "/commands" => {
+            let mut out = s.help_text.to_string();
+            if let (Some(toolgate_url), Some(http)) = (ctx.toolgate_url.clone(), ctx.http.clone()) {
+                let reg = crate::agent::handler_registry::HandlerRegistry::new(toolgate_url, http);
+                reg.refresh().await;
+                let manifests = reg.manifests().await;
+                let enabled = crate::agent::fse::get_enabled_allowlist(ctx.db).await;
+                let handlers = crate::agent::commands::handler_source::derive_handler_commands(
+                    &manifests, &enabled, ctx.agent_language,
+                );
+                out = append_handlers_section(&out, s.handlers_header, &handlers);
+            }
+            Some(Ok(CommandOutcome::Text(out)))
         }
         "/memory" => {
             let query = args.trim();
@@ -691,6 +732,41 @@ mod tests {
         assert!(matches!(parse_voice_command(""), VoiceCmd::Status));
         assert!(matches!(parse_voice_command("status"), VoiceCmd::Status));
         assert!(matches!(parse_voice_command("garbage"), VoiceCmd::Status));
+    }
+
+    #[test]
+    fn append_handlers_section_appends_lines_and_preserves_base_when_empty() {
+        use crate::agent::commands::spec::{
+            ArgType, CommandArg, CommandCategory, CommandScope, CommandSourceKind, CommandSpec, Visibility,
+        };
+
+        let base = "📋 *Available commands:*\n\n/status — agent status";
+
+        // Empty handler list → base returned verbatim (no regression).
+        assert_eq!(append_handlers_section(base, "🧩 *File handlers:*", &[]), base);
+
+        let handlers = vec![CommandSpec {
+            name: "summarize_video".to_string(),
+            aliases: vec![],
+            description: "Summarize a video into notes".to_string(),
+            category: CommandCategory::Media,
+            scope: CommandScope::Both,
+            args: vec![CommandArg {
+                name: "source".to_string(),
+                description: "url or file".to_string(),
+                arg_type: ArgType::String,
+                required: false,
+                choices: None,
+                capture_remaining: true,
+                menu: false,
+            }],
+            visibility: Visibility::All,
+            source: CommandSourceKind::Handler { handler_id: "summarize_video".to_string() },
+        }];
+        let out = append_handlers_section(base, "🧩 *File handlers:*", &handlers);
+        assert!(out.starts_with(base), "base text must be preserved verbatim");
+        assert!(out.contains("🧩 *File handlers:*"));
+        assert!(out.contains("/summarize_video — Summarize a video into notes"));
     }
 
     #[test]

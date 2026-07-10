@@ -34,6 +34,7 @@ pub struct CommandStrings {
     pub memory_empty: &'static str,
     pub memory_header: &'static str,
     pub help_text: &'static str,
+    pub handlers_header: &'static str,
 }
 
 pub struct ErrorStrings {
@@ -80,6 +81,7 @@ const RU: CommandStrings = CommandStrings {
 /usage — статистика токенов\n\
 /export — экспорт сессии\n\
 /help — эта справка",
+    handlers_header: "🧩 *Обработчики файлов:*",
 };
 
 const EN: CommandStrings = CommandStrings {
@@ -115,6 +117,7 @@ const EN: CommandStrings = CommandStrings {
 /usage — token statistics\n\
 /export — export session\n\
 /help — this help",
+    handlers_header: "🧩 *File handlers:*",
 };
 
 const RU_ERR: ErrorStrings = ErrorStrings {

@@ -186,6 +186,8 @@ impl AgentEngine {
             thinking_level: &self.state().thinking_level,
             memory_store: self.cfg().memory_store.as_ref(),
             engine_arc: self.state().self_ref.get().and_then(|w| w.upgrade()),
+            toolgate_url: self.cfg().app_config.toolgate_url.clone(),
+            http: Some(self.http_client().clone()),
         };
 
         if let Some(res) = crate::agent::pipeline::commands::handle_command(
