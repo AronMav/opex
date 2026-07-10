@@ -333,3 +333,165 @@ def test_sanitize_broken_item_does_not_kill_others():
 
 def test_sanitize_non_list_returns_empty():
     assert tf.sanitize_verdicts("не список", _cands()) == []
+
+
+# ── fix_terms orchestrator ───────────────────────────────────────────────────
+
+LONG_TEXT = "Использую амбассадор для суб-баса, он делает низ плотнее. " * 10  # > 300 chars
+
+DETECT_JSON = (
+    '[{"heard": "амбассадор", "variants": ["амбассадор"], '
+    '"description": "суб-бас плагин", "query": "sub bass plugin"}]'
+)
+# Тот же кандидат с другим регистром — для проверки casefold-дедупа между окнами.
+DETECT_JSON_CAP = (
+    '[{"heard": "Амбассадор", "variants": ["Амбассадор"], '
+    '"description": "суб-бас плагин", "query": "sub bass plugin"}]'
+)
+VERIFY_JSON = '[{"id": 0, "corrected": "MBassador", "confidence": "high"}]'
+
+
+def _fix_ctx(llm_side_effect, search_return=None, has_ws=True):
+    ctx = MagicMock()
+    ctx.has_capability = AsyncMock(return_value=has_ws)
+    ctx.llm.complete = AsyncMock(side_effect=llm_side_effect)
+    # ВАЖНО: ctx.search в проде — _CapabilityWrapper БЕЗ __call__; поиск — это
+    # метод ctx.search.search(...). Мокаем именно форму wrapper'а, чтобы
+    # ошибочный прямой вызов ctx.search(...) падал и в тестах.
+    ctx.search = MagicMock()
+    ctx.search.side_effect = TypeError("'_CapabilityWrapper' object is not callable")
+    ctx.search.search = AsyncMock(
+        return_value=search_return if search_return is not None
+        else [{"title": "MBassador", "url": "u", "content": "sub bass"}]
+    )
+    ctx.progress = AsyncMock()
+    ctx.log = MagicMock()
+    return ctx
+
+
+@pytest.mark.asyncio
+async def test_fix_terms_happy_path():
+    ctx = _fix_ctx([DETECT_JSON, VERIFY_JSON])
+    fx = await tf.fix_terms(ctx, LONG_TEXT)
+    assert "MBassador" in fx.transcript
+    assert "амбассадор" not in fx.transcript
+    assert fx.glossary_md.startswith("## Исправленные названия")
+    assert fx.term_notes != ""
+    assert ctx.llm.complete.await_count == 2  # 1 detect-окно + 1 verify
+    ctx.search.search.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_fix_terms_skips_short_transcript_without_any_call():
+    ctx = _fix_ctx([DETECT_JSON, VERIFY_JSON])
+    fx = await tf.fix_terms(ctx, "коротко")
+    assert fx.transcript == "коротко" and fx.glossary_md == ""
+    ctx.llm.complete.assert_not_awaited()
+    ctx.has_capability.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fix_terms_skips_without_websearch_before_detect():
+    ctx = _fix_ctx([DETECT_JSON], has_ws=False)
+    fx = await tf.fix_terms(ctx, LONG_TEXT)
+    assert fx.transcript == LONG_TEXT
+    ctx.llm.complete.assert_not_awaited()
+    ctx.log.warning.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_fix_terms_empty_detect_skips_search_and_verify():
+    ctx = _fix_ctx(["[]"])
+    fx = await tf.fix_terms(ctx, LONG_TEXT)
+    assert fx.transcript == LONG_TEXT
+    assert ctx.llm.complete.await_count == 1
+    ctx.search.search.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fix_terms_detect_windows_on_long_timecoded_transcript():
+    # 100 минут таймкодов → 3 окна по 45 мин → 3 detect-вызова + 1 verify
+    lines = [f"[{m:02d}:00] Использую амбассадор для суб-баса минута {m}."
+             for m in range(0, 101, 5)]
+    transcript = "\n".join(lines)
+    side = [DETECT_JSON, DETECT_JSON_CAP, DETECT_JSON, VERIFY_JSON]
+    ctx = _fix_ctx(side)
+    fx = await tf.fix_terms(ctx, transcript)
+    assert ctx.llm.complete.await_count == 4
+    # dedup (casefold): окна вернули «амбассадор»/«Амбассадор» → один кандидат,
+    # один поиск
+    ctx.search.search.assert_awaited_once()
+    assert "MBassador" in fx.transcript
+
+
+@pytest.mark.asyncio
+async def test_fix_terms_detect_window_failure_does_not_kill_others():
+    lines = [f"[{m:02d}:00] Использую амбассадор для суб-баса минута {m}."
+             for m in range(0, 101, 5)]
+    transcript = "\n".join(lines)
+    side = [RuntimeError("boom"), DETECT_JSON, DETECT_JSON, VERIFY_JSON]
+    ctx = _fix_ctx(side)
+    fx = await tf.fix_terms(ctx, transcript)
+    assert "MBassador" in fx.transcript
+    ctx.log.warning.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_fix_terms_search_failure_candidate_goes_without_results():
+    ctx = _fix_ctx([DETECT_JSON, VERIFY_JSON])
+    ctx.search.search = AsyncMock(side_effect=RuntimeError("search down"))
+    fx = await tf.fix_terms(ctx, LONG_TEXT)
+    # verify всё равно вызван (кандидат «без результатов»), решение за LLM
+    assert ctx.llm.complete.await_count == 2
+    assert "MBassador" in fx.transcript
+
+
+@pytest.mark.asyncio
+async def test_fix_terms_verify_failure_returns_original():
+    ctx = _fix_ctx([DETECT_JSON, RuntimeError("verify down")])
+    fx = await tf.fix_terms(ctx, LONG_TEXT)
+    assert fx.transcript == LONG_TEXT and fx.glossary_md == ""
+
+
+@pytest.mark.asyncio
+async def test_fix_terms_unparseable_verify_warns_and_returns_original():
+    # verify ответил прозой: parse → None → warning + noop (спека: «Verify
+    # вернул мусор целиком → Warning, исходный текст») — НЕ молчаливая смерть
+    ctx = _fix_ctx([DETECT_JSON, "к сожалению, не могу помочь с JSON"])
+    fx = await tf.fix_terms(ctx, LONG_TEXT)
+    assert fx.transcript == LONG_TEXT and fx.glossary_md == ""
+    ctx.log.warning.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_fix_terms_caps_candidates_with_warning():
+    import json as _json
+    items = [{"heard": f"кандидатус{i}", "variants": [f"кандидатус{i}"],
+              "description": "d", "query": "q"} for i in range(12)]
+    detect = _json.dumps(items, ensure_ascii=False)
+    verify = _json.dumps([{"id": i, "corrected": f"Fixed{i}", "confidence": "high"}
+                          for i in range(tf.MAX_CANDIDATES)])
+    text = " ".join(f"кандидатус{i}" for i in range(12)) + " " + LONG_TEXT
+    ctx = _fix_ctx([detect, verify])
+    fx = await tf.fix_terms(ctx, text)
+    assert ctx.search.search.await_count == tf.MAX_CANDIDATES  # 12 → кап 8
+    ctx.log.warning.assert_called()                            # усечение залогировано
+    assert "Fixed0" in fx.transcript
+
+
+@pytest.mark.asyncio
+async def test_fix_terms_emits_progress_pcts():
+    ctx = _fix_ctx([DETECT_JSON, VERIFY_JSON])
+    await tf.fix_terms(ctx, LONG_TEXT, progress_pcts=(60, 70, 80))
+    phases = [c.args for c in ctx.progress.await_args_list]
+    assert ("fix_terms", 60) in phases
+    assert ("fix_terms", 70) in phases
+    assert ("fix_terms", 80) in phases
+
+
+@pytest.mark.asyncio
+async def test_fix_terms_top_level_exception_returns_original():
+    ctx = _fix_ctx([DETECT_JSON, VERIFY_JSON])
+    ctx.has_capability = AsyncMock(side_effect=RuntimeError("ctx broken"))
+    fx = await tf.fix_terms(ctx, LONG_TEXT)
+    assert fx.transcript == LONG_TEXT

@@ -290,3 +290,219 @@ def build_term_notes(reps: list[Replacement], language: str = "ru") -> str:
         "Product names were already corrected in the transcript: " + "; ".join(parts) +
         '. Use the corrected spellings; keep the "likely" mark for unconfirmed ones.'
     )
+
+
+# ── prompts ──────────────────────────────────────────────────────────────────
+
+DETECT_SYSTEM_PROMPT = (
+    "Ты анализируешь фрагмент авто-транскрипта (speech-to-text). Найди названия "
+    "продуктов, брендов, моделей и терминов, которые выглядят как ФОНЕТИЧЕСКОЕ "
+    "ИСКАЖЕНИЕ распознавания: несуществующие названия, кириллица там, где "
+    "ожидается латинский бренд, странные буквенно-цифровые коды.\n"
+    "Для каждого верни JSON-объект с ключами:\n"
+    '- "heard": точная форма из текста;\n'
+    '- "variants": ВСЕ словоформы этого названия, встречающиеся в тексте;\n'
+    '- "description": что этот объект ДЕЛАЕТ, по контексту фрагмента;\n'
+    '- "query": поисковый запрос на английском ПО ОПИСАНИЮ И ФУНКЦИИ '
+    "(бренд + категория + функция), НЕ по искажённому имени.\n"
+    "Ответ — ТОЛЬКО JSON-массив. Если искажений нет — пустой массив []."
+)
+
+VERIFY_SYSTEM_PROMPT = (
+    "Тебе даны кандидаты — возможно искажённые распознаванием названия — и "
+    "результаты веб-поиска по их описанию. Для КАЖДОГО кандидата (по его id) "
+    "реши, какое РЕАЛЬНОЕ название имелось в виду.\n"
+    "Критерии: фонетическое сходство (тейп≈Tape, амбассадор≈MBassador), общие "
+    "цифры/коды (37↔J-37), совпадение бренда И функции с описанием.\n"
+    "Верни ТОЛЬКО JSON-массив, для каждого id один из вариантов:\n"
+    '- {"id": N, "corrected": "Реальное Название", "confidence": "high"|"low"} — '
+    '"high" ТОЛЬКО когда сходятся и фонетика, и функция; сомнение — "low";\n'
+    '- {"id": N, "already_correct": true} — услышанное само является реальным '
+    "названием;\n"
+    '- {"id": N, "corrected": null} — подходящего продукта в выдаче нет.'
+)
+
+
+def _detect_messages(window_text: str) -> list[dict]:
+    return [
+        {"role": "system", "content": DETECT_SYSTEM_PROMPT},
+        {"role": "user", "content": window_text},
+    ]
+
+
+def _verify_messages(candidates: list[dict], results: list[list[dict]]) -> list[dict]:
+    parts = []
+    for i, cand in enumerate(candidates):
+        parts.append(
+            f"Кандидат id={i}: услышано «{cand['heard']}», "
+            f"описание из контекста: {cand['description']}"
+        )
+        rows = results[i]
+        if rows:
+            for r in rows:
+                parts.append(f"  - {r['title']} | {r['url']} | {r['content']}")
+        else:
+            parts.append("  (без результатов поиска)")
+    return [
+        {"role": "system", "content": VERIFY_SYSTEM_PROMPT},
+        {"role": "user", "content": "\n".join(parts)},
+    ]
+
+
+# ── windows ──────────────────────────────────────────────────────────────────
+
+def split_windows(transcript: str) -> list[str]:
+    """Окна для detect: 45-мин по таймкодам; fallback — по символам.
+
+    Полный транскрипт длинной лекции НИКОГДА не уходит в один LLM-вызов —
+    map-reduce в digest существует именно потому, что он не влезает.
+    Импорт внутри функции: module-top импорт summarize_video создал бы цикл,
+    когда обработчик импортирует term_fixer.
+    """
+    from handlers.builtin.summarize_video import (  # noqa: PLC0415
+        split_transcript_by_time, transcript_minutes,
+    )
+    if transcript_minutes(transcript) > DETECT_WINDOW_MIN:
+        return [c.text for c in split_transcript_by_time(transcript, DETECT_WINDOW_MIN)]
+    if len(transcript) > DETECT_WINDOW_CHARS:
+        return [transcript[i:i + DETECT_WINDOW_CHARS]
+                for i in range(0, len(transcript), DETECT_WINDOW_CHARS)]
+    return [transcript]
+
+
+def _normalize_search_results(res) -> list[dict]:
+    out = []
+    if not isinstance(res, list):
+        return out
+    for r in res:
+        if not isinstance(r, dict):
+            continue
+        title = str(r.get("title") or "")
+        content = str(r.get("content") or "")
+        if not title and not content:
+            continue
+        out.append({"title": title, "url": str(r.get("url") or ""), "content": content})
+    return out
+
+
+# ── orchestrator ─────────────────────────────────────────────────────────────
+
+async def fix_terms(
+    ctx,
+    transcript: str,
+    language: str = "ru",
+    progress_pcts: tuple | None = None,
+) -> FixResult:
+    """Detect → search → verify → apply. Fail-soft: любая ошибка → исходник."""
+    noop = FixResult(transcript=transcript)
+
+    async def _prog(step: int) -> None:
+        if progress_pcts and step < len(progress_pcts):
+            await ctx.progress("fix_terms", progress_pcts[step])
+
+    try:
+        from handlers.builtin.summarize_video import strip_transcript_timecodes  # noqa: PLC0415
+        if len(strip_transcript_timecodes(transcript).strip()) < MIN_FIX_CHARS:
+            return noop
+        if not await ctx.has_capability("websearch"):
+            ctx.log.warning("term_fixer: no active websearch provider, skipping")
+            return noop
+
+        # ── detect (по окнам, dedup по heard casefold) ────────────────────
+        await _prog(0)
+        candidates: list[dict] = []
+        seen: set[str] = set()
+        for window in split_windows(transcript):
+            try:
+                raw = await ctx.llm.complete(_detect_messages(window))
+            except Exception as exc:
+                ctx.log.warning("term_fixer: detect window failed: %s", exc)
+                continue
+            items = parse_detect_json(raw)
+            if items is None:
+                # None = не распарсилось (в отличие от честного []) — молчаливая
+                # смерть detect на слабой модели должна быть видна в логах
+                ctx.log.warning("term_fixer: detect window returned unparseable JSON")
+                continue
+            for item in items:
+                cand = normalize_candidate(item)
+                if cand is None or cand["heard"].casefold() in seen:
+                    continue
+                seen.add(cand["heard"].casefold())
+                candidates.append(cand)
+        if not candidates:
+            return noop
+        if len(candidates) > MAX_CANDIDATES:
+            ctx.log.warning(
+                "term_fixer: %d candidates over cap, dropped: %s",
+                len(candidates) - MAX_CANDIDATES,
+                [c["heard"] for c in candidates[MAX_CANDIDATES:]],
+            )
+            candidates = candidates[:MAX_CANDIDATES]
+
+        # Кросс-кандидатный дедуп словоформ: общая словоформа у двух кандидатов
+        # дала бы недетерминированный lookup в apply (by_variant — один rep на
+        # ключ) — словоформа остаётся у первого кандидата.
+        taken: set[str] = set()
+        for cand in candidates:
+            kept = []
+            for v in cand["variants"]:
+                key = v.casefold()
+                if key not in taken:
+                    taken.add(key)
+                    kept.append(v)
+            cand["variants"] = kept
+        candidates = [c for c in candidates if c["variants"]]
+        if not candidates:
+            return noop
+
+        # ── search (параллельно, semaphore) ──────────────────────────────
+        await _prog(1)
+        sem = asyncio.Semaphore(SEARCH_CONCURRENCY)
+
+        async def _search_one(cand: dict) -> list[dict]:
+            async with sem:
+                try:
+                    # ctx.search — _CapabilityWrapper (НЕ callable!); метод —
+                    # ctx.search.search(...), как ctx.stt.transcribe(...)
+                    res = await ctx.search.search(cand["query"], max_results=5)
+                except Exception as exc:
+                    ctx.log.warning("term_fixer: search failed for %r: %s",
+                                    cand["heard"], exc)
+                    return []
+                return _normalize_search_results(res)
+
+        results = list(await asyncio.gather(*[_search_one(c) for c in candidates]))
+
+        # ── verify (один батч) ────────────────────────────────────────────
+        await _prog(2)
+        try:
+            raw = await ctx.llm.complete(_verify_messages(candidates, results))
+        except Exception as exc:
+            ctx.log.warning("term_fixer: verify failed: %s", exc)
+            return noop
+        verdicts = parse_detect_json(raw)
+        if verdicts is None:
+            ctx.log.warning("term_fixer: verify returned unparseable JSON")
+            return noop
+        reps = sanitize_verdicts(verdicts, dict(enumerate(candidates)))
+        if not reps:
+            return noop
+
+        # ── apply ─────────────────────────────────────────────────────────
+        fixed = apply_replacements(transcript, reps, language)
+        matched = [r for r in reps if r.matched]
+        if not matched:
+            return noop
+        return FixResult(
+            transcript=fixed,
+            replacements=matched,
+            glossary_md=build_glossary(matched, language),
+            term_notes=build_term_notes(matched, language),
+        )
+    except Exception as exc:
+        try:
+            ctx.log.warning("term_fixer failed: %s", exc)
+        except Exception:
+            pass
+        return noop
