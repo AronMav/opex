@@ -1,11 +1,14 @@
-//! `GET /api/commands` — exposes the in-core slash-command registry
-//! (`crate::agent::commands::COMMAND_REGISTRY`) over HTTP so the UI and
-//! channel adapters can render autocomplete / native command menus.
+//! `GET /api/commands` — exposes the merged slash-command registry
+//! (builtin plus live toolgate-handler commands, see
+//! `crate::agent::commands::merge`) over HTTP so the UI and channel
+//! adapters can render autocomplete / native command menus.
 //!
-//! Phase 1: no per-agent filtering (all builtin commands are
-//! `Visibility::All`), no ETag-based versioning — see task-5-brief.md.
+//! Phase 2a: per-lang handler descriptions + `fse.allowlist` gating for
+//! builtin-tier handlers; `version` is the `HandlerRegistry` ETag (falls
+//! back to a manifest-count tag when toolgate never sent one) — see
+//! task-3-brief.md.
 
-use axum::{Json, Router, extract::Query, response::IntoResponse, routing::get};
+use axum::{Json, Router, extract::{Query, State}, response::IntoResponse, routing::get};
 use serde::Deserialize;
 
 use crate::agent::commands::spec::CommandScope;
@@ -13,23 +16,30 @@ use crate::gateway::state::AppState;
 
 #[derive(Deserialize)]
 struct CommandsQuery {
-    // Accepted for UI/channel-adapter forward-compat; per-agent + language
-    // filtering land in Phase 2 (all Phase-1 commands are `Visibility::All`).
+    // Accepted for UI/channel-adapter forward-compat; per-agent visibility
+    // filtering (base vs. non-base) is not yet wired to a caller identity here.
     #[allow(dead_code)]
     agent: Option<String>,
-    #[allow(dead_code)]
     lang: Option<String>,
     scope: Option<String>,
 }
 
-async fn list_commands(Query(q): Query<CommandsQuery>) -> impl IntoResponse {
-    let reg = &*crate::agent::commands::COMMAND_REGISTRY;
-    // Phase 1: every command is `Visibility::All` → `visible_for(false)` == all.
-    let mut specs = reg.visible_for(false);
+async fn list_commands(State(state): State<AppState>, Query(q): Query<CommandsQuery>) -> impl IntoResponse {
+    let lang = q.lang.as_deref().unwrap_or("en");
+    let db = &state.infra.db;
+    state.handlers.refresh().await;
+    let manifests = state.handlers.manifests().await;
+    let enabled = crate::agent::fse::get_enabled_allowlist(db).await;
+    let registry = crate::agent::commands::merge::build_registry(&manifests, &enabled, lang);
+    let mut specs = registry.visible_for(false);
     if q.scope.as_deref() == Some("native") {
         specs.retain(|c| matches!(c.scope, CommandScope::Native | CommandScope::Both));
     }
-    let version = specs.len().to_string(); // F8: simple version-tag; ETag versioning is Phase 2
+    let version = state
+        .handlers
+        .etag()
+        .await
+        .unwrap_or_else(|| specs.len().to_string()); // F8: ETag when available, else manifest-count fallback
     Json(serde_json::json!({ "commands": specs, "version": version }))
 }
 
@@ -39,11 +49,25 @@ pub(crate) fn routes() -> Router<AppState> {
 
 #[cfg(test)]
 mod tests {
+    use crate::agent::commands::merge::build_registry;
+    use crate::agent::handler_registry::HandlerManifest;
+    use serde_json::json;
+
     #[test]
-    fn commands_serialize_to_json_array() {
-        let reg = &*crate::agent::commands::COMMAND_REGISTRY;
+    fn merged_registry_serializes_builtin_plus_handler() {
+        let m: HandlerManifest = serde_json::from_value(json!({
+            "id":"summarize_video","execution":"async","tier":"workspace",
+            "descriptions":{"en":"Summarize a video"},"config":[]}))
+        .unwrap();
+        let reg = build_registry(&[m], &[], "en");
         let json = serde_json::to_value(reg.all()).unwrap();
-        assert!(json.as_array().unwrap().len() >= 14);
-        assert!(json[0].get("name").is_some());
+        let names: Vec<&str> = json
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"status")); // builtin
+        assert!(names.contains(&"summarize_video")); // handler
     }
 }

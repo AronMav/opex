@@ -5,11 +5,10 @@
 //! shape to poll). Builtin-tier handlers are further gated by the operator's
 //! `fse.allowlist` (`enabled`) — same allowlist the composer menu uses.
 
-use super::registry::CommandSource;
 use super::spec::*;
 use crate::agent::handler_registry::HandlerManifest;
 
-fn desc_for<'a>(m: &'a HandlerManifest, lang: &str) -> String {
+fn desc_for(m: &HandlerManifest, lang: &str) -> String {
     m.descriptions
         .get(lang)
         .or_else(|| m.descriptions.get("en"))
@@ -82,22 +81,6 @@ pub fn derive_handler_commands(manifests: &[HandlerManifest], enabled: &[String]
             }
         })
         .collect()
-}
-
-pub struct HandlerCommandSource {
-    specs: Vec<CommandSpec>,
-}
-
-impl HandlerCommandSource {
-    pub fn new(manifests: &[HandlerManifest], enabled: &[String], lang: &str) -> Self {
-        Self { specs: derive_handler_commands(manifests, enabled, lang) }
-    }
-}
-
-impl CommandSource for HandlerCommandSource {
-    fn specs(&self) -> Vec<CommandSpec> {
-        self.specs.clone()
-    }
 }
 
 #[cfg(test)]

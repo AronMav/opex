@@ -306,6 +306,12 @@ impl HandlerRegistry {
     pub async fn manifests(&self) -> Vec<HandlerManifest> {
         self.inner.read().await.manifests.clone()
     }
+
+    /// Current ETag from the last successful `refresh()` (F8 versioning).
+    /// `None` before the first successful refresh or if toolgate never sent one.
+    pub async fn etag(&self) -> Option<String> {
+        self.inner.read().await.etag.clone()
+    }
 }
 
 #[cfg(test)]
