@@ -103,3 +103,97 @@ def test_normalize_rejects_missing_keys():
 def test_normalize_rejects_non_string_values():
     assert tf.normalize_candidate(_item(heard=42)) is None
     assert tf.normalize_candidate(_item(description=None)) is None
+
+
+# ── apply_replacements ───────────────────────────────────────────────────────
+
+def _rep(heard="амбассадор", variants=None, corrected="MBassador",
+         confidence="high", description="суб-бас плагин"):
+    return tf.Replacement(
+        heard=heard,
+        variants=variants if variants is not None else [heard],
+        corrected=corrected,
+        confidence=confidence,
+        description=description,
+    )
+
+
+def test_apply_high_replaces_all_occurrences():
+    text = "Возьмём амбассадор. Потом амбассадор снова."
+    r = _rep()
+    out = tf.apply_replacements(text, [r])
+    assert out == "Возьмём MBassador. Потом MBassador снова."
+    assert r.matched is True
+
+
+def test_apply_respects_word_boundaries():
+    r = _rep(heard="тейп", variants=["тейп"], corrected="Tape")
+    out = tf.apply_replacements("тейповый саунд и тейп рядом", [r])
+    assert out == "тейповый саунд и Tape рядом"
+
+
+def test_apply_is_case_insensitive():
+    r = _rep()
+    out = tf.apply_replacements("Амбассадор хорош. И амбассадор тоже.", [r])
+    assert out == "MBassador хорош. И MBassador тоже."
+
+
+def test_apply_single_pass_no_cascade():
+    # corrected первого кандидата СОДЕРЖИТ словоформу второго ("Tape") — при
+    # последовательных str.replace второй прошёлся бы по уже подставленному
+    # тексту ("Tape Machine J-37"); однопроходный re.sub это запрещает.
+    r1 = _rep(heard="Tape G37", variants=["Tape G37"], corrected="Tape J-37")
+    r2 = _rep(heard="Tape", variants=["Tape"], corrected="Tape Machine")
+    out = tf.apply_replacements("use Tape G37 and Tape here", [r1, r2])
+    assert out == "use Tape J-37 and Tape Machine here"
+
+
+def test_apply_low_annotates_only_first_occurrence():
+    r = _rep(confidence="low")
+    text = "амбассадор раз. амбассадор два."
+    out = tf.apply_replacements(text, [r])
+    assert out == "амбассадор (вероятно MBassador?) раз. амбассадор два."
+
+
+def test_apply_low_annotation_localized_en():
+    r = _rep(confidence="low")
+    out = tf.apply_replacements("амбассадор здесь", [r], language="en")
+    assert out == "амбассадор (likely MBassador?) здесь"
+
+
+def test_apply_longest_variant_wins():
+    r = _rep(variants=["амбассадора", "амбассадор"])
+    out = tf.apply_replacements("без амбассадора никуда", [r])
+    assert out == "без MBassador никуда"
+
+
+def test_apply_preserves_timecodes_url_segments_not_guaranteed():
+    r = _rep(heard="тест", variants=["тест"], corrected="Test")
+    text = "[12:37] тест на https://example.com/тест-page"
+    out = tf.apply_replacements(text, [r])
+    assert "[12:37]" in out                      # таймкод не тронут
+    assert out.startswith("[12:37] Test на ")
+    # ПРИНЯТОЕ ОГРАНИЧЕНИЕ (зафиксировано в спеке): словоформа внутри
+    # URL-сегмента между не-\w символами ("/тест-") ЗАМЕНЯЕТСЯ — защита URL
+    # не гарантируется, защищены только таймкоды (фильтром цифровых variants).
+
+
+def test_apply_atomic_rollback_resets_matched():
+    # corrected=None провоцирует TypeError внутри re.sub (repl вернул не-str):
+    # текст откатывается ЦЕЛИКОМ и matched-флаги сбрасываются — иначе
+    # fix_terms вернул бы исходный транскрипт с глоссарием, лгущим о заменах.
+    bad = _rep(corrected=None)  # type: ignore[arg-type]
+    out = tf.apply_replacements("амбассадор здесь", [bad])
+    assert out == "амбассадор здесь"
+    assert bad.matched is False
+
+
+def test_apply_unmatched_variant_leaves_matched_false():
+    r = _rep(heard="фантом", variants=["фантом"])
+    out = tf.apply_replacements("здесь ничего похожего нет", [r])
+    assert out == "здесь ничего похожего нет"
+    assert r.matched is False
+
+
+def test_apply_empty_reps_returns_text():
+    assert tf.apply_replacements("текст", []) == "текст"

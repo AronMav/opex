@@ -129,3 +129,58 @@ def normalize_candidate(item: dict) -> dict | None:
         "description": " ".join(description.split()),
         "query": query,
     }
+
+
+# ── apply (однопроходный, атомарный) ─────────────────────────────────────────
+
+_LOW_ANNOTATION = {"ru": "{found} (вероятно {corr}?)", "en": "{found} (likely {corr}?)"}
+
+
+def apply_replacements(text: str, reps: list[Replacement], language: str = "ru") -> str:
+    """Один re.sub по всем словоформам всех кандидатов сразу.
+
+    Однопроходность гарантирует отсутствие каскадов (замены никогда не
+    применяются к уже подставленному тексту). Границы слова (?<!\\w)…(?!\\w)
+    защищают «тейповый» от variant «тейп»; IGNORECASE закрывает
+    капитализацию начала предложения. Любое исключение → исходный текст
+    целиком (атомарность).
+    """
+    pairs: list[tuple[str, Replacement]] = [
+        (v, rep) for rep in reps for v in rep.variants if v
+    ]
+    if not pairs:
+        return text
+    try:
+        # Длинные словоформы раньше в альтернаторе — «амбассадора» до «амбассадор».
+        pairs.sort(key=lambda p: len(p[0]), reverse=True)
+        by_variant = {v.casefold(): rep for v, rep in reversed(pairs)}
+        pattern = re.compile(
+            r"(?<!\w)(" + "|".join(re.escape(v) for v, _ in pairs) + r")(?!\w)",
+            re.IGNORECASE,
+        )
+        tmpl = _LOW_ANNOTATION["ru" if language == "ru" else "en"]
+        annotated: set[int] = set()
+
+        def _sub(m: re.Match) -> str:
+            found = m.group(1)
+            rep = by_variant.get(found.casefold())
+            if rep is None:
+                return found
+            if not isinstance(rep.corrected, str):
+                raise TypeError(f"corrected must be a string, got {type(rep.corrected).__name__}")
+            rep.matched = True
+            if rep.confidence == "high":
+                return rep.corrected
+            if id(rep) in annotated:
+                return found
+            annotated.add(id(rep))
+            return tmpl.format(found=found, corr=rep.corrected)
+
+        return pattern.sub(_sub, text)
+    except Exception:
+        # Атомарный откат: текст возвращается исходным, значит и matched-флаги,
+        # выставленные до исключения, обязаны быть сброшены — иначе глоссарий
+        # и term_notes заявят замены, которых в тексте нет.
+        for rep in reps:
+            rep.matched = False
+        return text
