@@ -271,3 +271,29 @@ def test_parse_descriptor_rejects_missing_label():
 '''
     with pytest.raises(DescriptorError, match="label"):
         parse_descriptor(src, tier="builtin")
+
+
+def test_command_override_parsed():
+    src = """
+# <handler>
+#   <id>summarize_video</id>
+#   <label lang="en">Summarize</label>
+#   <match><mime>video/*</mime></match>
+#   <execution>async</execution>
+#   <command name="sumvid" aliases="sv,summary"/>
+# </handler>
+"""
+    d = parse_descriptor(src, tier="workspace")
+    assert d.command == {"name": "sumvid", "aliases": ["sv", "summary"]}
+
+
+def test_no_command_is_none():
+    src = (
+        "# <handler>\n"
+        "#   <id>x</id>\n"
+        '#   <label lang="en">X</label>\n'
+        "#   <match><mime>*/*</mime></match>\n"
+        "#   <execution>async</execution>\n"
+        "# </handler>"
+    )
+    assert parse_descriptor(src, tier="workspace").command is None

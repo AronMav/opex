@@ -37,6 +37,9 @@ class HandlerDescriptor:
     order: int
     enabled: bool
     tier: str  # "builtin" | "workspace"
+    # Optional chat-command override. When absent, the command name defaults
+    # to `id` (handled on the consuming/Rust side). {"name": str, "aliases": [str]}
+    command: dict | None = None
 
 
 # ── Parser ──────────────────────────────────────────────────────────────────
@@ -145,6 +148,15 @@ def parse_descriptor(source: str, tier: str) -> HandlerDescriptor:
                 }
             )
 
+    # Optional chat-command override block: <command name="..." aliases="a,b"/>
+    command: dict | None = None
+    cmd_el = root.find("command")
+    if cmd_el is not None:
+        cmd_name = (cmd_el.get("name") or "").strip()
+        cmd_aliases = [a.strip() for a in (cmd_el.get("aliases") or "").split(",") if a.strip()]
+        if cmd_name:
+            command = {"name": cmd_name, "aliases": cmd_aliases}
+
     order_txt = _text(root, "order")
     # F118: guard the <order> cast (mirrors max_size_mb above). An unguarded
     # int() on a non-numeric value raised an uncaught ValueError that surfaced as
@@ -196,4 +208,5 @@ def parse_descriptor(source: str, tier: str) -> HandlerDescriptor:
         order=order,
         enabled=(enabled_txt is None) or enabled_txt.strip().lower() == "true",
         tier=tier,
+        command=command,
     )

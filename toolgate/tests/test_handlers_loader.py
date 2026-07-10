@@ -164,10 +164,36 @@ def test_manifests_and_etag(tmp_path):
     assert item["execution"] == "sync"
     assert item["tier"] == "builtin"
     assert item["provider"] is None  # router fills this from the active provider
+    assert item["command"] is None  # no <command> override in GOOD fixture
     e1 = reg.etag()
     assert isinstance(e1, str) and e1
     # stable for identical content
     assert reg.etag() == e1
+
+
+WITH_COMMAND = textwrap.dedent('''\
+    # <handler>
+    #   <id>summarize_video</id>
+    #   <label lang="en">Summarize</label>
+    #   <match><mime>video/*</mime></match>
+    #   <execution>async</execution>
+    #   <command name="sumvid" aliases="sv,summary"/>
+    # </handler>
+
+    async def run(ctx, file, params):
+        return ctx.result.text("ok")
+''')
+
+
+def test_manifest_includes_command_override(tmp_path):
+    """A handler with a <command> override surfaces it in the /handlers manifest."""
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+    _write(builtin, "summarize_video.py", WITH_COMMAND)
+    reg = HandlerRegistry()
+    reg.load_all(str(builtin), None)
+    m = {x["id"]: x for x in reg.manifests()}
+    assert m["summarize_video"]["command"] == {"name": "sumvid", "aliases": ["sv", "summary"]}
 
 
 # ── Hot-reload tests (new) ───────────────────────────────────────────────────
