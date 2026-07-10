@@ -16,6 +16,12 @@ fn desc_for(m: &HandlerManifest, lang: &str) -> String {
         .unwrap_or_else(|| m.id.clone())
 }
 
+/// True for a non-empty token matching `[a-zA-Z0-9_-]+` — the same charset
+/// commands and aliases are validated against elsewhere in this module.
+fn is_valid_command_token(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 /// Optional named args from valve (`config`) fields that declare enum choices.
 fn valve_args(config: &serde_json::Value, lang: &str) -> Vec<CommandArg> {
     let Some(arr) = config.as_array() else {
@@ -69,9 +75,20 @@ pub fn derive_handler_commands(manifests: &[HandlerManifest], enabled: &[String]
                 menu: false,
             }];
             args.extend(valve_args(&m.config, lang));
+            let (name, aliases) = match &m.command {
+                Some(ov) => (
+                    ov.name.clone(),
+                    ov.aliases
+                        .iter()
+                        .filter(|a| is_valid_command_token(a))
+                        .cloned()
+                        .collect(),
+                ),
+                None => (m.id.clone(), vec![]),
+            };
             CommandSpec {
-                name: m.id.clone(),
-                aliases: vec![],
+                name,
+                aliases,
                 description: desc_for(m, lang),
                 category: CommandCategory::Media,
                 scope: CommandScope::Both,
@@ -123,5 +140,23 @@ mod tests {
         let m = vec![manifest("transcribe", "async", "builtin")];
         assert!(derive_handler_commands(&m, &[], "en").is_empty(), "not in allowlist");
         assert_eq!(derive_handler_commands(&m, &["transcribe".into()], "en").len(), 1);
+    }
+
+    #[test]
+    fn command_override_sets_name_and_aliases_but_keeps_handler_id() {
+        use serde_json::json;
+        let m: crate::agent::handler_registry::HandlerManifest = serde_json::from_value(json!({
+            "id":"summarize_video","execution":"async","tier":"workspace",
+            "descriptions":{"en":"d"},"config":[],
+            "command":{"name":"sumvid","aliases":["sv"]}
+        }))
+        .unwrap();
+        let specs = derive_handler_commands(&[m], &[], "en");
+        assert_eq!(specs[0].name, "sumvid");
+        assert_eq!(specs[0].aliases, vec!["sv".to_string()]);
+        match &specs[0].source {
+            CommandSourceKind::Handler { handler_id } => assert_eq!(handler_id, "summarize_video"),
+            _ => panic!("expected Handler source"),
+        }
     }
 }

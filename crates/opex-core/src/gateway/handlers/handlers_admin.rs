@@ -650,6 +650,7 @@ mod tests {
             order: 0,
             tier: tier.to_string(),
             source: String::new(),
+            command: None,
         }
     }
 
@@ -721,6 +722,7 @@ mod tests {
             order: 0,
             tier: "builtin".to_string(),
             source: String::new(),
+            command: None,
         };
         let row = HandlerAdminRow::from_manifest(&m, &get_enabled_allowlist(&pool).await);
         assert!(!row.enabled, "describe is not in the enabled set → disabled");

@@ -57,6 +57,21 @@ pub struct HandlerManifest {
     pub tier: String,
     #[serde(default)]
     pub source: String,
+    /// Optional `<command name="..." aliases="a,b"/>` override from the
+    /// handler's descriptor. Applied by `derive_handler_commands` to name the
+    /// derived chat command — the handler id (enqueue target) is unaffected.
+    #[serde(default)]
+    pub command: Option<CommandOverride>,
+}
+
+/// Custom command name/aliases declared by a handler descriptor's
+/// `<command>` tag, surfaced in the toolgate `/handlers` JSON as
+/// `"command": {"name": "...", "aliases": [...]}`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CommandOverride {
+    pub name: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }
 
 /// A composer button derived from a manifest for a concrete file.
@@ -342,6 +357,7 @@ mod tests {
             order,
             tier: tier.to_string(),
             source: String::new(),
+            command: None,
         }
     }
 
@@ -603,6 +619,7 @@ mod tests {
             order: 10,
             tier: tier.into(),
             source: String::new(),
+            command: None,
         }
     }
 
