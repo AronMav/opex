@@ -37,6 +37,11 @@ export function MentionAutocomplete({ query, agents, onSelect, onClose, onActive
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (filtered.length === 0) return;
+      // Only act while the keystroke originates inside the composer — a stray
+      // "@" left in the box must not let this menu hijack keys typed in an
+      // unrelated control once focus has moved away. (Unit tests dispatch on
+      // `window`, whose target isn't an HTMLElement, so the guard is skipped.)
+      if (e.target instanceof HTMLElement && !e.target.closest("[data-composer-input]")) return;
       // stopPropagation (capture, on window) prevents the event from ever
       // reaching the textarea's React onKeyDown — so selecting a mention with
       // Enter can never also submit the half-typed "@" (the C2 bug). Unlike the

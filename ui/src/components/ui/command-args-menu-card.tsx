@@ -14,25 +14,39 @@ interface CommandArgOption {
  * `command_args_menu` rich-card. Renders the prompt text and, when the
  * backend supplies `options`, a row of value buttons. Clicking a button
  * POSTs `{token, value}` to `/api/commands/menu-run` to run the command
- * with the chosen value; buttons are disabled after the first click to
- * prevent double-submission.
+ * with the chosen value. Buttons lock after a click to prevent
+ * double-submission, but a FAILED run unlocks them and shows an inline error
+ * so the choice can be retried (mirrors handler-menu-card).
  */
 export function CommandArgsMenuCard({ data }: { data: Record<string, unknown> }) {
-  const text = data.text as string | undefined;
-  const options = (data.options as CommandArgOption[] | undefined) ?? [];
-  const token = data.token as string | undefined;
+  const text = typeof data.text === "string" ? data.text : undefined;
+  const rawOptions = data.options;
+  const options: CommandArgOption[] = Array.isArray(rawOptions) ? (rawOptions as CommandArgOption[]) : [];
+  const token = typeof data.token === "string" ? data.token : undefined;
   const [chosen, setChosen] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleClick = (value: string) => {
+  const handleClick = async (value: string) => {
     if (!token || chosen) return;
     setChosen(value);
-    apiPost("/api/commands/menu-run", { token, value }).catch(() => {});
+    setError(null);
+    try {
+      await apiPost("/api/commands/menu-run", { token, value });
+    } catch {
+      // Unlock so the user can retry; surface the failure instead of leaving
+      // the buttons silently disabled forever.
+      setChosen(null);
+      setError("Не удалось запустить команду. Попробуйте ещё раз.");
+    }
   };
+
+  // Nothing to render — don't leave an empty bordered box in the transcript.
+  if (!text && options.length === 0) return null;
 
   return (
     <div className="rounded-md border bg-card p-3">
       {text && <p className="text-sm">{text}</p>}
-      {options.length ? (
+      {options.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
           {options.map((o) => (
             <button
@@ -47,7 +61,8 @@ export function CommandArgsMenuCard({ data }: { data: Record<string, unknown> })
             </button>
           ))}
         </div>
-      ) : null}
+      )}
+      {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
     </div>
   );
 }

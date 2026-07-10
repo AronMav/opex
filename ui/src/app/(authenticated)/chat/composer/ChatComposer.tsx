@@ -144,6 +144,8 @@ export function ChatComposer() {
     [activeProviders],
   );
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
+  const [activeCommandId, setActiveCommandId] = useState<string | null>(null);
+  const commandListboxId = useId();
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [activeMentionId, setActiveMentionId] = useState<string | null>(null);
   const mentionListboxId = useId();
@@ -730,6 +732,8 @@ export function ChatComposer() {
               commands={registryCommands ?? []}
               onPick={handleCommandPick}
               onClose={handleSlashClose}
+              onActiveChange={setActiveCommandId}
+              listboxId={commandListboxId}
             />
           )}
           {mentionQuery !== null && agents.length > 1 && (
@@ -782,11 +786,11 @@ export function ChatComposer() {
             autoCorrect="off"
             autoCapitalize="sentences"
             aria-label={t("chat.message_placeholder")}
-            role={mentionQuery !== null ? "combobox" : undefined}
-            aria-expanded={mentionQuery !== null ? true : undefined}
-            aria-controls={mentionQuery !== null ? mentionListboxId : undefined}
-            aria-autocomplete={mentionQuery !== null ? "list" : undefined}
-            aria-activedescendant={mentionQuery !== null ? (activeMentionId ?? undefined) : undefined}
+            role={mentionQuery !== null || slashQuery !== null ? "combobox" : undefined}
+            aria-expanded={mentionQuery !== null || slashQuery !== null ? true : undefined}
+            aria-controls={mentionQuery !== null ? mentionListboxId : slashQuery !== null ? commandListboxId : undefined}
+            aria-autocomplete={mentionQuery !== null || slashQuery !== null ? "list" : undefined}
+            aria-activedescendant={mentionQuery !== null ? (activeMentionId ?? undefined) : slashQuery !== null ? (activeCommandId ?? undefined) : undefined}
             placeholder={
               messageSource.mode === "history"
                 ? t("chat.continue_dialog")

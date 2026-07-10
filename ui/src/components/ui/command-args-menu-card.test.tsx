@@ -102,3 +102,33 @@ it("does not POST when token is absent", () => {
   fireEvent.click(screen.getByText("Коротко"));
   expect(mockApiPost).not.toHaveBeenCalled();
 });
+
+it("on POST failure unlocks the buttons and shows an inline error (retry path)", async () => {
+  mockApiPost.mockRejectedValueOnce(new Error("token expired"));
+  render(
+    <CommandArgsMenuCard
+      data={{
+        card_type: "command_args_menu",
+        command: "summarize_video",
+        text: "Выберите длину",
+        token: "t",
+        options: [
+          { value: "short", label: "Коротко" },
+          { value: "long", label: "Подробно" },
+        ],
+      }}
+    />
+  );
+  fireEvent.click(screen.getByText("Подробно"));
+  // After the rejected POST settles, the error surfaces and buttons re-enable.
+  expect(await screen.findByText(/Не удалось запустить/)).toBeInTheDocument();
+  expect(screen.getByText("Подробно").closest("button")).not.toBeDisabled();
+  expect(screen.getByText("Коротко").closest("button")).not.toBeDisabled();
+});
+
+it("renders nothing when neither text nor options are present", () => {
+  const { container } = render(
+    <CommandArgsMenuCard data={{ card_type: "command_args_menu", command: "x" }} />
+  );
+  expect(container).toBeEmptyDOMElement();
+});
