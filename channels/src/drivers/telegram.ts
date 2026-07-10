@@ -10,6 +10,7 @@ import type { ChannelDriver } from "../session";
 import type { ChannelActionDto, IncomingMessageDto, MediaAttachment } from "../types";
 import { getStrings, type Strings } from "../localization";
 import { splitText, toolEmoji, parseDirectives, parseUserCommand, reUploadAttachments, commonMarkToMarkdownV2, isTgPermanentError, extractTgErrorCode, extractTgRetryAfter, exponentialDelay, chatCooldownKey } from "./common";
+import { registerTelegramCommands } from "./telegram-commands";
 
 /** Builds reply_parameters with allow_sending_without_reply for resilient replies */
 function safeReplyParams(messageId: number | undefined): { message_id: number; allow_sending_without_reply: true } | undefined {
@@ -196,16 +197,11 @@ export function createTelegramDriver(
 
   let botUsername = "";
 
-  // Set bot commands
-  bot.api.setMyCommands([
-    { command: "help", description: strings.cmdHelp },
-    { command: "status", description: strings.cmdStatus },
-    { command: "memory", description: strings.cmdMemory },
-    { command: "new", description: strings.cmdNew },
-    { command: "compact", description: strings.cmdCompact },
-    { command: "stop", description: strings.cmdStop },
-    { command: "think", description: strings.cmdThink },
-  ]).catch(() => { });
+  // Set bot commands from the core command registry (dynamic — reflects handler
+  // commands too, not just the 7 builtins).
+  const coreUrl = (process.env.OPEX_CORE_WS || "ws://localhost:18789").replace("ws://", "http://");
+  const authToken = process.env.OPEX_AUTH_TOKEN || "";
+  void registerTelegramCommands(bot, coreUrl, authToken, language);
 
   // Message handler
   bot.on("message", async (ctx) => {

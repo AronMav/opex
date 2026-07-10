@@ -32,14 +32,6 @@ export interface Strings {
   thinkModeOn: string;
   stopped: string;
   choose: string;
-  // Bot command descriptions (Telegram menu)
-  cmdHelp: string;
-  cmdStatus: string;
-  cmdMemory: string;
-  cmdNew: string;
-  cmdCompact: string;
-  cmdStop: string;
-  cmdThink: string;
 }
 
 const RU: Strings = {
@@ -74,13 +66,6 @@ const RU: Strings = {
   thinkModeOn: "🧠 Режим размышлений включён для следующего сообщения.",
   stopped: "Остановлено.",
   choose: "Выберите:",
-  cmdHelp: "Показать команды",
-  cmdStatus: "Статус агента",
-  cmdMemory: "Поиск в памяти",
-  cmdNew: "Новая сессия",
-  cmdCompact: "Сжать контекст",
-  cmdStop: "Остановить обработку",
-  cmdThink: "Режим размышлений",
 };
 
 const EN: Strings = {
@@ -113,13 +98,6 @@ const EN: Strings = {
   thinkModeOn: "🧠 Think mode on for next message.",
   stopped: "Stopped.",
   choose: "Choose:",
-  cmdHelp: "Show commands",
-  cmdStatus: "Agent status",
-  cmdMemory: "Memory search",
-  cmdNew: "New session",
-  cmdCompact: "Compact context",
-  cmdStop: "Stop processing",
-  cmdThink: "Think mode",
 };
 
 export function getStrings(language: string): Strings {
