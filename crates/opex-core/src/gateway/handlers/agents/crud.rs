@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use crate::gateway::clusters::{AgentCore, AuthServices, InfraServices, ChannelBus, ConfigServices, StatusMonitor};
+use crate::agent::handler_registry::HandlerRegistry;
 use crate::config::AgentConfig;
 use super::dto::{AgentDetailDto, AgentInfoDto};
 use super::schema::*;
@@ -356,6 +357,7 @@ pub(crate) async fn api_get_agent(
     Json(detail).into_response()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn api_create_agent(
     State(agents): State<AgentCore>,
     State(auth): State<AuthServices>,
@@ -363,6 +365,7 @@ pub(crate) async fn api_create_agent(
     State(bus): State<ChannelBus>,
     State(cfg_svc): State<ConfigServices>,
     State(status): State<StatusMonitor>,
+    State(handlers): State<HandlerRegistry>,
     Json(mut payload): Json<AgentCreatePayload>,
 ) -> impl IntoResponse {
     let name = payload.name.clone();
@@ -488,7 +491,7 @@ pub(crate) async fn api_create_agent(
     // Workspace directory + scaffold is created by start_agent_from_config
 
     // Hot-start the agent
-    match start_agent_from_config(&cfg, &agents, &infra, &auth, &bus, &cfg_svc, &status).await {
+    match start_agent_from_config(&cfg, &agents, &infra, &auth, &bus, &cfg_svc, &status, &handlers).await {
         Ok((handle, guard)) => {
             // Guard must be inserted before the handle: channel adapters reconnect
             // as soon as the handle appears in agents.map, so the guard must already
@@ -534,6 +537,7 @@ pub(crate) async fn api_update_agent(
     State(bus): State<ChannelBus>,
     State(cfg_svc): State<ConfigServices>,
     State(status): State<StatusMonitor>,
+    State(handlers): State<HandlerRegistry>,
     axum::extract::Path(name): axum::extract::Path<String>,
     Json(mut payload): Json<AgentCreatePayload>,
 ) -> impl IntoResponse {
@@ -898,7 +902,7 @@ pub(crate) async fn api_update_agent(
             let _ = sandbox.remove_container(&name).await;
         }
 
-    match start_agent_from_config(&cfg, &agents, &infra, &auth, &bus, &cfg_svc, &status).await {
+    match start_agent_from_config(&cfg, &agents, &infra, &auth, &bus, &cfg_svc, &status, &handlers).await {
         Ok((handle, guard)) => {
             // Guard before handle — same reasoning as api_create_agent.
             if let Some(guard) = guard {

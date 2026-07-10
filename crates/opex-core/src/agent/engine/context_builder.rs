@@ -186,8 +186,12 @@ impl AgentEngine {
             thinking_level: &self.state().thinking_level,
             memory_store: self.cfg().memory_store.as_ref(),
             engine_arc: self.state().self_ref.get().and_then(|w| w.upgrade()),
-            toolgate_url: self.cfg().app_config.toolgate_url.clone(),
-            http: Some(self.http_client().clone()),
+            // Parity with the pre-Task-1 gate: `/help` only appends the live
+            // handler-command section when toolgate is configured for this
+            // agent (`app_config.toolgate_url`), matching the same guard
+            // `try_handler_command` dispatch uses below.
+            handlers: self.cfg().app_config.toolgate_url.as_ref()
+                .map(|_| &self.cfg().handler_registry),
         };
 
         if let Some(res) = crate::agent::pipeline::commands::handle_command(
@@ -203,11 +207,10 @@ impl AgentEngine {
         // e.g. `/summarize_video <url>`). Requires toolgate to be configured;
         // if it isn't, there's nothing to dispatch against.
         if text.trim().starts_with('/') {
-            let toolgate_url = self.cfg().app_config.toolgate_url.clone()?;
+            self.cfg().app_config.toolgate_url.as_ref()?;
             let deps = crate::agent::commands::dispatch::HandlerDispatchDeps {
                 db: &self.cfg().db,
-                toolgate_url,
-                http: self.http_client().clone(),
+                handlers: &self.cfg().handler_registry,
                 agent_name: &self.cfg().agent.name,
                 agent_language: &self.cfg().agent.language,
                 dm_scope,

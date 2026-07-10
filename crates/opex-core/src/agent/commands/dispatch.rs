@@ -32,8 +32,10 @@ use crate::agent::handler_registry::{
 /// falls through to ordinary (non-command) processing instead of erroring.
 pub struct HandlerDispatchDeps<'a> {
     pub db: &'a sqlx::PgPool,
-    pub toolgate_url: String,
-    pub http: reqwest::Client,
+    /// Shared registry (`AgentConfig::handler_registry`) — `refresh()` here is
+    /// a conditional GET against the process-wide ETag cache, not a fresh
+    /// fetch (Task 1, perf).
+    pub handlers: &'a HandlerRegistry,
     pub agent_name: &'a str,
     pub agent_language: &'a str,
     pub dm_scope: &'a str,
@@ -72,9 +74,8 @@ pub async fn try_handler_command(
 ) -> Option<Result<CommandOutcome>> {
     let (name, args) = parse_command_line(text)?;
 
-    let reg = HandlerRegistry::new(deps.toolgate_url.clone(), deps.http.clone());
-    reg.refresh().await;
-    let manifests = reg.manifests().await;
+    deps.handlers.refresh().await;
+    let manifests = deps.handlers.manifests().await;
 
     // Only async handlers become commands — sync handlers strand on the
     // async-only handler_jobs queue (F070; see module doc).

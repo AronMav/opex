@@ -90,13 +90,13 @@ pub struct CommandContext<'a> {
     /// Owned engine `Arc` (resolved from `state.self_ref`) so `/goal` can spawn a
     /// background driver that outlives the request. `None` when no self-ref is set.
     pub engine_arc: Option<std::sync::Arc<crate::agent::engine::AgentEngine>>,
-    /// Toolgate base URL, when configured. Used by `/help` to append the live
-    /// handler-command section. `None` disables the append (no regression —
-    /// `/help` falls back to the static localized text).
-    pub toolgate_url: Option<String>,
-    /// HTTP client used to fetch handler manifests for `/help`. `None` when
-    /// `toolgate_url` is also `None`.
-    pub http: Option<reqwest::Client>,
+    /// Shared handler-manifest registry (`AgentConfig::handler_registry`), when
+    /// toolgate is configured for this agent. Used by `/help` to append the
+    /// live handler-command section via a conditional-GET refresh against the
+    /// process-wide ETag cache. `None` disables the append (no regression —
+    /// `/help` falls back to the static localized text) — mirrors the old
+    /// `toolgate_url.is_none()` gate.
+    pub handlers: Option<&'a crate::agent::handler_registry::HandlerRegistry>,
 }
 
 /// Spawn (replacing any existing) the goal driver for a session. Returns false when
@@ -552,8 +552,7 @@ where
         }
         "/help" | "/commands" => {
             let mut out = s.help_text.to_string();
-            if let (Some(toolgate_url), Some(http)) = (ctx.toolgate_url.clone(), ctx.http.clone()) {
-                let reg = crate::agent::handler_registry::HandlerRegistry::new(toolgate_url, http);
+            if let Some(reg) = ctx.handlers {
                 reg.refresh().await;
                 let manifests = reg.manifests().await;
                 let enabled = crate::agent::fse::get_enabled_allowlist(ctx.db).await;

@@ -9,6 +9,7 @@ use crate::gateway::clusters::{AgentCore, AuthServices, ChannelBus, ConfigServic
 
 /// Start an agent from config: create engine, channel adapter, scheduler jobs.
 /// Returns the `AgentHandle` and optional `AccessGuard`.
+#[allow(clippy::too_many_arguments)]
 pub async fn start_agent_from_config(
     agent_cfg: &AgentConfig,
     agents: &AgentCore,
@@ -17,6 +18,7 @@ pub async fn start_agent_from_config(
     bus: &ChannelBus,
     cfg: &ConfigServices,
     status: &StatusMonitor,
+    handlers: &crate::agent::handler_registry::HandlerRegistry,
 ) -> anyhow::Result<(AgentHandle, Option<Arc<AccessGuard>>)> {
     use crate::agent::{engine::AgentEngine, providers};
     use crate::channels;
@@ -192,6 +194,7 @@ pub async fn start_agent_from_config(
         db: infra.db.clone(),
         memory_store: infra.memory_store.clone() as Arc<dyn crate::agent::memory_service::MemoryService>,
         embedder: infra.embedder.clone(),
+        handler_registry: handlers.clone(),
         tools: agents.tools.clone(),
         approval_manager: approval_manager.clone(),
         clarify_manager: clarify_manager.clone(),

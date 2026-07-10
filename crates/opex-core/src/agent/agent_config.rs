@@ -37,6 +37,12 @@ pub struct AgentConfig {
     pub db: PgPool,
     pub memory_store: Arc<dyn MemoryService>,
     pub embedder: Arc<dyn EmbeddingService>,
+    /// Shared discovery cache of toolgate-hosted file handlers (process-wide
+    /// singleton, cloned from `AppState.handlers`). Cheap to clone — inner
+    /// `Arc<RwLock<HandlerCache>>` is shared, so command dispatch (`dispatch.rs`)
+    /// and `/help` reuse the same ETag cache instead of paying a full manifest
+    /// fetch on every `/`-prefixed message.
+    pub handler_registry: crate::agent::handler_registry::HandlerRegistry,
 
     // ── Tools ───────────────────────────────────────────────────────────
     pub tools: ToolRegistry,

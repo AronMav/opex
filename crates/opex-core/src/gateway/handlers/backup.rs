@@ -365,6 +365,7 @@ async fn truncate_and_restore(
 }
 
 /// Load agent configs from disk and restart all agents.
+#[allow(clippy::too_many_arguments)]
 async fn restart_agents_from_disk(
     agents: &crate::gateway::clusters::AgentCore,
     infra: &crate::gateway::clusters::InfraServices,
@@ -372,13 +373,14 @@ async fn restart_agents_from_disk(
     bus: &crate::gateway::clusters::ChannelBus,
     cfg_svc: &crate::gateway::clusters::ConfigServices,
     status: &crate::gateway::clusters::StatusMonitor,
+    handlers: &crate::agent::handler_registry::HandlerRegistry,
 ) -> anyhow::Result<Vec<String>> {
     let agent_configs = crate::config::load_agent_configs("config/agents")
         .context("load_agent_configs failed")?;
     let mut restarted = Vec::new();
     for cfg in &agent_configs {
         match super::agents::start_agent_from_config(
-            cfg, agents, infra, auth, bus, cfg_svc, status
+            cfg, agents, infra, auth, bus, cfg_svc, status, handlers
         ).await {
             Ok((handle, guard)) => {
                 let name = cfg.agent.name.clone();
@@ -656,6 +658,7 @@ pub(crate) async fn api_restore(
     State(bus): State<crate::gateway::clusters::ChannelBus>,
     State(cfg_svc): State<crate::gateway::clusters::ConfigServices>,
     State(status): State<crate::gateway::clusters::StatusMonitor>,
+    State(handlers): State<crate::agent::handler_registry::HandlerRegistry>,
     req: Request,
 ) -> axum::response::Response {
     // Guard: require X-Confirm-Restore header
@@ -832,7 +835,7 @@ pub(crate) async fn api_restore(
     // pg_restore
     if let Err(e) = run_pg_restore(&container, &dump_path).await {
         tracing::error!("pg_restore failed: {e}");
-        let restarted = restart_agents_from_disk(&agents, &infra, &auth, &bus, &cfg_svc, &status).await
+        let restarted = restart_agents_from_disk(&agents, &infra, &auth, &bus, &cfg_svc, &status, &handlers).await
             .unwrap_or_default();
         let _ = tokio::fs::remove_dir_all(&tmpdir).await;
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
@@ -848,7 +851,7 @@ pub(crate) async fn api_restore(
         serde_json::from_slice(&secrets_bytes).unwrap_or_default();
     let secret_count = plaintext_secrets.len();
     if let Err(e) = auth.secrets.restore_plaintext(plaintext_secrets).await {
-        let restarted = restart_agents_from_disk(&agents, &infra, &auth, &bus, &cfg_svc, &status).await
+        let restarted = restart_agents_from_disk(&agents, &infra, &auth, &bus, &cfg_svc, &status, &handlers).await
             .unwrap_or_default();
         let _ = tokio::fs::remove_dir_all(&tmpdir).await;
         return (StatusCode::INTERNAL_SERVER_ERROR,
@@ -918,7 +921,7 @@ pub(crate) async fn api_restore(
 
     // Restart agents from restored configs
     let restarted = restart_agents_from_disk(
-        &agents, &infra, &auth, &bus, &cfg_svc, &status
+        &agents, &infra, &auth, &bus, &cfg_svc, &status, &handlers
     ).await.unwrap_or_default();
 
     let _ = tokio::fs::remove_dir_all(&tmpdir).await;

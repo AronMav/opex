@@ -1374,6 +1374,7 @@ async fn start_configured_agents(state: &gateway::AppState, agent_configs: &[con
             &state.channels,
             &state.config,
             &state.status,
+            &state.handlers,
         ).await {
             Ok((handle, guard)) => {
                 let name = agent_cfg.agent.name.clone();
@@ -1599,6 +1600,7 @@ fn setup_sighup_handler(state: gateway::AppState) {
                         &state.channels,
                         &state.config,
                         &state.status,
+                        &state.handlers,
                     ).await {
                         Ok((new_handle, guard)) => {
                             if let Some(old) = old_handle {
