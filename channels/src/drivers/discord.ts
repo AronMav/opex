@@ -6,6 +6,8 @@
 import {
   Client,
   GatewayIntentBits,
+  MessageFlags,
+  type ApplicationCommandDataResolvable,
   type Message as DMessage,
 } from "discord.js";
 import type { BridgeHandle, OutboundAction } from "../bridge";
@@ -13,6 +15,7 @@ import type { ChannelDriver } from "../session";
 import type { IncomingMessageDto, MediaAttachment } from "../types";
 import { getStrings, type Strings } from "../localization";
 import { splitText, toolEmoji, parseDirectives, parseUserCommand, classifyMediaType, reUploadAttachments, commonMarkToDiscord } from "./common";
+import { commandsToDiscord, reconstructCommandText, type ApiCommand } from "./discord-commands";
 
 const STREAM_EDIT_INTERVAL_MS = 1000;
 const MAX_MESSAGE_LEN = 1900; // Discord limit ~2000, leave margin
@@ -229,6 +232,87 @@ export function createDiscordDriver(
     }
 
     activeRequests.delete(key);
+  });
+
+  // Register the registry's native slash commands with Discord once the
+  // client is ready. Fail-soft: registration errors must never crash the
+  // driver — Discord already has whatever command menu it had before.
+  client.once("ready", async () => {
+    try {
+      const coreUrl = (process.env.OPEX_CORE_WS || "ws://localhost:18789").replace("ws://", "http://");
+      const authToken = process.env.OPEX_AUTH_TOKEN || "";
+      const resp = await fetch(
+        `${coreUrl}/api/commands?scope=native&lang=${encodeURIComponent(language)}`,
+        { headers: { Authorization: `Bearer ${authToken}` }, signal: AbortSignal.timeout(5000) },
+      );
+      if (resp.ok) {
+        const body = (await resp.json()) as { commands?: ApiCommand[] };
+        const cmds = commandsToDiscord(body.commands ?? []);
+        if (cmds.length && client.application) {
+          await client.application.commands
+            .set(cmds as unknown as ApplicationCommandDataResolvable[])
+            .catch((e) => console.error("[discord] command register failed:", e));
+        }
+      }
+    } catch (e) {
+      console.error("[discord] command fetch failed:", e);
+    }
+  });
+
+  // Native slash command dispatch: reconstruct "/name <args>" text from the
+  // interaction's options and route it through the same bridge.sendMessage
+  // path messageCreate uses, streaming the response into the deferred reply.
+  client.on("interactionCreate", async (interaction) => {
+    if (!interaction.isChatInputCommand()) return;
+
+    const userId = interaction.user.id;
+    const displayName = interaction.user.globalName ?? interaction.user.username;
+
+    const { allowed, isOwner } = await bridge.checkAccess(userId);
+    if (!allowed && !isOwner) {
+      const code = await bridge.createPairingCode(userId, displayName);
+      await interaction
+        .reply({ content: strings.accessRestricted(code), flags: MessageFlags.Ephemeral })
+        .catch(() => {});
+      return;
+    }
+
+    await interaction.deferReply().catch(() => {});
+
+    // Reconstruct "/name <values>" from the provided options (declared order).
+    const values: Record<string, string> = {};
+    for (const opt of interaction.options.data) {
+      if (opt.value != null) values[opt.name] = String(opt.value);
+    }
+    const text = reconstructCommandText(interaction.commandName, values);
+
+    const dto: IncomingMessageDto = {
+      user_id: userId,
+      display_name: displayName,
+      text,
+      attachments: [],
+      context: {
+        guild_id: interaction.guildId,
+        channel_id: interaction.channelId,
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const { onChunk, result } = bridge.sendMessage(dto);
+
+    let acc = "";
+    onChunk((chunk: string) => {
+      acc += chunk;
+      interaction.editReply(acc.slice(0, MAX_MESSAGE_LEN) || "…").catch(() => {});
+    });
+
+    try {
+      const final = await result;
+      const out = (final && final.length ? final : acc) || "✓";
+      await interaction.editReply(out.slice(0, MAX_MESSAGE_LEN)).catch(() => {});
+    } catch (err) {
+      await interaction.editReply(strings.errorMessage((err as Error)?.message ?? "error")).catch(() => {});
+    }
   });
 
   return {
