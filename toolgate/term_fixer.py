@@ -131,6 +131,52 @@ def normalize_candidate(item: dict) -> dict | None:
     }
 
 
+# ── verify sanitization ──────────────────────────────────────────────────────
+
+def sanitize_verdicts(verdicts, candidates: dict[int, dict]) -> list[Replacement]:
+    """Join verify-ответа с кандидатами СТРОГО по id (защита от
+    кросс-кандидатной инъекции в батче) + санитизация corrected: сниппеты
+    недоверенные, нарушение любого лимита = отброс кандидата, не обрезка."""
+    out: list[Replacement] = []
+    if not isinstance(verdicts, list):
+        return out
+    remaining = dict(candidates)
+    for v in verdicts:
+        if not isinstance(v, dict):
+            continue
+        cid = v.get("id")
+        # type(...) is int, НЕ isinstance: bool — подкласс int, и {"id": true}
+        # от недоверенного LLM попал бы в pop(True) == pop(1) — вердикт
+        # применился бы к чужому кандидату (кросс-кандидатная путаница).
+        cand = remaining.pop(cid, None) if type(cid) is int else None
+        if cand is None:
+            continue
+        if v.get("already_correct") is True:
+            continue
+        corr = v.get("corrected")
+        if not isinstance(corr, str) or "\n" in corr:
+            continue  # многострочный corrected = отброс, не склейка (спека)
+        corr = corr.strip()
+        if (
+            not corr
+            or len(corr) > MAX_CORRECTED_LEN
+            or len(corr) > 3 * len(cand["heard"])
+            or not _CORRECTED_ALLOWED_RE.match(corr)
+        ):
+            continue
+        if corr.casefold() == cand["heard"].casefold():
+            continue  # no-op → already_correct
+        conf = v.get("confidence")
+        out.append(Replacement(
+            heard=cand["heard"],
+            variants=cand["variants"],
+            corrected=corr,
+            confidence=conf if conf in ("high", "low") else "low",
+            description=cand["description"],
+        ))
+    return out
+
+
 # ── apply (однопроходный, атомарный) ─────────────────────────────────────────
 
 _LOW_ANNOTATION = {"ru": "{found} (вероятно {corr}?)", "en": "{found} (likely {corr}?)"}

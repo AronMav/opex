@@ -253,3 +253,83 @@ def test_term_notes_localized_en():
 
 def test_term_notes_empty_without_matched():
     assert tf.build_term_notes([_rep()]) == ""
+
+
+# ── sanitize_verdicts ────────────────────────────────────────────────────────
+
+def _cands():
+    return {
+        0: {"heard": "амбассадор", "variants": ["амбассадор", "амбассадора"],
+            "description": "суб-бас плагин", "query": "q"},
+        1: {"heard": "T-G37", "variants": ["T-G37"],
+            "description": "tape плагин", "query": "q2"},
+    }
+
+
+def test_sanitize_happy_path_joins_by_id():
+    out = tf.sanitize_verdicts(
+        [{"id": 0, "corrected": "MBassador", "confidence": "high"}], _cands()
+    )
+    assert len(out) == 1
+    r = out[0]
+    assert (r.heard, r.corrected, r.confidence) == ("амбассадор", "MBassador", "high")
+    assert r.description == "суб-бас плагин"  # только из detect
+
+
+def test_sanitize_ignores_unknown_id():
+    out = tf.sanitize_verdicts(
+        [{"id": 99, "corrected": "Evil", "confidence": "high"}], _cands()
+    )
+    assert out == []
+
+
+def test_sanitize_ignores_bool_id():
+    # bool — подкласс int: {"id": true} не должен резолвиться в кандидата 1
+    out = tf.sanitize_verdicts(
+        [{"id": True, "corrected": "Evil", "confidence": "high"}], _cands()
+    )
+    assert out == []
+
+
+def test_sanitize_drops_null_and_already_correct():
+    out = tf.sanitize_verdicts(
+        [{"id": 0, "corrected": None}, {"id": 1, "already_correct": True}], _cands()
+    )
+    assert out == []
+
+
+def test_sanitize_noop_corrected_treated_as_already_correct():
+    out = tf.sanitize_verdicts(
+        [{"id": 0, "corrected": "Амбассадор", "confidence": "high"}], _cands()
+    )
+    assert out == []
+
+
+def test_sanitize_drops_bad_corrected():
+    cases = [
+        {"id": 0, "corrected": "x" * (tf.MAX_CORRECTED_LEN + 1)},   # длина
+        {"id": 0, "corrected": "имя\nс переводом"},                  # \n
+        {"id": 0, "corrected": "## Заголовок [ссылка](x)"},          # markdown
+        {"id": 0, "corrected": 42},                                   # не строка
+        {"id": 1, "corrected": "очень длинное имя тут" * 3},         # > 3× heard
+    ]
+    for v in cases:
+        assert tf.sanitize_verdicts([v | {"confidence": "high"}], _cands()) == [], v
+
+
+def test_sanitize_unknown_confidence_becomes_low():
+    out = tf.sanitize_verdicts(
+        [{"id": 0, "corrected": "MBassador", "confidence": "medium"}], _cands()
+    )
+    assert out[0].confidence == "low"
+
+
+def test_sanitize_broken_item_does_not_kill_others():
+    out = tf.sanitize_verdicts(
+        ["мусор", {"id": 1, "corrected": "Tape J-37", "confidence": "high"}], _cands()
+    )
+    assert len(out) == 1 and out[0].corrected == "Tape J-37"
+
+
+def test_sanitize_non_list_returns_empty():
+    assert tf.sanitize_verdicts("не список", _cands()) == []
