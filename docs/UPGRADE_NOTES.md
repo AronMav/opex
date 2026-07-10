@@ -1,7 +1,26 @@
 # OPEX — Примечания по обновлению
 
-> Это исторические примечания по обновлению. Текущая версия — v0.27.0.
-> При обновлении с v0.20+ никаких действий из этих разделов не требуется.
+> Актуальную версию смотрите на [странице релизов](https://github.com/AronMav/opex/releases) —
+> здесь номер не дублируется, чтобы не устаревал.
+> Миграции БД применяются автоматически при старте core; `update.sh` сохраняет
+> `.env`, `config/`, `workspace/` и базу данных. Разделы ниже описывают только
+> обновления, требовавшие ручных действий.
+
+## Обновление до v0.33+: File Scenarios (FSE) → файл-обработчики
+
+В v0.33.0 система file-сценариев (FSE) удалена. Замена — самоописывающиеся
+Python-обработчики в toolgate: встроенные (`toolgate/handlers/builtin/*.py`) и
+пользовательские (`workspace/file_handlers/*.py`, hot-reload без перезапуска).
+
+- **Действий не требуется**, если вы не создавали кастомных file-сценариев.
+- Кастомные сценарии нужно переписать как обработчики: XML-дескриптор в комментарии +
+  `async def run(ctx, file, params)`. См. навык `file-handler-guide` и вкладку
+  File Handlers в UI.
+- Таблицы `file_scenarios` (m069) и `video_jobs` (m068) помечены устаревшими,
+  но **не удаляются** — история сохраняется. Видео-конспекты теперь выполняет
+  async-обработчик `summarize_video` через очередь `handler_jobs`.
+- Начиная с v0.34.0 Docker-контейнер `mcp-youtube-transcript` не используется —
+  его можно удалить.
 
 ## Обновление до v0.20+: конфиг toolgate → единый источник истины Core API
 
@@ -13,7 +32,7 @@
 ### Удалённые переменные окружения
 
 | Устаревшая env-переменная | Замена (в реестре провайдеров Core) |
-|---|---|
+| --- | --- |
 | `WHISPER_URL`, `OLLAMA_API_KEY` (для STT) | Создать провайдер с `type=stt`, `driver=whisper-local`, `base_url=<ваш URL Whisper>` |
 | `VISION_URL`, `VISION_MODEL`, `OLLAMA_API_KEY` | Создать провайдер с `type=vision`, `driver=ollama`, `base_url=<URL vision>`, `default_model=<модель>` |
 | `TTS_BACKEND_URL` | Создать провайдер с `type=tts`, `driver=qwen3-tts`, `base_url=<ваш URL Qwen3-TTS>` |
@@ -22,25 +41,30 @@
 ### Проверка миграции
 
 1. **До обновления:** на текущем сервере выведите список env-переменных:
+
    ```bash
    systemctl --user show-environment | grep -E 'WHISPER|VISION|OLLAMA|TTS_BACKEND|MINIMAX'
    ```
+
 2. **Для каждой перечисленной переменной:** создайте эквивалентный провайдер через UI (Settings → Media Providers → Add Provider).
 3. **Для случая MINIMAX normalize:** запишите UUID нового `text`-провайдера. В редакторе TTS-провайдера установите `options.normalize_provider_id = "<этот UUID>"` и `options.normalize = true`.
 4. **Обновление:** `./update.sh opex-v<VERSION>.tar.gz`
 5. **Проверка:**
+
    ```bash
    curl -s http://localhost:9011/health | jq .
    ```
+
    Ожидаемый результат: `"degraded": false`, все используемые capabilities — `true` в карте `capabilities`.
 
 ### Откат
 
 Если провайдеры не были созданы заранее, можно:
+
 1. Откатиться к предыдущему бинарнику (`~/opex/opex-core-aarch64.bak`, если сохранён)
 2. **или** создать провайдеры ретроспективно через UI — toolgate автоматически перезагрузится при первом соответствующем `PUT /api/providers/{id}`.
 
-### Архитектурное обоснование
+### Архитектурное обоснование (config SoT)
 
 Полный контекст проектного решения (деградированный режим, вложенный `normalize_provider_id` и т.д.) см. в `docs/superpowers/specs/2026-04-18-toolgate-config-sot-design.md`.
 
@@ -49,7 +73,7 @@
 Роутеры `email`, `calendar` и `bcs_portfolio` в toolgate заменены примитивными эндпоинтами:
 
 | Старый эндпоинт | Новый примитивный эндпоинт |
-|---|---|
+| --- | --- |
 | `POST /email/send` | `POST /primitives/smtp/send` |
 | `GET /email/inbox` | `POST /primitives/imap/fetch` |
 | `GET /email/search` | `POST /primitives/imap/search` |
@@ -112,7 +136,7 @@ Toolgate теперь требует `google-api-python-client` и `google-auth`
 в `calendar_upcoming` принимается, но игнорируется — создайте issue, если вам нужно
 старое поведение.
 
-### Архитектурное обоснование
+### Архитектурное обоснование (примитивы)
 
 Полный контекст проектного решения (примитивы vs роутеры интеграций, шаблонизация `${VAR}` в
 `body_template`, выделение состояния BCS и т.д.) см. в `docs/superpowers/specs/2026-04-19-toolgate-primitives-design.md`.
