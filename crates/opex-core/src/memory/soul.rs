@@ -1,5 +1,5 @@
-//! Soul retrieval scoring (spec §1): score = norm(recency) + norm(importance)
-//! + norm(relevance), Stanford weights 1/1/1. recency = 0.995^hours(created_at)
+//! Soul retrieval scoring (spec §1): score sums normalized recency, importance,
+//! and relevance with Stanford weights 1/1/1. recency = 0.995^hours(created_at)
 //! — from created_at, NOT accessed_at (write-on-read disabled adversarially).
 //! Diversification: ≤3 EVENTS per source session; reflections exempt (they all
 //! share source='soul_reflection' — naive grouping would cap them at 3 total).

@@ -54,10 +54,10 @@ fn parse_sections(raw: &str) -> std::collections::BTreeMap<usize, Vec<String>> {
             current = None;
             continue;
         }
-        if let (Some(idx), Some(b)) = (current, t.strip_prefix("- ")) {
-            if !b.trim().is_empty() {
-                out.entry(idx).or_default().push(b.trim().to_string());
-            }
+        if let (Some(idx), Some(b)) = (current, t.strip_prefix("- "))
+            && !b.trim().is_empty()
+        {
+            out.entry(idx).or_default().push(b.trim().to_string());
         }
     }
     out
