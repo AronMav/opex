@@ -28,6 +28,7 @@
 #     <field name="summary_folder" type="string" default="Summary" label="Папка в хранилище" description="Подпапка внутри workspace/zettelkasten, используется когда полный путь не задан"/>
 #     <field name="include_transcript" type="bool" default="true" label="Вставлять транскрипт" description="Добавлять полный транскрипт в свёрнутом блоке в конце заметки"/>
 #     <field name="summary_length" type="string" default="medium" label="Длина конспекта" description="short | medium | long" choices="short,medium,long"/>
+#     <field name="fix_terms" type="bool" default="true" label="Исправлять названия" description="Определять искажённые STT названия (бренды, плагины, термины) и исправлять их через веб-поиск. Транскрипты короче 300 символов пропускаются."/>
 #   </config>
 #   <order>20</order>
 #   <enabled>true</enabled>
@@ -235,6 +236,15 @@ def _length_suffix(length: str) -> str:
     return LENGTH_INSTRUCTIONS.get(length, "")
 
 
+def _notes_suffix(term_notes: str) -> str:
+    """Extra system-prompt instruction carrying term_fixer's correction notes.
+
+    Empty when term correction found nothing (or is disabled/skipped) — the
+    prompt stays byte-for-byte identical to the pre-integration behavior.
+    """
+    return f"\n\n{term_notes}" if term_notes else ""
+
+
 def _resolve_summary_length(params: Optional[dict], ctx_config: dict) -> str:
     """Resolve the `summary_length` valve with the correct precedence.
 
@@ -374,11 +384,14 @@ def build_single_pass_messages(
     transcript: str,
     duration: float = 0.0,
     length: str = "medium",
+    term_notes: str = "",
 ) -> list[dict]:
     """Messages for the single-pass digest (short transcripts).
 
     `length` ('short'/'medium'/'long') is the operator-set `summary_length`
     valve; "medium" is the default and matches the original prompt exactly.
+    `term_notes` (from `term_fixer.fix_terms`) is appended when non-empty;
+    empty (default) keeps the prompt byte-for-byte identical.
 
     NOTE: Frame descriptions are DEFERRED — the Rust version passes vision
     frame descriptions here. This implementation is transcript-only.
@@ -390,7 +403,10 @@ def build_single_pass_messages(
     user_parts.append(strip_transcript_timecodes(transcript))
     user_parts.append("\n\nСделай конспект по инструкции.")
     return [
-        {"role": "system", "content": SYSTEM_PROMPT + _length_suffix(length)},
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT + _length_suffix(length) + _notes_suffix(term_notes),
+        },
         {"role": "user", "content": "\n".join(user_parts)},
     ]
 
@@ -399,8 +415,12 @@ def build_chunk_messages(
     chunk: TranscriptChunk,
     idx: int,
     total: int,
+    term_notes: str = "",
 ) -> list[dict]:
     """Messages for one map-step partial conspect.
+
+    `term_notes` (from `term_fixer.fix_terms`) is appended when non-empty;
+    empty (default) keeps the prompt byte-for-byte identical.
 
     NOTE: Frame descriptions filtered to this chunk's time window are DEFERRED.
     """
@@ -412,16 +432,20 @@ def build_chunk_messages(
         "Сделай подробный конспект этого фрагмента."
     )
     return [
-        {"role": "system", "content": CHUNK_SYSTEM_PROMPT},
+        {"role": "system", "content": CHUNK_SYSTEM_PROMPT + _notes_suffix(term_notes)},
         {"role": "user", "content": user},
     ]
 
 
-def build_reduce_messages(partials: list[str], length: str = "medium") -> list[dict]:
+def build_reduce_messages(
+    partials: list[str], length: str = "medium", term_notes: str = "",
+) -> list[dict]:
     """Messages for the reduce step: merge per-chunk partial conspects.
 
     `length` ('short'/'medium'/'long') is the operator-set `summary_length`
     valve; "medium" is the default and matches the original prompt exactly.
+    `term_notes` (from `term_fixer.fix_terms`) is appended when non-empty;
+    empty (default) keeps the prompt byte-for-byte identical.
     """
     total = len(partials)
     user_parts = [
@@ -432,7 +456,10 @@ def build_reduce_messages(partials: list[str], length: str = "medium") -> list[d
         user_parts.append(f"===== Фрагмент {i + 1}/{total} =====\n{p.strip()}\n\n")
     user_parts.append("Склей фрагменты в единый конспект, сохранив все детали.")
     return [
-        {"role": "system", "content": REDUCE_SYSTEM_PROMPT + _length_suffix(length)},
+        {
+            "role": "system",
+            "content": REDUCE_SYSTEM_PROMPT + _length_suffix(length) + _notes_suffix(term_notes),
+        },
         {"role": "user", "content": "".join(user_parts)},
     ]
 
@@ -445,8 +472,15 @@ def build_note(
     transcript: str,
     llm_body: str,
     include_transcript: bool = True,
+    glossary: str = "",
 ) -> str:
-    """Build the full Obsidian note: frontmatter + LLM body + (optional) transcript."""
+    """Build the full Obsidian note: frontmatter + LLM body + (optional) glossary
+    + (optional) transcript.
+
+    `glossary` (from `term_fixer.fix_terms`'s `glossary_md`) is inserted after
+    the body and before the transcript block; empty (default) keeps the note
+    byte-for-byte identical to the pre-integration behavior.
+    """
     body = _strip_image_embeds(llm_body.strip())
 
     lines = [
@@ -460,6 +494,9 @@ def build_note(
         "",
         body.strip(),
     ]
+    if glossary:
+        lines.append("")
+        lines.append(glossary.strip())
     if include_transcript:
         lines.append("")
         lines.append("> [!note]- Полный транскрипт")
@@ -585,6 +622,23 @@ async def run(ctx, file, params):
             "или язык распознавания не совпадает с языком видео"
         )
 
+    # ── 2b. term correction (spec 2026-07-10-transcript-term-correction) ────
+    term_notes = ""
+    glossary = ""
+    fix_enabled = (
+        str(ctx.config.get("fix_terms") or "true").strip().lower()
+        not in ("false", "0", "no")
+    )
+    if fix_enabled:
+        try:
+            from term_fixer import fix_terms  # runner puts toolgate root on sys.path
+            fx = await fix_terms(ctx, transcript, language, progress_pcts=(40, 43, 46))
+            transcript, glossary, term_notes = (
+                fx.transcript, fx.glossary_md, fx.term_notes,
+            )
+        except Exception as exc:
+            ctx.log.warning("summarize_video: fix_terms unavailable: %s", exc)
+
     # ── 3. digest ─────────────────────────────────────────────────────────────
     await ctx.progress("digest", 50)
 
@@ -602,22 +656,30 @@ async def run(ctx, file, params):
 
             async def _map_chunk(chunk: TranscriptChunk, idx: int) -> str:
                 async with sem:
-                    msgs = build_chunk_messages(chunk, idx, len(chunks))
+                    msgs = build_chunk_messages(
+                        chunk, idx, len(chunks), term_notes=term_notes
+                    )
                     return await ctx.llm.complete(msgs)
 
             partials = await asyncio.gather(
                 *[_map_chunk(c, i) for i, c in enumerate(chunks)]
             )
             # reduce (length valve applies to the FINAL merged digest)
-            reduce_msgs = build_reduce_messages(list(partials), length=summary_length)
+            reduce_msgs = build_reduce_messages(
+                list(partials), length=summary_length, term_notes=term_notes
+            )
             llm_body = await ctx.llm.complete(reduce_msgs)
         else:
             # Degenerate: only one chunk despite should_chunk=True; go single-pass
-            msgs = build_single_pass_messages(transcript, length=summary_length)
+            msgs = build_single_pass_messages(
+                transcript, length=summary_length, term_notes=term_notes
+            )
             llm_body = await ctx.llm.complete(msgs)
     else:
         # Single-pass path (short video)
-        msgs = build_single_pass_messages(transcript, length=summary_length)
+        msgs = build_single_pass_messages(
+            transcript, length=summary_length, term_notes=term_notes
+        )
         llm_body = await ctx.llm.complete(msgs)
 
     # ── 4. assemble note + return ─────────────────────────────────────────────
@@ -640,6 +702,7 @@ async def run(ctx, file, params):
         transcript=transcript,
         llm_body=llm_body,
         include_transcript=include_transcript,
+        glossary=glossary,
     )
 
     # Extract short summary text from the LLM body for the status message

@@ -35,6 +35,11 @@ def _make_ctx(llm_side_effect=None):
     # progress is async
     ctx.progress = AsyncMock()
 
+    # fix_terms probe: без этого long-transcript тесты (транскрипт > 300 симв.)
+    # выживали бы только через TypeError на `await MagicMock()` → fail-soft —
+    # хрупко. False = детерминированный skip этапа коррекции.
+    ctx.has_capability = AsyncMock(return_value=False)
+
     # stt.transcribe returns a short transcript by default
     ctx.stt.transcribe = AsyncMock(return_value="Hello world.\nSimple transcript.")
 
@@ -501,6 +506,91 @@ def test_resolve_summary_length_invalid_value_falls_back_to_medium():
     from handlers.builtin.summarize_video import _resolve_summary_length
     assert _resolve_summary_length({"summary_length": "bogus"}, {}) == "medium"
     assert _resolve_summary_length({}, {"summary_length": "bogus"}) == "medium"
+
+
+# ── fix_terms integration ────────────────────────────────────────────────────
+
+def test_builders_append_term_notes_to_system_prompt():
+    notes = "В транскрипте уже исправлены названия: ..."
+    single = sv_mod.build_single_pass_messages("текст", term_notes=notes)
+    assert notes in single[0]["content"]
+    chunk = sv_mod.build_chunk_messages(
+        sv_mod.TranscriptChunk(0, 45, "текст"), 0, 2, term_notes=notes
+    )
+    assert notes in chunk[0]["content"]
+    reduce_ = sv_mod.build_reduce_messages(["a", "b"], term_notes=notes)
+    assert notes in reduce_[0]["content"]
+    # без notes — промпт байт-в-байт прежний
+    assert sv_mod.build_single_pass_messages("текст")[0]["content"] == (
+        sv_mod.SYSTEM_PROMPT
+    )
+
+
+def test_build_note_places_glossary_before_transcript_block():
+    g = "## Исправленные названия\n- «x» → **Y**"
+    note = sv_mod.build_note("T", 0.0, "[00:01] речь", "## Резюме\nтело",
+                             include_transcript=True, glossary=g)
+    gi = note.find("## Исправленные названия")
+    ti = note.find("> [!note]- Полный транскрипт")
+    assert 0 < gi < ti
+
+
+def test_build_note_without_glossary_unchanged():
+    a = sv_mod.build_note("T", 0.0, "речь", "тело")
+    b = sv_mod.build_note("T", 0.0, "речь", "тело", glossary="")
+    assert a == b
+
+
+@pytest.mark.asyncio
+async def test_run_passes_fixed_transcript_and_term_notes(monkeypatch):
+    import term_fixer as tf
+
+    fixed = "Используем MBassador для суб-баса. " * 20
+    notes = "В транскрипте уже исправлены названия: \"MBassador\" (было \"амбассадор\")."
+    g = "## Исправленные названия\n- «амбассадор» → **MBassador**"
+
+    async def _fake_fix(ctx, transcript, language, progress_pcts=None):
+        return tf.FixResult(transcript=fixed, glossary_md=g, term_notes=notes)
+
+    monkeypatch.setattr(tf, "fix_terms", _fake_fix)
+    ctx = _make_ctx()
+    ctx.stt.transcribe = AsyncMock(return_value="Используем амбассадор. " * 20)
+    with patch.object(sv_mod, "extract_audio_from_file", _fake_extract_audio):
+        res = await sv_mod.run(ctx, _video_file(), {})
+    # digest получил исправленный транскрипт + term_notes в system-промпте
+    sys_prompt = ctx.llm.complete.await_args_list[0].args[0][0]["content"]
+    user_prompt = ctx.llm.complete.await_args_list[0].args[0][1]["content"]
+    assert notes in sys_prompt
+    assert "MBassador" in user_prompt
+    # заметка содержит глоссарий
+    assert "## Исправленные названия" in res.post_action["content"]
+
+
+@pytest.mark.asyncio
+async def test_run_valve_off_no_fix(monkeypatch):
+    import term_fixer as tf
+    called = {"n": 0}
+
+    async def _fake_fix(*a, **k):
+        called["n"] += 1
+        return tf.FixResult(transcript="x")
+
+    monkeypatch.setattr(tf, "fix_terms", _fake_fix)
+    ctx = _make_ctx()
+    ctx.config = {"fix_terms": "false"}
+    with patch.object(sv_mod, "extract_audio_from_file", _fake_extract_audio):
+        await sv_mod.run(ctx, _video_file(), {})
+    assert called["n"] == 0
+
+
+def test_summarize_descriptor_declares_fix_terms_valve():
+    from pathlib import Path
+    from handlers.loader import HandlerRegistry
+    reg = HandlerRegistry()
+    reg.load_all(str(Path(__file__).resolve().parents[1] / "handlers" / "builtin"), None)
+    d = reg.get("summarize_video").descriptor
+    f = next((c for c in d.config if c["name"] == "fix_terms"), None)
+    assert f is not None and f["default"] == "true"
 
 
 def test_descriptor_choices_match_valid_lengths():
