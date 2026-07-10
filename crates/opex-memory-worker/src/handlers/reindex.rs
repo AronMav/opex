@@ -109,18 +109,10 @@ pub async fn handle(
     // versa, a session-only reindex (`include_sessions=true` with no
     // workspace files to index) used to skip the cleanup entirely.
     if clear_existing && !agent_id.is_empty() && (indexed + session_indexed) > 0 {
-        let cleared = sqlx::query(
-            "DELETE FROM memory_chunks \
-             WHERE agent_id = $1 \
-               AND created_at < $2",
-        )
-        .bind(agent_id)
-        .bind(reindex_started)
-        .execute(db)
-        .await?;
+        let removed = delete_pre_reindex_chunks(db, agent_id, reindex_started).await?;
         tracing::info!(
             agent_id,
-            removed = cleared.rows_affected(),
+            removed,
             "removed pre-reindex chunks after successful re-population",
         );
     }
@@ -131,6 +123,26 @@ pub async fn handle(
         "errors": errors,
         "total_files": total_files,
     }))
+}
+
+/// kind='fact' guard: reindex re-populates FILE-backed chunks only; soul
+/// biography (event/reflection) must survive clear_existing (spec §1, rev3 blocker).
+pub(crate) async fn delete_pre_reindex_chunks(
+    db: &sqlx::PgPool,
+    agent_id: &str,
+    cutoff: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<u64> {
+    let cleared = sqlx::query(
+        "DELETE FROM memory_chunks \
+         WHERE agent_id = $1 \
+           AND created_at < $2 \
+           AND kind = 'fact'",
+    )
+    .bind(agent_id)
+    .bind(cutoff)
+    .execute(db)
+    .await?;
+    Ok(cleared.rows_affected())
 }
 
 /// Collect all .md and .txt files from `workspace_root`, skipping excluded top-level dirs.
@@ -308,4 +320,28 @@ mod tests {
         assert_eq!(files.len(), 2);
     }
 
+}
+
+#[cfg(test)]
+mod soul_guard_tests {
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn reindex_clear_existing_spares_soul_kinds(db: sqlx::PgPool) {
+        // one 'fact' and one 'event' chunk, both older than the cutoff
+        for (kind, id) in [("fact", "a"), ("event", "b")] {
+            sqlx::query(
+                "INSERT INTO memory_chunks (id, agent_id, content, source, pinned, scope, kind, created_at) \
+                 VALUES (gen_random_uuid(), 'A', $1, 'soul_event:s', false, 'private', $2, now() - interval '1 hour')",
+            )
+            .bind(format!("content-{id}"))
+            .bind(kind)
+            .execute(&db).await.unwrap();
+        }
+        // Через ПРОДОВУЮ функцию, не копию SQL (ревью плана):
+        let removed = super::delete_pre_reindex_chunks(&db, "A", chrono::Utc::now()).await.unwrap();
+        assert_eq!(removed, 1);
+
+        let kinds: Vec<String> = sqlx::query_scalar("SELECT kind FROM memory_chunks WHERE agent_id = 'A'")
+            .fetch_all(&db).await.unwrap();
+        assert_eq!(kinds, vec!["event".to_string()], "event must survive, fact must be deleted");
+    }
 }

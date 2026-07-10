@@ -98,8 +98,16 @@ pub async fn get_existing_embedding_dim(db: &PgPool) -> Option<i32> {
 }
 
 /// Delete all memory chunks that have embeddings (dimension mismatch cleanup).
+/// Soul biography (kind event/reflection) is NOT file-backed and cannot be
+/// re-populated by reindex — its rows survive with embedding=NULL (unretrievable
+/// by L1 until a future re-embed pass; reflection window still works — it
+/// reads by created_at, no embedding needed). Spec §1 amendment (plan review).
 pub async fn clear_embeddings(db: &PgPool) -> Result<()> {
-    sqlx::query("DELETE FROM memory_chunks WHERE embedding IS NOT NULL")
+    sqlx::query("UPDATE memory_chunks SET embedding = NULL WHERE embedding IS NOT NULL AND kind != 'fact'")
+        .execute(db)
+        .await
+        .context("failed to null soul embeddings after dimension change")?;
+    sqlx::query("DELETE FROM memory_chunks WHERE embedding IS NOT NULL AND kind = 'fact'")
         .execute(db)
         .await
         .context("failed to clear memory_chunks after dimension change")?;

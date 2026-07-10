@@ -651,12 +651,9 @@ impl Scheduler {
         let job = Job::new_async("0 0 8 * * *", move |_uuid, _lock| {
             let db = db.clone();
             Box::pin(async move {
-                let result = sqlx::query(
-                    "DELETE FROM memory_chunks WHERE pinned = false AND relevance_score < 0.1 AND accessed_at < now() - interval '180 days'"
-                ).execute(&db).await;
-                match result {
-                    Ok(r) => if r.rows_affected() > 0 {
-                        tracing::info!(deleted = r.rows_affected(), "memory_chunks decay cleanup");
+                match run_memory_decay_cleanup(&db).await {
+                    Ok(deleted) => if deleted > 0 {
+                        tracing::info!(deleted, "memory_chunks decay cleanup");
                     },
                     Err(e) => tracing::warn!(error = %e, "memory_chunks decay cleanup failed"),
                 }
@@ -1710,15 +1707,74 @@ async fn run_memory_decay(db: &PgPool) -> Result<(u64, u64)> {
     let decayed = decay_result.rows_affected();
 
     // Delete chunks with very low scores (private only — see fn doc).
+    // Soul biography (kind event/reflection) is exempt: its lifetime is governed
+    // by importance-based retrieval, not access-recency decay (spec §1).
     let delete_result = sqlx::query(
         "DELETE FROM memory_chunks \
-         WHERE pinned = false AND scope != 'shared' AND relevance_score < 0.05",
+         WHERE pinned = false AND scope != 'shared' AND relevance_score < 0.05 \
+           AND kind = 'fact'",
     )
     .execute(db)
     .await?;
     let deleted = delete_result.rows_affected();
 
     Ok((decayed, deleted))
+}
+
+/// Free function behind the memory-decay-cleanup cron job (extracted so the
+/// soul-guard sqlx test can call the production path directly instead of a
+/// copy of the SQL). Deletes very old, low-score, non-pinned chunks.
+/// Soul biography (kind event/reflection) is exempt: see `run_memory_decay` doc.
+pub(crate) async fn run_memory_decay_cleanup(db: &PgPool) -> Result<u64> {
+    let result = sqlx::query(
+        "DELETE FROM memory_chunks WHERE pinned = false AND relevance_score < 0.1 \
+         AND accessed_at < now() - interval '180 days' AND kind = 'fact'",
+    )
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+// ── Soul-guard tests (kind='fact' hard-delete predicate) ───────────────────
+//
+// Live-DB tests need testcontainers/Docker, so gated to Linux/x86_64 like the
+// neighboring hybrid-RRF suite in `memory/store.rs`. Exercises the production
+// `run_memory_decay_cleanup` function directly, not a copy of its SQL.
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+mod soul_guard_tests {
+    use super::run_memory_decay_cleanup;
+    use sqlx::PgPool;
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn decay_cleanup_spares_soul_kinds(db: PgPool) {
+        // one 'fact' and one 'event' chunk, both eligible by score/age except kind
+        for (kind, id) in [("fact", "a"), ("event", "b")] {
+            sqlx::query(
+                "INSERT INTO memory_chunks \
+                 (id, agent_id, content, source, pinned, scope, relevance_score, kind, accessed_at) \
+                 VALUES (gen_random_uuid(), 'A', $1, 'soul_event:s', false, 'private', 0.01, $2, now() - interval '200 days')",
+            )
+            .bind(format!("content-{id}"))
+            .bind(kind)
+            .execute(&db)
+            .await
+            .unwrap();
+        }
+
+        let removed = run_memory_decay_cleanup(&db).await.unwrap();
+        assert_eq!(removed, 1);
+
+        let kinds: Vec<String> =
+            sqlx::query_scalar("SELECT kind FROM memory_chunks WHERE agent_id = 'A'")
+                .fetch_all(&db)
+                .await
+                .unwrap();
+        assert_eq!(
+            kinds,
+            vec!["event".to_string()],
+            "event must survive, fact must be deleted"
+        );
+    }
 }
 
 /// Compute the next fire time for a cron expression in the given timezone.
