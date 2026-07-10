@@ -33,7 +33,7 @@ export function MentionAutocomplete({ query, agents, onSelect, onClose, onActive
 
   // Capture-phase keydown so ArrowDown/ArrowUp/Enter/Tab/Escape drive the menu
   // instead of the textarea (which would otherwise submit the half-typed "@").
-  // Mirrors SlashMenu's handler.
+  // Mirrors CommandAutocomplete's keydown handler.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (filtered.length === 0) return;

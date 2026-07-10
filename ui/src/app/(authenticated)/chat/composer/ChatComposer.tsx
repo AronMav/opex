@@ -8,7 +8,6 @@ import { uuid, getLiveMessages, type MessageSource } from "@/stores/chat-types";
 import { useTranslation } from "@/hooks/use-translation";
 import { useAuthStore } from "@/stores/auth-store";
 import { Button } from "@/components/ui/button";
-import { SlashMenu, SLASH_COMMAND_KEYS } from "../parts/SlashMenu";
 import { MentionAutocomplete } from "./MentionAutocomplete";
 import { CommandAutocomplete } from "@/components/chat/command-autocomplete";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
@@ -32,6 +31,12 @@ import {
 // ── Draft persistence helpers ─────────────────────────────────────────────────
 
 const DRAFT_PREFIX = "opex.draft.";
+
+// Maps the /think <level> word form to the numeric level accepted by
+// setThinkingLevel — replaces the old /think:N colon syntax.
+const THINK_LEVELS: Record<string, number> = {
+  off: 0, minimal: 1, low: 2, medium: 3, high: 4, max: 5,
+};
 
 export function saveDraft(agent: string, text: string) {
   if (text) localStorage.setItem(DRAFT_PREFIX + agent, text);
@@ -128,11 +133,8 @@ export function ChatComposer() {
   const hasMessages = messageSource.mode !== "new-chat";
 
   // ── Slash-command registry (server-backed autocomplete) ───────────────────
-  // Fallback for the legacy hardcoded SlashMenu below: only rendered when the
-  // current query isn't already covered by SLASH_COMMAND_KEYS, so the two
-  // dropdowns never overlap. Lets any command from the /api/commands registry
-  // (e.g. media/status commands added in later phases) surface in the composer
-  // without hand-maintaining SLASH_COMMAND_KEYS.
+  // CommandAutocomplete is the single slash menu, driven entirely by the
+  // /api/commands registry — no hardcoded command list.
   const { data: registryCommands } = useCommands(currentAgent);
 
   // ── Voice recorder ───────────────────────────────────────────────────────
@@ -462,38 +464,59 @@ export function ChatComposer() {
     ta.focus();
   }, []);
 
-  const handleSlashSelect = useCallback((cmd: string) => {
-    setSlashQuery(null);
-    const ta = textareaRef.current;
-    if (ta) {
-      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
-      setter?.call(ta, "");
-      ta.dispatchEvent(new Event("input", { bubbles: true }));
-    }
+  // Client-side shortcut for slash commands — the single place that handles
+  // /stop, /new and /think locally instead of round-tripping to the backend.
+  // Used both by the normal submit flow (typed commands) and by
+  // handleCommandPick (immediate no-arg registry picks), so the two paths
+  // never diverge. Everything else (/reset, /compact, /status, /memory ...,
+  // /rollback ...) is sent as a plain message — the backend (engine_commands.rs)
+  // handles those.
+  const dispatchSlashCommand = useCallback((text: string) => {
+    const trimmed = text.trim();
     const store = useChatStore.getState();
-    if (cmd === "/stop")           { store.stopStream(); return; }
-    if (cmd === "/new")            { store.newChat(); return; }
-    if (cmd.startsWith("/think:")) { store.setThinkingLevel(parseInt(cmd.split(":")[1])); return; }
-    // /reset and other commands are sent as messages — backend (engine_commands.rs) handles them
-    store.sendMessage(cmd);
+    const spaceIdx = trimmed.indexOf(" ");
+    const word = (spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx)).toLowerCase();
+    const rest = (spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1)).trim().toLowerCase();
+    if (word === "/stop") { store.stopStream(); return; }
+    if (word === "/new")  { store.newChat(); return; }
+    if (word === "/think") {
+      const level = /^[0-5]$/.test(rest) ? Number(rest) : THINK_LEVELS[rest];
+      if (level !== undefined) { store.setThinkingLevel(level); return; }
+    }
+    store.sendMessage(trimmed);
   }, []);
 
   const handleSlashClose = useCallback(() => {
     setSlashQuery(null);
   }, []);
 
-  // Registry-backed pick: insert "/name " and leave it for the user to add
-  // args + Enter (unlike handleSlashSelect, which sends the fixed no-arg
-  // legacy commands immediately).
+  const clearComposerText = useCallback(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    setter?.call(ta, "");
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+  }, []);
+
+  // Registry-backed pick. No-arg commands (e.g. /new, /status) execute
+  // immediately via dispatchSlashCommand — the same one-click UX the old
+  // hardcoded menu gave for its fixed no-arg commands. Commands with args
+  // insert "/name " and leave it for the user to fill in + Enter.
   const handleCommandPick = useCallback((name: string) => {
     setSlashQuery(null);
+    const cmd = registryCommands?.find((c) => c.name === name);
+    if (cmd && cmd.args.length === 0) {
+      clearComposerText();
+      dispatchSlashCommand(`/${name}`);
+      return;
+    }
     const ta = textareaRef.current;
     if (!ta) return;
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
     setter?.call(ta, `/${name} `);
     ta.dispatchEvent(new Event("input", { bubbles: true }));
     ta.focus();
-  }, []);
+  }, [registryCommands, dispatchSlashCommand, clearComposerText]);
 
   const handleFileAdd = useCallback(async (file: File) => {
     setUploadingCount(c => c + 1);
@@ -535,8 +558,14 @@ export function ChatComposer() {
     e.preventDefault();
     const text = textareaRef.current?.value?.trim() ?? "";
     if (!text && attachments.length === 0) return;
-    // sendMessage is now interrupt-aware: if streaming it calls interruptAndSend.
-    useChatStore.getState().sendMessage(text, attachments);
+    if (attachments.length === 0 && text.startsWith("/")) {
+      // Typed slash command: client shortcuts (/stop, /new, /think) run locally,
+      // everything else is routed to sendMessage inside dispatchSlashCommand.
+      dispatchSlashCommand(text);
+    } else {
+      // sendMessage is now interrupt-aware: if streaming it calls interruptAndSend.
+      useChatStore.getState().sendMessage(text, attachments);
+    }
     clearDraft(useChatStore.getState().currentAgent);
     setAttachments([]);
     setHasInput(false);
@@ -545,7 +574,7 @@ export function ChatComposer() {
       textareaRef.current.value = "";
       textareaRef.current.style.height = "auto";
     }
-  }, [attachments]);
+  }, [attachments, dispatchSlashCommand]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // While the slash- or @-mention menu is open, Enter/Tab belong to the menu
@@ -695,18 +724,12 @@ export function ChatComposer() {
               </div>
             </div>
           )}
-          {slashQuery !== null && SLASH_COMMAND_KEYS.some((c) => c.cmd.startsWith(slashQuery)) && (
-            <SlashMenu
-              query={slashQuery}
-              onSelect={handleSlashSelect}
-              onClose={handleSlashClose}
-            />
-          )}
-          {slashQuery !== null && !SLASH_COMMAND_KEYS.some((c) => c.cmd.startsWith(slashQuery)) && (
+          {slashQuery !== null && (
             <CommandAutocomplete
               input={slashQuery}
               commands={registryCommands ?? []}
               onPick={handleCommandPick}
+              onClose={handleSlashClose}
             />
           )}
           {mentionQuery !== null && agents.length > 1 && (

@@ -1,4 +1,4 @@
-import { vi, describe, it, expect } from "vitest";
+import { vi, describe, it, expect, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
@@ -104,6 +104,21 @@ vi.mock("@/stores/auth-store", () => ({
   ),
 }));
 
+// Store action mocks are hoisted to module scope (not recreated per getState()
+// call) so a test can grab useChatStore.getState().sendMessage etc. and assert
+// on the SAME mock instance the component invoked internally.
+const storeActionMocks = {
+  regenerate: vi.fn(),
+  clearError: vi.fn(),
+  sendMessage: vi.fn(),
+  deleteMessage: vi.fn().mockResolvedValue(undefined),
+  editMessage: vi.fn(),
+  exportSession: vi.fn(),
+  stopStream: vi.fn(),
+  newChat: vi.fn(),
+  setThinkingLevel: vi.fn(),
+};
+
 vi.mock("@/stores/chat-store", () => ({
   useChatStore: Object.assign(
     (selector?: (s: Record<string, unknown>) => unknown) => {
@@ -124,21 +139,28 @@ vi.mock("@/stores/chat-store", () => ({
       getState: () => ({
         currentAgent: "Agent1",
         agents: { Agent1: { activeSessionId: null, activeSessionIds: [], messageSource: { mode: "new-chat" }, connectionPhase: "idle" } },
-        regenerate: vi.fn(),
-        clearError: vi.fn(),
-        sendMessage: vi.fn(),
-        deleteMessage: vi.fn().mockResolvedValue(undefined),
-        editMessage: vi.fn(),
-        exportSession: vi.fn(),
-        stopStream: vi.fn(),
-        newChat: vi.fn(),
-        setThinkingLevel: vi.fn(),
+        ...storeActionMocks,
       }),
     },
   ),
   isActivePhase: () => false,
   convertHistory: () => [],
   MAX_INPUT_LENGTH: 32000,
+}));
+
+// ── Mock: @/hooks/use-commands ──────────────────────────────────────────────
+// Registry-backed commands the composer's single slash menu (CommandAutocomplete)
+// renders from. Includes a no-arg command ("new") and an args command ("think")
+// so both pick-immediate and insert-with-space paths are exercisable.
+
+vi.mock("@/hooks/use-commands", () => ({
+  useCommands: () => ({
+    data: [
+      { name: "new", description: "Start a new chat", category: "session", aliases: [], args: [] },
+      { name: "reset", description: "Reset context", category: "session", aliases: [], args: [] },
+      { name: "think", description: "Set thinking level", category: "session", aliases: [], args: [{ name: "level" }] },
+    ],
+  }),
 }));
 
 // ── Mock: @/lib/queries ────────────────────────────────────────────────────
@@ -211,7 +233,7 @@ vi.mock("@/components/ui/rich-card", () => ({
 // ── Import components under test ───────────────────────────────────────────
 
 import { MentionAutocomplete } from "@/app/(authenticated)/chat/composer/MentionAutocomplete";
-import { SlashMenu } from "@/app/(authenticated)/chat/parts/SlashMenu";
+import { useChatStore } from "@/stores/chat-store";
 
 // ── INPT-01: @-mention autocomplete ───────────────────────────────────────
 
@@ -315,43 +337,124 @@ describe("Textarea presence (INPT-04)", () => {
   });
 });
 
-// ── INPT-05: SlashMenu ────────────────────────────────────────────────────
+// ── INPT-05: single registry-backed slash menu (CommandAutocomplete) ───────
+// The legacy hardcoded menu component is gone — CommandAutocomplete
+// (unit-tested in command-autocomplete.test.tsx) is now the only slash menu.
+// Here we verify it's actually the one wired into ChatComposer and that the client-side
+// shortcut commands (/stop, /new, /think) still run locally rather than
+// round-tripping to the backend, whether typed-and-submitted or picked from
+// the menu.
 
-describe("SlashMenu (INPT-05)", () => {
-  it("renders all commands when query is /", () => {
+describe("Composer slash menu integration (INPT-05)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("shows registry commands when query is /", async () => {
+    const { ChatThread } = await import("@/app/(authenticated)/chat/ChatThread");
     render(
-      <SlashMenu query="/" onSelect={vi.fn()} onClose={vi.fn()} />,
+      <ChatThread streamError={null} isReadOnly={false} onClearError={vi.fn()} onRetry={vi.fn()} />,
     );
+    const composerContainer = document.querySelector("[data-composer-input]");
+    const textarea = composerContainer?.querySelector("textarea") as HTMLTextAreaElement;
+    fireEvent.input(textarea, { target: { value: "/" } });
     expect(screen.getByText("/new")).toBeInTheDocument();
     expect(screen.getByText("/reset")).toBeInTheDocument();
-    expect(screen.getByText("/stop")).toBeInTheDocument();
   });
 
-  it("filters commands matching query prefix", () => {
+  it("filters registry commands matching query prefix", async () => {
+    const { ChatThread } = await import("@/app/(authenticated)/chat/ChatThread");
     render(
-      <SlashMenu query="/th" onSelect={vi.fn()} onClose={vi.fn()} />,
+      <ChatThread streamError={null} isReadOnly={false} onClearError={vi.fn()} onRetry={vi.fn()} />,
     );
-    // Only /think:N commands should match /th
-    expect(screen.getByText("/think:0")).toBeInTheDocument();
-    expect(screen.getByText("/think:1")).toBeInTheDocument();
+    const composerContainer = document.querySelector("[data-composer-input]");
+    const textarea = composerContainer?.querySelector("textarea") as HTMLTextAreaElement;
+    fireEvent.input(textarea, { target: { value: "/th" } });
+    expect(screen.getByText("/think")).toBeInTheDocument();
     expect(screen.queryByText("/new")).not.toBeInTheDocument();
-    expect(screen.queryByText("/stop")).not.toBeInTheDocument();
   });
 
-  it("returns null when no commands match", () => {
-    const { container } = render(
-      <SlashMenu query="/zzz" onSelect={vi.fn()} onClose={vi.fn()} />,
-    );
-    expect(container.innerHTML).toBe("");
-  });
-
-  it("calls onSelect with command on click", () => {
-    const onSelect = vi.fn();
+  it("typed /stop and submitted calls store.stopStream() instead of sendMessage", async () => {
+    const { ChatThread } = await import("@/app/(authenticated)/chat/ChatThread");
+    const store = useChatStore.getState() as unknown as { stopStream: ReturnType<typeof vi.fn>; sendMessage: ReturnType<typeof vi.fn> };
     render(
-      <SlashMenu query="/new" onSelect={onSelect} onClose={vi.fn()} />,
+      <ChatThread streamError={null} isReadOnly={false} onClearError={vi.fn()} onRetry={vi.fn()} />,
     );
+    const composerContainer = document.querySelector("[data-composer-input]");
+    const textarea = composerContainer?.querySelector("textarea") as HTMLTextAreaElement;
+    const form = composerContainer as HTMLFormElement;
+    fireEvent.input(textarea, { target: { value: "/stop" } });
+    fireEvent.submit(form);
+    expect(store.stopStream).toHaveBeenCalled();
+    expect(store.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("typed /new and submitted calls store.newChat() instead of sendMessage", async () => {
+    const { ChatThread } = await import("@/app/(authenticated)/chat/ChatThread");
+    const store = useChatStore.getState() as unknown as { newChat: ReturnType<typeof vi.fn>; sendMessage: ReturnType<typeof vi.fn> };
+    render(
+      <ChatThread streamError={null} isReadOnly={false} onClearError={vi.fn()} onRetry={vi.fn()} />,
+    );
+    const composerContainer = document.querySelector("[data-composer-input]");
+    const textarea = composerContainer?.querySelector("textarea") as HTMLTextAreaElement;
+    const form = composerContainer as HTMLFormElement;
+    fireEvent.input(textarea, { target: { value: "/new" } });
+    fireEvent.submit(form);
+    expect(store.newChat).toHaveBeenCalled();
+    expect(store.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("typed /think high and submitted calls store.setThinkingLevel(4)", async () => {
+    const { ChatThread } = await import("@/app/(authenticated)/chat/ChatThread");
+    const store = useChatStore.getState() as unknown as { setThinkingLevel: ReturnType<typeof vi.fn>; sendMessage: ReturnType<typeof vi.fn> };
+    render(
+      <ChatThread streamError={null} isReadOnly={false} onClearError={vi.fn()} onRetry={vi.fn()} />,
+    );
+    const composerContainer = document.querySelector("[data-composer-input]");
+    const textarea = composerContainer?.querySelector("textarea") as HTMLTextAreaElement;
+    const form = composerContainer as HTMLFormElement;
+    fireEvent.input(textarea, { target: { value: "/think high" } });
+    fireEvent.submit(form);
+    expect(store.setThinkingLevel).toHaveBeenCalledWith(4);
+    expect(store.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("typed /reset and submitted falls through to store.sendMessage (backend command)", async () => {
+    const { ChatThread } = await import("@/app/(authenticated)/chat/ChatThread");
+    const store = useChatStore.getState() as unknown as { sendMessage: ReturnType<typeof vi.fn> };
+    render(
+      <ChatThread streamError={null} isReadOnly={false} onClearError={vi.fn()} onRetry={vi.fn()} />,
+    );
+    const composerContainer = document.querySelector("[data-composer-input]");
+    const textarea = composerContainer?.querySelector("textarea") as HTMLTextAreaElement;
+    const form = composerContainer as HTMLFormElement;
+    fireEvent.input(textarea, { target: { value: "/reset" } });
+    fireEvent.submit(form);
+    expect(store.sendMessage).toHaveBeenCalledWith("/reset");
+  });
+
+  it("picking the no-arg /new registry entry runs newChat() immediately (no insert)", async () => {
+    const { ChatThread } = await import("@/app/(authenticated)/chat/ChatThread");
+    const store = useChatStore.getState() as unknown as { newChat: ReturnType<typeof vi.fn> };
+    render(
+      <ChatThread streamError={null} isReadOnly={false} onClearError={vi.fn()} onRetry={vi.fn()} />,
+    );
+    const composerContainer = document.querySelector("[data-composer-input]");
+    const textarea = composerContainer?.querySelector("textarea") as HTMLTextAreaElement;
+    fireEvent.input(textarea, { target: { value: "/new" } });
     fireEvent.mouseDown(screen.getByText("/new"));
-    expect(onSelect).toHaveBeenCalledWith("/new");
+    expect(store.newChat).toHaveBeenCalled();
+    expect(textarea.value).toBe("");
+  });
+
+  it("picking the args /think registry entry inserts '/think ' and leaves it for input", async () => {
+    const { ChatThread } = await import("@/app/(authenticated)/chat/ChatThread");
+    render(
+      <ChatThread streamError={null} isReadOnly={false} onClearError={vi.fn()} onRetry={vi.fn()} />,
+    );
+    const composerContainer = document.querySelector("[data-composer-input]");
+    const textarea = composerContainer?.querySelector("textarea") as HTMLTextAreaElement;
+    fireEvent.input(textarea, { target: { value: "/th" } });
+    fireEvent.mouseDown(screen.getByText("/think"));
+    expect(textarea.value).toBe("/think ");
   });
 });
 
