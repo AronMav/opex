@@ -4,6 +4,10 @@
 
 /// Clean a candidate soul text. Returns `None` when the text trips a
 /// High-severity injection pattern (scan_for_block) or is empty after cleaning.
+// reviewed: `cleaned[start..]` range-slice uses ASCII-anchor byte offsets from
+// `find("<|")`/`find("|>")` — the literals are ASCII, so offsets land on char
+// boundaries (crate Cargo.toml enforces clippy::string_slice = warn).
+#[allow(clippy::string_slice)]
 pub fn sanitize_soul_text(text: &str, max_chars: usize) -> Option<String> {
     if crate::tools::content_security::scan_for_block(text) {
         tracing::warn!("soul text dropped: high-severity injection pattern");
