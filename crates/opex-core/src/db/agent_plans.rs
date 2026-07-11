@@ -71,7 +71,8 @@ pub async fn try_add_proposal(
     proposal: &Proposal,
 ) -> Result<bool> {
     let p = serde_json::to_value(proposal)?;
-    // COALESCE guards a freshly-created row (proposal_day NULL). New day OR under cap.
+    // IS DISTINCT FROM is NULL-safe and guards a freshly-created row
+    // (proposal_day NULL). New day OR under cap.
     let res = sqlx::query(
         "UPDATE agent_plans
            SET proposals = proposals || $3::jsonb,

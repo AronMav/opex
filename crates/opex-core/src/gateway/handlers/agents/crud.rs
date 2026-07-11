@@ -134,6 +134,9 @@ pub(super) const TABLES_TO_DELETE_BY_AGENT_ID: &[&str] = &[
     "agent_github_repos",
     "approval_allowlist",
     "channel_allowed_users",
+    // Stage C initiative: per-agent plan object (agent_id TEXT PRIMARY KEY,
+    // no FK, no compliance/history value) — must not outlive its agent.
+    "agent_plans",
 ];
 
 /// Rename `agent_id` from `old` to `new` across every catalogued table.
