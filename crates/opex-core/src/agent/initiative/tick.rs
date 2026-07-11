@@ -31,6 +31,7 @@ pub struct InitiativeDeps {
     pub timezone: String,
     pub workspace_dir: String, // for reading SELF.md via self_md_path
     pub ui_event_tx: Option<tokio::sync::broadcast::Sender<String>>, // matches SoulDeps.ui_event_tx exactly
+    pub channel_router: Option<crate::agent::channel_actions::ChannelActionRouter>,
 }
 
 /// Resolve "today" in the agent's configured timezone (falls back to UTC-naive).
@@ -116,28 +117,36 @@ async fn initiative_tick_inner(
         let added = agent_plans::try_add_proposal(
             db, agent_name, today, deps.cfg.daily_proposal_cap as i32, &proposal,
         ).await?;
-        if added
-            && let Some(tx) = &deps.ui_event_tx
-        {
+        if added {
             // rationale is LLM-generated from untrusted conversation material —
             // same sanitize barrier as goal_text before it reaches the
-            // notification payload.
+            // notification payload / channel delivery.
             let clean_rationale = crate::agent::soul::sanitize::sanitize_soul_text(
                 &proposal_gen.rationale, crate::agent::knowledge_extractor::EVENT_MAX_CHARS,
             ).unwrap_or_default();
-            let _ = crate::gateway::handlers::notifications::notify(
-                db,
-                tx,
-                "initiative_proposal",
-                &format!("{agent_name} предлагает цель"),
-                clean_goal,
-                serde_json::json!({
-                    "agent": agent_name,
-                    "proposal_id": proposal.id,
-                    "text": clean_goal,
-                    "rationale": clean_rationale,
-                }),
-            ).await;
+            if let Some(tx) = &deps.ui_event_tx {
+                let _ = crate::gateway::handlers::notifications::notify(
+                    db,
+                    tx,
+                    "initiative_proposal",
+                    &format!("{agent_name} предлагает цель"),
+                    clean_goal,
+                    serde_json::json!({
+                        "agent": agent_name,
+                        "proposal_id": proposal.id,
+                        "text": clean_goal,
+                        "rationale": clean_rationale,
+                    }),
+                ).await;
+            }
+            if let (Some(router), Some((ch, chat_id))) = (
+                deps.channel_router.as_ref(),
+                crate::agent::initiative::delivery::resolve_owner_target(db, agent_name, deps.owner_id.as_deref()).await,
+            ) {
+                crate::agent::initiative::delivery::send_proposal_to_channel(
+                    router, &ch, chat_id, proposal.id, clean_goal, &clean_rationale,
+                ).await;
+            }
         }
     }
     Ok(())

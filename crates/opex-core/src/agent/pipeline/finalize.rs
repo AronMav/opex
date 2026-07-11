@@ -737,6 +737,7 @@ pub fn finalize_context_from_engine(
                 timezone: a.heartbeat.as_ref().and_then(|h| h.timezone.clone()).unwrap_or_else(|| "UTC".to_string()),
                 workspace_dir: engine.cfg().workspace_dir.clone(),
                 ui_event_tx: engine.state().ui_event_tx.clone(),
+                channel_router: engine.state().channel_router.clone(),
             })
         },
     }

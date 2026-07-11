@@ -3,6 +3,8 @@
 //! sourced from agent config (engine.cfg().agent.access.owner_id), never a request.
 use sqlx::PgPool;
 
+use crate::agent::channel_actions::{ChannelAction, ChannelActionRouter};
+
 pub(crate) fn parse_chat_id(owner_id: Option<&str>) -> Option<i64> {
     owner_id?.trim().parse::<i64>().ok()
 }
@@ -15,6 +17,26 @@ pub async fn resolve_owner_target(db: &PgPool, agent_name: &str, owner_id: Optio
          ORDER BY created_at LIMIT 1",
     ).bind(agent_name).fetch_optional(db).await.ok().flatten();
     ch.map(|c| (c, chat_id))
+}
+
+/// Deliver an initiative proposal to the owner's channel (e.g. Telegram).
+/// Fire-and-forget with a bounded wait: throwaway oneshot reply + 5s timeout,
+/// result ignored — matches the fail-soft posture of the rest of the tick.
+pub async fn send_proposal_to_channel(
+    router: &ChannelActionRouter, channel: &str, chat_id: i64,
+    proposal_id: uuid::Uuid, text: &str, rationale: &str,
+) {
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    let action = ChannelAction {
+        name: "initiative_proposal".to_string(),
+        params: serde_json::json!({ "proposal_id": proposal_id.to_string(), "text": text, "rationale": rationale }),
+        context: serde_json::json!({ "chat_id": chat_id }),
+        reply: reply_tx,
+        target_channel: Some(channel.to_string()),
+    };
+    if router.send(action).await.is_ok() {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), reply_rx).await;
+    }
 }
 
 #[cfg(test)]
