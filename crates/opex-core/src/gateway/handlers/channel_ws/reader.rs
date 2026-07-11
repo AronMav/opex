@@ -117,6 +117,13 @@ pub(super) async fn run(
                         ).await;
                         if consumed { continue; }
 
+                        // Initiative callback intercept (approve/dismiss proposal,
+                        // cancel goal — owner-gated, `iappr:`/`idismiss:`/`icancel:`).
+                        let consumed_initiative = inline::handle_initiative_callback(
+                            &ctx, &engine, &agent_name, &request_id, &msg, &out_tx,
+                        ).await;
+                        if consumed_initiative { continue; }
+
                         // Clarify button-callback intercept (owner-gated).
                         let consumed_clarify_cb = inline::handle_clarify_callback(
                             &ctx, &engine, &agent_name, &request_id, &msg, &out_tx,
@@ -247,5 +254,13 @@ mod wire_guards {
         let approval = src.find("handle_approval_callback").expect("approval intercept present");
         let clarify_txt = src.find("handle_clarify_text").expect("clarify text-intercept present");
         assert!(approval < clarify_txt, "approval intercept must be wired before clarify text-intercept");
+    }
+
+    #[test]
+    fn initiative_callback_wired_before_dispatch() {
+        let src = include_str!("reader.rs");
+        let cb = src.find("handle_initiative_callback").expect("initiative callback intercept must be wired");
+        let dispatch = src.find("dispatcher::dispatch_message(").expect("dispatcher present");
+        assert!(cb < dispatch, "initiative callback intercept must run before dispatch_message");
     }
 }

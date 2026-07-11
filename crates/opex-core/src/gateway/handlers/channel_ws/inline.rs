@@ -247,6 +247,188 @@ pub(super) async fn handle_approval_callback(
     true
 }
 
+// ── Initiative callback ───────────────────────────────────────────────────────
+
+/// Render a [`ProposalError`](crate::gateway::handlers::agents::initiative::ProposalError)
+/// as a human-readable message for the Telegram error frame / log line.
+/// `ProposalError` carries no `Display`/`Debug` impl, so this is the single
+/// place that knows how to unwrap its two variants.
+fn describe_proposal_error(e: crate::gateway::handlers::agents::initiative::ProposalError) -> String {
+    use crate::gateway::handlers::agents::initiative::ProposalError;
+    match e {
+        ProposalError::BaseAgent => "initiative is non-base only".to_string(),
+        ProposalError::Db(msg) => msg,
+    }
+}
+
+/// Fire-and-forget delivery of a "⏹ Отменить" inline button for a
+/// newly-spawned initiative goal session, sent to the agent owner's channel.
+/// Fail-soft: no channel router, no connected adapter, or no resolvable
+/// owner target are all silently skipped — the goal already spawned
+/// successfully via `approve_proposal`, this is best-effort UX only.
+async fn send_cancel_button(ctx: &CwsCtx, engine: &Arc<AgentEngine>, agent_name: &str, session_id: uuid::Uuid) {
+    let Some(router) = engine.channel_router_ref() else {
+        return;
+    };
+    let owner_id = engine.agent_access().and_then(|a| a.owner_id.as_deref());
+    let Some((channel, chat_id)) =
+        crate::agent::initiative::delivery::resolve_owner_target(&ctx.infra.db, agent_name, owner_id).await
+    else {
+        return;
+    };
+    let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+    let action = crate::agent::channel_actions::ChannelAction {
+        name: "send_buttons".to_string(),
+        params: serde_json::json!({
+            "text": "Цель запущена",
+            "buttons": [{ "text": "⏹ Отменить", "data": format!("icancel:{session_id}") }],
+        }),
+        context: serde_json::json!({ "chat_id": chat_id }),
+        reply: reply_tx,
+        target_channel: Some(channel),
+    };
+    let _ = router.send(action).await;
+}
+
+/// Intercept Telegram inline-button initiative callbacks (`iappr:UUID` /
+/// `idismiss:UUID` / `icancel:UUID`). Returns `true` when the message was a
+/// callback and was consumed (caller should `continue`), `false` if the
+/// message should fall through to other interceptors / the dispatcher.
+///
+/// Only the agent's owner is allowed to approve/dismiss proposals or cancel
+/// goals — non-owner callbacks receive an error frame and are also consumed
+/// (fail-closed, same rule as [`handle_approval_callback`]).
+pub(super) async fn handle_initiative_callback(
+    ctx: &CwsCtx,
+    engine: &Arc<AgentEngine>,
+    agent_name: &str,
+    request_id: &str,
+    msg: &IncomingMessageDto,
+    out_tx: &mpsc::Sender<OutboundMsg>,
+) -> bool {
+    let is_callback = msg
+        .context
+        .get("is_callback")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if !is_callback {
+        return false;
+    }
+
+    let text = msg.text.as_deref().unwrap_or("");
+    if !(text.starts_with("iappr:") || text.starts_with("idismiss:") || text.starts_with("icancel:")) {
+        return false; // not an initiative callback — let other interceptors / dispatcher try
+    }
+
+    let user_id = msg.user_id.clone();
+
+    // Security: only the owner can approve/dismiss proposals or cancel goals.
+    // Re-fetch live guard — fail-closed if absent.
+    let live_guard = ctx.auth.access_guards.read().await.get(agent_name).cloned();
+    let is_owner = live_guard.as_ref().is_some_and(|g| g.is_owner(&user_id));
+    if !is_owner {
+        tracing::warn!(%user_id, "non-owner attempted to resolve initiative callback");
+        let _ = out_tx
+            .send(OutboundMsg::Wire(ChannelOutbound::Error {
+                request_id: request_id.to_string(),
+                message: "Only the owner can manage initiative proposals.".to_string(),
+            }))
+            .await;
+        return true;
+    }
+
+    let db = &ctx.infra.db;
+
+    if let Some(id_str) = text.strip_prefix("iappr:") {
+        let Ok(id) = id_str.parse::<uuid::Uuid>() else {
+            return true; // malformed UUID — consume but don't error noisily
+        };
+        match crate::gateway::handlers::agents::initiative::approve_proposal(db, engine, id).await {
+            Ok(out) => {
+                tracing::info!(proposal_id = %id, %user_id, "initiative proposal approved via Telegram callback");
+                let _ = out_tx
+                    .send(OutboundMsg::Wire(ChannelOutbound::Done {
+                        request_id: request_id.to_string(),
+                        text: "✅ Одобрено, цель запущена".to_string(),
+                    }))
+                    .await;
+                if let Some(session_id) = out.session_id {
+                    send_cancel_button(ctx, engine, agent_name, session_id).await;
+                }
+            }
+            Err(e) => {
+                let err_msg = describe_proposal_error(e);
+                tracing::warn!(proposal_id = %id, error = %err_msg, "failed to approve initiative proposal via callback");
+                let _ = out_tx
+                    .send(OutboundMsg::Wire(ChannelOutbound::Error {
+                        request_id: request_id.to_string(),
+                        message: format!("Failed to approve proposal: {err_msg}"),
+                    }))
+                    .await;
+            }
+        }
+        return true;
+    }
+
+    if let Some(id_str) = text.strip_prefix("idismiss:") {
+        let Ok(id) = id_str.parse::<uuid::Uuid>() else {
+            return true;
+        };
+        match crate::gateway::handlers::agents::initiative::dismiss_proposal(db, engine, id).await {
+            Ok(_) => {
+                tracing::info!(proposal_id = %id, %user_id, "initiative proposal dismissed via Telegram callback");
+                let _ = out_tx
+                    .send(OutboundMsg::Wire(ChannelOutbound::Done {
+                        request_id: request_id.to_string(),
+                        text: "❌ Отклонено".to_string(),
+                    }))
+                    .await;
+            }
+            Err(e) => {
+                let err_msg = describe_proposal_error(e);
+                tracing::warn!(proposal_id = %id, error = %err_msg, "failed to dismiss initiative proposal via callback");
+                let _ = out_tx
+                    .send(OutboundMsg::Wire(ChannelOutbound::Error {
+                        request_id: request_id.to_string(),
+                        message: format!("Failed to dismiss proposal: {err_msg}"),
+                    }))
+                    .await;
+            }
+        }
+        return true;
+    }
+
+    if let Some(id_str) = text.strip_prefix("icancel:") {
+        let Ok(session_id) = id_str.parse::<uuid::Uuid>() else {
+            return true;
+        };
+        match crate::gateway::handlers::agents::initiative::cancel_goal(db, engine, session_id).await {
+            Ok(_) => {
+                tracing::info!(%session_id, %user_id, "initiative goal cancelled via Telegram callback");
+                let _ = out_tx
+                    .send(OutboundMsg::Wire(ChannelOutbound::Done {
+                        request_id: request_id.to_string(),
+                        text: "⏹ Отменено".to_string(),
+                    }))
+                    .await;
+            }
+            Err(e) => {
+                let err_msg = describe_proposal_error(e);
+                tracing::warn!(%session_id, error = %err_msg, "failed to cancel initiative goal via callback");
+                let _ = out_tx
+                    .send(OutboundMsg::Wire(ChannelOutbound::Error {
+                        request_id: request_id.to_string(),
+                        message: format!("Failed to cancel goal: {err_msg}"),
+                    }))
+                    .await;
+            }
+        }
+        return true;
+    }
+
+    false
+}
+
 // ── Clarify callback / text-intercept ────────────────────────────────────────
 
 /// Parse a `clarify:{uuid}:{idx_or_other}` Telegram callback payload.

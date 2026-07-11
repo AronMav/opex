@@ -2,7 +2,7 @@ mod checkpoints;
 mod crud;
 pub mod dto;
 mod icon;
-mod initiative;
+pub(crate) mod initiative;
 mod lifecycle;
 mod schema;
 
