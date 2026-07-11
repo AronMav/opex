@@ -43,14 +43,19 @@ async fn api_dismiss_proposal(
     State(app): State<AppState>,
     Path((name, id)): Path<(String, Uuid)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    if validate_agent_name(&name).is_err() || app.agents.get_engine(&name).await.is_none() {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "agent not found"}))));
+    if validate_agent_name(&name).is_err() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "bad name"}))));
     }
-    let updated = crate::db::agent_plans::try_set_proposal_status(&app.infra.db, &name, id, "dismissed")
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-    // Idempotent: if it wasn't pending, still return ok (no-op).
-    Ok(Json(json!({"ok": true, "changed": updated.is_some()})))
+    let Some(engine) = app.agents.get_engine(&name).await else {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "agent not found"}))));
+    };
+    match dismiss_proposal(&app.infra.db, &engine, id).await {
+        Ok(changed) => Ok(Json(json!({"ok": true, "changed": changed}))),
+        Err(ProposalError::BaseAgent) => {
+            Err((StatusCode::FORBIDDEN, Json(json!({"error": "initiative is non-base only"}))))
+        }
+        Err(ProposalError::Db(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e})))),
+    }
 }
 
 /// Errors from [`approve_proposal`].
@@ -112,6 +117,47 @@ pub(crate) async fn approve_proposal(
         pool.insert(session_id, handle);
     }
     Ok(ApproveOutcome { spawned: true, session_id: Some(session_id) })
+}
+
+/// Dismiss a pending Stage-C proposal (guarded flip pending→dismissed).
+/// M3: same non-base gate as [`approve_proposal`], checked first.
+pub(crate) async fn dismiss_proposal(
+    db: &sqlx::PgPool,
+    engine: &std::sync::Arc<crate::agent::engine::AgentEngine>,
+    proposal_id: Uuid,
+) -> Result<bool, ProposalError> {
+    if engine.cfg().agent.base {
+        return Err(ProposalError::BaseAgent);
+    }
+    let agent_name = engine.cfg().agent.name.clone();
+    let updated = crate::db::agent_plans::try_set_proposal_status(db, &agent_name, proposal_id, "dismissed")
+        .await
+        .map_err(|e| ProposalError::Db(e.to_string()))?;
+    Ok(updated.is_some())
+}
+
+/// Cancel an active standing goal (guarded flip active→cancelled) and stop its
+/// driver, if any. M3: same non-base gate as [`approve_proposal`].
+/// Not yet wired to a web route — a follow-up task adds the endpoint; this is
+/// the shared function it will call.
+#[allow(dead_code)]
+pub(crate) async fn cancel_goal(
+    db: &sqlx::PgPool,
+    engine: &std::sync::Arc<crate::agent::engine::AgentEngine>,
+    session_id: Uuid,
+) -> Result<bool, ProposalError> {
+    if engine.cfg().agent.base {
+        return Err(ProposalError::BaseAgent);
+    }
+    let cancelled = crate::db::session_goals::try_cancel_goal(db, session_id)
+        .await
+        .map_err(|e| ProposalError::Db(e.to_string()))?;
+    if cancelled
+        && let Some(pool) = engine.cfg().goal_pool.clone()
+    {
+        crate::agent::goal::pool::stop(&pool, session_id);
+    }
+    Ok(cancelled)
 }
 
 async fn api_approve_proposal(
