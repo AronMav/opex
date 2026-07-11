@@ -153,6 +153,38 @@ pub fn is_retryable(class: &LlmErrorClass) -> bool {
     )
 }
 
+/// Whether a *different* provider could plausibly succeed where this one failed
+/// — i.e. the failure is about transport / capacity / availability, not about
+/// the request content or the caller's credentials. Drives the pipeline
+/// fallback-provider switch (`BehaviourLayers::fallback_provider`).
+///
+/// Included:
+/// - `TransientHttp` / `Overloaded` — the upstream is degraded; a peer may be fine.
+/// - `RateLimit` — a fallback provider is a *different account*, so its quota is
+///   independent of the primary's.
+/// - `CallTimeout` — the primary stalled; a peer may respond in time.
+/// - `Unknown` — a bare connection reset/refused (`error sending request for url`)
+///   carries no recognizable marker and lands here; this is the exact class that
+///   killed live sessions during egress bursts, so it MUST fail over.
+///
+/// Excluded (a different provider cannot help — and failing over would only mask
+/// the real problem or double-bill):
+/// - `AuthPermanent` / `Billing` — a credential/quota problem the peer shares or
+///   that needs operator action.
+/// - `ContextOverflow` — the request itself is too large; handled by compaction,
+///   not by swapping providers.
+/// - `SessionCorruption` — repaired in place by the session-recovery layer.
+pub fn is_failover_worthy(class: &LlmErrorClass) -> bool {
+    matches!(
+        class,
+        LlmErrorClass::TransientHttp
+            | LlmErrorClass::Overloaded
+            | LlmErrorClass::RateLimit
+            | LlmErrorClass::CallTimeout
+            | LlmErrorClass::Unknown
+    )
+}
+
 /// Asserts that CallTimeout is not included in the retryable set.
 fn _assert_call_timeout_not_retryable() {
     // Compile-time assertion: if CallTimeout becomes retryable, this would need updating.
@@ -315,6 +347,39 @@ mod tests {
         assert!(!is_retryable(&LlmErrorClass::AuthPermanent));
         assert!(!is_retryable(&LlmErrorClass::CallTimeout));
         assert!(!is_retryable(&LlmErrorClass::Unknown));
+    }
+
+    #[test]
+    fn failover_worthy_covers_transport_and_capacity() {
+        // Transport / capacity / availability → a peer provider may succeed.
+        assert!(is_failover_worthy(&LlmErrorClass::TransientHttp));
+        assert!(is_failover_worthy(&LlmErrorClass::Overloaded));
+        assert!(is_failover_worthy(&LlmErrorClass::RateLimit));
+        assert!(is_failover_worthy(&LlmErrorClass::CallTimeout));
+        // A bare connection reset/refused classifies as Unknown — this is the
+        // exact failure that killed live sessions during egress bursts.
+        assert!(is_failover_worthy(&LlmErrorClass::Unknown));
+    }
+
+    #[test]
+    fn failover_worthy_excludes_content_and_credential_errors() {
+        // A different provider cannot fix these — failing over would only mask.
+        assert!(!is_failover_worthy(&LlmErrorClass::AuthPermanent));
+        assert!(!is_failover_worthy(&LlmErrorClass::Billing));
+        assert!(!is_failover_worthy(&LlmErrorClass::ContextOverflow));
+        // SessionCorruption is repaired in place by the session-recovery layer.
+        assert!(!is_failover_worthy(&LlmErrorClass::SessionCorruption));
+    }
+
+    /// Regression guard for the real incident: a bare egress connection
+    /// reset ("error sending request for url …") must be failover-worthy so
+    /// the pipeline switches to the configured fallback instead of failing
+    /// the whole session.
+    #[test]
+    fn connection_reset_string_is_failover_worthy() {
+        let class = classify_str("network error: error sending request for url (https://api.z.ai/…)");
+        assert_eq!(class, LlmErrorClass::Unknown);
+        assert!(is_failover_worthy(&class));
     }
 
     #[test]

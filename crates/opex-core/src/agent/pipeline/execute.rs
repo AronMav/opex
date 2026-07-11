@@ -381,13 +381,16 @@ pub async fn execute<S: EventSink>(
                 r
             }
             Err(e) => {
+                // Classify once for the whole error arm — both the
+                // session-recovery and fallback layers below key off it.
+                let err_class = crate::agent::error_classify::classify(&e);
+
                 // Session-recovery layer (A3 in the divergent feature map).
                 // Must run BEFORE the fallback layer — a SessionCorruption
                 // error shouldn't increment the consecutive-failure counter
                 // that drives fallback.
                 if let Some(ref recovery) = layers.session_recovery {
-                    let class = crate::agent::error_classify::classify(&e);
-                    if class == crate::agent::error_classify::LlmErrorClass::SessionCorruption
+                    if err_class == crate::agent::error_classify::LlmErrorClass::SessionCorruption
                         && !layer_state.did_reset_session
                     {
                         layer_state.did_reset_session = true;
@@ -413,13 +416,28 @@ pub async fn execute<S: EventSink>(
                     }
                 }
 
-                // Fallback layer (A1 in the divergent feature map). Increment
-                // the counter and, on threshold, lazily build the fallback
-                // provider and `continue` the turn with it.
+                // Fallback layer (A1 in the divergent feature map). Switch to
+                // the configured fallback provider and `continue` the turn
+                // with it.
+                //
+                // Trigger: the FIRST failover-worthy error (transport / 5xx /
+                // rate-limit / timeout / bare connection reset). A single
+                // pipeline-level `Err` already means the provider's internal
+                // transport retries (`max_retries`) were exhausted, so one
+                // failure is sufficient signal to fail over. The legacy
+                // `consecutive_failures >= threshold` gate alone was
+                // unreachable here — this arm returns `Failed` on the first
+                // error, so the counter never accumulated past 1 and the
+                // fallback never engaged for a live session during an egress
+                // blip. It is retained as a secondary trigger for completeness.
                 if let Some(ref fb_policy) = layers.fallback_provider {
                     layer_state.consecutive_failures += 1;
+                    let failover_worthy =
+                        crate::agent::error_classify::is_failover_worthy(&err_class);
                     if !layer_state.using_fallback
-                        && layer_state.consecutive_failures >= fb_policy.consecutive_failure_threshold
+                        && (failover_worthy
+                            || layer_state.consecutive_failures
+                                >= fb_policy.consecutive_failure_threshold)
                     {
                         if layer_state.fallback_provider.is_none() {
                             layer_state.fallback_provider =
@@ -431,7 +449,9 @@ pub async fn execute<S: EventSink>(
                             tracing::warn!(
                                 agent = %engine.cfg().agent.name,
                                 iteration,
-                                "switching to fallback provider after consecutive failures"
+                                error_class = ?err_class,
+                                error = %e,
+                                "switching to fallback provider after primary LLM error"
                             );
                             // Emit StepFinish for the failed step so the
                             // frontend stops the spinner; then `continue`
