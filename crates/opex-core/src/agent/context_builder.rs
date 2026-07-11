@@ -172,6 +172,10 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     /// (None, None) when [agent.soul] is disabled. Fail-soft inside.
     async fn soul_blocks(&self, user_text: &str, session_id: Uuid) -> (Option<String>, Option<String>);
 
+    /// Persona-drift probe (spec stage B): self-baseline drift score → session_timeline.
+    /// Detect+log only, no prompt injection. No-op when `[agent.drift]` disabled or on error.
+    async fn drift_probe(&self, history: &[opex_db::sessions::MessageRow], session_id: Uuid);
+
     // Workspace
     fn workspace_dir(&self) -> &str;
 
@@ -281,6 +285,9 @@ impl ContextBuilder for DefaultContextBuilder {
             let limit = deps.agent_max_history_messages();
             deps.session_load_messages(session_id, limit).await?
         };
+
+        // Stage B: persona-drift probe (detect+log only, fail-soft, no injection).
+        deps.drift_probe(&history, session_id).await;
 
         // T17: conversation-history size estimate (chars/4 heuristic, same as
         // the system-prompt estimate below) — captured pre-repair, before any

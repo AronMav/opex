@@ -299,6 +299,82 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         (self_block, l1_block)
     }
 
+    async fn drift_probe(&self, history: &[opex_db::sessions::MessageRow], session_id: Uuid) {
+        let cfg = &self.cfg().agent.drift;
+        if !cfg.enabled {
+            return;
+        }
+        if history.len() < cfg.min_history {
+            return;
+        }
+        let agent = self.agent_name();
+        let texts = crate::agent::drift::own_assistant_texts(history, agent);
+        // нужно ≥ baseline_turns эталонных + ≥1 свежий
+        if texts.len() < cfg.baseline_turns + 1 {
+            return;
+        }
+        let embedder = &self.cfg().embedder;
+
+        // baseline: центроид первых baseline_turns собственных ответов (кэш пер-сессия)
+        let baselines = &self.cfg().drift_baselines;
+        let baseline = if let Some(b) = baselines.get(&session_id) {
+            b.clone()
+        } else {
+            let base_texts: Vec<&str> = texts.iter().take(cfg.baseline_turns).map(|s| s.as_str()).collect();
+            let embs = match embedder.embed_batch(&base_texts).await {
+                Ok(e) => e,
+                Err(e) => { tracing::warn!(agent, error = %e, "drift baseline embed failed"); return; }
+            };
+            let Some(c) = crate::agent::drift::centroid(&embs) else {
+                tracing::warn!(agent, "drift baseline centroid degenerate"); return;
+            };
+            let arc = std::sync::Arc::new(c);
+            // soft-cap backstop: не даём кэшу расти безгранично (спека §3; основная
+            // эвикция — на finalize, Task 3 Step 3). ВАЖНО: ключ извлекаем в
+            // отдельный `let`, чтобы временный DashMap `Iter` (держит shard read-guard)
+            // ДРОПНУЛСЯ на `;` ДО `remove` — иначе self-deadlock (remove на том же шарде).
+            const MAX_BASELINES: usize = 2000;
+            if baselines.len() >= MAX_BASELINES {
+                let victim = baselines.iter().next().map(|e| *e.key());
+                if let Some(k) = victim {
+                    baselines.remove(&k);
+                }
+            }
+            baselines.insert(session_id, arc.clone());
+            arc
+        };
+
+        // recent: последний собственный ответ
+        let Some(recent_text) = texts.last() else { return };
+        let recent = match embedder.embed(recent_text).await {
+            Ok(v) => v,
+            Err(e) => { tracing::warn!(agent, error = %e, "drift recent embed failed"); return; }
+        };
+        let score = crate::agent::drift::drift_score(&baseline, &recent);
+        let over = score > cfg.threshold;
+
+        // cos напрямую для наблюдаемости (декомпозиция — ревью F13)
+        let cos = 1.0 - score;
+        let payload = serde_json::json!({
+            "drift_score": score,
+            "cos_recent_baseline": cos,
+            "own_assistant_turns": texts.len(),
+            "baseline_turns_used": cfg.baseline_turns,
+            "history_len": history.len(),
+            "over_threshold": over,
+        });
+        if let Err(e) = opex_db::session_timeline::log_event(
+            &self.cfg().db, session_id, "drift_probe", Some(&payload),
+        ).await {
+            tracing::warn!(agent, error = %e, "drift timeline write failed");
+        }
+        if over {
+            tracing::warn!(agent, drift_score = score, "persona drift over threshold");
+        } else {
+            tracing::debug!(agent, drift_score = score, "drift probe");
+        }
+    }
+
     async fn session_resume(&self, sid: Uuid) -> Result<Uuid> {
         SessionManager::new(self.cfg().db.clone()).resume(sid).await
     }
