@@ -10,6 +10,7 @@ pub use opex_db::usage;
 
 // ── Remaining modules (not extracted) ───────────────────────────────────
 pub mod access;
+pub mod agent_plans;
 pub mod audit_queue;
 pub mod audit;
 pub mod channel_voice_modes;

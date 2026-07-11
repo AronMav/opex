@@ -197,6 +197,43 @@ pub async fn list_redrivable(
         .collect())
 }
 
+/// Active goals for an agent by origin (join through sessions.agent_id).
+/// Used by the initiative context block to surface running self-initiated goals.
+/// GoalRow has NO FromRow derive (manual tuple decode, mirroring `get()`), and
+/// `subgoals` is JSONB → decode explicitly. Select session_id too (list needs it).
+pub async fn list_active_by_agent_and_origin(
+    db: &PgPool,
+    agent_id: &str,
+    origin: &str,
+) -> Result<Vec<GoalRow>> {
+    type Row = (Uuid, String, String, i32, i32, serde_json::Value, Option<String>, i32);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT g.session_id, g.goal_text, g.status, g.turn_count, g.max_turns,
+                g.subgoals, g.last_verdict, g.consecutive_judge_failures
+         FROM session_goals g
+         JOIN sessions s ON s.id = g.session_id
+         WHERE s.agent_id = $1 AND g.origin = $2 AND g.status = 'active'
+         ORDER BY g.created_at DESC",
+    )
+    .bind(agent_id)
+    .bind(origin)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(session_id, goal_text, status, turn_count, max_turns, subgoals, last_verdict, cjf)| GoalRow {
+            session_id,
+            goal_text,
+            status,
+            turn_count,
+            max_turns,
+            subgoals: serde_json::from_value(subgoals).unwrap_or_default(),
+            last_verdict,
+            consecutive_judge_failures: cjf,
+        })
+        .collect())
+}
+
 /// Set the resumer backoff gate: this goal will not be re-driven again until
 /// `secs` from now. Applied after each re-drive attempt so a crash-looping goal
 /// backs off instead of being retried on every boot.
