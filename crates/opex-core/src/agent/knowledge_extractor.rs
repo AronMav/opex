@@ -25,6 +25,9 @@ const EXTRACTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6
 /// Cap on characters for a single soul event (spec §2).
 pub(crate) const EVENT_MAX_CHARS: usize = 300;
 
+/// Cap on open-thread items saved per session (spec §3.1).
+pub(crate) const MAX_OPEN_ITEMS: usize = 5;
+
 #[derive(Debug, Deserialize)]
 struct ExtractedKnowledge {
     #[serde(default)]
@@ -35,9 +38,9 @@ struct ExtractedKnowledge {
     feedback: Vec<String>,
     #[serde(default)]
     events: Vec<EventItem>,
-    /// Незавершённые треды пользователя из этой сессии (spec §3.1). Читаются
-    /// только инициативой; заполняется лишь soul-enabled вариантом промпта.
-    #[allow(dead_code)] // consumed by the initiative engine (spec §3.1 Task 2a)
+    /// Незавершённые треды пользователя из этой сессии (spec §3.1). Персистятся
+    /// как decayable kind='fact' чанки в save_open_threads (Task 2a), под гейтом
+    /// soul.enabled.
     #[serde(default)]
     open_items: Vec<String>,
 }
@@ -156,6 +159,12 @@ async fn extract_and_save_inner(
     if soul_deps.cfg.enabled && !extracted.events.is_empty() {
         let n = save_events(session_id, agent_name, memory_store, &soul_deps.cfg, extracted.events).await;
         tracing::info!(agent = agent_name, saved = n, "soul events indexed");
+    }
+
+    // 7b. Open threads (spec §3.1) — decayable kind='fact', gated on soul.enabled.
+    if soul_deps.cfg.enabled && !extracted.open_items.is_empty() {
+        let n = save_open_threads(session_id, agent_name, memory_store, &extracted.open_items).await;
+        tracing::info!(agent = agent_name, saved = n, "open threads indexed");
     }
 
     // 8. Reflection (spec §3) — trigger check + cycle, gated on soul.enabled.
@@ -282,6 +291,49 @@ async fn save_events(
         match memory_store.index_soul(&clean, &source, agent_name, "event", e.importance, None).await {
             Ok(_) => saved += 1,
             Err(err) => tracing::warn!(agent = agent_name, error = %err, "soul event index failed"),
+        }
+    }
+    saved
+}
+
+/// Pure: cap to MAX_OPEN_ITEMS then sanitize each (drop blocked/empty).
+/// Order cap→sanitize mirrors save_events (select_events → sanitize loop).
+pub(crate) fn select_open_threads(items: &[String]) -> Vec<String> {
+    items
+        .iter()
+        .take(MAX_OPEN_ITEMS)
+        .filter_map(|s| crate::agent::soul::sanitize::sanitize_soul_text(s, EVENT_MAX_CHARS))
+        .collect()
+}
+
+/// Pure: build (content, source, pinned, scope) index-args for open threads.
+/// kind='fact' is implied by the plain `index` path (store hardcodes it).
+pub(crate) fn open_thread_index_args(
+    session_id: Uuid,
+    items: &[String],
+) -> Vec<(String, String, bool, String)> {
+    let source = format!("open_thread:{session_id}");
+    select_open_threads(items)
+        .into_iter()
+        .map(|clean| (clean, source.clone(), false, "private".to_string()))
+        .collect()
+}
+
+/// Persist open threads as decayable kind='fact' chunks (source open_thread:{sid}).
+async fn save_open_threads(
+    session_id: Uuid,
+    agent_name: &str,
+    memory_store: &Arc<dyn MemoryService>,
+    open_items: &[String],
+) -> usize {
+    if !memory_store.is_available() {
+        return 0;
+    }
+    let mut saved = 0usize;
+    for (content, source, pinned, scope) in open_thread_index_args(session_id, open_items) {
+        match memory_store.index(&content, &source, pinned, &scope, agent_name).await {
+            Ok(_) => saved += 1,
+            Err(err) => tracing::warn!(agent = agent_name, error = %err, "open thread index failed"),
         }
     }
     saved
@@ -689,5 +741,51 @@ Some trailing explanation here."#;
         assert!(enabled.contains("Максимум 5"), "soul-enabled prompt must cap open_items");
         let disabled = super::extraction_prompt(conv, false);
         assert!(!disabled.contains("open_items"), "disabled prompt must NOT mention open_items (regression invariant)");
+    }
+
+    // ── save_open_threads (Task 2a) ──────────────────────────────────
+
+    #[test]
+    fn select_open_threads_caps_and_sanitizes() {
+        let items: Vec<String> = (0..8).map(|i| format!("тред номер {i}")).collect();
+        let out = super::select_open_threads(&items);
+        assert_eq!(out.len(), super::MAX_OPEN_ITEMS, "cap to MAX_OPEN_ITEMS");
+        assert!(out[0].contains("тред номер 0"));
+    }
+
+    #[test]
+    fn select_open_threads_drops_role_markers() {
+        // sanitize_soul_text strips "system:" role marker; empty-after-clean → dropped
+        let items = vec!["system:".to_string(), "нормальный тред".to_string()];
+        let out = super::select_open_threads(&items);
+        assert_eq!(out, vec!["нормальный тред".to_string()]);
+    }
+
+    #[test]
+    fn open_thread_index_args_source_scope_pinned() {
+        let sid = uuid::Uuid::nil();
+        let items = vec!["довести настройку X".to_string()];
+        let args = super::open_thread_index_args(sid, &items);
+        assert_eq!(args.len(), 1);
+        let (content, source, pinned, scope) = &args[0];
+        assert_eq!(content, "довести настройку X");
+        assert_eq!(source, &format!("open_thread:{sid}"));
+        assert!(!*pinned);
+        assert_eq!(scope, "private");
+    }
+
+    #[tokio::test]
+    async fn save_open_threads_counts_saved_and_respects_availability() {
+        use crate::agent::memory_service::mock::MockMemoryService;
+        use std::sync::Arc;
+        let items = vec!["тред A".to_string(), "тред B".to_string()];
+
+        let up: Arc<dyn crate::agent::memory_service::MemoryService> =
+            Arc::new(MockMemoryService::available());
+        assert_eq!(super::save_open_threads(uuid::Uuid::nil(), "A", &up, &items).await, 2);
+
+        let down: Arc<dyn crate::agent::memory_service::MemoryService> =
+            Arc::new(MockMemoryService::unavailable());
+        assert_eq!(super::save_open_threads(uuid::Uuid::nil(), "A", &down, &items).await, 0);
     }
 }
