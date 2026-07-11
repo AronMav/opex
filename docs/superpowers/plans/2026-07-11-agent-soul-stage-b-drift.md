@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (opex-core), toolgate embeddings (`Arc<dyn EmbeddingService>`), PostgreSQL session_timeline, dashmap.
 
-**Спека:** [docs/superpowers/specs/2026-07-11-agent-soul-stage-b-persona-drift-design.md](../specs/2026-07-11-agent-soul-stage-b-persona-drift-design.md) (ревизия 2). При расхождении план ↔ спека — спека главнее.
+**Спека:** [docs/superpowers/specs/2026-07-11-agent-soul-stage-b-persona-drift-design.md](../specs/2026-07-11-agent-soul-stage-b-persona-drift-design.md) (ревизия 2). При расхождении план ↔ спека — спека главнее. Ревизия плана 2 (2026-07-11): правки по трёхстороннему ревью — MessageRow без Default (все 15 полей явно), dashmap self-deadlock в soft-cap (hoist victim), backstop-only эвикция (без finalize — done-сессии переиспользуются), schema.rs импорт, точные якоря/async_trait-заметки.
 
 ## Global Constraints
 
@@ -17,7 +17,7 @@
 - `session_timeline.event_type` — свободный TEXT (без CHECK); `'drift_probe'` валиден. Writer: `opex_db::session_timeline::log_event(db: &PgPool, session_id: Uuid, event_type: &str, payload: Option<&serde_json::Value>) -> Result<()>`.
 - Эмбеддер: `AgentConfig.embedder: Arc<dyn EmbeddingService>` (поле, `agent_config.rs:39`), достижим как `self.cfg().embedder`. **НЕ** `MemoryStore::embedder()` (недоступен через `MemoryService`-трейт). `EmbeddingService::embed(&self, text: &str) -> Result<Vec<f32>>` и `embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>` (`memory/embedding.rs:35,38`).
 - `MessageRow` (`opex-db/src/sessions.rs:682`): `role: String`, `content: String`, `agent_id: Option<String>`, `created_at`, `status`.
-- Константы (не конфиг, YAGNI): дефолт baseline_turns 3.
+- `baseline_turns` — конфиг-поле `[agent.drift]` (Task 1), дефолт 3, диапазон [1,10]; НЕ хардкод-константа. Единственная захардкоженная константа — `MAX_BASELINES=2000` (soft-cap кэша).
 - Коммиты: один на задачу, БЕЗ Co-Authored-By. `git push` — только с явного разрешения оператора.
 - **Регрессионный инвариант:** при `[agent.drift].enabled=false` — ноль изменений поведения (нет embedding, нет timeline-записей, промпт байт-в-байт).
 - v1 = **только detect+log.** Никакой инъекции в `messages`, никакого A-anchor, никакого нового файла. Коррекция — фаза 2 (не в этом плане).
@@ -121,7 +121,7 @@ impl DriftConfig {
 
 В `AgentConfig::load()` — рядом с `self.agent.soul.validate()` добавить идентичную обработку `self.agent.drift.validate()` (тот же формат ошибок/bail).
 
-Ломающиеся struct-литералы `AgentSettings { ... }` (те же, что чинил этап A): `config/mod.rs` два тест-литерала + `gateway/handlers/agents/schema.rs` — добавить `drift: DriftConfig::default(),` (cargo check покажет каждый).
+Ломающиеся struct-литералы `AgentSettings { ... }` (полный список — 3 сайта: `config/mod.rs:2329`, `config/mod.rs:2399`, `gateway/handlers/agents/schema.rs:196`) — каждому добавить `drift: DriftConfig::default(),` (cargo check покажет). **В `schema.rs:193` есть `use crate::config::{… SoulConfig, ToolDispatcherConfig};` — добавить туда `DriftConfig`** (иначе `DriftConfig::default()` не резолвится).
 
 - [ ] **Step 3:** Run: `cargo check --all-targets -p opex-core` → чисто.
 
@@ -154,6 +154,7 @@ git commit -m "feat(drift): [agent.drift] DriftConfig with load-time validation"
 mod tests {
     use super::*;
 
+    // MessageRow НЕ выводит Default (только Debug/Serialize/FromRow) — заполняем ВСЕ 15 полей явно.
     fn row(role: &str, agent: Option<&str>, content: &str) -> opex_db::sessions::MessageRow {
         opex_db::sessions::MessageRow {
             id: uuid::Uuid::new_v4(),
@@ -166,7 +167,11 @@ mod tests {
             feedback: None,
             edited_at: None,
             status: "done".to_string(),
-            ..Default::default()
+            thinking_blocks: None,
+            parent_message_id: None,
+            branch_from_message_id: None,
+            abort_reason: None,
+            is_mirror: false,
         }
     }
 
@@ -311,6 +316,8 @@ git commit -m "feat(drift): self-baseline detector core (centroid, drift_score, 
 **Interfaces:**
 - Produces: поле `pub drift_baselines: std::sync::Arc<dashmap::DashMap<uuid::Uuid, std::sync::Arc<Vec<f32>>>>` на `AgentConfig` — session_id → baseline_centroid. `Arc::default()` при конструировании.
 
+**NB implementer:** `AgentConfig` здесь = рантайм-`crate::agent::agent_config::AgentConfig` (поле `soul_runtime`, `agent_config.rs:80`), НЕ config-файловый `config::AgentConfig`. Рантайм-версия конструируется в дереве **единственно** в `gateway/handlers/agents/lifecycle.rs:187` (grep `agent_config::AgentConfig {` — одна точка); тест-литералов рантайм-версии нет. Многочисленные `AgentConfig { ... }` в config/mod.rs/crud.rs/schema.rs/dto.rs — это ДРУГОЙ тип и от этой задачи НЕ ломаются.
+
 - [ ] **Step 1: Поле на AgentConfig** (рядом с `soul_runtime`, `agent_config.rs:80`):
 
 ```rust
@@ -328,7 +335,7 @@ git commit -m "feat(drift): self-baseline detector core (centroid, drift_score, 
         drift_baselines: std::sync::Arc::default(),
 ```
 
-Любые тест-литералы `AgentConfig { ... }` сломаются — cargo check покажет; добавить туда же `drift_baselines: std::sync::Arc::default(),`.
+(Единственная точка конструирования — см. NB выше; тест-литералов рантайм-`AgentConfig` нет, так что `cargo check` подсветит только lifecycle.rs, если что-то забыто.)
 
 - [ ] **Step 3:** Run: `cargo check --all-targets -p opex-core` → чисто.
 
@@ -359,7 +366,7 @@ git commit -m "feat(drift): per-session baseline centroid cache on AgentConfig"
     async fn drift_probe(&self, history: &[opex_db::sessions::MessageRow], session_id: uuid::Uuid);
 ```
 
-Тестовых impl'ов `ContextBuilderDeps` в дереве НЕТ (только `AgentEngine`, подтверждено этапом A) — mock не нужен.
+**NB:** трейт `ContextBuilderDeps` и его impl для `AgentEngine` — под `#[async_trait]` (макрос уже стоит на блоках); `async fn` добавляется ВНУТРЬ существующих аннотированных блоков, ничего доп. не нужно. Тестовых impl'ов `ContextBuilderDeps` в дереве НЕТ (`MockContextBuilder` реализует ДРУГОЙ трейт `ContextBuilder`; grep `impl ContextBuilderDeps for` → только `AgentEngine`) — mock не нужен, метод без default ломает ровно один impl (его и правим в Step 2).
 
 - [ ] **Step 2: Реализация** (в `engine/context_builder.rs`, `impl ContextBuilderDeps for AgentEngine`):
 
@@ -394,10 +401,14 @@ git commit -m "feat(drift): per-session baseline centroid cache on AgentConfig"
                 tracing::warn!(agent, "drift baseline centroid degenerate"); return;
             };
             let arc = std::sync::Arc::new(c);
-            // soft-cap: не даём кэшу расти безгранично (спека §3)
+            // soft-cap backstop: не даём кэшу расти безгранично (спека §3; основная
+            // эвикция — на finalize, Task 3 Step 3). ВАЖНО: ключ извлекаем в
+            // отдельный `let`, чтобы временный DashMap `Iter` (держит shard read-guard)
+            // ДРОПНУЛСЯ на `;` ДО `remove` — иначе self-deadlock (remove на том же шарде).
             const MAX_BASELINES: usize = 2000;
             if baselines.len() >= MAX_BASELINES {
-                if let Some(k) = baselines.iter().next().map(|e| *e.key()) {
+                let victim = baselines.iter().next().map(|e| *e.key());
+                if let Some(k) = victim {
                     baselines.remove(&k);
                 }
             }
@@ -439,14 +450,14 @@ git commit -m "feat(drift): per-session baseline centroid cache on AgentConfig"
 
 **NB implementer:** сверить точные accessor'ы в `impl ContextBuilderDeps for AgentEngine`: `self.cfg()` → `&AgentConfig` (поля `.agent.drift`, `.embedder`, `.drift_baselines`, `.db`), `self.agent_name() -> &str` — по образцу соседних методов (`soul_blocks`, `select_top_k_tools_semantic` для `cfg().embedder`). `embed_batch` принимает `&[&str]`.
 
-- [ ] **Step 3: Вызов в `build()`** — в `context_builder.rs::build()`, ПОСЛЕ загрузки `history` (переменная `history`, доступна с ~:271-276) и наличия `session_id`, добавить fire-and-forget вызов (детекция читает прошлые ходы; НИЧЕГО не вставляет):
+- [ ] **Step 3: Вызов в `build()`** — в `context_builder.rs::build()`, сразу после присваивания `let history = if let Some(leaf_id) = msg.leaf_message_id { … } else { … };` (заканчивается ~:283), до строки `let conversation_chars = …` (~:285). `session_id` уже в скоупе (~:253). Fire-and-forget (детекция читает прошлые ходы; НИЧЕГО не вставляет в `messages`):
 
 ```rust
         // Stage B: persona-drift probe (detect+log only, fail-soft, no injection).
         deps.drift_probe(&history, session_id).await;
 ```
 
-Разместить после того, как `history` загружена, но до/после сборки промпта — не важно (не влияет на messages). Разместить сразу после блока загрузки history для читаемости. НЕ در subagent/openai-compat путях (они минуют context_builder — спека §6).
+`&history` (`Vec<opex_db::sessions::MessageRow>`, т.к. `crate::db::sessions` = `pub use opex_db::sessions`) коэрсится в `&[MessageRow]`. Путь только через `build()` — subagent/openai-compat его минуют (спека §6), детекции там нет by design.
 
 - [ ] **Step 4: Тест breakdown-независимости** (unit, context_builder.rs) — drift не трогает ContextBreakdown, отдельного теста не требует; вместо этого добавить в E2E-чеклист (Task 5) проверку записи timeline. Здесь только `cargo check`.
 
