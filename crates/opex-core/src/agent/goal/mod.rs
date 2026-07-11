@@ -164,6 +164,8 @@ mod tests {
             subgoals: vec![],
             last_verdict: None,
             consecutive_judge_failures: cjf,
+            origin: "goal".into(),
+            current_chunk: 0,
         }
     }
 

@@ -14,6 +14,8 @@ pub struct GoalRow {
     pub subgoals: Vec<String>,
     pub last_verdict: Option<String>,
     pub consecutive_judge_failures: i32,
+    pub origin: String,
+    pub current_chunk: i32,
 }
 
 impl GoalRow {
@@ -26,26 +28,32 @@ impl GoalRow {
 }
 
 /// Column tuple returned by the `get` query (factored out to satisfy clippy::type_complexity).
-type GoalRowTuple = (String, String, i32, i32, serde_json::Value, Option<String>, i32);
+type GoalRowTuple =
+    (String, String, i32, i32, serde_json::Value, Option<String>, i32, String, i32);
 
 pub async fn get(db: &PgPool, session_id: Uuid) -> Result<Option<GoalRow>> {
     let row: Option<GoalRowTuple> = sqlx::query_as(
-        "SELECT goal_text, status, turn_count, max_turns, subgoals, last_verdict, consecutive_judge_failures
+        "SELECT goal_text, status, turn_count, max_turns, subgoals, last_verdict, consecutive_judge_failures,
+                origin, current_chunk
          FROM session_goals WHERE session_id = $1",
     )
     .bind(session_id)
     .fetch_optional(db)
     .await?;
-    Ok(row.map(|(goal_text, status, turn_count, max_turns, subgoals, last_verdict, cjf)| GoalRow {
-        session_id,
-        goal_text,
-        status,
-        turn_count,
-        max_turns,
-        subgoals: serde_json::from_value(subgoals).unwrap_or_default(),
-        last_verdict,
-        consecutive_judge_failures: cjf,
-    }))
+    Ok(row.map(
+        |(goal_text, status, turn_count, max_turns, subgoals, last_verdict, cjf, origin, current_chunk)| GoalRow {
+            session_id,
+            goal_text,
+            status,
+            turn_count,
+            max_turns,
+            subgoals: serde_json::from_value(subgoals).unwrap_or_default(),
+            last_verdict,
+            consecutive_judge_failures: cjf,
+            origin,
+            current_chunk,
+        },
+    ))
 }
 
 pub async fn upsert(db: &PgPool, session_id: Uuid, goal_text: &str, max_turns: i32) -> Result<()> {
@@ -145,6 +153,17 @@ pub async fn set_status(db: &PgPool, session_id: Uuid, status: &str) -> Result<(
 pub async fn bump_turn(db: &PgPool, session_id: Uuid) -> Result<()> {
     sqlx::query("UPDATE session_goals SET turn_count = turn_count + 1, updated_at = now() WHERE session_id = $1")
         .bind(session_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+// Wired by the plan-decompose-react chunk driver (batch B, later task); unused until then.
+#[allow(dead_code)]
+pub async fn set_current_chunk(db: &PgPool, session_id: Uuid, n: i32) -> Result<()> {
+    sqlx::query("UPDATE session_goals SET current_chunk = $2, updated_at = now() WHERE session_id = $1")
+        .bind(session_id)
+        .bind(n)
         .execute(db)
         .await?;
     Ok(())
@@ -257,10 +276,11 @@ pub async fn list_active_by_agent_and_origin(
     agent_id: &str,
     origin: &str,
 ) -> Result<Vec<GoalRow>> {
-    type Row = (Uuid, String, String, i32, i32, serde_json::Value, Option<String>, i32);
+    type Row = (Uuid, String, String, i32, i32, serde_json::Value, Option<String>, i32, String, i32);
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT g.session_id, g.goal_text, g.status, g.turn_count, g.max_turns,
-                g.subgoals, g.last_verdict, g.consecutive_judge_failures
+                g.subgoals, g.last_verdict, g.consecutive_judge_failures,
+                g.origin, g.current_chunk
          FROM session_goals g
          JOIN sessions s ON s.id = g.session_id
          WHERE s.agent_id = $1 AND g.origin = $2 AND g.status = 'active'
@@ -272,16 +292,22 @@ pub async fn list_active_by_agent_and_origin(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(session_id, goal_text, status, turn_count, max_turns, subgoals, last_verdict, cjf)| GoalRow {
-            session_id,
-            goal_text,
-            status,
-            turn_count,
-            max_turns,
-            subgoals: serde_json::from_value(subgoals).unwrap_or_default(),
-            last_verdict,
-            consecutive_judge_failures: cjf,
-        })
+        .map(
+            |(session_id, goal_text, status, turn_count, max_turns, subgoals, last_verdict, cjf, origin, current_chunk)| {
+                GoalRow {
+                    session_id,
+                    goal_text,
+                    status,
+                    turn_count,
+                    max_turns,
+                    subgoals: serde_json::from_value(subgoals).unwrap_or_default(),
+                    last_verdict,
+                    consecutive_judge_failures: cjf,
+                    origin,
+                    current_chunk,
+                }
+            },
+        )
         .collect())
 }
 
@@ -363,6 +389,8 @@ mod tests {
             subgoals: vec![],
             last_verdict: None,
             consecutive_judge_failures: 0,
+            origin: "goal".into(),
+            current_chunk: 0,
         }
     }
 
