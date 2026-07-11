@@ -100,6 +100,12 @@ async fn initiative_tick_inner(
         if clean_goal.is_empty() {
             return Ok(());
         }
+        // A sparse/fresh SELF.md makes the model punt with "N/A"/"нет" — such
+        // non-answers pass sanitize but must not fire a proposal + notification.
+        if super::is_trivial_goal(clean_goal) {
+            tracing::debug!(agent = agent_name, goal = clean_goal, "initiative: skipping trivial proposal");
+            return Ok(());
+        }
         let proposal = Proposal {
             id: Uuid::new_v4(),
             text: clean_goal.to_string(),
