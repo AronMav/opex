@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { ArrowLeft, Target, Lightbulb, ListChecks, Check, X } from "lucide-react";
 import { useTranslation } from "@/hooks/use-translation";
 import { relativeTime } from "@/lib/format";
-import { useAgentPlan, useApproveProposal, useDismissProposal } from "@/lib/queries";
+import { useAgentPlan, useApproveProposal, useDismissProposal, useCancelGoal } from "@/lib/queries";
 import { PageContainer } from "@/components/ui/page-container";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionHeader } from "@/components/ui/section-header";
@@ -40,8 +40,9 @@ function AgentPlanPageInner() {
   const { data: plan, isLoading, error } = useAgentPlan(agent || null);
   const approveProposal = useApproveProposal();
   const dismissProposal = useDismissProposal();
+  const cancelGoal = useCancelGoal();
 
-  const acting = approveProposal.isPending || dismissProposal.isPending;
+  const acting = approveProposal.isPending || dismissProposal.isPending || cancelGoal.isPending;
 
   return (
     <PageContainer>
@@ -150,9 +151,21 @@ function AgentPlanPageInner() {
                     <p className="min-w-0 flex-1 text-sm text-foreground/90 whitespace-pre-wrap break-words">
                       {g.goal}
                     </p>
-                    <Badge variant="outline" className="font-mono shrink-0">
-                      {t("agent_plan.turns", { count: g.turns })}
-                    </Badge>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Badge variant="outline" className="font-mono">
+                        {t("agent_plan.turns", { count: g.turns })}
+                      </Badge>
+                      <Button
+                        variant="outline-destructive"
+                        size="sm"
+                        onClick={() => cancelGoal.mutate({ agent, sessionId: g.session_id })}
+                        disabled={acting}
+                        className="text-xs font-medium"
+                      >
+                        <X className="h-4 w-4 mr-2" />
+                        {t("agent_plan.cancel")}
+                      </Button>
+                    </div>
                   </Card>
                 ))}
               </div>

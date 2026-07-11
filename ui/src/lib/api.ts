@@ -342,6 +342,12 @@ export const dismissProposal = (agent: string, id: string) =>
     {},
   );
 
+export const cancelGoal = (agent: string, sessionId: string) =>
+  apiPost<{ ok: boolean; cancelled?: boolean }>(
+    `/api/agents/${encodeURIComponent(agent)}/plan/goals/${encodeURIComponent(sessionId)}/cancel`,
+    {},
+  );
+
 // ── Workspace API helpers ─────────────────────────────────────────────────────
 
 export function isBinaryFile(

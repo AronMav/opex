@@ -1013,6 +1013,7 @@
   "agent_plan.active_goals": "Active goals",
   "agent_plan.no_active_goals": "No active initiative-driven goals",
   "agent_plan.turns": "{{count}} turns",
+  "agent_plan.cancel": "Cancel",
   "nav.backups": "Backups",
   "backups.title": "Backups",
   "backups.subtitle": "Create and restore database backups",

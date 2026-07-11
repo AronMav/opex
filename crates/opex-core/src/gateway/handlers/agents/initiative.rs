@@ -16,6 +16,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/agents/{name}/plan", get(api_get_plan))
         .route("/api/agents/{name}/plan/proposals/{id}/approve", post(api_approve_proposal))
         .route("/api/agents/{name}/plan/proposals/{id}/dismiss", post(api_dismiss_proposal))
+        .route("/api/agents/{name}/plan/goals/{session_id}/cancel", post(api_cancel_goal))
 }
 
 async fn api_get_plan(
@@ -35,7 +36,7 @@ async fn api_get_plan(
         "agent": name,
         "current_focus": plan.current_focus,
         "proposals": plan.parsed_proposals(),
-        "active_goals": active.iter().map(|g| json!({"goal": g.goal_text, "turns": g.turn_count})).collect::<Vec<_>>(),
+        "active_goals": active.iter().map(|g| json!({"goal": g.goal_text, "turns": g.turn_count, "session_id": g.session_id})).collect::<Vec<_>>(),
     })))
 }
 
@@ -138,9 +139,6 @@ pub(crate) async fn dismiss_proposal(
 
 /// Cancel an active standing goal (guarded flip active→cancelled) and stop its
 /// driver, if any. M3: same non-base gate as [`approve_proposal`].
-/// Not yet wired to a web route — a follow-up task adds the endpoint; this is
-/// the shared function it will call.
-#[allow(dead_code)]
 pub(crate) async fn cancel_goal(
     db: &sqlx::PgPool,
     engine: &std::sync::Arc<crate::agent::engine::AgentEngine>,
@@ -158,6 +156,25 @@ pub(crate) async fn cancel_goal(
         crate::agent::goal::pool::stop(&pool, session_id);
     }
     Ok(cancelled)
+}
+
+async fn api_cancel_goal(
+    State(app): State<AppState>,
+    Path((name, session_id)): Path<(String, Uuid)>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if validate_agent_name(&name).is_err() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "bad name"}))));
+    }
+    let Some(engine) = app.agents.get_engine(&name).await else {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "agent not found"}))));
+    };
+    match cancel_goal(&app.infra.db, &engine, session_id).await {
+        Ok(cancelled) => Ok(Json(json!({"ok": true, "cancelled": cancelled}))),
+        Err(ProposalError::BaseAgent) => {
+            Err((StatusCode::FORBIDDEN, Json(json!({"error": "initiative is non-base only"}))))
+        }
+        Err(ProposalError::Db(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e})))),
+    }
 }
 
 async fn api_approve_proposal(

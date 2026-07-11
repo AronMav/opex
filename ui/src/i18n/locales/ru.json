@@ -1013,6 +1013,7 @@
   "agent_plan.active_goals": "Активные цели",
   "agent_plan.no_active_goals": "Нет активных целей от инициативы",
   "agent_plan.turns": "{{count}} ходов",
+  "agent_plan.cancel": "Отменить",
   "nav.backups": "Бэкапы",
   "backups.title": "Бэкапы",
   "backups.subtitle": "Создание и восстановление бэкапов базы данных",

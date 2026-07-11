@@ -176,8 +176,7 @@ pub async fn record_verdict(db: &PgPool, session_id: Uuid, verdict: &str, judge_
 
 /// Atomically cancel an active goal (guarded flip, mirrors [`crate::db::agent_plans::try_set_proposal_status`]).
 /// Returns whether a row was flipped (i.e. it was `active`) — idempotent no-op otherwise.
-/// Consumed by `cancel_goal` (Phase 2A); wired to a web route in a follow-up task.
-#[allow(dead_code)]
+/// Consumed by `cancel_goal` (Phase 2A), wired to `POST /api/agents/{name}/plan/goals/{session_id}/cancel`.
 pub async fn try_cancel_goal(db: &PgPool, session_id: Uuid) -> Result<bool> {
     let row: Option<(Uuid,)> = sqlx::query_as(
         "UPDATE session_goals SET status='cancelled', updated_at=now()

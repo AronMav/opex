@@ -408,6 +408,7 @@ export interface AgentPlanProposal {
 export interface AgentPlanActiveGoal {
   goal: string;
   turns: number;
+  session_id: string;
 }
 
 export interface AgentPlan {

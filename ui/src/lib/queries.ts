@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useEffect } from "react"
 import { toast } from "sonner"
-import { apiGet, apiPost, apiPut, apiDelete, apiPatch, listCheckpoints, restoreCheckpoint, getAgentPlan, approveProposal, dismissProposal } from "./api"
+import { apiGet, apiPost, apiPut, apiDelete, apiPatch, listCheckpoints, restoreCheckpoint, getAgentPlan, approveProposal, dismissProposal, cancelGoal } from "./api"
 import { useNotificationStore } from "@/stores/notification-store"
 import { useWsSubscription } from "@/hooks/use-ws-subscription"
 import type { NotificationsResponse, SessionFailuresResponse, SessionChainResponse } from "@/types/api"
@@ -768,6 +768,15 @@ export function useDismissProposal() {
   const qc = useQueryClient()
   return useMutation<{ ok: boolean; changed?: boolean }, Error, { agent: string; id: string }>({
     mutationFn: ({ agent, id }) => dismissProposal(agent, id),
+    onSuccess: (_r, { agent }) => qc.invalidateQueries({ queryKey: qk.agentPlan(agent) }),
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+export function useCancelGoal() {
+  const qc = useQueryClient()
+  return useMutation<{ ok: boolean; cancelled?: boolean }, Error, { agent: string; sessionId: string }>({
+    mutationFn: ({ agent, sessionId }) => cancelGoal(agent, sessionId),
     onSuccess: (_r, { agent }) => qc.invalidateQueries({ queryKey: qk.agentPlan(agent) }),
     onError: (e: Error) => toast.error(e.message),
   })
