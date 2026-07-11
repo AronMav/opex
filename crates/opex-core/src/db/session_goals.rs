@@ -107,7 +107,16 @@ pub async fn upsert_cron_goal(
 /// Single-statement insert/refresh with `origin='initiative'` — unlike
 /// `upsert_cron_goal`, initiative goals are not scoped to a recurring job
 /// identity, so there is no prior-run to supersede.
-pub async fn upsert_initiative_goal(db: &PgPool, session_id: Uuid, goal_text: &str, max_turns: i32) -> Result<()> {
+///
+/// Transaction-only: the sole caller is `approve_proposal` (Phase 2A L1),
+/// which flips the proposal status, creates the session, and seeds this goal
+/// in ONE transaction so "approved without a goal" can never happen.
+pub async fn upsert_initiative_goal_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    session_id: Uuid,
+    goal_text: &str,
+    max_turns: i32,
+) -> Result<()> {
     sqlx::query(
         "INSERT INTO session_goals (session_id, goal_text, status, turn_count, max_turns, origin)
          VALUES ($1, $2, 'active', 0, $3, 'initiative')
@@ -119,7 +128,7 @@ pub async fn upsert_initiative_goal(db: &PgPool, session_id: Uuid, goal_text: &s
     .bind(session_id)
     .bind(goal_text)
     .bind(max_turns)
-    .execute(db)
+    .execute(&mut **tx)
     .await?;
     Ok(())
 }

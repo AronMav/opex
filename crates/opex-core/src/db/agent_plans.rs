@@ -129,6 +129,39 @@ pub async fn try_set_proposal_status(
     Ok(updated.and_then(|v| serde_json::from_value(v).ok()))
 }
 
+/// Transaction variant of [`try_set_proposal_status`] — same guarded flip,
+/// executed on the caller's transaction so it commits atomically with sibling
+/// writes (Stage C `approve_proposal`: status flip + session + goal in one
+/// tx — no "approved without goal" gap).
+pub async fn try_set_proposal_status_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    agent_id: &str,
+    id: Uuid,
+    new_status: &str,
+) -> Result<Option<Proposal>> {
+    let updated = sqlx::query_scalar::<_, serde_json::Value>(
+        "WITH idx AS (
+           SELECT ord - 1 AS i
+           FROM agent_plans, jsonb_array_elements(proposals) WITH ORDINALITY e(val, ord)
+           WHERE agent_id = $1 AND val->>'id' = $2::text AND val->>'status' = 'pending'
+         )
+         UPDATE agent_plans SET
+           proposals = jsonb_set(
+             jsonb_set(proposals, ARRAY[(SELECT i::text FROM idx), 'status'], to_jsonb($3::text)),
+             ARRAY[(SELECT i::text FROM idx), 'acted_at'], to_jsonb(now())
+           ),
+           updated_at = now()
+         WHERE agent_id = $1 AND EXISTS (SELECT 1 FROM idx)
+         RETURNING proposals -> (SELECT i FROM idx)::int",
+    )
+    .bind(agent_id)
+    .bind(id)
+    .bind(new_status)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(updated.and_then(|v| serde_json::from_value(v).ok()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

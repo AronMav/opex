@@ -53,6 +53,67 @@ async fn api_dismiss_proposal(
     Ok(Json(json!({"ok": true, "changed": updated.is_some()})))
 }
 
+/// Errors from [`approve_proposal`].
+pub(crate) enum ProposalError {
+    /// Initiative (Stage C self-proposed goals) is non-base only (M3 gate).
+    BaseAgent,
+    /// Any DB failure surfaced from the atomic flip+session+goal transaction.
+    Db(String),
+}
+
+/// Result of a successful [`approve_proposal`] call.
+pub(crate) struct ApproveOutcome {
+    pub spawned: bool,
+    pub session_id: Option<Uuid>,
+}
+
+/// Atomically approve a pending Stage-C proposal: flip status pending→approved,
+/// create the session, and seed the initiative goal — all in ONE transaction
+/// (L1: no "approved without goal" gap possible). The goal driver is spawned
+/// only after commit, with `GoalTarget` resolved from agent CONFIG owner_id
+/// (H1) — never from the request. M3: the non-base gate lives inside this
+/// function, first, so every caller gets it for free.
+pub(crate) async fn approve_proposal(
+    db: &sqlx::PgPool,
+    engine: &std::sync::Arc<crate::agent::engine::AgentEngine>,
+    proposal_id: Uuid,
+) -> Result<ApproveOutcome, ProposalError> {
+    if engine.cfg().agent.base {
+        return Err(ProposalError::BaseAgent);
+    }
+    let agent_name = engine.cfg().agent.name.clone();
+    const INITIATIVE_GOAL_MAX_TURNS: i32 = 20;
+    let channel = crate::agent::channel_kind::channel::CRON; // reuse the system channel
+
+    // L1: flip + session + goal in ONE transaction. No "approved without goal".
+    let mut tx = db.begin().await.map_err(|e| ProposalError::Db(e.to_string()))?;
+    let flipped = crate::db::agent_plans::try_set_proposal_status_tx(&mut tx, &agent_name, proposal_id, "approved")
+        .await
+        .map_err(|e| ProposalError::Db(e.to_string()))?;
+    let Some(proposal) = flipped else {
+        tx.rollback().await.ok();
+        // Not pending (already acted on, or unknown id) → idempotent no-op, no spawn.
+        return Ok(ApproveOutcome { spawned: false, session_id: None });
+    };
+    let session_id = crate::db::sessions::create_new_session_tx(&mut tx, &agent_name, "system", channel)
+        .await
+        .map_err(|e| ProposalError::Db(e.to_string()))?;
+    crate::db::session_goals::upsert_initiative_goal_tx(&mut tx, session_id, &proposal.text, INITIATIVE_GOAL_MAX_TURNS)
+        .await
+        .map_err(|e| ProposalError::Db(e.to_string()))?;
+    tx.commit().await.map_err(|e| ProposalError::Db(e.to_string()))?;
+
+    // H1: GoalTarget resolved from CONFIG owner_id — never the request. Spawn
+    // only after commit so the driver never observes a not-yet-committed goal.
+    let owner = engine.cfg().agent.access.as_ref().and_then(|a| a.owner_id.clone());
+    let target = crate::agent::initiative::delivery::resolve_owner_target(db, &agent_name, owner.as_deref()).await;
+    if let Some(pool) = engine.cfg().goal_pool.clone() {
+        let handle = crate::agent::goal::driver::spawn_goal_driver(engine.clone(), session_id, target);
+        pool.insert(session_id, handle);
+    }
+    Ok(ApproveOutcome { spawned: true, session_id: Some(session_id) })
+}
+
 async fn api_approve_proposal(
     State(app): State<AppState>,
     Path((name, id)): Path<(String, Uuid)>,
@@ -65,34 +126,15 @@ async fn api_approve_proposal(
     let Some(engine) = app.agents.get_engine(&name).await else {
         return Err((StatusCode::NOT_FOUND, Json(json!({"error": "agent not found"}))));
     };
-    // Initiative (Stage C self-proposed goals) is non-base only.
-    if engine.cfg().agent.base {
-        return Err((StatusCode::FORBIDDEN, Json(json!({"error": "initiative is non-base only"}))));
+    match approve_proposal(&app.infra.db, &engine, id).await {
+        Ok(outcome) => Ok(Json(json!({
+            "ok": true,
+            "spawned": outcome.spawned,
+            "session_id": outcome.session_id,
+        }))),
+        Err(ProposalError::BaseAgent) => {
+            Err((StatusCode::FORBIDDEN, Json(json!({"error": "initiative is non-base only"}))))
+        }
+        Err(ProposalError::Db(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e})))),
     }
-    // Atomic pending → approved; the goal text is resolved SERVER-SIDE from the
-    // stored proposal — any text in the request body (there is none) is never
-    // trusted here.
-    let proposal = crate::db::agent_plans::try_set_proposal_status(&app.infra.db, &name, id, "approved")
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-    let Some(proposal) = proposal else {
-        // Not pending (already acted on, or unknown id) → idempotent no-op, no spawn.
-        return Ok(Json(json!({"ok": true, "spawned": false})));
-    };
-
-    // Spawn goal driver — mirrors scheduler::bootstrap_cron_goal, but with
-    // origin='initiative' and no announce target (GoalTarget = None).
-    const INITIATIVE_GOAL_MAX_TURNS: i32 = 20;
-    let channel = crate::agent::channel_kind::channel::CRON; // reuse the system channel
-    let session_id = crate::db::sessions::create_new_session(&app.infra.db, &name, "system", channel)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-    crate::db::session_goals::upsert_initiative_goal(&app.infra.db, session_id, &proposal.text, INITIATIVE_GOAL_MAX_TURNS)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-    if let Some(pool) = engine.cfg().goal_pool.clone() {
-        let handle = crate::agent::goal::driver::spawn_goal_driver(engine.clone(), session_id, None);
-        pool.insert(session_id, handle);
-    }
-    Ok(Json(json!({"ok": true, "spawned": true, "session_id": session_id})))
 }

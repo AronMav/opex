@@ -311,6 +311,28 @@ pub async fn create_new_session(
     Ok(row.get("id"))
 }
 
+/// Transaction variant of [`create_new_session`] — same insert, executed on
+/// the caller's transaction so it commits atomically with sibling writes
+/// (e.g. Stage C `approve_proposal`: status flip + session + goal in one tx).
+pub async fn create_new_session_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    agent_id: &str,
+    user_id: &str,
+    channel: &str,
+) -> Result<Uuid> {
+    let row = sqlx::query(
+        "INSERT INTO sessions (agent_id, user_id, channel, participants) \
+         VALUES ($1, $2, $3, ARRAY[$1]) RETURNING id",
+    )
+    .bind(agent_id)
+    .bind(user_id)
+    .bind(channel)
+    .fetch_one(&mut **tx)
+    .await?;
+
+    Ok(row.get("id"))
+}
+
 /// Create a child session in a compression chain.
 pub async fn create_chain_session(
     db: &sqlx::PgPool,
