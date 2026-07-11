@@ -209,6 +209,7 @@ pub async fn start_agent_from_config(
         tool_exec_ctx: deps.tool_exec_ctx.clone(),
         checkpoint_manager: Some(deps.checkpoint_mgr.clone()),
         soul_runtime: std::sync::Arc::default(),
+        drift_baselines: std::sync::Arc::default(),
         lsp_manager: deps.lsp_manager.clone(),
     });
 
