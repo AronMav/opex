@@ -770,6 +770,33 @@ pub async fn recent_soul_chunks(db: &PgPool, agent_id: &str, limit: i64) -> Resu
     Ok(rows.iter().map(row_to_soul_candidate).collect())
 }
 
+/// Freshest open-thread chunk contents for an agent (spec §3.2).
+/// Prefix-scan on source over idx_memory_source; recency window in days.
+pub async fn recent_open_thread_chunks(
+    db: &PgPool,
+    agent_id: &str,
+    since_days: i64,
+    limit: i64,
+) -> Result<Vec<String>> {
+    // bind days as i32 to match house style (make_interval `days` is int4;
+    // every existing make_interval call site binds i32 — see usage.rs, sessions.rs).
+    let rows: Vec<String> = sqlx::query_scalar(
+        r"SELECT content FROM memory_chunks
+           WHERE agent_id = $1
+             AND source LIKE 'open_thread:%'
+             AND created_at > now() - make_interval(days => $2)
+           ORDER BY created_at DESC
+           LIMIT $3",
+    )
+    .bind(agent_id)
+    .bind(since_days as i32)
+    .bind(limit)
+    .fetch_all(db)
+    .await
+    .context("recent_open_thread_chunks query failed")?;
+    Ok(rows)
+}
+
 /// kind of a single chunk (None when the id does not exist / is not a UUID).
 pub async fn chunk_kind(db: &PgPool, id: &str) -> Result<Option<String>> {
     let Ok(uuid) = id.parse::<uuid::Uuid>() else { return Ok(None) };
@@ -1035,6 +1062,42 @@ mod tests {
         let excl = super::soul_candidates(&pool, "[0.5,0.5,0.5,0.5]", "A", Some("soul_event:s1"), 50).await.unwrap();
         assert_eq!(excl.len(), 1);
         assert_eq!(excl[0].source, "soul_event:s2");
+    }
+
+    // ── Open-thread recency tests (T2b) ──────────────────────────────
+
+    async fn insert_open_thread(pool: &sqlx::PgPool, agent: &str, content: &str, age_days: i32) {
+        sqlx::query(
+            "INSERT INTO memory_chunks (id, agent_id, content, source, pinned, scope, kind, created_at) \
+             VALUES (gen_random_uuid(), $1, $2, 'open_thread:s1', false, 'private', 'fact', \
+                     now() - make_interval(days => $3))",
+        )
+        .bind(agent).bind(content).bind(age_days)
+        .execute(pool).await.unwrap();
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn recent_open_threads_filters_window_agent_and_prefix(pool: sqlx::PgPool) {
+        insert_open_thread(&pool, "A", "свежий тред", 0).await;
+        insert_open_thread(&pool, "A", "старый тред", 30).await;
+        insert_open_thread(&pool, "B", "чужой тред", 0).await;
+        // non-open_thread fact for agent A must not match the prefix
+        sqlx::query(
+            "INSERT INTO memory_chunks (id, agent_id, content, source, pinned, scope, kind) \
+             VALUES (gen_random_uuid(), 'A', 'обычный факт', 'manual', false, 'private', 'fact')",
+        ).execute(&pool).await.unwrap();
+
+        let got = super::recent_open_thread_chunks(&pool, "A", 5, 10).await.unwrap();
+        assert_eq!(got, vec!["свежий тред".to_string()]);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn recent_open_threads_limit_and_order(pool: sqlx::PgPool) {
+        insert_open_thread(&pool, "A", "тред старее", 3).await;
+        insert_open_thread(&pool, "A", "тред средний", 2).await;
+        insert_open_thread(&pool, "A", "тред новейший", 1).await;
+        let got = super::recent_open_thread_chunks(&pool, "A", 5, 2).await.unwrap();
+        assert_eq!(got, vec!["тред новейший".to_string(), "тред средний".to_string()]);
     }
 
     #[sqlx::test(migrations = "../../migrations")]
