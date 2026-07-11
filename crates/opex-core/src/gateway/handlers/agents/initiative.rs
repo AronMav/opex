@@ -147,7 +147,8 @@ pub(crate) async fn cancel_goal(
     if engine.cfg().agent.base {
         return Err(ProposalError::BaseAgent);
     }
-    let cancelled = crate::db::session_goals::try_cancel_goal(db, session_id)
+    let agent_name = engine.cfg().agent.name.clone();
+    let cancelled = crate::db::session_goals::try_cancel_goal(db, session_id, &agent_name)
         .await
         .map_err(|e| ProposalError::Db(e.to_string()))?;
     if cancelled
