@@ -264,4 +264,13 @@ describe("getNotificationRoute", () => {
   it("falls back to /monitor/ for unknown notification types", () => {
     expect(getNotificationRoute("unknown_event")).toBe("/monitor/");
   });
+
+  it("routes initiative_proposal to the agent's plan page using data.agent", () => {
+    expect(getNotificationRoute("initiative_proposal", { agent: "Alma" })).toBe("/agents/plan/?agent=Alma");
+  });
+
+  it("falls back to /monitor/ for initiative_proposal with no agent in data", () => {
+    expect(getNotificationRoute("initiative_proposal")).toBe("/monitor/");
+    expect(getNotificationRoute("initiative_proposal", {})).toBe("/monitor/");
+  });
 });

@@ -1,6 +1,6 @@
 import { useAuthStore } from "@/stores/auth-store";
 import type { CheckpointListDto, RestoreReportDto } from "@/types/api.generated";
-import type { WorkspaceFile } from "@/types/api";
+import type { WorkspaceFile, AgentPlan } from "@/types/api";
 
 const REQUEST_TIMEOUT = 30_000;
 
@@ -323,6 +323,23 @@ export const restoreCheckpoint = (agent: string, n: number, file?: string) =>
   apiPost<RestoreReportDto>(
     `/api/agents/${encodeURIComponent(agent)}/checkpoints/${n}/restore`,
     file ? { file } : {},
+  );
+
+// ── Agent Plan (Stage C initiative) ───────────────────────────────────────────
+
+export const getAgentPlan = (agent: string) =>
+  apiGet<AgentPlan>(`/api/agents/${encodeURIComponent(agent)}/plan`);
+
+export const approveProposal = (agent: string, id: string) =>
+  apiPost<{ ok: boolean; spawned?: boolean; session_id?: string }>(
+    `/api/agents/${encodeURIComponent(agent)}/plan/proposals/${encodeURIComponent(id)}/approve`,
+    {},
+  );
+
+export const dismissProposal = (agent: string, id: string) =>
+  apiPost<{ ok: boolean; changed?: boolean }>(
+    `/api/agents/${encodeURIComponent(agent)}/plan/proposals/${encodeURIComponent(id)}/dismiss`,
+    {},
   );
 
 // ── Workspace API helpers ─────────────────────────────────────────────────────

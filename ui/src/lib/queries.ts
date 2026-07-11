@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useEffect } from "react"
 import { toast } from "sonner"
-import { apiGet, apiPost, apiPut, apiDelete, apiPatch, listCheckpoints, restoreCheckpoint } from "./api"
+import { apiGet, apiPost, apiPut, apiDelete, apiPatch, listCheckpoints, restoreCheckpoint, getAgentPlan, approveProposal, dismissProposal } from "./api"
 import { useNotificationStore } from "@/stores/notification-store"
 import { useWsSubscription } from "@/hooks/use-ws-subscription"
 import type { NotificationsResponse, SessionFailuresResponse, SessionChainResponse } from "@/types/api"
@@ -43,6 +43,7 @@ import type {
   HandlerAdminRow,
   HandlerAllowlistRow,
   HandlerSourceDto,
+  AgentPlan,
 } from "@/types/api"
 
 // ── Query Keys ──────────────────────────────────────────────────────────────
@@ -89,6 +90,7 @@ export const qk = {
   curatorDecisions: ["curator-decisions"] as const,
   skillCuratorDecisions: (name: string) => ["skills", name, "curator-decisions"] as const,
   checkpoints: (name: string) => ["agents", name, "checkpoints"] as const,
+  agentPlan: (name: string) => ["agents", name, "plan"] as const,
   handlers: ["handlers"] as const,
   handlerAllowlist: ["handlers", "allowlist"] as const,
 }
@@ -739,6 +741,34 @@ export function useRestoreCheckpoint() {
   return useMutation<RestoreReportDto, Error, { agent: string; n: number; file?: string }>({
     mutationFn: ({ agent, n, file }) => restoreCheckpoint(agent, n, file),
     onSuccess: (_r, { agent }) => qc.invalidateQueries({ queryKey: qk.checkpoints(agent) }),
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+// ── Agent Plan (Stage C initiative) ─────────────────────────────────────────
+
+export function useAgentPlan(agent: string | null) {
+  return useQuery<AgentPlan>({
+    queryKey: qk.agentPlan(agent ?? ""),
+    queryFn: () => getAgentPlan(agent!),
+    enabled: !!agent,
+  })
+}
+
+export function useApproveProposal() {
+  const qc = useQueryClient()
+  return useMutation<{ ok: boolean; spawned?: boolean; session_id?: string }, Error, { agent: string; id: string }>({
+    mutationFn: ({ agent, id }) => approveProposal(agent, id),
+    onSuccess: (_r, { agent }) => qc.invalidateQueries({ queryKey: qk.agentPlan(agent) }),
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+export function useDismissProposal() {
+  const qc = useQueryClient()
+  return useMutation<{ ok: boolean; changed?: boolean }, Error, { agent: string; id: string }>({
+    mutationFn: ({ agent, id }) => dismissProposal(agent, id),
+    onSuccess: (_r, { agent }) => qc.invalidateQueries({ queryKey: qk.agentPlan(agent) }),
     onError: (e: Error) => toast.error(e.message),
   })
 }

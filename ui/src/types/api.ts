@@ -383,6 +383,40 @@ export type { Notification as NotificationRow } from "./api.generated";
 // Regenerate: make gen-types
 export type { NotificationsResponseDto as NotificationsResponse } from "./api.generated";
 
+// `NotificationRow.type` is a plain `string` in the generated DTO (the Rust
+// `Notification` struct stores `notification_type` as free-form text, not an
+// enum) — there is no literal union to widen for new event kinds. Known
+// values in use across the UI: "access_request" | "tool_approval" |
+// "agent_error" | "watchdog_alert" | "initiative_proposal" (Stage C
+// self-proposed goals — see notification-bell.tsx's getNotificationRoute)
+// plus the media-flavoured "tts_*"/"image_*"/"video_*"/"media_*" events.
+
+// ── Agent Plan (Stage C initiative) ─────────────────────────────────────────
+// Hand-written — the handler returns an ad-hoc serde_json::json!(...) object,
+// not a ts-rs DTO, so there is nothing to regenerate here.
+// Source: crates/opex-core/src/gateway/handlers/agents/initiative.rs
+//         crates/opex-core/src/db/agent_plans.rs (Proposal)
+
+export interface AgentPlanProposal {
+  id: string;
+  text: string;
+  status: "pending" | "approved" | "dismissed";
+  created_at: string;
+  acted_at: string | null;
+}
+
+export interface AgentPlanActiveGoal {
+  goal: string;
+  turns: number;
+}
+
+export interface AgentPlan {
+  agent: string;
+  current_focus: string | null;
+  proposals: AgentPlanProposal[];
+  active_goals: AgentPlanActiveGoal[];
+}
+
 export interface TaskStep {
   id: string;
   title: string;

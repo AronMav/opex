@@ -65,6 +65,10 @@ export interface WsPong {
 
 export interface WsNotification {
   type: "notification";
+  // `data.type` (the notification's own event kind) is a plain `string` on
+  // `NotificationRow` — see the comment above that type in `./api.ts` for the
+  // known values, including "initiative_proposal" (Stage C self-proposed
+  // goals, routed to `/agents/{agent}/plan` by notification-bell.tsx).
   data: import("./api").NotificationRow;
 }
 

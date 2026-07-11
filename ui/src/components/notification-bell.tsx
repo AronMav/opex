@@ -153,15 +153,29 @@ function isMediaEvent(type: string): boolean {
 // Exported so unit tests can verify routing decisions for every notification
 // type without rendering the bell. Keeping it free-standing also documents
 // the routing contract in one place.
-export function getNotificationRoute(type: string): string | null {
+//
+// `data` is optional (existing callers/tests pass only `type`) — it's needed
+// for "initiative_proposal", whose target route is agent-scoped. The plan
+// page lives at `/agents/plan/?agent=` (a `?agent=` query param, NOT an
+// `/agents/{name}/plan` dynamic segment) because the UI is a static export
+// (`output: "export"` in next.config.ts) — a `[name]` route can't be
+// pre-rendered for a runtime-configurable, open-ended agent set. Same
+// query-param-as-router pattern as the `/monitor/?tab=` tabs. Stage C
+// initiative — see `agent/initiative/tick.rs`'s
+// `notify(..., "initiative_proposal", ..., {agent, proposal_id, text, rationale})`.
+export function getNotificationRoute(type: string, data?: Record<string, unknown>): string | null {
   // Media events (tts/image/video/media — ready + error) render inline; no nav.
   if (isMediaEvent(type)) return null;
   switch (type) {
-    case "access_request":  return "/access";
-    case "tool_approval":   return "/monitor/?tab=approvals";
-    case "agent_error":     return "/monitor/?tab=logs";
-    case "watchdog_alert":  return "/monitor/?tab=watchdog";
-    default:                return "/monitor/";
+    case "access_request":      return "/access";
+    case "tool_approval":       return "/monitor/?tab=approvals";
+    case "agent_error":         return "/monitor/?tab=logs";
+    case "watchdog_alert":      return "/monitor/?tab=watchdog";
+    case "initiative_proposal": {
+      const agent = typeof data?.agent === "string" ? data.agent : null;
+      return agent ? `/agents/plan/?agent=${encodeURIComponent(agent)}` : "/monitor/";
+    }
+    default:                    return "/monitor/";
   }
 }
 
@@ -259,7 +273,7 @@ export function NotificationBell() {
                 key={n.id}
                 onClick={() => {
                   if (!n.read) markRead.mutate(n.id);
-                  const route = getNotificationRoute(n.type);
+                  const route = getNotificationRoute(n.type, n.data);
                   if (route) router.push(route);
                 }}
                 className={`flex w-full flex-col gap-1 px-4 py-3 text-left transition-colors hover:bg-accent border-b border-border/50 last:border-0 ${
