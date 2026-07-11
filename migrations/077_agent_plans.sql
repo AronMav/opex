@@ -17,7 +17,7 @@ COMMENT ON TABLE agent_plans IS
 
 -- Widen origin to allow owner-approved self-initiated goals. The CHECK added in
 -- 057 is an unnamed inline column constraint auto-named session_goals_origin_check.
-ALTER TABLE session_goals DROP CONSTRAINT session_goals_origin_check;
+ALTER TABLE session_goals DROP CONSTRAINT IF EXISTS session_goals_origin_check;
 ALTER TABLE session_goals ADD CONSTRAINT session_goals_origin_check
     CHECK (origin IN ('goal','cron','initiative'));
 
