@@ -387,7 +387,10 @@ pub struct FinalizeContext {
     /// event persistence on `soul.cfg.enabled`, and drive the reflection engine
     /// (lock/backoff runtime, checkpoint manager, workspace dir, ui_event_tx).
     pub soul_deps: crate::agent::soul::reflection::SoulDeps,
-    /// Stage C initiative deps; None when initiative disabled or in unit tests.
+    /// Stage C initiative deps. `finalize_context_from_engine` always builds
+    /// `Some(...)` — the initiative/base/owner gating happens later, inside
+    /// `initiative_tick_inner`. `None` only occurs in unit tests that
+    /// construct `FinalizeContext` directly without going through the engine.
     pub initiative: Option<crate::agent::initiative::tick::InitiativeDeps>,
 }
 

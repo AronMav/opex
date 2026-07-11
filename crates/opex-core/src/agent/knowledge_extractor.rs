@@ -165,9 +165,16 @@ async fn extract_and_save_inner(
     // 9. Initiative tick (spec §3.3) — focus refresh + gated proposal, only when
     // the caller supplied deps (initiative enabled + non-base + owner set).
     if let Some(init) = initiative.as_ref() {
-        // Read SELF.md via the canonical path helper (empty if absent).
+        // Read SELF.md via the canonical path helper, then run it through the
+        // SAME structural re-serialization barrier as the system prompt
+        // (context_builder.rs) — never feed the raw file to an LLM prompt.
+        // Only whitelisted sections/bullets survive, each re-sanitized; fail-soft
+        // to an empty string on read error or an empty/absent SELF.md.
         let self_md_path = crate::agent::soul::self_md::self_md_path(&init.workspace_dir, agent_name);
-        let self_md_text = tokio::fs::read_to_string(&self_md_path).await.unwrap_or_default();
+        let self_md_text = match tokio::fs::read_to_string(&self_md_path).await {
+            Ok(raw) => crate::agent::soul::self_md::render_self_block(&raw).unwrap_or_default(),
+            Err(_) => String::new(),
+        };
         crate::agent::initiative::tick::initiative_tick(
             db, agent_name, provider, &self_md_text, init,
         ).await;

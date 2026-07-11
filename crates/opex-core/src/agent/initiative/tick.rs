@@ -78,14 +78,13 @@ async fn initiative_tick_inner(
         Some(last) => latest_refl.map(|r| r > last).unwrap_or(false),
         None => latest_refl.is_some(),
     };
-    if has_new {
-        if let Ok(focus) = generate_focus(provider, agent_name, self_md_text).await {
-            if let Some(clean) = crate::agent::soul::sanitize::sanitize_soul_text(
-                &focus, crate::agent::knowledge_extractor::EVENT_MAX_CHARS,
-            ) {
-                let _ = agent_plans::set_focus(db, agent_name, clean.trim()).await;
-            }
-        }
+    if has_new
+        && let Ok(focus) = generate_focus(provider, agent_name, self_md_text).await
+        && let Some(clean) = crate::agent::soul::sanitize::sanitize_soul_text(
+            &focus, crate::agent::knowledge_extractor::EVENT_MAX_CHARS,
+        )
+    {
+        let _ = agent_plans::set_focus(db, agent_name, clean.trim()).await;
     }
 
     // Step 2: gated proposal.
@@ -110,17 +109,22 @@ async fn initiative_tick_inner(
         let added = agent_plans::try_add_proposal(
             db, agent_name, today, deps.cfg.daily_proposal_cap as i32, &proposal,
         ).await?;
-        if added {
-            if let Some(tx) = &deps.ui_event_tx {
-                let _ = crate::gateway::handlers::notifications::notify(
-                    db,
-                    tx,
-                    "initiative_proposal",
-                    &format!("{agent_name} предлагает цель"),
-                    clean_goal,
-                    serde_json::json!({ "agent": agent_name, "proposal_id": proposal.id, "text": clean_goal }),
-                ).await;
-            }
+        if added
+            && let Some(tx) = &deps.ui_event_tx
+        {
+            let _ = crate::gateway::handlers::notifications::notify(
+                db,
+                tx,
+                "initiative_proposal",
+                &format!("{agent_name} предлагает цель"),
+                clean_goal,
+                serde_json::json!({
+                    "agent": agent_name,
+                    "proposal_id": proposal.id,
+                    "text": clean_goal,
+                    "rationale": proposal_gen.rationale,
+                }),
+            ).await;
         }
     }
     Ok(())
