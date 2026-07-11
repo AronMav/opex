@@ -26,6 +26,10 @@ export interface Strings {
   approvalRejected: string;
   approvalForbidden: string;
   actionUnavailable: string;
+  // Initiative proposals
+  initiativeHeader: string;
+  initiativeApprove: string;
+  initiativeDismiss: string;
   // Commands
   noActiveRequest: string;
   thinkModeOff: string;
@@ -61,6 +65,9 @@ const RU: Strings = {
   approvalRejected: "❌ Отклонено",
   approvalForbidden: "Только владелец может подтверждать действия.",
   actionUnavailable: "Это действие больше недоступно — откройте файл заново, чтобы увидеть действия.",
+  initiativeHeader: "💡 Предложение цели",
+  initiativeApprove: "✅ Одобрить",
+  initiativeDismiss: "❌ Отклонить",
   noActiveRequest: "Нет активного запроса.",
   thinkModeOff: "🧠 Режим размышлений выключен.",
   thinkModeOn: "🧠 Режим размышлений включён для следующего сообщения.",
@@ -93,6 +100,9 @@ const EN: Strings = {
   approvalRejected: "❌ Rejected",
   approvalForbidden: "Only the owner can resolve approvals.",
   actionUnavailable: "This action is no longer available — re-open the file to see actions.",
+  initiativeHeader: "💡 Goal proposal",
+  initiativeApprove: "✅ Approve",
+  initiativeDismiss: "❌ Dismiss",
   noActiveRequest: "No active request.",
   thinkModeOff: "🧠 Think mode off.",
   thinkModeOn: "🧠 Think mode on for next message.",

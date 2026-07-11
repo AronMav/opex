@@ -1199,6 +1199,20 @@ async function executeAction(
       break;
     }
 
+    case "initiative_proposal": {
+      const proposalId = action.params.proposal_id as string;
+      const text = action.params.text as string;
+      const rationale = (action.params.rationale as string) ?? "";
+      if (!strings) { console.error("[tg] initiative_proposal requires strings"); break; }
+      const s = strings;
+      const body = `${s.initiativeHeader}\n${text}${rationale ? "\n\n" + rationale : ""}`;
+      const keyboard = new InlineKeyboard()
+        .text(s.initiativeApprove, `iappr:${proposalId}`).row()
+        .text(s.initiativeDismiss, `idismiss:${proposalId}`);
+      await bot.api.sendMessage(chatId, body, { reply_markup: keyboard, reply_parameters: safeReplyParams(messageId) });
+      break;
+    }
+
     case "send_buttons": {
       const buttons = action.params.buttons as Array<{ text: string; data: string }>;
       if (buttons) {
