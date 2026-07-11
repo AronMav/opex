@@ -103,6 +103,27 @@ pub async fn upsert_cron_goal(
     Ok(())
 }
 
+/// Bootstrap an initiative-owned goal (Stage C: self-proposed, human-approved).
+/// Single-statement insert/refresh with `origin='initiative'` — unlike
+/// `upsert_cron_goal`, initiative goals are not scoped to a recurring job
+/// identity, so there is no prior-run to supersede.
+pub async fn upsert_initiative_goal(db: &PgPool, session_id: Uuid, goal_text: &str, max_turns: i32) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO session_goals (session_id, goal_text, status, turn_count, max_turns, origin)
+         VALUES ($1, $2, 'active', 0, $3, 'initiative')
+         ON CONFLICT (session_id) DO UPDATE SET goal_text = EXCLUDED.goal_text,
+           status = 'active', turn_count = 0, max_turns = EXCLUDED.max_turns,
+           origin = 'initiative',
+           last_verdict = NULL, consecutive_judge_failures = 0, updated_at = now()",
+    )
+    .bind(session_id)
+    .bind(goal_text)
+    .bind(max_turns)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
 pub async fn set_status(db: &PgPool, session_id: Uuid, status: &str) -> Result<()> {
     sqlx::query("UPDATE session_goals SET status = $2, updated_at = now() WHERE session_id = $1")
         .bind(session_id)
