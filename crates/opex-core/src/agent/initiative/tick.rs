@@ -60,8 +60,9 @@ async fn initiative_tick_inner(
     self_md_text: &str,
     deps: &InitiativeDeps,
 ) -> anyhow::Result<()> {
-    // Preconditions (spec §3.2): non-base, enabled, owner set. (soul.enabled is
-    // implied — this is only called from the soul-gated post-reflection path.)
+    // Preconditions (spec §3.2): non-base, enabled, owner set. (soul.enabled
+    // itself is not re-checked here — the call site is gated on
+    // soul_deps.cfg.enabled in knowledge_extractor.)
     if deps.is_base || !deps.cfg.enabled || deps.owner_id.is_none() {
         return Ok(());
     }
@@ -112,6 +113,12 @@ async fn initiative_tick_inner(
         if added
             && let Some(tx) = &deps.ui_event_tx
         {
+            // rationale is LLM-generated from untrusted conversation material —
+            // same sanitize barrier as goal_text before it reaches the
+            // notification payload.
+            let clean_rationale = crate::agent::soul::sanitize::sanitize_soul_text(
+                &proposal_gen.rationale, crate::agent::knowledge_extractor::EVENT_MAX_CHARS,
+            ).unwrap_or_default();
             let _ = crate::gateway::handlers::notifications::notify(
                 db,
                 tx,
@@ -122,7 +129,7 @@ async fn initiative_tick_inner(
                     "agent": agent_name,
                     "proposal_id": proposal.id,
                     "text": clean_goal,
-                    "rationale": proposal_gen.rationale,
+                    "rationale": clean_rationale,
                 }),
             ).await;
         }
