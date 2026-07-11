@@ -387,6 +387,8 @@ pub struct FinalizeContext {
     /// event persistence on `soul.cfg.enabled`, and drive the reflection engine
     /// (lock/backoff runtime, checkpoint manager, workspace dir, ui_event_tx).
     pub soul_deps: crate::agent::soul::reflection::SoulDeps,
+    /// Stage C initiative deps; None when initiative disabled or in unit tests.
+    pub initiative: Option<crate::agent::initiative::tick::InitiativeDeps>,
 }
 
 // ── finalize() ────────────────────────────────────────────────────────────────
@@ -466,6 +468,7 @@ pub async fn finalize<S: EventSink>(
                 ctx.memory_store.clone(),
                 ctx.message_count,
                 ctx.soul_deps.clone(),
+                ctx.initiative.clone(),
                 &ctx.bg_tasks,
             );
             if let Some(sr_cfg) = &ctx.skill_review
@@ -722,6 +725,17 @@ pub fn finalize_context_from_engine(
             ui_event_tx: engine.state().ui_event_tx.clone(),
             runtime: engine.cfg().soul_runtime.clone(),
         },
+        initiative: {
+            let a = &engine.cfg().agent;
+            Some(crate::agent::initiative::tick::InitiativeDeps {
+                cfg: a.initiative.clone(),
+                owner_id: a.access.as_ref().and_then(|x| x.owner_id.clone()),
+                is_base: a.base,
+                timezone: a.heartbeat.as_ref().and_then(|h| h.timezone.clone()).unwrap_or_else(|| "UTC".to_string()),
+                workspace_dir: engine.cfg().workspace_dir.clone(),
+                ui_event_tx: engine.state().ui_event_tx.clone(),
+            })
+        },
     }
 }
 
@@ -736,12 +750,13 @@ pub(crate) fn spawn_knowledge_extraction(
     memory_store: Arc<dyn MemoryService>,
     message_count: usize,
     soul_deps: crate::agent::soul::reflection::SoulDeps,
+    initiative: Option<crate::agent::initiative::tick::InitiativeDeps>,
     tracker: &TaskTracker,
 ) {
     if message_count >= 2 {
         tracker.spawn(async move {
             crate::agent::knowledge_extractor::extract_and_save(
-                db, session_id, agent_name, provider, memory_store, soul_deps,
+                db, session_id, agent_name, provider, memory_store, soul_deps, initiative,
             )
             .await;
         });
@@ -953,6 +968,7 @@ mod tests {
                 ui_event_tx: None,
                 runtime: Arc::default(),
             },
+            initiative: None,
         }
     }
 

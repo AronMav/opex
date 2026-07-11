@@ -50,6 +50,7 @@ fn default_event_importance() -> f32 {
 
 /// Extract knowledge from a completed session and save to memory.
 /// Runs in background — errors are logged, never propagated.
+#[allow(clippy::too_many_arguments)]
 pub async fn extract_and_save(
     db: PgPool,
     session_id: Uuid,
@@ -57,12 +58,13 @@ pub async fn extract_and_save(
     provider: Arc<dyn LlmProvider>,
     memory_store: Arc<dyn MemoryService>,
     soul_deps: crate::agent::soul::reflection::SoulDeps,
+    initiative: Option<crate::agent::initiative::tick::InitiativeDeps>,
 ) {
     if !memory_store.is_available() {
         return;
     }
 
-    if let Err(e) = extract_and_save_inner(&db, session_id, &agent_name, &provider, &memory_store, &soul_deps).await {
+    if let Err(e) = extract_and_save_inner(&db, session_id, &agent_name, &provider, &memory_store, &soul_deps, &initiative).await {
         tracing::warn!(
             session_id = %session_id,
             agent = %agent_name,
@@ -72,6 +74,7 @@ pub async fn extract_and_save(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn extract_and_save_inner(
     db: &PgPool,
     session_id: Uuid,
@@ -79,6 +82,7 @@ async fn extract_and_save_inner(
     provider: &Arc<dyn LlmProvider>,
     memory_store: &Arc<dyn MemoryService>,
     soul_deps: &crate::agent::soul::reflection::SoulDeps,
+    initiative: &Option<crate::agent::initiative::tick::InitiativeDeps>,
 ) -> Result<()> {
     // 1. Load messages
     let rows = crate::db::sessions::load_messages(db, session_id, None).await?;
@@ -156,6 +160,17 @@ async fn extract_and_save_inner(
             db, agent_name, provider, memory_store, soul_deps,
         )
         .await;
+    }
+
+    // 9. Initiative tick (spec §3.3) — focus refresh + gated proposal, only when
+    // the caller supplied deps (initiative enabled + non-base + owner set).
+    if let Some(init) = initiative.as_ref() {
+        // Read SELF.md via the canonical path helper (empty if absent).
+        let self_md_path = crate::agent::soul::self_md::self_md_path(&init.workspace_dir, agent_name);
+        let self_md_text = tokio::fs::read_to_string(&self_md_path).await.unwrap_or_default();
+        crate::agent::initiative::tick::initiative_tick(
+            db, agent_name, provider, &self_md_text, init,
+        ).await;
     }
 
     Ok(())

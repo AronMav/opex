@@ -47,6 +47,9 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+# Pure-Rust IANA timezone db for initiative_tick's "today in agent tz" resolution
+# (heartbeat/scheduler use manual UTC offsets instead; this is the one consumer).
+chrono-tz = "0.10"
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }

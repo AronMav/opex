@@ -122,7 +122,7 @@ pub async fn maybe_reflect(
     }
 }
 
-async fn llm_text(provider: &Arc<dyn LlmProvider>, prompt: String) -> Result<String> {
+pub(crate) async fn llm_text(provider: &Arc<dyn LlmProvider>, prompt: String) -> Result<String> {
     let messages = vec![opex_types::Message {
         role: opex_types::MessageRole::User,
         content: prompt,

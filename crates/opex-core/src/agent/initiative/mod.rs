@@ -3,6 +3,8 @@
 //! knowledge_extractor). Чистые функции здесь — юнит-тестируемы.
 use chrono::{DateTime, NaiveDate, Utc};
 
+pub mod tick;
+
 /// Effective daily proposal count, resetting to 0 when the stored day != today.
 pub fn effective_today_count(proposal_day: Option<NaiveDate>, stored_count: i32, today: NaiveDate) -> u32 {
     match proposal_day {
