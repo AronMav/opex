@@ -181,4 +181,62 @@ mod tests {
         assert_eq!(back[0].status, "pending");
         assert_eq!(back[0].text, "изучить X");
     }
+
+    /// Two concurrent `try_add_proposal` calls against a cap of 1 must only let
+    /// ONE through — the `proposals_today < $4` guard has to be race-safe under
+    /// Postgres row-level locking (UPDATE ... WHERE serializes the two statements).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn concurrent_try_add_proposal_respects_cap(pool: sqlx::PgPool) -> sqlx::Result<()> {
+        get_or_create(&pool, "raceA").await.unwrap();
+        let today = chrono::Utc::now().date_naive();
+        let mk = |t: &str| Proposal {
+            id: uuid::Uuid::new_v4(),
+            text: t.into(),
+            status: "pending".into(),
+            created_at: chrono::Utc::now(),
+            acted_at: None,
+        };
+        let (p1, p2) = (mk("g1"), mk("g2"));
+        let (r1, r2) = tokio::join!(
+            try_add_proposal(&pool, "raceA", today, 1, &p1),
+            try_add_proposal(&pool, "raceA", today, 1, &p2)
+        );
+        assert_eq!([r1.unwrap(), r2.unwrap()].iter().filter(|x| **x).count(), 1);
+        let plan = get_or_create(&pool, "raceA").await.unwrap();
+        assert_eq!(plan.proposals_today, 1);
+        assert_eq!(plan.parsed_proposals().len(), 1);
+        Ok(())
+    }
+
+    /// Two concurrent `try_set_proposal_status` calls flipping the SAME pending
+    /// proposal to `approved` must only let ONE win — the `status = 'pending'`
+    /// guard in the CTE has to be race-safe (mirrors the `session_goals::try_cancel_goal`
+    /// atomicity contract).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn concurrent_approve_flip_wins_once(pool: sqlx::PgPool) -> sqlx::Result<()> {
+        get_or_create(&pool, "raceB").await.unwrap();
+        let today = chrono::Utc::now().date_naive();
+        let id = uuid::Uuid::new_v4();
+        try_add_proposal(
+            &pool,
+            "raceB",
+            today,
+            1,
+            &Proposal {
+                id,
+                text: "g".into(),
+                status: "pending".into(),
+                created_at: chrono::Utc::now(),
+                acted_at: None,
+            },
+        )
+        .await
+        .unwrap();
+        let (a, b) = tokio::join!(
+            try_set_proposal_status(&pool, "raceB", id, "approved"),
+            try_set_proposal_status(&pool, "raceB", id, "approved")
+        );
+        assert_eq!([a.unwrap(), b.unwrap()].iter().filter(|x| x.is_some()).count(), 1);
+        Ok(())
+    }
 }

@@ -583,4 +583,46 @@ mod tests {
         assert_eq!(got[0].chat_id, Some(99001), "persisted chat_id surfaced for channel-push");
         Ok(())
     }
+
+    /// `try_cancel_goal` is a guarded flip (mirrors `agent_plans::try_set_proposal_status`):
+    /// active → cancelled (true), a repeat cancel is an idempotent no-op (false), and a
+    /// `done` goal is never touched by it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn try_cancel_goal_atomicity(pool: PgPool) -> sqlx::Result<()> {
+        let active_sid = seed_session(&pool).await;
+        upsert(&pool, active_sid, "g", 5).await.unwrap();
+        assert!(
+            try_cancel_goal(&pool, active_sid, "Test").await.unwrap(),
+            "active goal flips to cancelled"
+        );
+        assert_eq!(get(&pool, active_sid).await.unwrap().unwrap().status, "cancelled");
+
+        assert!(
+            !try_cancel_goal(&pool, active_sid, "Test").await.unwrap(),
+            "already-cancelled goal is an idempotent no-op"
+        );
+
+        let done_sid = seed_session(&pool).await;
+        upsert(&pool, done_sid, "g2", 5).await.unwrap();
+        set_status(&pool, done_sid, "done").await.unwrap();
+        assert!(
+            !try_cancel_goal(&pool, done_sid, "Test").await.unwrap(),
+            "done goal is not cancelled"
+        );
+        assert_eq!(get(&pool, done_sid).await.unwrap().unwrap().status, "done");
+        Ok(())
+    }
+
+    /// Two concurrent `try_cancel_goal` calls against the same active goal must
+    /// only let ONE win the flip — the `status='active'` guard has to be
+    /// race-safe under concurrent UPDATEs (same contract as
+    /// `agent_plans::concurrent_approve_flip_wins_once`).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn concurrent_try_cancel_goal_flips_once(pool: PgPool) -> sqlx::Result<()> {
+        let sid = seed_session(&pool).await;
+        upsert(&pool, sid, "g", 5).await.unwrap();
+        let (a, b) = tokio::join!(try_cancel_goal(&pool, sid, "Test"), try_cancel_goal(&pool, sid, "Test"));
+        assert_eq!([a.unwrap(), b.unwrap()].iter().filter(|x| **x).count(), 1);
+        Ok(())
+    }
 }
