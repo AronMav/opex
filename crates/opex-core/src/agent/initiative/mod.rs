@@ -3,6 +3,7 @@
 //! knowledge_extractor). Чистые функции здесь — юнит-тестируемы.
 use chrono::{DateTime, NaiveDate, Utc};
 
+pub mod delivery;
 pub mod tick;
 
 /// Effective daily proposal count, resetting to 0 when the stored day != today.
