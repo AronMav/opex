@@ -974,6 +974,9 @@ pub struct AgentSettings {
     /// Persona-drift detection (spec stage B, 2026-07-11).
     #[serde(default)]
     pub drift: DriftConfig,
+    /// Proactive-initiative daily proposal cap (spec stage C, 2026-07-11).
+    #[serde(default)]
+    pub initiative: InitiativeConfig,
     pub compaction: Option<CompactionConfig>,
     pub skill_review: Option<SkillReviewConfig>,
     pub session: Option<SessionConfig>,
@@ -1475,6 +1478,41 @@ impl DriftConfig {
     }
 }
 
+/// Configuration for proactive-initiative daily proposal budget (spec stage C, 2026-07-11).
+/// Maps to `[agent.initiative]`. All fields default — section can be omitted.
+/// Opt-in: disabled by default.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct InitiativeConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_initiative_cap")]
+    pub daily_proposal_cap: u32,
+}
+
+fn default_initiative_cap() -> u32 {
+    1
+}
+
+impl Default for InitiativeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            daily_proposal_cap: default_initiative_cap(),
+        }
+    }
+}
+
+impl InitiativeConfig {
+    /// Validate initiative settings. Called from `AgentConfig::load()` (like DriftConfig).
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if !(1..=10).contains(&self.daily_proposal_cap) {
+            errors.push("initiative.daily_proposal_cap must be in [1, 10]".to_string());
+        }
+        errors
+    }
+}
+
 /// Configuration for the tool dispatcher meta-tool (`tool_use`).
 ///
 /// Maps to `[agent.tool_dispatcher]` section in agent TOML config. All fields
@@ -1912,6 +1950,17 @@ impl AgentConfig {
                 "agent {:?}: invalid [agent.drift] section:\n  - {}",
                 config.agent.name,
                 drift_errors.join("\n  - ")
+            );
+        }
+
+        // Validate initiative policy. Errors here block agent load — same
+        // treatment as drift (misconfiguration surfaced at startup, not runtime).
+        let initiative_errors = config.agent.initiative.validate();
+        if !initiative_errors.is_empty() {
+            anyhow::bail!(
+                "agent {:?}: invalid [agent.initiative] section:\n  - {}",
+                config.agent.name,
+                initiative_errors.join("\n  - ")
             );
         }
 
@@ -2434,6 +2483,7 @@ owner_id = "123"
                 delegation: DelegationConfig::default(),
                 soul: SoulConfig::default(),
                 drift: DriftConfig::default(),
+                initiative: InitiativeConfig::default(),
                 compaction: Some(CompactionConfig {
                     enabled: true,
                     threshold: 0.9,
@@ -2517,6 +2567,7 @@ owner_id = "123"
                 delegation: DelegationConfig::default(),
                 soul: SoulConfig::default(),
                 drift: DriftConfig::default(),
+                initiative: InitiativeConfig::default(),
                 compaction: None,
                 skill_review: None,
                 session: None,
@@ -3288,6 +3339,27 @@ model = "gpt-4o"
         let errs = bad.validate();
         assert_eq!(errs.len(), 3, "each violated rule reports once: {errs:?}");
         assert!(DriftConfig::default().validate().is_empty());
+    }
+
+    // ── InitiativeConfig ──
+
+    #[test]
+    fn initiative_config_defaults_and_validation() {
+        let c = InitiativeConfig::default();
+        assert!(!c.enabled);
+        assert_eq!(c.daily_proposal_cap, 1);
+        assert!(c.validate().is_empty());
+
+        let bad = InitiativeConfig {
+            enabled: true,
+            daily_proposal_cap: 0,
+        };
+        assert!(!bad.validate().is_empty());
+        let bad2 = InitiativeConfig {
+            enabled: true,
+            daily_proposal_cap: 99,
+        };
+        assert!(!bad2.validate().is_empty());
     }
 }
 
