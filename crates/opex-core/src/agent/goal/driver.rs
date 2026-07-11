@@ -83,6 +83,7 @@ async fn run_goal_driver(engine: Arc<AgentEngine>, session_id: Uuid, target: Goa
                 deliver(&engine, &target, session_id, &text).await;
             }
             let verdict = chunk_judge(&engine, &row.goal_text, &cur_text, &text).await;
+            let fresh = crate::db::session_goals::get(&db, session_id).await.ok().flatten().unwrap_or_else(|| row.clone());
             let _ = crate::db::session_goals::record_verdict(
                 &db,
                 session_id,
@@ -90,7 +91,6 @@ async fn run_goal_driver(engine: Arc<AgentEngine>, session_id: Uuid, target: Goa
                 !verdict.parse_ok,
             )
             .await;
-            let fresh = crate::db::session_goals::get(&db, session_id).await.ok().flatten().unwrap_or_else(|| row.clone());
             match decompose::advance_decision(&fresh, verdict, fresh.subgoals.len()) {
                 DecomposeAction::Continue => {}
                 DecomposeAction::Advance => {
