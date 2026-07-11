@@ -652,4 +652,22 @@ mod tests {
         assert_eq!([a.unwrap(), b.unwrap()].iter().filter(|x| **x).count(), 1);
         Ok(())
     }
+
+    /// `set_current_chunk` persists the decomposer's active-chunk pointer, and
+    /// `get` decodes both `current_chunk` and `origin` correctly for an
+    /// initiative-owned goal (Stage C decompose driver).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn set_and_read_current_chunk(pool: PgPool) -> sqlx::Result<()> {
+        let sid = seed_session(&pool).await;
+        upsert(&pool, sid, "goal", 20).await.unwrap();
+        sqlx::query("UPDATE session_goals SET origin = 'initiative' WHERE session_id = $1")
+            .bind(sid)
+            .execute(&pool)
+            .await?;
+        set_current_chunk(&pool, sid, 3).await.unwrap();
+        let g = get(&pool, sid).await.unwrap().unwrap();
+        assert_eq!(g.current_chunk, 3);
+        assert_eq!(g.origin, "initiative");
+        Ok(())
+    }
 }
