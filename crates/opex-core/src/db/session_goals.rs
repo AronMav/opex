@@ -202,35 +202,36 @@ pub async fn clear(db: &PgPool, session_id: Uuid) -> Result<()> {
     Ok(())
 }
 
-/// A crashed autonomous (cron) goal eligible for re-drive on startup.
+/// A crashed autonomous (cron or initiative) goal eligible for re-drive on startup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RedrivableGoal {
     pub session_id: Uuid,
     pub agent_id: String,
+    pub origin: String,
 }
 
-/// List autonomous (origin='cron') goals whose owning session crashed and is
-/// eligible for re-drive: still `active`, within the retry budget
-/// (`retry_count < max_retries`), past any backoff gate, and newer than
-/// `staleness_secs`.
+/// List autonomous (origin IN ('cron','initiative')) goals whose owning
+/// session crashed and is eligible for re-drive: still `active`, within the
+/// retry budget (`retry_count < max_retries`), past any backoff gate, and
+/// newer than `staleness_secs`.
 ///
-/// `run_status IN ('interrupted','done')` covers BOTH crash shapes for a cron
-/// goal: `interrupted` = crashed mid-turn; `done` = crashed BETWEEN turns (the
-/// last turn finalized, but the in-memory driver was lost). The `origin='cron'`
-/// filter keeps this safe — a `/goal` on a live interactive session
-/// (`origin='goal'`) is NEVER selected, so a human's `done` chat is never
-/// auto-continued.
+/// `run_status IN ('interrupted','done')` covers BOTH crash shapes for an
+/// autonomous goal: `interrupted` = crashed mid-turn; `done` = crashed
+/// BETWEEN turns (the last turn finalized, but the in-memory driver was
+/// lost). The `origin IN ('cron','initiative')` filter keeps this safe — a
+/// `/goal` on a live interactive session (`origin='goal'`) is NEVER selected,
+/// so a human's `done` chat is never auto-continued.
 pub async fn list_redrivable(
     db: &PgPool,
     staleness_secs: i64,
     max_retries: i32,
 ) -> Result<Vec<RedrivableGoal>> {
-    let rows: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT g.session_id, s.agent_id
+    let rows: Vec<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT g.session_id, s.agent_id, g.origin
          FROM session_goals g
          JOIN sessions s ON s.id = g.session_id
          WHERE g.status = 'active'
-           AND g.origin = 'cron'
+           AND g.origin IN ('cron', 'initiative')
            AND s.run_status IN ('interrupted', 'done')
            AND s.retry_count < $2
            AND (g.next_redrive_at IS NULL OR g.next_redrive_at <= now())
@@ -243,7 +244,7 @@ pub async fn list_redrivable(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(session_id, agent_id)| RedrivableGoal { session_id, agent_id })
+        .map(|(session_id, agent_id, origin)| RedrivableGoal { session_id, agent_id, origin })
         .collect())
 }
 
@@ -455,19 +456,27 @@ mod tests {
 
         let want_interrupted = seed(&pool, "interrupted", "cron", 0, 60).await; // mid-turn crash
         let want_done = seed(&pool, "done", "cron", 0, 60).await; // crashed BETWEEN turns (driver lost)
+        let want_initiative = seed(&pool, "interrupted", "initiative", 0, 60).await; // crashed self-initiated goal
         let _interactive = seed(&pool, "interrupted", "goal", 0, 60).await; // origin=goal → excluded
         let _exhausted = seed(&pool, "interrupted", "cron", 3, 60).await; // retry_count >= max → excluded
         let _stale = seed(&pool, "interrupted", "cron", 0, 100_000).await; // older than window → excluded
+        let _cancelled_initiative = seed(&pool, "interrupted", "initiative", 0, 60).await; // seeded active below is cancelled
+        set_status(&pool, _cancelled_initiative, "cancelled").await.unwrap();
 
         let got = list_redrivable(&pool, 21_600, 3).await.unwrap(); // 6h window, max_retries = 3
         let mut ids: Vec<Uuid> = got.iter().map(|r| r.session_id).collect();
         ids.sort();
-        let mut expected = vec![want_interrupted, want_done];
+        let mut expected = vec![want_interrupted, want_done, want_initiative];
         expected.sort();
         assert_eq!(
             ids, expected,
-            "both interrupted (mid-turn) and done (between-turns) cron goals are redrivable"
+            "interrupted/done cron AND initiative goals are redrivable; cancelled initiative is not"
         );
+        let by_id: std::collections::HashMap<Uuid, &str> =
+            got.iter().map(|r| (r.session_id, r.origin.as_str())).collect();
+        assert_eq!(by_id[&want_interrupted], "cron");
+        assert_eq!(by_id[&want_done], "cron");
+        assert_eq!(by_id[&want_initiative], "initiative");
         Ok(())
     }
 

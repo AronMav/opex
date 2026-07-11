@@ -922,13 +922,19 @@ async fn cleanup_interrupted_sessions(db_pool: &sqlx::PgPool) {
     }
 }
 
-/// Durable re-drive of crashed autonomous (cron) goal runs (durable-resumption
-/// Phase 1). MUST run detached AFTER the listener binds so a hung provider can
-/// never wedge the gateway bind (the R-LOOP outage class). For each crashed
-/// `origin='cron'` goal it resolves the owning engine, atomically claims it
-/// (`interrupted → running` + retry budget via `claim_redrive`), sets a backoff
-/// gate, and spawns the goal driver. Interactive `/goal` runs (`origin='goal'`)
-/// are never selected — `list_redrivable` enforces that scope boundary.
+/// Durable re-drive of crashed autonomous (cron AND initiative) goal runs
+/// (durable-resumption Phase 1, extended by Phase 2A Task 7 to cover
+/// self-initiated goals). MUST run detached AFTER the listener binds so a
+/// hung provider can never wedge the gateway bind (the R-LOOP outage class).
+/// For each crashed `origin IN ('cron','initiative')` goal it resolves the
+/// owning engine, atomically claims it (`interrupted → running` + retry
+/// budget via `claim_redrive`), sets a backoff gate, and spawns the goal
+/// driver — with the `GoalTarget` resolved from agent CONFIG owner_id for
+/// `origin='initiative'` goals (mirrors `approve_proposal`) so re-driven
+/// initiative goals keep delivering to their owner, and left `None` for
+/// `origin='cron'` goals (ui_event delivery, unchanged). Interactive `/goal`
+/// runs (`origin='goal'`) are never selected — `list_redrivable` enforces
+/// that scope boundary.
 async fn resume_autonomous_goals(state: gateway::AppState, db: sqlx::PgPool) {
     const STALENESS_SECS: i64 = 6 * 3600;
     const MAX_RETRIES: i32 = 3;
@@ -981,8 +987,17 @@ async fn resume_autonomous_goals(state: gateway::AppState, db: sqlx::PgPool) {
                 if let Err(e) = crate::db::session_goals::set_next_redrive_at(&db, rg.session_id, backoff_secs).await {
                     tracing::warn!(session = %rg.session_id, error = %e, "re-drive: set_next_redrive_at failed");
                 }
-                // GoalTarget None → ui_event delivery; channel-target resolution is a follow-up slice.
-                let handle = crate::agent::goal::driver::spawn_goal_driver(engine.clone(), rg.session_id, None);
+                // origin='cron' → GoalTarget None (ui_event delivery, unchanged). origin='initiative'
+                // → resolve the owner DM target from agent CONFIG owner_id (H1: never the request),
+                // mirroring `approve_proposal`'s spawn so a re-driven initiative goal still delivers
+                // its proposal/results to the owner instead of silently continuing headless.
+                let target = if rg.origin == "initiative" {
+                    let owner = engine.cfg().agent.access.as_ref().and_then(|a| a.owner_id.clone());
+                    crate::agent::initiative::delivery::resolve_owner_target(&db, &rg.agent_id, owner.as_deref()).await
+                } else {
+                    None
+                };
+                let handle = crate::agent::goal::driver::spawn_goal_driver(engine.clone(), rg.session_id, target);
                 pool.insert(rg.session_id, handle);
                 started += 1;
                 metrics.record_redrive_event(&rg.agent_id, "cron_redrive_started");
