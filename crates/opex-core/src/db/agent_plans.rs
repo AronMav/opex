@@ -17,12 +17,16 @@ pub struct Proposal {
 
 #[derive(Debug, Clone)]
 pub struct PlanRow {
+    // Full row mirror: agent_id/updated_at are decoded for completeness but not
+    // read by current consumers (focus + proposals + counter fields are).
+    #[allow(dead_code)]
     pub agent_id: String,
     pub current_focus: Option<String>,
     pub proposals: serde_json::Value,
     pub last_proposal_at: Option<DateTime<Utc>>,
     pub proposals_today: i32,
     pub proposal_day: Option<NaiveDate>,
+    #[allow(dead_code)]
     pub updated_at: DateTime<Utc>,
 }
 
