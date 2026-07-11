@@ -80,9 +80,17 @@ class ItsFlows:
 
     async def read(self, ref: str) -> dict:
         rc = self._cfg["read"]
-        if rc.get("print_url_template"):   # путь (a)
+        ref = ref.strip()
+        # ref может быть уже абсолютным URL — описание тула прямо приглашает
+        # передавать «полный URL» (напр. поле url из прошлого чтения). Раньше
+        # read безусловно клеил {base}{ref} → https://its.1c.ruhttps://its.1c.ru/...
+        # → мусорный хост → net::ERR_TUNNEL_CONNECTION_FAILED → 500 → 502.
+        # Абсолютный ref используем как есть; базу приклеиваем только к относительному.
+        if ref.startswith(("http://", "https://")):
+            url = ref
+        elif rc.get("print_url_template"):   # путь (a)
             url = rc["print_url_template"].format(base=self._cfg["base_url"], ref=ref)
-        else:                              # путь (b)
+        else:                                # путь (b)
             url = rc["full_url_template"].format(base=self._cfg["base_url"], ref=ref)
         await self._d.navigate(url)
         # ИТС рендерит тело документа в same-origin iframe (его src редиректит

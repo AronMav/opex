@@ -20,6 +20,8 @@ class FakeDriver:
     async def content(self):
         c = self._content.pop(0) if len(self._content) > 1 else self._content[0]
         return {"html": c, "text": "", "url": "u"}
+    async def frame_content(self, frame_sel, content_sel="body"):
+        return {"html": "<div id='content'>тело</div>", "text": "", "url": "u"}
     async def reset_session(self): pass
 
 
@@ -30,11 +32,38 @@ CFG = {  # минимальный SITE_ITS для теста
               "username_selector": "input[name=username]", "password_selector": "input[name=password]",
               "submit_selector": "input[name=submit]", "success_marker": "action=logout"},
     "relogin_cooldown_s": 300,
+    "read": {
+        "print_url_template": None,
+        "full_url_template": "{base}{ref}",
+        "doc_frame_selector": "#w_metadata_doc_frame",
+        "content_selector": "#content",
+        "strip_selectors": ["nav"],
+        "wait_selector": "#content",
+    },
 }
 
 
 async def _nosleep(_s):
     pass
+
+
+@pytest.mark.asyncio
+async def test_read_relative_ref_prepends_base():
+    drv = FakeDriver(content_seq=[_LOGGED_IN])
+    f = ItsFlows(drv, CFG, now_fn=lambda: 0.0, sleep_fn=_nosleep)
+    await f.read("/db/taxnds/content/2/hdoc")
+    assert drv.navigated == ["https://its.1c.ru/db/taxnds/content/2/hdoc"]
+
+
+@pytest.mark.asyncio
+async def test_read_absolute_ref_is_not_doubled():
+    # Регрессия: описание тула приглашает передавать «полный URL» в ref. Раньше
+    # read делал {base}{ref} безусловно → https://its.1c.ruhttps://its.1c.ru/... →
+    # мусорный хост → ERR_TUNNEL_CONNECTION_FAILED → 502. Абсолютный ref = как есть.
+    drv = FakeDriver(content_seq=[_LOGGED_IN])
+    f = ItsFlows(drv, CFG, now_fn=lambda: 0.0, sleep_fn=_nosleep)
+    await f.read("https://its.1c.ru/db/taxnds/content/2/hdoc")
+    assert drv.navigated == ["https://its.1c.ru/db/taxnds/content/2/hdoc"]
 
 
 @pytest.mark.asyncio
