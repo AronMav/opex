@@ -389,10 +389,10 @@ pub async fn execute<S: EventSink>(
                 // Must run BEFORE the fallback layer — a SessionCorruption
                 // error shouldn't increment the consecutive-failure counter
                 // that drives fallback.
-                if let Some(ref recovery) = layers.session_recovery {
-                    if err_class == crate::agent::error_classify::LlmErrorClass::SessionCorruption
-                        && !layer_state.did_reset_session
-                    {
+                if let Some(ref recovery) = layers.session_recovery
+                    && err_class == crate::agent::error_classify::LlmErrorClass::SessionCorruption
+                    && !layer_state.did_reset_session
+                {
                         layer_state.did_reset_session = true;
                         tracing::warn!(error = %e, "session corrupted, resetting context");
                         messages.retain(|m| m.role == MessageRole::System);
@@ -413,7 +413,6 @@ pub async fn execute<S: EventSink>(
                             }))
                             .await;
                         continue;
-                    }
                 }
 
                 // Fallback layer (A1 in the divergent feature map). Switch to
