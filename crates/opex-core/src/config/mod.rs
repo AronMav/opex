@@ -971,6 +971,9 @@ pub struct AgentSettings {
     /// Agent soul: autobiographical memory + reflection (spec 2026-07-09).
     #[serde(default)]
     pub soul: SoulConfig,
+    /// Persona-drift detection (spec stage B, 2026-07-11).
+    #[serde(default)]
+    pub drift: DriftConfig,
     pub compaction: Option<CompactionConfig>,
     pub skill_review: Option<SkillReviewConfig>,
     pub session: Option<SessionConfig>,
@@ -1419,6 +1422,59 @@ impl SoulConfig {
     }
 }
 
+/// Configuration for persona-drift detection (spec stage B, 2026-07-11).
+/// Maps to `[agent.drift]`. All fields default — section can be omitted.
+/// v1: detect + log only (no correction).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DriftConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_drift_threshold")]
+    pub threshold: f32,
+    #[serde(default = "default_drift_min_history")]
+    pub min_history: usize,
+    #[serde(default = "default_drift_baseline_turns")]
+    pub baseline_turns: usize,
+}
+
+fn default_drift_threshold() -> f32 {
+    0.15
+}
+fn default_drift_min_history() -> usize {
+    6
+}
+fn default_drift_baseline_turns() -> usize {
+    3
+}
+
+impl Default for DriftConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            threshold: default_drift_threshold(),
+            min_history: default_drift_min_history(),
+            baseline_turns: default_drift_baseline_turns(),
+        }
+    }
+}
+
+impl DriftConfig {
+    /// Validate drift settings. Called from `AgentConfig::load()` (like SoulConfig).
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if !(0.0..=2.0).contains(&self.threshold) {
+            errors.push("drift.threshold must be in [0.0, 2.0]".to_string());
+        }
+        if !(2..=50).contains(&self.min_history) {
+            errors.push("drift.min_history must be in [2, 50]".to_string());
+        }
+        if !(1..=10).contains(&self.baseline_turns) {
+            errors.push("drift.baseline_turns must be in [1, 10]".to_string());
+        }
+        errors
+    }
+}
+
 /// Configuration for the tool dispatcher meta-tool (`tool_use`).
 ///
 /// Maps to `[agent.tool_dispatcher]` section in agent TOML config. All fields
@@ -1845,6 +1901,17 @@ impl AgentConfig {
                 "agent {:?}: invalid [agent.soul] section:\n  - {}",
                 config.agent.name,
                 soul_errors.join("\n  - ")
+            );
+        }
+
+        // Validate drift policy. Errors here block agent load — same treatment
+        // as soul (misconfiguration surfaced at startup, not runtime).
+        let drift_errors = config.agent.drift.validate();
+        if !drift_errors.is_empty() {
+            anyhow::bail!(
+                "agent {:?}: invalid [agent.drift] section:\n  - {}",
+                config.agent.name,
+                drift_errors.join("\n  - ")
             );
         }
 
@@ -2366,6 +2433,7 @@ owner_id = "123"
                 tools: None,
                 delegation: DelegationConfig::default(),
                 soul: SoulConfig::default(),
+                drift: DriftConfig::default(),
                 compaction: Some(CompactionConfig {
                     enabled: true,
                     threshold: 0.9,
@@ -2448,6 +2516,7 @@ owner_id = "123"
                 }),
                 delegation: DelegationConfig::default(),
                 soul: SoulConfig::default(),
+                drift: DriftConfig::default(),
                 compaction: None,
                 skill_review: None,
                 session: None,
@@ -3188,6 +3257,37 @@ model = "gpt-4o"
         let errs = bad.validate();
         assert_eq!(errs.len(), 5, "each violated rule reports once: {errs:?}");
         assert!(SoulConfig::default().validate().is_empty());
+    }
+
+    // ── DriftConfig ──
+
+    #[test]
+    fn drift_config_defaults_when_section_absent() {
+        let toml_src = r#"
+[agent]
+name = "T"
+language = "ru"
+provider = "openai"
+model = "gpt-4o"
+"#;
+        let cfg: AgentConfig = toml::from_str(toml_src).unwrap();
+        assert!(!cfg.agent.drift.enabled);
+        assert_eq!(cfg.agent.drift.threshold, 0.15);
+        assert_eq!(cfg.agent.drift.min_history, 6);
+        assert_eq!(cfg.agent.drift.baseline_turns, 3);
+    }
+
+    #[test]
+    fn drift_config_validate_rejects_out_of_range() {
+        let bad = DriftConfig {
+            enabled: true,
+            threshold: 3.0,
+            min_history: 1,
+            baseline_turns: 20,
+        };
+        let errs = bad.validate();
+        assert_eq!(errs.len(), 3, "each violated rule reports once: {errs:?}");
+        assert!(DriftConfig::default().validate().is_empty());
     }
 }
 
