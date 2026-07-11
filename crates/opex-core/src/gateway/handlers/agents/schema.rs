@@ -205,7 +205,9 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
             temperature: p.temperature.unwrap_or(1.0),
             max_tokens: p.max_tokens,
             access: p.access.flatten().map(|a| AgentAccessConfig {
-                mode: a.mode.unwrap_or_else(|| "open".to_string()),
+                // Secure by default: an access section with no explicit mode is
+                // treated as "restricted", never "open".
+                mode: a.mode.unwrap_or_else(|| "restricted".to_string()),
                 owner_id: a.owner_id,
             }),
             heartbeat: p.heartbeat.flatten().map(|h| HeartbeatConfig {

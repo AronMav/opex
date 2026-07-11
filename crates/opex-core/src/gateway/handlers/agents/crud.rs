@@ -425,13 +425,6 @@ pub(crate) async fn api_create_agent(
                 groups: Default::default(),
             });
         }
-        // Set restricted access by default (secure out of the box)
-        if cfg.agent.access.is_none() {
-            cfg.agent.access = Some(crate::config::AgentAccessConfig {
-                mode: "restricted".into(),
-                owner_id: None,
-            });
-        }
         // Setup-wizard default: enable the tool dispatcher for fresh installs
         // unless the payload explicitly opts out (T22).
         // The wizard always creates the first agent on a clean install, so
@@ -459,6 +452,17 @@ pub(crate) async fn api_create_agent(
                 groups: Default::default(),
             });
         }
+    }
+
+    // Access control is enabled by default for EVERY agent (base or not):
+    // if no access section was provided, default to "restricted" so an agent
+    // is never silently world-open out of the box. An operator can still opt
+    // into "open" explicitly via the UI/TOML.
+    if cfg.agent.access.is_none() {
+        cfg.agent.access = Some(crate::config::AgentAccessConfig {
+            mode: "restricted".into(),
+            owner_id: None,
+        });
     }
 
     // Auto-fill provider/model from provider_connection if not explicitly set

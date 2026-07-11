@@ -1204,15 +1204,18 @@ fn default_temperature() -> f64 {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct AgentAccessConfig {
-    /// Access mode: "open" (anyone can use) or "restricted" (owner + approved users only).
-    #[serde(default = "default_access_open")]
+    /// Access mode: "open" (anyone can use) or "restricted" (owner + approved
+    /// users only). Defaults to "restricted" — access control is enabled by
+    /// default for every agent (secure by default); an operator can still opt
+    /// an agent into "open" explicitly.
+    #[serde(default = "default_access_restricted")]
     pub mode: String,
     /// User ID of the bot owner (auto-allowed in restricted mode).
     pub owner_id: Option<String>,
 }
 
-fn default_access_open() -> String {
-    "open".to_string()
+fn default_access_restricted() -> String {
+    "restricted".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -2319,6 +2322,26 @@ model = "m2.5"
         assert!(cfg.agent.routing.is_empty());
         assert!(cfg.agent.approval.is_none());
         assert!(cfg.agent.tool_loop.is_none());
+    }
+
+    #[test]
+    fn access_section_without_mode_defaults_to_restricted() {
+        // Secure by default: an [agent.access] section that omits `mode` must
+        // parse as "restricted", never "open".
+        let toml_str = r#"
+[agent]
+name = "test"
+provider = "minimax"
+model = "m2.5"
+
+[agent.access]
+owner_id = "123"
+"#;
+        let cfg: AgentConfig =
+            toml::from_str(toml_str).expect("failed to parse AgentConfig");
+        let access = cfg.agent.access.expect("access section present");
+        assert_eq!(access.mode, "restricted");
+        assert_eq!(access.owner_id.as_deref(), Some("123"));
     }
 
     // ── 2. AgentConfig roundtrip: serialize → deserialize → compare ──

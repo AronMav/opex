@@ -297,21 +297,24 @@ pub async fn start_agent_from_config(
         scheduler_job_ids.push(uuid);
     }
 
-    // Set up access guard if access config is present.
-    // Channel adapter connects externally via /ws/channel/{agent}.
-    let mut access_guard = None;
-
-    if let Some(ref ac) = agent_cfg.agent.access {
-        let restricted = ac.mode == "restricted";
-        let guard = Arc::new(channels::access::AccessGuard::new(
-            name.clone(),
-            ac.owner_id.clone(),
-            restricted,
-            infra.db.clone(),
-        ));
-        access_guard = Some(guard.clone());
-        tracing::info!(agent = %name, mode = %ac.mode, "access guard configured (adapter via /ws/channel)");
-    }
+    // Always set up an access guard. Access control is enabled by default:
+    // an agent with no [agent.access] section is treated as "restricted"
+    // (owner + approved users only) rather than world-open. This closes the
+    // former fail-open gap where a missing guard meant unrestricted channel
+    // access. Channel adapter connects externally via /ws/channel/{agent}.
+    let (restricted, owner_id) = match agent_cfg.agent.access {
+        Some(ref ac) => (ac.mode == "restricted", ac.owner_id.clone()),
+        // No access config → secure by default.
+        None => (true, None),
+    };
+    let guard = Arc::new(channels::access::AccessGuard::new(
+        name.clone(),
+        owner_id,
+        restricted,
+        infra.db.clone(),
+    ));
+    let access_guard = Some(guard);
+    tracing::info!(agent = %name, restricted, "access guard configured (adapter via /ws/channel)");
 
     let agent_handle = AgentHandle {
         engine,

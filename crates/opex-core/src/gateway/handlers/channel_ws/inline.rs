@@ -53,8 +53,12 @@ pub(super) async fn handle_access_check(
         );
         (allowed, is_owner)
     } else {
-        tracing::debug!(%agent_name, %user_id, "access check: no guard, open access");
-        (true, false)
+        // Defense in depth: a guard is now always registered for every live
+        // agent (see agents::lifecycle), so this branch is only reached in an
+        // anomalous state (agent not fully started). Fail closed — deny access
+        // rather than silently granting world-open access.
+        tracing::warn!(%agent_name, %user_id, "access check: no guard, denying (fail-closed)");
+        (false, false)
     };
     let _ = out_tx
         .send(OutboundMsg::Wire(ChannelOutbound::AccessResult {

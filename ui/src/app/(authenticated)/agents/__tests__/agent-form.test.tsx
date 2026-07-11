@@ -300,6 +300,11 @@ describe("detailToForm", () => {
     expect(form.accessEnabled).toBe(false);
   });
 
+  it("access: null → accessMode defaults to restricted (secure by default)", () => {
+    const form = detailToForm(makeDetail({ access: null }) as any);
+    expect(form.accessMode).toBe("restricted");
+  });
+
   it('access: { mode: "restricted" } → accessEnabled: true, accessMode: "restricted"', () => {
     const form = detailToForm(
       makeDetail({ access: { mode: "restricted", owner_id: null } }) as any
