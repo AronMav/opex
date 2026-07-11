@@ -1,8 +1,6 @@
 //! Stage C batch B: pure logic for plan-decompose-react within an approved
 //! initiative goal. Prompts + advance decision. IO (LLM, DB, sanitize) lives in
-//! the driver.
-// Not yet called from the driver — wired in Task 5.
-#![allow(dead_code)]
+//! the driver ([`super::driver`]).
 use crate::db::session_goals::GoalRow;
 
 pub const MAX_CHUNKS: usize = 8;

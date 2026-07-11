@@ -158,8 +158,7 @@ pub async fn bump_turn(db: &PgPool, session_id: Uuid) -> Result<()> {
     Ok(())
 }
 
-// Wired by the plan-decompose-react chunk driver (batch B, later task); unused until then.
-#[allow(dead_code)]
+/// Persist which chunk of an initiative goal's decomposed plan is active.
 pub async fn set_current_chunk(db: &PgPool, session_id: Uuid, n: i32) -> Result<()> {
     sqlx::query("UPDATE session_goals SET current_chunk = $2, updated_at = now() WHERE session_id = $1")
         .bind(session_id)

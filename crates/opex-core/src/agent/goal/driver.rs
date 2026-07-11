@@ -6,6 +6,7 @@ use opex_types::{Message, MessageRole, ToolDefinition};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use super::decompose::{self, ChunkVerdict, DecomposeAction, CHUNK_MAX_CHARS, MAX_CHUNKS};
 use super::pool::{GoalDriverHandle, GoalTarget};
 use super::{continuation_prompt, next_action, parse_judge_verdict, DriverAction, Verdict};
 use crate::agent::engine::AgentEngine;
@@ -22,6 +23,7 @@ async fn run_goal_driver(engine: Arc<AgentEngine>, session_id: Uuid, target: Goa
     let Some(locks) = engine.cfg().goal_locks.clone() else {
         return;
     };
+    let mut decompose_failed = false;
     loop {
         if cancel.is_cancelled() {
             break;
@@ -39,6 +41,99 @@ async fn run_goal_driver(engine: Arc<AgentEngine>, session_id: Uuid, target: Goa
             break;
         }
 
+        let is_decompose =
+            row.origin == "initiative" && engine.cfg().agent.initiative.decompose && !decompose_failed;
+        if is_decompose {
+            // Lazy decompose on first entry.
+            if row.subgoals.is_empty() {
+                let chunks = clean_chunks(
+                    llm_json_list(&engine, decompose::decompose_prompt(&row.goal_text), "chunks").await,
+                );
+                if chunks.is_empty() {
+                    tracing::warn!(session = %session_id, "decompose failed/empty; falling back to flat loop");
+                    decompose_failed = true;
+                    continue;
+                }
+                let _ = crate::db::session_goals::set_subgoals(&db, session_id, &chunks).await;
+                let _ = crate::db::session_goals::set_current_chunk(&db, session_id, 0).await;
+                continue; // reload on next iteration
+            }
+            let current = row.current_chunk.max(0) as usize;
+            let cur_text = row.subgoals.get(current).cloned().unwrap_or_default();
+            let lock = super::pool::goal_lock(&locks, session_id);
+            let text = {
+                let _guard = lock.lock().await;
+                if cancel.is_cancelled() {
+                    break;
+                }
+                let prompt = decompose::chunk_continuation_prompt(&row.goal_text, &row.subgoals, current);
+                match engine.run_goal_turn(session_id, &prompt, cancel.clone()).await {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::warn!(session = %session_id, error = %e, "chunk turn failed; continue");
+                        String::new()
+                    }
+                }
+            };
+            if cancel.is_cancelled() {
+                break;
+            }
+            let _ = crate::db::session_goals::bump_turn(&db, session_id).await;
+            if !text.trim().is_empty() {
+                deliver(&engine, &target, session_id, &text).await;
+            }
+            let verdict = chunk_judge(&engine, &row.goal_text, &cur_text, &text).await;
+            let _ = crate::db::session_goals::record_verdict(
+                &db,
+                session_id,
+                if verdict.chunk_done { "chunk_done" } else { "continue" },
+                !verdict.parse_ok,
+            )
+            .await;
+            let fresh = crate::db::session_goals::get(&db, session_id).await.ok().flatten().unwrap_or_else(|| row.clone());
+            match decompose::advance_decision(&fresh, verdict, fresh.subgoals.len()) {
+                DecomposeAction::Continue => {}
+                DecomposeAction::Advance => {
+                    let _ = crate::db::session_goals::set_current_chunk(&db, session_id, fresh.current_chunk + 1).await;
+                }
+                DecomposeAction::AdvanceAndReplan => {
+                    let done: Vec<String> = fresh.subgoals.iter().take(current + 1).cloned().collect();
+                    let remaining: Vec<String> = fresh.subgoals.iter().skip(current + 1).cloned().collect();
+                    let new_remaining = clean_chunks(
+                        llm_json_list(
+                            &engine,
+                            decompose::replan_prompt(&fresh.goal_text, &done, &remaining, &text),
+                            "remaining",
+                        )
+                        .await,
+                    );
+                    if !new_remaining.is_empty() {
+                        let mut merged = done.clone();
+                        merged.extend(new_remaining);
+                        let _ = crate::db::session_goals::set_subgoals(&db, session_id, &merged).await;
+                        tracing::info!(session = %session_id, "initiative goal replanned remaining chunks");
+                    }
+                    let _ = crate::db::session_goals::set_current_chunk(&db, session_id, fresh.current_chunk + 1).await;
+                }
+                DecomposeAction::Done => {
+                    let _ = crate::db::session_goals::set_status(&db, session_id, "done").await;
+                    deliver(&engine, &target, session_id, "✅ Goal complete.").await;
+                    break;
+                }
+                DecomposeAction::Pause(reason) => {
+                    let _ = crate::db::session_goals::set_status(&db, session_id, "paused").await;
+                    let m = if reason == "judge" {
+                        "⏸ Goal paused (judge unreliable). /goal resume to retry."
+                    } else {
+                        "⏸ Goal paused (turn budget). /goal resume to continue."
+                    };
+                    deliver(&engine, &target, session_id, m).await;
+                    break;
+                }
+            }
+            continue; // decompose branch handled this iteration
+        }
+
         // Serialize against user turns for the duration of the autonomous turn.
         let lock = super::pool::goal_lock(&locks, session_id);
         let text = {
@@ -46,7 +141,12 @@ async fn run_goal_driver(engine: Arc<AgentEngine>, session_id: Uuid, target: Goa
             if cancel.is_cancelled() {
                 break;
             }
-            let prompt = continuation_prompt(&row.goal_text, &row.subgoals);
+            let flat_subgoals: Vec<String> = if row.origin == "initiative" && row.current_chunk > 0 {
+                row.subgoals.iter().skip(row.current_chunk as usize).cloned().collect()
+            } else {
+                row.subgoals.clone()
+            };
+            let prompt = continuation_prompt(&row.goal_text, &flat_subgoals);
             // Pass the driver's cancel token so `/goal stop` breaks a long
             // in-flight turn cooperatively (execute() observes it) instead of
             // the turn being hard-aborted by pool::stop and guard-dropped.
@@ -100,6 +200,45 @@ async fn run_goal_driver(engine: Arc<AgentEngine>, session_id: Uuid, target: Goa
     }
     if let Some(pool) = engine.cfg().goal_pool.clone() {
         pool.remove(&session_id);
+    }
+}
+
+/// Sanitize + cap LLM-produced chunk strings before persistence (H1). Drops
+/// injection-tripping entries; empty result signals decompose/replan failure.
+fn clean_chunks(raw: Vec<String>) -> Vec<String> {
+    raw.into_iter()
+        .filter_map(|c| crate::agent::soul::sanitize::sanitize_soul_text(&c, CHUNK_MAX_CHARS))
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
+        .take(MAX_CHUNKS)
+        .collect()
+}
+
+/// Call the aux/compaction model with `prompt`, repair the JSON reply, and pull
+/// the string array at `key`. Fail-soft: any provider/parse error → `vec![]`.
+async fn llm_json_list(engine: &AgentEngine, prompt: String, key: &str) -> Vec<String> {
+    let provider = engine.cfg().compaction_provider.clone().unwrap_or_else(|| engine.provider_arc());
+    let Ok(raw) = crate::agent::soul::reflection::llm_text(&provider, prompt).await else {
+        return vec![];
+    };
+    let Ok(v) = crate::agent::json_repair::repair_json(&raw) else {
+        return vec![];
+    };
+    v.get(key)
+        .and_then(|a| a.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default()
+}
+
+/// Ask the aux/compaction model whether the current chunk is done and whether
+/// the remaining plan needs replanning. Fail-soft: provider/parse error → not-done, not-ok.
+async fn chunk_judge(engine: &AgentEngine, goal: &str, current_chunk: &str, last: &str) -> ChunkVerdict {
+    let provider = engine.cfg().compaction_provider.clone().unwrap_or_else(|| engine.provider_arc());
+    match crate::agent::soul::reflection::llm_text(&provider, decompose::chunk_judge_prompt(goal, current_chunk, last))
+        .await
+    {
+        Ok(raw) => decompose::parse_chunk_verdict(&raw),
+        Err(_) => ChunkVerdict { chunk_done: false, replan: false, parse_ok: false },
     }
 }
 
