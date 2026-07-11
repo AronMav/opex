@@ -176,6 +176,10 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     /// Detect+log only, no prompt injection. No-op when `[agent.drift]` disabled or on error.
     async fn drift_probe(&self, history: &[opex_db::sessions::MessageRow], session_id: Uuid);
 
+    /// Stage C: read-only «current focus + active initiative goals» block.
+    /// Framed + sanitized; None when nothing to show or initiative disabled.
+    async fn initiative_block(&self, agent: &str) -> Option<String>;
+
     // Workspace
     fn workspace_dir(&self) -> &str;
 
@@ -370,6 +374,13 @@ impl ContextBuilder for DefaultContextBuilder {
             system_prompt.push_str(&b);
         }
         let self_len = system_prompt.len() - pre_self_len;
+
+        // Stage C: read-only «current focus + active initiative goals» block —
+        // sits right after the soul SELF block, before any request-specific ones.
+        if let Some(block) = deps.initiative_block(deps.agent_name()).await {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&block);
+        }
 
         // T17: base prompt size before any request-specific blocks are appended.
         let base_prompt_len = system_prompt.len();

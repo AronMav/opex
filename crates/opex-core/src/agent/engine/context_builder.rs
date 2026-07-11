@@ -375,6 +375,28 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         }
     }
 
+    /// Stage C: read-only «current focus + active initiative goals» block.
+    /// Non-base only, gated by `[agent.initiative].enabled`; fail-soft (DB
+    /// errors degrade to empty focus / no goals rather than propagating).
+    async fn initiative_block(&self, agent: &str) -> Option<String> {
+        if !self.cfg().agent.initiative.enabled || self.cfg().agent.base {
+            return None;
+        }
+        let db = &self.cfg().db;
+        let focus = crate::db::agent_plans::get_or_create(db, agent)
+            .await
+            .ok()
+            .and_then(|p| p.current_focus)
+            .unwrap_or_default();
+        let goals: Vec<String> = crate::db::session_goals::list_active_by_agent_and_origin(db, agent, "initiative")
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|g| g.goal_text)
+            .collect();
+        crate::agent::initiative::render_focus_block(&focus, &goals)
+    }
+
     async fn session_resume(&self, sid: Uuid) -> Result<Uuid> {
         SessionManager::new(self.cfg().db.clone()).resume(sid).await
     }
