@@ -120,7 +120,7 @@ pub async fn has_recent(
         "SELECT EXISTS ( \
            SELECT 1 FROM infra_decisions WHERE container = $1 AND ( \
              (status = 'pending' AND expires_at > now()) OR \
-             (status IN ('done','dismissed','rejected') \
+             (status <> 'expired' \
               AND created_at > now() - ($2 || ' hours')::interval) \
            ) )",
     )
@@ -131,11 +131,11 @@ pub async fn has_recent(
     Ok(exists)
 }
 
-/// Пометить просроченные pending как expired (ленивый TTL). Возвращает число строк.
+/// Пометить просроченные pending/triaging как expired (ленивый TTL). Возвращает число строк.
 pub async fn expire_stale(db: &PgPool) -> Result<u64, sqlx::Error> {
     let r = sqlx::query(
         "UPDATE infra_decisions SET status = 'expired' \
-         WHERE status = 'pending' AND expires_at < now()",
+         WHERE status IN ('pending', 'triaging') AND expires_at < now()",
     )
     .execute(db)
     .await?;

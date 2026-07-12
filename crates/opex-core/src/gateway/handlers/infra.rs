@@ -97,6 +97,25 @@ async fn api_infra_event(
         tracing::warn!("infra-event: no base agent to respond");
         return Json(json!({ "skipped": true, "reason": "no base agent" }));
     };
+
+    // Anchor-запись: лог самой попытки триажа, ДО спавна изолированной сессии.
+    // Best-effort — если Opex упадёт без записи собственного решения (LLM/tool
+    // error), эта строка всё равно подавит повторный триггер на следующем
+    // цикле watchdog через `has_recent` (recency покрывает статус `triaging`).
+    if let Err(e) = crate::db::infra_decisions::create(
+        &infra.db,
+        &body.docker_name,
+        "auto-triage in progress",
+        "",
+        &json!([]),
+        "triaging",
+        1,
+    )
+    .await
+    {
+        tracing::warn!(error = %e, "infra triaging anchor insert failed (best-effort)");
+    }
+
     let agent_name = engine.cfg().agent.name.clone();
     let seed = build_infra_seed(&body.docker_name, &body.status);
     spawn_infra_session(engine, agent_name, seed);

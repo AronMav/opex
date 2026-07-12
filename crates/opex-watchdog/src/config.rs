@@ -33,6 +33,12 @@ pub struct WatchdogSettings {
     pub stale_activity_timeout_hours: u64,
     #[serde(default = "default_missed_heartbeat_grace_minutes")]
     pub missed_heartbeat_grace_minutes: u64,
+    /// Kill-switch for the self-healing infra pass (устойчиво-проблемные
+    /// docker-контейнеры → триггер Opex через /api/internal/infra-event).
+    /// Opt-in: defaults to `false` so the feature stays inert immediately
+    /// after deploy until explicitly enabled in watchdog config.
+    #[serde(default)]
+    pub self_healing_enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -151,5 +157,21 @@ ram_warning_percent = 80
         assert_eq!(cfg.watchdog.flap_window_secs, 600);
         assert_eq!(cfg.watchdog.flap_threshold, 3);
         assert_eq!(cfg.resources.check_interval_secs, 300);
+    }
+
+    // I2 (final review): self-healing is opt-in — must default to false so the
+    // feature stays inert immediately after deploy until explicitly enabled.
+    #[test]
+    fn self_healing_defaults_false() {
+        let toml = "[watchdog]\nenabled = true\n";
+        let cfg: WatchdogConfig = toml::from_str(toml).unwrap();
+        assert!(!cfg.watchdog.self_healing_enabled);
+    }
+
+    #[test]
+    fn self_healing_can_be_enabled() {
+        let toml = "[watchdog]\nenabled = true\nself_healing_enabled = true\n";
+        let cfg: WatchdogConfig = toml::from_str(toml).unwrap();
+        assert!(cfg.watchdog.self_healing_enabled);
     }
 }

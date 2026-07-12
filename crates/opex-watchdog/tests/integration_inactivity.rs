@@ -23,6 +23,7 @@ fn minimal_settings() -> WatchdogSettings {
         session_retry_max_attempts: 3,
         stale_activity_timeout_hours: 6,
         missed_heartbeat_grace_minutes: 10,
+        self_healing_enabled: false,
     }
 }
 

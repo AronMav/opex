@@ -433,22 +433,26 @@ async fn main() -> anyhow::Result<()> {
         was_container_unhealthy = current_unhealthy;
 
         // ── Self-healing: устойчиво-проблемные контейнеры → триггер Opex ──
-        let mut next_streak: HashMap<String, u32> = HashMap::new();
-        for c in &all_containers {
-            if is_excluded(&c.docker_name) {
-                continue;
-            }
-            let class = classify(&c.status);
-            if class == ContainerClass::Problem {
-                let streak = unhealthy_streak.get(&c.docker_name).copied().unwrap_or(0) + 1;
-                next_streak.insert(c.docker_name.clone(), streak);
-                if should_trigger(class, streak, INFRA_GRACE) {
-                    alerter.post_infra_event(&c.docker_name, &c.status).await;
+        // Kill-switch: opt-in via `[watchdog] self_healing_enabled = true`,
+        // defaults false so the feature stays inert right after deploy.
+        if cfg.watchdog.self_healing_enabled {
+            let mut next_streak: HashMap<String, u32> = HashMap::new();
+            for c in &all_containers {
+                if is_excluded(&c.docker_name) {
+                    continue;
                 }
+                let class = classify(&c.status);
+                if class == ContainerClass::Problem {
+                    let streak = unhealthy_streak.get(&c.docker_name).copied().unwrap_or(0) + 1;
+                    next_streak.insert(c.docker_name.clone(), streak);
+                    if should_trigger(class, streak, INFRA_GRACE) {
+                        alerter.post_infra_event(&c.docker_name, &c.status).await;
+                    }
+                }
+                // Healthy/Transient → streak сбрасывается (не переносим в next_streak).
             }
-            // Healthy/Transient → streak сбрасывается (не переносим в next_streak).
+            unhealthy_streak = next_streak;
         }
-        unhealthy_streak = next_streak;
 
         // Write status file
         status::write_status(&status::WatchdogStatus {

@@ -5,6 +5,10 @@ cooldown_secs = 300
 grace_period_secs = 60
 flap_window_secs = 600
 flap_threshold = 3
+# Self-healing: устойчиво-проблемные docker-контейнеры → триггер Opex через
+# /api/internal/infra-event. Opt-in kill-switch, default false. Uncomment to
+# enable after the feature has been validated on this host.
+# self_healing_enabled = true
 
 [[checks]]
 name = "core"
