@@ -719,6 +719,21 @@ export function useClearAllNotifications() {
   });
 }
 
+// Owner resolves an `infra_decision` notification (self-healing infra —
+// Task 5 backend) — "Выполнить"/"Отклонить" buttons rendered inline in the
+// bell (see `NotificationInfraBody`). Invalidates the notifications query so
+// the mounted `useNotifications()` refetch drops the resolved decision.
+export function useResolveInfraDecision() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, approved }: { id: string; approved: boolean }) =>
+      apiPost<unknown>(`/api/infra/decisions/${id}/resolve`, { approved }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.notifications });
+    },
+  });
+}
+
 export function useNotificationWsSync() {
   const prependNotification = useNotificationStore((s) => s.prependNotification);
   useWsSubscription("notification", (event) => {

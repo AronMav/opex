@@ -18,6 +18,7 @@ import {
 } from "@/lib/queries";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/hooks/use-translation";
+import { NotificationInfraBody } from "./notification-infra-body";
 import type { NotificationRow } from "@/types/api";
 
 // ── Sound helper ─────────────────────────────────────────────────────────────
@@ -167,6 +168,7 @@ export function getNotificationRoute(type: string, data?: Record<string, unknown
   // Media events (tts/image/video/media — ready + error) render inline; no nav.
   if (isMediaEvent(type)) return null;
   switch (type) {
+    case "infra_decision":      return null; // actionable buttons, not navigation
     case "access_request":      return "/access";
     case "tool_approval":       return "/monitor/?tab=approvals";
     case "agent_error":         return "/monitor/?tab=logs";
@@ -291,6 +293,7 @@ export function NotificationBell() {
                   )}
                 </div>
                 <MediaNotificationBody notification={n} />
+                {n.type === "infra_decision" && <NotificationInfraBody n={n} />}
                 <span className="text-2xs text-muted-foreground-subtle">
                   {new Date(n.created_at).toLocaleString()}
                 </span>
