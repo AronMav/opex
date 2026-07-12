@@ -133,4 +133,39 @@ impl Alerter {
             }
         }
     }
+
+    /// Триггерит self-healing по проблемному контейнеру. Best-effort.
+    pub async fn post_infra_event(&self, docker_name: &str, status: &str) {
+        let body = infra_event_body(docker_name, status);
+        let url = format!("{}/api/internal/infra-event", self.core_url);
+        match self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.auth_token))
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => {
+                tracing::info!(container = %docker_name, "infra-event posted");
+            }
+            Ok(r) => tracing::warn!(container = %docker_name, status = %r.status(), "infra-event non-2xx"),
+            Err(e) => tracing::warn!(container = %docker_name, error = %e, "infra-event send failed"),
+        }
+    }
+}
+
+pub(crate) fn infra_event_body(docker_name: &str, status: &str) -> serde_json::Value {
+    serde_json::json!({ "docker_name": docker_name, "status": status })
+}
+
+#[cfg(test)]
+mod infra_event_tests {
+    use super::*;
+    #[test]
+    fn body_has_name_and_status() {
+        let b = infra_event_body("docker-tts-silero-1", "Created");
+        assert_eq!(b["docker_name"], "docker-tts-silero-1");
+        assert_eq!(b["status"], "Created");
+    }
 }

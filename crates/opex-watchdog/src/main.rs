@@ -8,8 +8,13 @@ mod status;
 // binary (and the dead_code warnings that go with it).
 
 use opex_watchdog::{alerter, config, inactivity, infra_jobs};
+use opex_watchdog::infra_watch::{classify, is_excluded, should_trigger, ContainerClass};
 
 use std::collections::HashMap;
+
+/// Consecutive-cycle grace period before a `Problem`-classified container
+/// triggers a self-healing infra-event POST.
+const INFRA_GRACE: u32 = 2;
 
 /// Reads `OPEX_<suffix>`. Local copy — watchdog intentionally has no dep on
 /// opex-gateway-util.
@@ -68,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
     let mut resource_status: Option<resources::ResourceStatus> = None;
     let mut was_resource_warning: HashMap<String, bool> = HashMap::new();
     let mut was_container_unhealthy: HashMap<String, bool> = HashMap::new();
+    let mut unhealthy_streak: HashMap<String, u32> = HashMap::new();
     let mut inactivity_state: HashMap<inactivity::EpisodeKey, inactivity::AlertState> =
         HashMap::new();
     let start_time = std::time::Instant::now();
@@ -425,6 +431,24 @@ async fn main() -> anyhow::Result<()> {
             alerter.send(&alert_config, &msg, "down").await;
         }
         was_container_unhealthy = current_unhealthy;
+
+        // ── Self-healing: устойчиво-проблемные контейнеры → триггер Opex ──
+        let mut next_streak: HashMap<String, u32> = HashMap::new();
+        for c in &all_containers {
+            if is_excluded(&c.docker_name) {
+                continue;
+            }
+            let class = classify(&c.status);
+            if class == ContainerClass::Problem {
+                let streak = unhealthy_streak.get(&c.docker_name).copied().unwrap_or(0) + 1;
+                next_streak.insert(c.docker_name.clone(), streak);
+                if should_trigger(class, streak, INFRA_GRACE) {
+                    alerter.post_infra_event(&c.docker_name, &c.status).await;
+                }
+            }
+            // Healthy/Transient → streak сбрасывается (не переносим в next_streak).
+        }
+        unhealthy_streak = next_streak;
 
         // Write status file
         status::write_status(&status::WatchdogStatus {
