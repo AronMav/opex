@@ -255,6 +255,7 @@ pub(crate) async fn auth_middleware(
             "/api/channels/notify",
             "/api/media/upload",
             "/api/vision/analyze",
+            "/api/internal/infra-event",
             // Codemode (tools-as-code): sandbox scripts call back into core to
             // invoke tools and search the tool catalog. Security boundary is
             // the X-Codemode-Token HMAC (verified in the handler), not the

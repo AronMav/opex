@@ -61,6 +61,16 @@ impl AgentCore {
         self.map.read().await.values().next().map(|h| h.engine.clone())
     }
 
+    /// Первый агент с `base = true` (респондер self-healing). None если base-агентов нет.
+    pub async fn base_engine(&self) -> Option<Arc<AgentEngine>> {
+        self.map
+            .read()
+            .await
+            .values()
+            .find(|h| h.engine.cfg().agent.base)
+            .map(|h| h.engine.clone())
+    }
+
     /// Phase 65 OBS-05: total pending approval waiters across every running
     /// agent. Each agent owns its own waiters map (keyed by approval UUID);
     /// we aggregate them here for the `/api/health/dashboard` snapshot so

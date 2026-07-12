@@ -130,6 +130,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(handlers::clarify::routes())        // /api/clarify/{id}
         .merge(handlers::files::routes())           // /api/files/{upload_id}/actions + /run, /api/commands/menu-run
         .merge(handlers::handlers_admin::routes())  // /api/handlers, /api/handlers/allowlist (File Handlers tab)
+        .merge(handlers::infra::routes())           // /api/internal/infra-event (watchdog self-healing trigger, loopback)
         .merge(handlers::llm::routes())              // /api/llm/complete (raw LLM, auth-required)
         .merge(handlers::internal_creds::routes())    // /api/internal/its-credentials (ITS 1C login, auth-required)
         .merge(handlers::youtube_creds::routes())     // /api/internal/youtube-cookies (toolgate yt-dlp cookies, auth-required)
