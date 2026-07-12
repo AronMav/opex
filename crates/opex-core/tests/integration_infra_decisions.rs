@@ -119,3 +119,27 @@ async fn expire_stale_clears_triaging(pool: PgPool) {
     let got = ind::get(&pool, id).await.unwrap().unwrap();
     assert_eq!(got.status, "expired");
 }
+
+// Code-level guarantee: api_infra_event creates a pending anchor that Opex enriches
+// via PATCH (update_content) without changing status — owner already has buttons.
+#[sqlx::test(migrations = "../../migrations")]
+async fn update_content_enriches_pending(pool: PgPool) {
+    let base = serde_json::json!([]);
+    let id = ind::create(&pool, "docker-enrich-1", "Watchdog: Created", "проверить", &base, "pending", 7)
+        .await
+        .unwrap();
+    let cmds = serde_json::json!(["docker rm docker-enrich-1"]);
+    ind::update_content(&pool, id, Some("осиротевший, порт не слушает"), Some("удалить"), Some(&cmds))
+        .await
+        .unwrap();
+    let got = ind::get(&pool, id).await.unwrap().unwrap();
+    assert_eq!(got.status, "pending", "статус остаётся pending после дополнения");
+    assert_eq!(got.diagnosis, "осиротевший, порт не слушает");
+    assert_eq!(got.proposed_action, "удалить");
+    assert_eq!(got.proposed_commands, cmds);
+    // COALESCE: пропущенные поля не затираются.
+    ind::update_content(&pool, id, None, None, None).await.unwrap();
+    let again = ind::get(&pool, id).await.unwrap().unwrap();
+    assert_eq!(again.diagnosis, "осиротевший, порт не слушает");
+    assert_eq!(again.proposed_commands, cmds);
+}

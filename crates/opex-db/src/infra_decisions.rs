@@ -110,6 +110,32 @@ pub async fn mark_status(db: &PgPool, id: Uuid, status: &str) -> Result<(), sqlx
     Ok(())
 }
 
+/// Обновить содержимое pending-решения (diagnosis/action/commands), НЕ трогая статус.
+/// COALESCE — обновляются только переданные (`Some`) поля. Вызывается Opex при
+/// дополнении авто-созданного pending диагнозом/командами перед решением владельца.
+pub async fn update_content(
+    db: &PgPool,
+    id: Uuid,
+    diagnosis: Option<&str>,
+    proposed_action: Option<&str>,
+    proposed_commands: Option<&serde_json::Value>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE infra_decisions SET \
+           diagnosis = COALESCE($2, diagnosis), \
+           proposed_action = COALESCE($3, proposed_action), \
+           proposed_commands = COALESCE($4, proposed_commands) \
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(diagnosis)
+    .bind(proposed_action)
+    .bind(proposed_commands)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
 /// Дебаунс: есть ли недавняя запись, подавляющая новый триггер по контейнеру.
 pub async fn has_recent(
     db: &PgPool,

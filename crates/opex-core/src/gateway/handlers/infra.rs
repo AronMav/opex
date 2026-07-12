@@ -37,14 +37,22 @@ struct InfraEventBody {
     status: String,
 }
 
-/// Собирает диагноз-затравку для изолированной сессии Opex.
-fn build_infra_seed(docker_name: &str, status: &str) -> String {
+/// Собирает диагноз-затравку для изолированной сессии Opex. Решение `decision_id`
+/// уже создано (pending) и владелец уже уведомлён кнопками — задача Opex ДОПОЛНИТЬ
+/// его диагнозом/командами через PATCH либо самому резолвить (safe→done, штатно→
+/// dismissed). Владелец получит осмысленный вопрос независимо от того, отработает
+/// ли LLM — базовый pending уже виден.
+fn build_diagnostic_seed(docker_name: &str, status: &str, decision_id: Uuid) -> String {
     format!(
         "[Infra] Watchdog обнаружил проблемный контейнер `{docker_name}` в состоянии \
-`{status}` (держится ≥2 циклов). Используй скилл infra-triage: продиагностируй и, \
-если безопасно — почини сам; иначе создай infra-решение с вопросом владельцу. \
-По итогу ОБЯЗАТЕЛЬНО оставь ровно одну запись в infra_decisions (pending | done | \
-dismissed) — молчаливого завершения быть не должно."
+`{status}` (держится ≥2 циклов). По нему УЖЕ создано pending-решение `{decision_id}`, \
+владелец уведомлён кнопками. Используй скилл infra-triage: продиагностируй \
+(docker inspect, сверка с compose/провайдерами/портом) и обнови ЭТО решение через \
+`PATCH /api/infra/decisions/{decision_id}`: safe (нужный упавший сервис) → сам \
+`docker restart` + status `done`; штатно/не требуется → status `dismissed`; нужно \
+удаление/правка compose → передай уточнённый diagnosis + proposed_commands, оставь \
+pending (владелец одобрит кнопкой). НЕ создавай новое решение и НЕ пиши владельцу \
+текстом — работай через PATCH этого id."
     )
 }
 
@@ -77,6 +85,7 @@ fn spawn_infra_session(engine: Arc<AgentEngine>, agent_name: String, seed: Strin
 /// without an owner bearer token.
 async fn api_infra_event(
     State(infra): State<InfraServices>,
+    State(bus): State<ChannelBus>,
     State(agents): State<AgentCore>,
     Json(body): Json<InfraEventBody>,
 ) -> impl IntoResponse {
@@ -98,28 +107,66 @@ async fn api_infra_event(
         return Json(json!({ "skipped": true, "reason": "no base agent" }));
     };
 
-    // Anchor-запись: лог самой попытки триажа, ДО спавна изолированной сессии.
-    // Best-effort — если Opex упадёт без записи собственного решения (LLM/tool
-    // error), эта строка всё равно подавит повторный триггер на следующем
-    // цикле watchdog через `has_recent` (recency покрывает статус `triaging`).
-    if let Err(e) = crate::db::infra_decisions::create(
+    // Создаём pending-решение СРАЗУ (базовое содержимое от watchdog) + уведомляем
+    // владельца кнопками. Так владелец получает осмысленный вопрос независимо от
+    // того, отработает ли LLM-сессия Opex — не полагаемся на adherence модели.
+    // Этот pending также служит anchor'ом анти-петли (has_recent покрывает pending).
+    let diagnosis = format!("Watchdog: контейнер в состоянии `{}`", body.status);
+    let proposed_action =
+        "Проверить и починить или удалить (Opex уточнит; можно решить сразу)".to_string();
+    let decision_id = match crate::db::infra_decisions::create(
         &infra.db,
         &body.docker_name,
-        "auto-triage in progress",
-        "",
+        &diagnosis,
+        &proposed_action,
         &json!([]),
-        "triaging",
-        1,
+        "pending",
+        INFRA_TTL_DAYS,
     )
     .await
     {
-        tracing::warn!(error = %e, "infra triaging anchor insert failed (best-effort)");
-    }
+        Ok(id) => id,
+        Err(e) => {
+            // UNIQUE-нарушение = уже есть pending по контейнеру (гонка с debounce) →
+            // не плодим и не спавним второй раз.
+            tracing::warn!(error = %e, "infra-event: pending уже существует, skip");
+            return Json(json!({ "skipped": true, "reason": "pending exists" }));
+        }
+    };
+    notify_owner_of_pending(&infra, &bus, &engine, decision_id, &body.docker_name, &proposed_action)
+        .await;
 
     let agent_name = engine.cfg().agent.name.clone();
-    let seed = build_infra_seed(&body.docker_name, &body.status);
+    let seed = build_diagnostic_seed(&body.docker_name, &body.status, decision_id);
     spawn_infra_session(engine, agent_name, seed);
-    Json(json!({ "spawned": true }))
+    Json(json!({ "spawned": true, "decision_id": decision_id.to_string() }))
+}
+
+/// UI-notification (колокольчик) + Telegram inline-кнопки владельцу для pending-решения.
+/// Общий путь для `api_infra_event` (авто-создание) и `api_create_decision` (Opex).
+async fn notify_owner_of_pending(
+    infra: &InfraServices,
+    bus: &ChannelBus,
+    engine: &AgentEngine,
+    decision_id: Uuid,
+    container: &str,
+    proposed_action: &str,
+) {
+    crate::gateway::handlers::notifications::notify(
+        &infra.db,
+        &bus.ui_event_tx,
+        "infra_decision",
+        "Требуется решение по инфраструктуре",
+        &format!("Контейнер {container}: {proposed_action}"),
+        json!({
+            "decision_id": decision_id.to_string(),
+            "container": container,
+            "proposed_action": proposed_action,
+        }),
+    )
+    .await
+    .ok();
+    deliver_infra_buttons(&infra.db, engine, decision_id, container, proposed_action).await;
 }
 
 // ── Decisions API (Task 5) ──────────────────────────────────────────────────
@@ -174,28 +221,11 @@ async fn api_create_decision(
     };
 
     // Уведомляем владельца ТОЛЬКО для pending (вопрос). done/dismissed — молча.
-    if body.status == "pending" {
-        // (а) UI-notification (колокольчик, chat_id-независимо).
-        crate::gateway::handlers::notifications::notify(
-            &infra.db,
-            &bus.ui_event_tx,
-            "infra_decision",
-            "Требуется решение по инфраструктуре",
-            &format!("Контейнер {}: {}", body.container, body.proposed_action),
-            json!({
-                "decision_id": id.to_string(),
-                "container": body.container,
-                "proposed_action": body.proposed_action,
-            }),
-        )
-        .await
-        .ok();
-
-        // (б) Telegram inline-кнопки владельцу — переиспускаем паттерн initiative.
-        if let Some(engine) = agents.base_engine().await {
-            deliver_infra_buttons(&infra.db, &engine, id, &body.container, &body.proposed_action)
-                .await;
-        }
+    if body.status == "pending"
+        && let Some(engine) = agents.base_engine().await
+    {
+        notify_owner_of_pending(&infra, &bus, &engine, id, &body.container, &body.proposed_action)
+            .await;
     }
     (axum::http::StatusCode::OK, Json(json!({"ok": true, "id": id.to_string()}))).into_response()
 }
@@ -251,44 +281,90 @@ async fn api_list_decisions(State(infra): State<InfraServices>) -> impl IntoResp
 
 #[derive(Debug, Deserialize)]
 struct PatchBody {
-    status: String,
+    /// done | failed | dismissed. Опционально — можно обновить только содержимое.
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    diagnosis: Option<String>,
+    #[serde(default)]
+    proposed_action: Option<String>,
+    #[serde(default)]
+    proposed_commands: Option<serde_json::Value>,
 }
 
-/// PATCH /api/infra/decisions/{id} — Opex отмечает исполнение одобренного
-/// действия (done | failed). Не транзакционно (`mark_status`), вызывается
-/// самим Opex по итогу выполнения.
+/// PATCH /api/infra/decisions/{id} — Opex дополняет авто-созданный pending
+/// (diagnosis/proposed_action/proposed_commands, статус остаётся pending) ЛИБО
+/// резолвит его сам (`done` после restart, `dismissed` если действий не нужно,
+/// `failed` при сбое исполнения). Owner-resolve (approve/reject) идёт отдельным
+/// путём через `/resolve`.
 async fn api_patch_decision(
     State(infra): State<InfraServices>,
     Path(id): Path<Uuid>,
     Json(body): Json<PatchBody>,
 ) -> impl IntoResponse {
-    // Только терминальные статусы исполнения.
-    if !matches!(body.status.as_str(), "done" | "failed") {
-        return (
-            axum::http::StatusCode::BAD_REQUEST,
-            Json(json!({"error": "status must be done|failed"})),
+    // 1. Обновить содержимое, если переданы поля (COALESCE — только не-None).
+    let has_content =
+        body.diagnosis.is_some() || body.proposed_action.is_some() || body.proposed_commands.is_some();
+    if has_content
+        && let Err(e) = crate::db::infra_decisions::update_content(
+            &infra.db,
+            id,
+            body.diagnosis.as_deref(),
+            body.proposed_action.as_deref(),
+            body.proposed_commands.as_ref(),
         )
-            .into_response();
-    }
-    match crate::db::infra_decisions::mark_status(&infra.db, id, &body.status).await {
-        Ok(()) => Json(json!({"ok": true})).into_response(),
-        Err(e) => (
+        .await
+    {
+        return (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": e.to_string()})),
         )
-            .into_response(),
+            .into_response();
     }
+
+    // 2. Перевести статус, если передан (терминальные для Opex).
+    if let Some(status) = body.status.as_deref() {
+        if !matches!(status, "done" | "failed" | "dismissed") {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"error": "status must be done|failed|dismissed"})),
+            )
+                .into_response();
+        }
+        if let Err(e) = crate::db::infra_decisions::mark_status(&infra.db, id, status).await {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    }
+
+    Json(json!({"ok": true})).into_response()
 }
 
 /// Собирает затравку для изолированной сессии Opex, выполняющей одобренное решение.
 fn build_execute_seed(d: &InfraDecision) -> String {
+    let cmds_empty = d
+        .proposed_commands
+        .as_array()
+        .is_none_or(|a| a.is_empty());
+    let action_line = if cmds_empty {
+        "Конкретные команды не зафиксированы — продиагностируй контейнер `{container}` \
+и выполни необходимое по своему суждению (restart нужного сервиса, либо `docker rm` \
+осиротевшего + правка compose, если требуется)."
+            .replace("{container}", &d.container)
+    } else {
+        format!("Выполни зафиксированные шаги: {}.", d.proposed_commands)
+    };
     format!(
-        "[Infra] Владелец одобрил решение {id}: {action}. Выполни зафиксированные шаги: \
-{cmds}. По завершении вызови PATCH /api/infra/decisions/{id} со статусом done или \
-failed и кратко сообщи итог.",
+        "[Infra] Владелец одобрил решение {id} по контейнеру `{container}`: {action}. \
+{action_line} Если правишь серверный docker-compose.yml — предупреди владельца, что \
+git-версию надо синхронизировать. По завершении вызови \
+PATCH /api/infra/decisions/{id} со статусом done или failed и кратко сообщи итог.",
         id = d.id,
+        container = d.container,
         action = d.proposed_action,
-        cmds = d.proposed_commands,
     )
 }
 
@@ -358,11 +434,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn seed_mentions_container_and_skill() {
-        let s = build_infra_seed("docker-tts-silero-1", "Created");
+    fn seed_mentions_container_skill_and_decision() {
+        let did = uuid::Uuid::new_v4();
+        let s = build_diagnostic_seed("docker-tts-silero-1", "Created", did);
         assert!(s.contains("docker-tts-silero-1"));
         assert!(s.contains("Created"));
         assert!(s.contains("infra-triage"));
+        assert!(s.contains(&did.to_string()), "seed должен нести decision_id для PATCH");
+        assert!(s.contains("PATCH"));
+    }
+
+    #[test]
+    fn execute_seed_empty_commands_asks_diagnose() {
+        let mut d = sample_decision();
+        d.proposed_commands = serde_json::json!([]);
+        let s = build_execute_seed(&d);
+        assert!(s.contains(&d.id.to_string()));
+        assert!(s.contains(&d.container));
+        assert!(s.contains("продиагностируй"), "при пустых командах Opex должен разобраться сам");
     }
 
     fn sample_decision() -> InfraDecision {
