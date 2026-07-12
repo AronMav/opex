@@ -45,3 +45,14 @@ async fn has_recent_debounce(pool: PgPool) {
         .unwrap();
     assert!(ind::has_recent(&pool, "docker-qux-1", 24).await.unwrap());
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn resolve_marks_status(pool: PgPool) {
+    let cmds = serde_json::json!(["docker rm x"]);
+    let id = ind::create(&pool, "docker-x-1", "d", "a", &cmds, "pending", 7)
+        .await
+        .unwrap();
+    let d = ind::resolve_strict(&pool, id, "rejected", "owner").await.unwrap();
+    assert_eq!(d.status, "rejected");
+    assert_eq!(d.resolved_by.as_deref(), Some("owner"));
+}
