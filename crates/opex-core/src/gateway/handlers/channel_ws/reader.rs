@@ -124,6 +124,12 @@ pub(super) async fn run(
                         ).await;
                         if consumed_initiative { continue; }
 
+                        // Infra-decision callback intercept (owner-gated, `infra:ok:`/`infra:no:`).
+                        let consumed_infra = inline::handle_infra_callback(
+                            &ctx, &engine, &agent_name, &request_id, &msg, &out_tx,
+                        ).await;
+                        if consumed_infra { continue; }
+
                         // Clarify button-callback intercept (owner-gated).
                         let consumed_clarify_cb = inline::handle_clarify_callback(
                             &ctx, &engine, &agent_name, &request_id, &msg, &out_tx,
@@ -262,5 +268,11 @@ mod wire_guards {
         let cb = src.find("handle_initiative_callback").expect("initiative callback intercept must be wired");
         let dispatch = src.find("dispatcher::dispatch_message(").expect("dispatcher present");
         assert!(cb < dispatch, "initiative callback intercept must run before dispatch_message");
+    }
+
+    #[test]
+    fn infra_callback_wired() {
+        let src = include_str!("reader.rs");
+        assert!(src.contains("handle_infra_callback"), "infra callback должен быть подключён в reader");
     }
 }

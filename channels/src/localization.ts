@@ -30,6 +30,10 @@ export interface Strings {
   initiativeHeader: string;
   initiativeApprove: string;
   initiativeDismiss: string;
+  // Infra decisions
+  infraHeader: string;
+  infraApprove: string;
+  infraDismiss: string;
   // Commands
   noActiveRequest: string;
   thinkModeOff: string;
@@ -68,6 +72,9 @@ const RU: Strings = {
   initiativeHeader: "💡 Предложение цели",
   initiativeApprove: "✅ Одобрить",
   initiativeDismiss: "❌ Отклонить",
+  infraHeader: "🛠 Требуется решение по инфраструктуре",
+  infraApprove: "✅ Выполнить",
+  infraDismiss: "❌ Отклонить",
   noActiveRequest: "Нет активного запроса.",
   thinkModeOff: "🧠 Режим размышлений выключен.",
   thinkModeOn: "🧠 Режим размышлений включён для следующего сообщения.",
@@ -103,6 +110,9 @@ const EN: Strings = {
   initiativeHeader: "💡 Goal proposal",
   initiativeApprove: "✅ Approve",
   initiativeDismiss: "❌ Dismiss",
+  infraHeader: "🛠 Infra decision needed",
+  infraApprove: "✅ Apply",
+  infraDismiss: "❌ Dismiss",
   noActiveRequest: "No active request.",
   thinkModeOff: "🧠 Think mode off.",
   thinkModeOn: "🧠 Think mode on for next message.",

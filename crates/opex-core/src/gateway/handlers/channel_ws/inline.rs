@@ -429,6 +429,88 @@ pub(super) async fn handle_initiative_callback(
     false
 }
 
+/// Intercept Telegram inline-button infra-decision callbacks (`infra:ok:UUID` /
+/// `infra:no:UUID`). Returns `true` when the message was a callback and was
+/// consumed (caller should `continue`), `false` if the message should fall
+/// through to other interceptors / the dispatcher.
+///
+/// Only the agent's owner is allowed to resolve infra decisions — non-owner
+/// callbacks receive an error frame and are also consumed (fail-closed, same
+/// rule as [`handle_initiative_callback`]).
+pub(super) async fn handle_infra_callback(
+    ctx: &CwsCtx,
+    _engine: &Arc<AgentEngine>,
+    agent_name: &str,
+    request_id: &str,
+    msg: &IncomingMessageDto,
+    out_tx: &mpsc::Sender<OutboundMsg>,
+) -> bool {
+    let is_callback = msg
+        .context
+        .get("is_callback")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if !is_callback {
+        return false;
+    }
+
+    let text = msg.text.as_deref().unwrap_or("");
+    let (rest, approved) = if let Some(r) = text.strip_prefix("infra:ok:") {
+        (r, true)
+    } else if let Some(r) = text.strip_prefix("infra:no:") {
+        (r, false)
+    } else {
+        return false; // not an infra callback — let other interceptors / dispatcher try
+    };
+
+    let user_id = msg.user_id.clone();
+
+    // Security: only the owner can resolve infra decisions. Re-fetch live
+    // guard — fail-closed if absent.
+    let live_guard = ctx.auth.access_guards.read().await.get(agent_name).cloned();
+    let is_owner = live_guard.as_ref().is_some_and(|g| g.is_owner(&user_id));
+    if !is_owner {
+        tracing::warn!(%user_id, "non-owner attempted to resolve infra decision");
+        let _ = out_tx
+            .send(OutboundMsg::Wire(ChannelOutbound::Error {
+                request_id: request_id.to_string(),
+                message: "Only the owner can resolve infra decisions.".to_string(),
+            }))
+            .await;
+        return true;
+    }
+
+    let Ok(id) = rest.parse::<uuid::Uuid>() else {
+        return true; // malformed UUID — consume but don't error noisily
+    };
+    match crate::gateway::handlers::infra::resolve_infra_decision(
+        &ctx.infra, &ctx.agents, id, approved, &user_id,
+    )
+    .await
+    {
+        Ok(()) => {
+            tracing::info!(decision_id = %id, %user_id, approved, "infra decision resolved via Telegram callback");
+            let text = if approved { "✅ Одобрено, выполняю" } else { "❌ Отклонено" };
+            let _ = out_tx
+                .send(OutboundMsg::Wire(ChannelOutbound::Done {
+                    request_id: request_id.to_string(),
+                    text: text.to_string(),
+                }))
+                .await;
+        }
+        Err(e) => {
+            tracing::warn!(decision_id = %id, error = %e, "failed to resolve infra decision via callback");
+            let _ = out_tx
+                .send(OutboundMsg::Wire(ChannelOutbound::Error {
+                    request_id: request_id.to_string(),
+                    message: format!("Не удалось обработать решение: {e}"),
+                }))
+                .await;
+        }
+    }
+    true
+}
+
 // ── Clarify callback / text-intercept ────────────────────────────────────────
 
 /// Parse a `clarify:{uuid}:{idx_or_other}` Telegram callback payload.

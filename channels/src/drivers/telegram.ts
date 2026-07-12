@@ -1213,6 +1213,20 @@ async function executeAction(
       break;
     }
 
+    case "infra_decision": {
+      const decisionId = action.params.decision_id as string;
+      const container = (action.params.container as string) ?? "";
+      const proposedAction = (action.params.proposed_action as string) ?? "";
+      if (!strings) { console.error("[tg] infra_decision requires strings"); break; }
+      const s = strings;
+      const body = `${s.infraHeader}\n${container}${proposedAction ? "\n\n" + proposedAction : ""}`;
+      const keyboard = new InlineKeyboard()
+        .text(s.infraApprove, `infra:ok:${decisionId}`).row()
+        .text(s.infraDismiss, `infra:no:${decisionId}`);
+      await bot.api.sendMessage(chatId, body, { reply_markup: keyboard, reply_parameters: safeReplyParams(messageId) });
+      break;
+    }
+
     case "send_buttons": {
       const buttons = action.params.buttons as Array<{ text: string; data: string }>;
       if (buttons) {
