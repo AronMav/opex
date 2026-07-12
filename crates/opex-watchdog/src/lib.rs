@@ -9,3 +9,4 @@ pub mod alerter;
 pub mod config;
 pub mod inactivity;
 pub mod infra_jobs;
+pub mod infra_watch;
