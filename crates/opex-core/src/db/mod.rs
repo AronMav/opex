@@ -1,5 +1,6 @@
 // ── Extracted to opex-db (leaf modules, zero crate::* refs) ─────────
 pub use opex_db::approvals;
+pub use opex_db::infra_decisions;
 pub use opex_db::memory_queries;
 pub use opex_db::notifications;
 pub use opex_db::session_failures;
