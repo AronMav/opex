@@ -38,14 +38,16 @@ struct ActiveStream {
 
 // AUDIT:SSE-03 (verified 2026-03-30): Session cleanup on disconnect:
 // 1. register() cancels any prior stream for the same session (no duplicates) -- see line ~79
-// 2. Client disconnect does NOT abort engine (intentional: saves response to DB)
-//    The send_and_buffer! macro in chat.rs detects sse_tx.is_closed() and sets
-//    client_gone_since, but continues buffering events for DB persistence.
-// 3. 10-minute timeout (client_gone_since > 600s) aborts engine if client never reconnects
-//    -- see chat.rs converter loop safety net check
-// 4. Cancel API (POST /api/chat/{id}/abort) sets CancellationToken, checked each iteration
-//    in the converter loop -- provides immediate user-initiated cancellation
-// No hanging tasks possible: either client reconnects, timeout fires, or cancel API used.
+// 2. Client disconnect does NOT abort engine (intentional: saves response to DB).
+//    The send_and_buffer! macro in sse_converter.rs detects sse_tx.is_closed()
+//    and keeps buffering events for DB persistence while the engine runs to
+//    natural completion. There is NO client-gone timeout-abort — a browser drop
+//    is a transport event, not a cancel.
+// 3. Cancel API (POST /api/chat/{id}/abort) sets CancellationToken, checked each
+//    iteration in the converter loop -- provides immediate user-initiated cancel
+//    (with a 30s grace window, then hard-abort if wedged).
+// Runaway protection is the engine's own: max_iterations, loop-detection, tool
+// timeouts. A run stops via natural completion, those limits, or explicit cancel.
 pub struct StreamRegistry {
     streams: RwLock<HashMap<String, Arc<ActiveStream>>>,
     db: PgPool,

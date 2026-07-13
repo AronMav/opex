@@ -207,17 +207,16 @@ pub(crate) async fn api_chat_sse(
     //     converter task ALWAYS buffers events into `StreamRegistry`
     //     (broadcast-backed) regardless of whether the SSE client is still
     //     connected — see `send_and_buffer!` in sse_converter.rs.
-    //   * If the SSE client disconnects, the converter sets
-    //     `client_gone_since` but keeps draining engine events to the registry
-    //     so reconnects via `/api/chat/{id}/stream` see a complete reply.
-    //   * The only paths that abort the engine task externally are:
-    //       (a) the 30s grace window after an explicit user-initiated cancel
-    //           (POST /api/chat/{id}/abort), and
-    //       (b) the 600s runaway-protection window after the SSE client is
-    //           confirmed gone with no resume.
-    //   Neither path runs unless the converter task observes a deliberate
-    //   signal — converter panics, channel hiccups, or transient client
-    //   drops do NOT cancel the engine.
+    //   * If the SSE client disconnects, the converter keeps draining engine
+    //     events to the registry so reconnects via `/api/chat/{id}/stream` see
+    //     a complete reply, and the engine runs to natural completion.
+    //   * The ONLY path that aborts the engine task externally is the 30s grace
+    //     window after an explicit user-initiated cancel (POST
+    //     /api/chat/{id}/abort). A client disconnect never aborts the engine —
+    //     a browser drop is a transport event, not a cancel; runaway protection
+    //     is the engine's own (max_iterations, loop-detection, tool timeouts).
+    //   Converter panics, channel hiccups, or client drops do NOT cancel the
+    //   engine.
     //
     // Inter-agent communication happens via the `agent` tool (polling model),
     // so no turn loop is needed — a single handle_sse call suffices.

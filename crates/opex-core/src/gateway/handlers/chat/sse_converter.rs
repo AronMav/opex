@@ -13,8 +13,10 @@
 //!     `/api/chat/{id}/stream` see a complete reply.
 //!   - Periodically flushes streaming text to the `messages` row (every
 //!     2 s in append mode).
-//!   - Honours the 30 s cancel-grace window and the 600 s
-//!     client-gone runaway-protection window.
+//!   - Honours the 30 s cancel-grace window for explicit `/abort`. Client
+//!     disconnect does NOT abort: the engine runs to natural completion
+//!     (result buffered + persisted); only `/abort` or the engine's own
+//!     limits (max_iterations, loop-detection, tool timeouts) stop a run.
 //!
 //! AUDIT:SSE-01 / SSE-02 / SSE-03 invariants are preserved verbatim from
 //! the pre-extraction inline body — see comments below.
@@ -73,7 +75,9 @@ pub(super) async fn run_converter(
     tracing::debug!(current_responding_agent = %writer.current_agent(), "converter: initial agent for SSE");
     let mut session_id_str: Option<String> = None;
     #[allow(unused_assignments)]
-    let mut client_gone_since: Option<std::time::Instant> = None;
+    // Client disconnect no longer aborts the engine (browser drop ≠ cancel).
+    // This bool only gates a one-time "client disconnected, continuing" log.
+    let mut client_gone_logged = false;
 
     // Helper: send SSE event to client (if connected) and always buffer in registry
     macro_rules! send_and_buffer {
@@ -86,7 +90,7 @@ pub(super) async fn run_converter(
                 0
             };
             if !sse_tx.is_closed() {
-                client_gone_since = None;
+                client_gone_logged = false;
                 // SSE `id:` field — client tracks via Last-Event-ID for
                 // dedup-free reconnect. seq=0 (no session yet) emits no id.
                 let event = if seq > 0 {
@@ -99,10 +103,12 @@ pub(super) async fn run_converter(
                 // Client disconnected — keep buffering for DB save + resume.
                 // Do NOT abort the engine: let it finish naturally so the result
                 // is saved to DB and the frontend picks it up via polling on reload.
-                // Engine has its own limits (max_iterations, subagent timeout).
-                if client_gone_since.is_none() {
-                    client_gone_since = Some(std::time::Instant::now());
-                    tracing::info!("SSE client disconnected, continuing engine for DB save");
+                // Engine has its own limits (max_iterations, loop-detection, tool
+                // timeouts); a browser drop is not a cancel, so there is no
+                // client-gone timeout-abort — only explicit `/abort` stops a run.
+                if !client_gone_logged {
+                    client_gone_logged = true;
+                    tracing::info!("SSE client disconnected, continuing engine to completion (result saved to DB)");
                 }
                 true // always keep going — abort only via cancel API
             }
@@ -131,9 +137,8 @@ pub(super) async fn run_converter(
     // usage_log entry. We give it a bounded window (CANCEL_GRACE) to
     // finish naturally, then hard-abort if it's wedged. This guards
     // against tool loops or sync blocks that ignore the cancel token
-    // (code_exec, workspace_write, std::sync::Mutex contention) — the
-    // pre-existing `client_gone_since > 600 s` check only ran inside
-    // `event_rx.recv().await`, so a silent wedge bypassed it.
+    // (code_exec, workspace_write, std::sync::Mutex contention). This is the
+    // ONLY hard-abort path — a client disconnect never aborts the engine.
     const CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
     let mut logged_cancel_drain = false;
     let mut cancel_deadline: Option<tokio::time::Instant> = None;
@@ -207,37 +212,11 @@ pub(super) async fn run_converter(
             }
         };
 
-        // AUDIT:SSE-03 (verified 2026-03-30): Safety net for client disconnect.
-        // See stream_registry.rs for full SSE-03 audit. This 10-minute timeout
-        // ensures no hanging tasks if client disconnects and never reconnects.
-        // Safety net: abort if client gone for 10+ minutes (runaway engine protection)
-        if client_gone_since.is_some_and(|t| t.elapsed().as_secs() > 600) {
-            tracing::warn!("SSE client gone for 10min, aborting runaway engine");
-            // R-CONTINUITY: pre-mark the session 'interrupted' BEFORE the hard
-            // abort, exactly like the cancel-grace branch above. Otherwise the
-            // engine task's SessionLifecycleGuard::Drop marks it 'failed' — a
-            // misleading "error" state for what is really just a transport
-            // disconnect, and (pre-R-CONTINUITY) one that blocked 4h reuse.
-            // The atomic `WHERE run_status='running'` claim means the guard's
-            // later Drop sees 'interrupted' and no-ops (Ok(false)).
-            if let Some(sid) = session_uuid
-                && let Err(e) = crate::db::sessions::cleanup_session_terminated(
-                    &db,
-                    sid,
-                    "interrupted",
-                    "client_gone_runaway",
-                )
-                .await
-            {
-                tracing::warn!(
-                    session_id = %sid,
-                    error = %e,
-                    "failed to mark session interrupted before runaway hard-abort"
-                );
-            }
-            engine_handle.abort();
-            break;
-        }
+        // NOTE: no client-gone timeout-abort here. When the SSE client
+        // disconnects the engine keeps running to natural completion (events
+        // buffered to the registry for DB persist + reconnect-replay). A browser
+        // drop is a transport event, not a cancel — only explicit `/abort`
+        // (cancel-grace branch above) or the engine's own limits stop a run.
         // Close the open text block before any non-text event. Consecutive
         // TextDelta events keep the block open and share the same id.
         if !matches!(event, StreamEvent::TextDelta(_))
