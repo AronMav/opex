@@ -107,7 +107,11 @@ pub(crate) async fn advance_one_chunk(
             );
             if chunks.is_empty() {
                 tracing::warn!(session = %session_id, "decompose failed/empty; flat fallback (persisted)");
-                let _ = crate::db::session_goals::set_decompose_failed(&db, session_id, true).await;
+                if crate::db::session_goals::set_decompose_failed(&db, session_id, true).await.is_err() {
+                    // Persist failed — without the flag the next tick would re-decompose (paid LLM) with
+                    // no progress. Consume a turn so the goal's budget eventually caps the retry loop.
+                    let _ = crate::db::session_goals::bump_turn(&db, session_id).await;
+                }
                 return StepOutcome::Continuing;
             }
             let _ = crate::db::session_goals::set_subgoals(&db, session_id, &chunks).await;
