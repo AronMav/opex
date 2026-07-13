@@ -659,6 +659,7 @@ where
                 }
                 GoalCmd::Resume => {
                     let _ = crate::db::session_goals::set_status(ctx.db, session_id, "active").await;
+                    let _ = crate::db::session_goals::set_decompose_failed(ctx.db, session_id, false).await;
                     if !start_goal_driver(ctx, session_id, target) {
                         return Some(Ok(CommandOutcome::Text("Could not resume the autonomous driver here.".to_string())));
                     }

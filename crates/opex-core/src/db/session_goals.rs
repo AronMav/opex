@@ -152,7 +152,6 @@ pub async fn set_status(db: &PgPool, session_id: Uuid, status: &str) -> Result<(
     Ok(())
 }
 
-#[allow(dead_code)] // wired by the Task 2 decompose driver
 pub async fn set_decompose_failed(db: &PgPool, session_id: Uuid, v: bool) -> Result<()> {
     sqlx::query("UPDATE session_goals SET decompose_failed = $2, updated_at = now() WHERE session_id = $1")
         .bind(session_id).bind(v).execute(db).await?;
