@@ -3,6 +3,7 @@
 //! knowledge_extractor). Чистые функции здесь — юнит-тестируемы.
 use chrono::{DateTime, NaiveDate, Utc};
 
+pub mod day_plan;
 pub mod delivery;
 pub mod tick;
 
