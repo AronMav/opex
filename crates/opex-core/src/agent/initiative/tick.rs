@@ -94,7 +94,10 @@ async fn initiative_tick_inner(
     }
 
     // Step 2: gated proposal.
-    if should_propose(plan.last_proposal_at, latest_refl, effective, deps.cfg.daily_proposal_cap) {
+    // B-wide: when the daily-plan path owns initiative, skip single-proposal Step 2.
+    if !deps.cfg.daily_plan
+        && should_propose(plan.last_proposal_at, latest_refl, effective, deps.cfg.daily_proposal_cap)
+    {
         let open_threads = recent_open_threads(
             db, agent_name, OPEN_THREAD_SINCE_DAYS, OPEN_THREAD_READ_LIMIT,
         ).await;

@@ -1970,6 +1970,19 @@ impl AgentConfig {
             );
         }
 
+        if config.agent.initiative.daily_plan && config.agent.heartbeat.is_none() {
+            anyhow::bail!(
+                "agent {:?}: [agent.initiative] daily_plan=true requires a configured [agent.heartbeat] (heartbeat drives day-plan generation + advancement)",
+                config.agent.name
+            );
+        }
+        if config.agent.initiative.daily_plan && !config.agent.initiative.enabled {
+            anyhow::bail!(
+                "agent {:?}: [agent.initiative] daily_plan=true requires enabled=true (review M3: otherwise a silent no-op)",
+                config.agent.name
+            );
+        }
+
         Ok(config)
     }
 
@@ -3375,6 +3388,21 @@ model = "gpt-4o"
     #[test]
     fn initiative_decompose_defaults_false() {
         assert!(!InitiativeConfig::default().decompose);
+    }
+
+    #[test]
+    fn daily_plan_requires_heartbeat_and_enabled() {
+        let base = "[agent]\nname=\"A\"\nprovider=\"p\"\nmodel=\"m\"\n[agent.initiative]\nenabled=true\ndaily_plan=true\n";
+        // no [agent.heartbeat] → error
+        let dir = std::env::temp_dir().join(format!("bwide_cfg_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("A.toml");
+        std::fs::write(&p, base).unwrap();
+        assert!(AgentConfig::load(&p).is_err(), "daily_plan without heartbeat must fail load");
+        // enabled=false + daily_plan=true → error
+        std::fs::write(&p, "[agent]\nname=\"A\"\nprovider=\"p\"\nmodel=\"m\"\n[agent.heartbeat]\ncron=\"0 * * * *\"\n[agent.initiative]\nenabled=false\ndaily_plan=true\n").unwrap();
+        assert!(AgentConfig::load(&p).is_err(), "daily_plan without enabled must fail load");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
