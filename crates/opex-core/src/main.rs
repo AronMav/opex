@@ -997,6 +997,10 @@ async fn resume_autonomous_goals(state: gateway::AppState, db: sqlx::PgPool) {
                 } else {
                     None
                 };
+                // Reset the persisted decompose-fallback flag on redrive — the pre-refactor
+                // in-memory flag reset on every driver spawn; a crash-redriven initiative goal
+                // must be able to retry decompose, not stay permanently flat.
+                let _ = crate::db::session_goals::set_decompose_failed(&db, rg.session_id, false).await;
                 let handle = crate::agent::goal::driver::spawn_goal_driver(engine.clone(), rg.session_id, target);
                 pool.insert(rg.session_id, handle);
                 started += 1;
