@@ -519,7 +519,24 @@ export function createTelegramDriver(
       return;
     }
 
-    await ctx.answerCallbackQuery().catch(() => { });
+    // Initiative-family inline buttons (goal proposals `iappr:`/`idismiss:`/`icancel:`
+    // + day plans `dpm:approve:`/`dpm:dismiss:`) are resolved by Core over the WS
+    // forward below (no synchronous result here). Give the user an immediate toast
+    // and remove the keyboard optimistically so the card reflects the action and the
+    // buttons can't be re-clicked — Core is idempotent / CAS-guarded, so an optimistic
+    // removal on a no-op (stale date, already-acted) is harmless.
+    if (/^(iappr:|dpm:approve:)/.test(data)) {
+      await ctx.answerCallbackQuery({ text: "✅ Принято" }).catch(() => { });
+      await ctx.editMessageReplyMarkup().catch(() => { });
+    } else if (/^icancel:/.test(data)) {
+      await ctx.answerCallbackQuery({ text: "⏹ Отменено" }).catch(() => { });
+      await ctx.editMessageReplyMarkup().catch(() => { });
+    } else if (/^(idismiss:|dpm:dismiss:)/.test(data)) {
+      await ctx.answerCallbackQuery({ text: "❌ Отклонено" }).catch(() => { });
+      await ctx.editMessageReplyMarkup().catch(() => { });
+    } else {
+      await ctx.answerCallbackQuery().catch(() => { });
+    }
     bridge.sendMessage({
       user_id: userId,
       text: data,
