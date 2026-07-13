@@ -330,6 +330,22 @@ impl Scheduler {
                     &engine, &workspace_dir, &agent_name,
                     announce_to.as_deref(), owner_id.as_deref(),
                 ).await;
+                // B-wide: advance/generate the daily plan on the heartbeat cadence,
+                // under the SAME per-agent guard (serialized; no heartbeat×heartbeat race).
+                if engine.cfg().agent.initiative.daily_plan {
+                    let a = &engine.cfg().agent;
+                    let deps = crate::agent::initiative::tick::InitiativeDeps {
+                        cfg: a.initiative.clone(),
+                        owner_id: a.access.as_ref().and_then(|x| x.owner_id.clone()),
+                        is_base: a.base,
+                        timezone: a.heartbeat.as_ref().and_then(|h| h.timezone.clone()).unwrap_or_else(|| "UTC".to_string()),
+                        workspace_dir: engine.cfg().workspace_dir.clone(),
+                        ui_event_tx: engine.state().ui_event_tx.clone(),
+                        channel_router: engine.state().channel_router.clone(),
+                    };
+                    let db = engine.cfg().db.clone();
+                    crate::agent::initiative::day_plan::day_plan_tick(&db, &engine, &agent_name, &deps).await;
+                }
                 // _guard dropped here, releasing the per-agent lock.
                 match result {
                     Ok(()) => {

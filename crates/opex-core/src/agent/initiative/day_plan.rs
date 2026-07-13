@@ -75,7 +75,6 @@ pub(crate) fn plan_advance(current: usize, len: usize, intent_finished: bool) ->
 }
 
 /// Heartbeat entry (fail-soft). Generation branch OR advancement branch.
-#[allow(dead_code)] // wired by Task 8 (heartbeat call site)
 pub async fn day_plan_tick(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &InitiativeDeps) {
     if let Err(e) = day_plan_tick_inner(db, engine, agent, deps).await {
         tracing::warn!(agent, error = %e, "day_plan_tick failed (fail-soft)");
@@ -169,7 +168,6 @@ async fn read_self_md(engine: &AgentEngine, agent: &str, workspace_dir: &str) ->
 /// Notify the owner of the morning day-plan (ALL intents enumerated — informed
 /// consent, review HIGH sec): a UI notification plus a Telegram message with
 /// approve/dismiss buttons carrying `date` (review H2).
-#[allow(dead_code)] // wired by Task 8 (heartbeat call site)
 async fn notify_day_plan(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &InitiativeDeps, intents: &[DayIntent], date: chrono::NaiveDate) {
     let texts: Vec<String> = intents.iter().map(|i| i.intent.clone()).collect();
     if let Some(tx) = &deps.ui_event_tx {
@@ -189,7 +187,6 @@ async fn notify_day_plan(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &
 }
 
 /// Notify the owner that today's day-plan has been fully worked through.
-#[allow(dead_code)] // wired by Task 8 (heartbeat call site)
 async fn notify_plan_done(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &InitiativeDeps) {
     let _ = engine;
     if let (Some(router), Some((ch, chat_id))) = (

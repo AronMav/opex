@@ -187,7 +187,6 @@ pub async fn try_set_proposal_status_tx(
 }
 
 // status Option so the "no material" branch writes NULL atomically (review L1).
-#[allow(dead_code)] // wired by the Task 2 day_plan_tick driver
 pub async fn set_day_plan(db: &PgPool, agent_id: &str, intents: &[DayIntent], date: NaiveDate, status: Option<&str>) -> Result<()> {
     sqlx::query(
         "UPDATE agent_plans SET day_plan = $2, day_plan_current = 0, day_plan_date = $3,
@@ -197,7 +196,6 @@ pub async fn set_day_plan(db: &PgPool, agent_id: &str, intents: &[DayIntent], da
     Ok(())
 }
 
-#[allow(dead_code)] // wired by the Task 2 day_plan_tick driver
 pub async fn set_day_plan_status(db: &PgPool, agent_id: &str, status: Option<&str>) -> Result<()> {
     sqlx::query("UPDATE agent_plans SET day_plan_status = $2, updated_at = now() WHERE agent_id = $1")
         .bind(agent_id).bind(status).execute(db).await?;
@@ -205,7 +203,6 @@ pub async fn set_day_plan_status(db: &PgPool, agent_id: &str, status: Option<&st
 }
 
 /// Persist advanced pointer + updated intent statuses (day_plan JSONB).
-#[allow(dead_code)] // wired by the Task 2 day_plan_tick driver
 pub async fn set_day_plan_pointer(db: &PgPool, agent_id: &str, current: i32, intents: &[DayIntent]) -> Result<()> {
     sqlx::query(
         "UPDATE agent_plans SET day_plan = $2, day_plan_current = $3, updated_at = now() WHERE agent_id = $1",
