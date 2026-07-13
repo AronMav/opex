@@ -39,7 +39,7 @@ pub struct InitiativeDeps {
 }
 
 /// Resolve "today" in the agent's configured timezone (falls back to UTC-naive).
-fn today_in_tz(tz: &str) -> chrono::NaiveDate {
+pub(crate) fn today_in_tz(tz: &str) -> chrono::NaiveDate {
     match tz.parse::<chrono_tz::Tz>() {
         Ok(z) => Utc::now().with_timezone(&z).date_naive(),
         Err(_) => Utc::now().date_naive(),

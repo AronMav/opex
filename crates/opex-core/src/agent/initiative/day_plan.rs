@@ -2,9 +2,16 @@
 //! Injection barrier: sanitize at read (re-sanitize threads/reflections) + framing.
 use std::sync::Arc;
 
+use sqlx::PgPool;
+use tokio_util::sync::CancellationToken;
+
+use crate::agent::engine::AgentEngine;
+use crate::agent::goal::driver::{advance_one_chunk, StepOutcome};
+use crate::agent::initiative::tick::InitiativeDeps;
 use crate::agent::providers::LlmProvider;
 use crate::agent::knowledge_extractor::EVENT_MAX_CHARS;
 use crate::agent::soul::sanitize::sanitize_soul_text;
+use crate::db::agent_plans::{self, DayIntent};
 
 /// Max intents in a generated day plan (spec §3.2).
 pub const MAX_DAY_INTENTS: usize = 4;
@@ -42,7 +49,6 @@ pub(crate) fn build_day_plan_prompt(agent: &str, self_md: &str, reflections: &[S
     )
 }
 
-#[allow(dead_code)] // wired by Task 4
 pub(crate) async fn generate_day_plan(
     provider: &Arc<dyn LlmProvider>, agent: &str, self_md: &str,
     reflections: &[String], open_threads: &[String],
@@ -56,8 +62,128 @@ pub(crate) async fn generate_day_plan(
     select_intents(&items)
 }
 
+/// Pure: given current pointer, plan length, and whether the current intent is
+/// finished this tick, return (new_current, plan_done).
+pub(crate) fn plan_advance(current: usize, len: usize, intent_finished: bool) -> (usize, bool) {
+    if current >= len { return (current + 1, true); }
+    if intent_finished {
+        let nc = current + 1;
+        (nc, nc >= len)
+    } else {
+        (current, false)
+    }
+}
+
+/// Heartbeat entry (fail-soft). Generation branch OR advancement branch.
+#[allow(dead_code)] // wired by Task 8 (heartbeat call site)
+pub async fn day_plan_tick(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &InitiativeDeps) {
+    if let Err(e) = day_plan_tick_inner(db, engine, agent, deps).await {
+        tracing::warn!(agent, error = %e, "day_plan_tick failed (fail-soft)");
+    }
+}
+
+async fn day_plan_tick_inner(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &InitiativeDeps) -> anyhow::Result<()> {
+    if deps.is_base || !deps.cfg.enabled || deps.owner_id.is_none() { return Ok(()); }
+    let plan = agent_plans::get_or_create(db, agent).await?;
+    let today = crate::agent::initiative::tick::today_in_tz(&deps.timezone);
+
+    if plan.day_plan_date != Some(today) {
+        // 1. Finalize prev-day still-active intents to paused (no zombies).
+        let prev: Vec<DayIntent> = serde_json::from_value(plan.day_plan.clone()).unwrap_or_default();
+        for it in &prev {
+            if it.status == "active" && let Some(sid) = it.session_id {
+                let _ = crate::db::session_goals::set_status(db, sid, "paused").await;
+            }
+        }
+        // 2. Fresh material?
+        let latest_refl = crate::db::memory_queries::latest_reflection_at(db, agent).await.ok().flatten();
+        let threads = crate::db::memory_queries::recent_open_thread_chunks(db, agent, 5, 5).await.unwrap_or_default();
+        if latest_refl.is_none() && threads.is_empty() {
+            let _ = agent_plans::set_day_plan(db, agent, &[], today, None).await; // sticky date, no plan (single write, review L1)
+            return Ok(());
+        }
+        let reflections: Vec<String> = crate::db::memory_queries::recent_soul_chunks(db, agent, 5).await
+            .map(|v| v.into_iter().map(|c| c.content).collect()).unwrap_or_default();
+        let self_md = read_self_md(engine, agent, &deps.workspace_dir).await;
+        // aux/compaction provider (fallback to main) — same as goal driver's llm_json_list.
+        let provider = engine.cfg().compaction_provider.clone().unwrap_or_else(|| engine.provider_arc());
+        let intents_txt = generate_day_plan(&provider, agent, &self_md, &reflections, &threads).await;
+        if intents_txt.is_empty() {
+            let _ = agent_plans::set_day_plan(db, agent, &[], today, None).await;
+            return Ok(());
+        }
+        let intents: Vec<DayIntent> = intents_txt.into_iter()
+            .map(|t| DayIntent { session_id: None, intent: t, status: "pending".into() }).collect();
+        agent_plans::set_day_plan(db, agent, &intents, today, Some("pending")).await?;
+        notify_day_plan(db, engine, agent, deps, &intents, today).await; // Task 6 provides (date → button)
+        return Ok(());
+    }
+
+    if plan.day_plan_status.as_deref() == Some("approved") {
+        advance_day_plan(db, engine, agent, deps, plan).await;
+    }
+    Ok(())
+}
+
+async fn advance_day_plan(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &InitiativeDeps, plan: agent_plans::PlanRow) {
+    let mut intents: Vec<DayIntent> = serde_json::from_value(plan.day_plan.clone()).unwrap_or_default();
+    let cur = plan.day_plan_current.max(0) as usize;
+    if cur >= intents.len() {
+        let _ = agent_plans::set_day_plan_status(db, agent, Some("done")).await;
+        notify_plan_done(db, engine, agent, deps).await; // Task 6 provides
+        return;
+    }
+    let target = crate::agent::initiative::delivery::resolve_owner_target(db, agent, deps.owner_id.as_deref()).await;
+    let sid = intents[cur].session_id;
+    let intent_finished = match sid {
+        None => true, // defensive: approved but no session → skip
+        Some(sid) => {
+            let running = crate::db::session_goals::get(db, sid).await.ok().flatten()
+                .map(|g| g.is_running()).unwrap_or(false);
+            if !running {
+                true // GAP-6: externally cancelled/done/paused → advance past it
+            } else {
+                let outcome = advance_one_chunk(engine, sid, &target, &CancellationToken::new()).await;
+                matches!(outcome, StepOutcome::Done | StepOutcome::Paused)
+            }
+        }
+    };
+    let (new_cur, plan_done) = plan_advance(cur, intents.len(), intent_finished);
+    if intent_finished && cur < intents.len() { intents[cur].status = "done".into(); }
+    let _ = agent_plans::set_day_plan_pointer(db, agent, new_cur as i32, &intents).await;
+    if plan_done {
+        let _ = agent_plans::set_day_plan_status(db, agent, Some("done")).await;
+        notify_plan_done(db, engine, agent, deps).await;
+    }
+}
+
+async fn read_self_md(engine: &AgentEngine, agent: &str, workspace_dir: &str) -> String {
+    let _ = engine;
+    let path = crate::agent::soul::self_md::self_md_path(workspace_dir, agent);
+    match tokio::fs::read_to_string(&path).await {
+        Ok(raw) => crate::agent::soul::self_md::render_self_block(&raw).unwrap_or_default(),
+        Err(_) => String::new(),
+    }
+}
+
+// STUBS — Task 6 replaces these bodies with the real notification/channel-button
+// implementation. Signatures are frozen here so day_plan_tick/advance_day_plan
+// compile standalone in Task 4.
+#[allow(dead_code)] // wired by Task 8; body replaced by Task 6
+async fn notify_day_plan(_db: &PgPool, _engine: &AgentEngine, _agent: &str, _deps: &InitiativeDeps, _intents: &[DayIntent], _date: chrono::NaiveDate) {}
+#[allow(dead_code)] // wired by Task 8; body replaced by Task 6
+async fn notify_plan_done(_db: &PgPool, _engine: &AgentEngine, _agent: &str, _deps: &InitiativeDeps) {}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn plan_advance_pointer_transitions() {
+        // intent finished (done/paused/not-running) → current++ ; plan_done when past end
+        assert_eq!(super::plan_advance(0, 3, true), (1, false));
+        assert_eq!(super::plan_advance(2, 3, true), (3, true));   // last finished → done
+        assert_eq!(super::plan_advance(1, 3, false), (1, false)); // still working → hold
+        assert_eq!(super::plan_advance(3, 3, true), (4, true));   // already past → done
+    }
     #[test]
     fn select_intents_caps_sanitizes_filters_trivial() {
         let raw: Vec<String> = (0..8).map(|i| format!("довести задачу {i}")).collect();
