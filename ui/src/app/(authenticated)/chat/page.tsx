@@ -507,7 +507,7 @@ export default function ChatPage() {
   // Agent selector component (reused in desktop header and mobile)
   const agentSelector = (
     <Select value={currentAgent} onValueChange={switchAgent} aria-label={t("chat.switch_agent")}>
-      <SelectTrigger size="sm" className="w-auto min-w-16 sm:min-w-24 max-w-24 md:max-w-40 text-xs font-semibold uppercase tracking-wide bg-card/50 border-border">
+      <SelectTrigger size="sm" className="w-auto min-w-14 max-w-16 sm:min-w-24 sm:max-w-24 md:max-w-40 text-xs font-semibold uppercase tracking-wide bg-card/50 border-border">
         <SelectValue />
       </SelectTrigger>
       <SelectContent className="border-border">
@@ -540,7 +540,7 @@ export default function ChatPage() {
   const sessionList = (
     <div className="flex h-full flex-col bg-sidebar">
       <TaskPlanPanel agentName={currentAgent} isStreaming={isStreaming} />
-      <div className="flex items-center justify-between px-5 py-5 border-b border-border/50">
+      <div className="flex items-center justify-between px-3 py-3 md:px-5 md:py-5 border-b border-border/50">
         <div className="flex flex-col gap-1">
           <span className="text-sm font-display font-semibold text-foreground">
             {t("chat.sessions")}
@@ -643,7 +643,7 @@ export default function ChatPage() {
                     </button>
                     <button
                       onClick={() => handleSelectSession(s)}
-                      className={`relative flex w-full min-w-0 flex-col gap-1.5 rounded-lg px-4 py-3 pr-14 text-left transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background overflow-hidden ${
+                      className={`relative flex w-full min-w-0 flex-col gap-1.5 rounded-lg px-3 py-2.5 pr-12 md:px-4 md:py-3 md:pr-14 text-left transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background overflow-hidden ${
                         activeSessionId === s.id
                         ? "bg-accent shadow-inner"
                         : "hover:bg-accent/40"
@@ -813,7 +813,7 @@ export default function ChatPage() {
         </div>
 
         {/* Mobile/tablet floating actions — visible below lg */}
-        <div className="absolute top-0 left-0 right-0 z-20 flex items-center gap-1 px-2 py-1.5 bg-background/90 backdrop-blur-sm border-b border-border/30 lg:hidden">
+        <div className="sticky top-0 z-20 flex shrink-0 items-center gap-0.5 px-1.5 py-1 sm:gap-1 sm:px-2 bg-background/95 backdrop-blur-md border-b border-border/30 lg:hidden">
           <SidebarTrigger className="h-9 w-9 text-foreground active:scale-90 transition-transform md:hidden shrink-0" />
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
             {agentSelector}

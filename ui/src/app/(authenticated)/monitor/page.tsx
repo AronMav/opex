@@ -1393,7 +1393,7 @@ function MonitorPageInner() {
                               })}
                             </TableBody>
                           </Table>
-                        </Card>
+              </Card>
                       );
                     })}
                   </div>
@@ -1528,6 +1528,7 @@ function MonitorPageInner() {
               <EmptyState icon={CheckCircle2} text={t("monitor.failures.empty")} />
             ) : (
               <Card className="overflow-hidden">
+              <div className="overflow-x-auto">
                 <Table style={{ minWidth: 700 }}>
                   <TableHeader className="bg-muted/30">
                     <TableRow>
@@ -1628,6 +1629,7 @@ function MonitorPageInner() {
                     })}
                   </TableBody>
                 </Table>
+              </div>
               </Card>
             )}
           </div>

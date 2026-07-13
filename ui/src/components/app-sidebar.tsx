@@ -95,7 +95,7 @@ export function AppSidebar() {
 
   return (
     <Sidebar className="border-r border-border bg-sidebar">
-      <SidebarHeader className="px-6 py-6">
+      <SidebarHeader className="px-4 py-4 md:px-6 md:py-6">
         <div className="flex items-center gap-2">
           <WalnutMark className="text-primary" size={48} />
           <span className="font-display text-base font-bold tracking-wide text-foreground">
@@ -148,7 +148,7 @@ export function AppSidebar() {
         ))}
       </SidebarContent>
 
-      <SidebarFooter className="border-t border-border bg-muted/30 p-4">
+      <SidebarFooter className="border-t border-border bg-muted/30 p-3 md:p-4">
         <div className="flex items-center justify-between rounded-lg bg-muted/30 px-3 py-2.5">
           <div className="flex flex-col">
             <span className="text-xs text-muted-foreground-subtle">{t("common.version")}</span>
@@ -156,7 +156,7 @@ export function AppSidebar() {
               {version || "0.1.0-alpha"}
             </span>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1">
             <LanguageToggle />
             <ModeToggle />
             <NotificationBell />

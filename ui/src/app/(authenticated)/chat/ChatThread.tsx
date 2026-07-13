@@ -244,7 +244,7 @@ export function ChatThread({
       style={keyboardHeight > 0 ? { paddingBottom: keyboardHeight } : undefined}
     >
       {search.isOpen && (
-        <div className="pt-14 lg:pt-0">
+        <div>
           <SearchBar search={search} />
         </div>
       )}

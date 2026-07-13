@@ -815,7 +815,7 @@ export function ChatComposer() {
             </div>
           )}
           <div className="flex flex-wrap items-center justify-between px-3 pb-3">
-            <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 items-center gap-1 sm:gap-2">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -904,7 +904,7 @@ export function ChatComposer() {
                 </Button>
               )}
               {hasSttProvider && (
-                <div className="relative">
+                <div className="relative hidden sm:block">
                   <Button
                     ref={voiceSettingsTriggerRef}
                     type="button"

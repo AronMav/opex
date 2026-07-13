@@ -50,7 +50,7 @@ function SharedConversation() {
   }, [token]);
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="min-h-dvh bg-background text-foreground">
       <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
         <header className="mb-6 border-b border-border pb-4">
           <div className="text-2xs font-bold uppercase tracking-widest text-muted-foreground">
@@ -127,7 +127,7 @@ function SharedConversation() {
 
 export default function SharePage() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-background" />}>
+    <Suspense fallback={<div className="min-h-dvh bg-background" />}>
       <SharedConversation />
     </Suspense>
   );
