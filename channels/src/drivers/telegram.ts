@@ -1213,6 +1213,20 @@ async function executeAction(
       break;
     }
 
+    case "day_plan": {
+      const intents = (action.params.intents as string[]) ?? [];
+      const date = (action.params.date as string) ?? "";
+      if (!strings) { console.error("[tg] day_plan requires strings"); break; }
+      const s = strings;
+      const list = intents.map((t, i) => `${i + 1}. ${t}`).join("\n");
+      const body = `${s.initiativeHeader}\n${list}`;
+      const keyboard = new InlineKeyboard()
+        .text(s.initiativeApprove, `dpm:approve:${date}`).row()
+        .text(s.initiativeDismiss, `dpm:dismiss:${date}`);
+      await bot.api.sendMessage(chatId, body, { reply_markup: keyboard, reply_parameters: safeReplyParams(messageId) });
+      break;
+    }
+
     case "infra_decision": {
       const decisionId = action.params.decision_id as string;
       const container = (action.params.container as string) ?? "";

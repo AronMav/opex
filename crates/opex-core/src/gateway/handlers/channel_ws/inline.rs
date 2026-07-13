@@ -316,7 +316,8 @@ pub(super) async fn handle_initiative_callback(
     }
 
     let text = msg.text.as_deref().unwrap_or("");
-    if !(text.starts_with("iappr:") || text.starts_with("idismiss:") || text.starts_with("icancel:")) {
+    if !(text.starts_with("iappr:") || text.starts_with("idismiss:") || text.starts_with("icancel:")
+        || text.starts_with("dpm:approve:") || text.starts_with("dpm:dismiss:")) {
         return false; // not an initiative callback — let other interceptors / dispatcher try
     }
 
@@ -422,6 +423,23 @@ pub(super) async fn handle_initiative_callback(
                     }))
                     .await;
             }
+        }
+        return true;
+    }
+
+    if let Some(d) = text.strip_prefix("dpm:approve:") {
+        let Ok(date) = d.parse::<chrono::NaiveDate>() else { return true; };
+        match crate::gateway::handlers::agents::initiative::approve_day_plan(db, engine, date).await {
+            Ok(_) => { let _ = out_tx.send(OutboundMsg::Wire(ChannelOutbound::Done { request_id: request_id.to_string(), text: "✅ План принят".to_string() })).await; }
+            Err(e) => { let m = describe_proposal_error(e); let _ = out_tx.send(OutboundMsg::Wire(ChannelOutbound::Error { request_id: request_id.to_string(), message: format!("Failed to approve day plan: {m}") })).await; }
+        }
+        return true;
+    }
+    if let Some(d) = text.strip_prefix("dpm:dismiss:") {
+        let Ok(date) = d.parse::<chrono::NaiveDate>() else { return true; };
+        match crate::gateway::handlers::agents::initiative::dismiss_day_plan(db, engine, date).await {
+            Ok(_) => { let _ = out_tx.send(OutboundMsg::Wire(ChannelOutbound::Done { request_id: request_id.to_string(), text: "❌ План отклонён".to_string() })).await; }
+            Err(e) => { let m = describe_proposal_error(e); let _ = out_tx.send(OutboundMsg::Wire(ChannelOutbound::Error { request_id: request_id.to_string(), message: format!("Failed to dismiss day plan: {m}") })).await; }
         }
         return true;
     }

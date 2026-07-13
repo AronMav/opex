@@ -39,6 +39,27 @@ pub async fn send_proposal_to_channel(
     }
 }
 
+/// Pure: numbered list of all N intents for the owner's approval message.
+pub(crate) fn day_plan_body(intents: &[String]) -> String {
+    intents.iter().enumerate().map(|(i, t)| format!("{}. {t}", i + 1)).collect::<Vec<_>>().join("\n")
+}
+
+/// Deliver the morning day-plan (ALL intents enumerated) to the owner's channel.
+/// `date` (plan generation date) is embedded in the button callback (review H2).
+pub async fn send_day_plan_to_channel(router: &ChannelActionRouter, channel: &str, chat_id: i64, intents: &[String], date: chrono::NaiveDate) {
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    let action = ChannelAction {
+        name: "day_plan".to_string(),
+        params: serde_json::json!({ "intents": intents, "date": date.to_string() }),
+        context: serde_json::json!({ "chat_id": chat_id }),
+        reply: reply_tx,
+        target_channel: Some(channel.to_string()),
+    };
+    if router.send(action).await.is_ok() {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), reply_rx).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -47,5 +68,12 @@ mod tests {
         assert_eq!(super::parse_chat_id(Some("not-a-number")), None);
         assert_eq!(super::parse_chat_id(None), None);
         assert_eq!(super::parse_chat_id(Some("")), None);
+    }
+
+    #[test]
+    fn day_plan_body_numbers_all_intents() {
+        let body = super::day_plan_body(&["довести X".to_string(), "разобрать Y".to_string()]);
+        assert!(body.contains("1.") && body.contains("довести X"));
+        assert!(body.contains("2.") && body.contains("разобрать Y"));
     }
 }

@@ -166,13 +166,46 @@ async fn read_self_md(engine: &AgentEngine, agent: &str, workspace_dir: &str) ->
     }
 }
 
-// STUBS — Task 6 replaces these bodies with the real notification/channel-button
-// implementation. Signatures are frozen here so day_plan_tick/advance_day_plan
-// compile standalone in Task 4.
-#[allow(dead_code)] // wired by Task 8; body replaced by Task 6
-async fn notify_day_plan(_db: &PgPool, _engine: &AgentEngine, _agent: &str, _deps: &InitiativeDeps, _intents: &[DayIntent], _date: chrono::NaiveDate) {}
-#[allow(dead_code)] // wired by Task 8; body replaced by Task 6
-async fn notify_plan_done(_db: &PgPool, _engine: &AgentEngine, _agent: &str, _deps: &InitiativeDeps) {}
+/// Notify the owner of the morning day-plan (ALL intents enumerated — informed
+/// consent, review HIGH sec): a UI notification plus a Telegram message with
+/// approve/dismiss buttons carrying `date` (review H2).
+#[allow(dead_code)] // wired by Task 8 (heartbeat call site)
+async fn notify_day_plan(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &InitiativeDeps, intents: &[DayIntent], date: chrono::NaiveDate) {
+    let texts: Vec<String> = intents.iter().map(|i| i.intent.clone()).collect();
+    if let Some(tx) = &deps.ui_event_tx {
+        let _ = crate::gateway::handlers::notifications::notify(
+            db, tx, "day_plan", &format!("{agent}: план на день"),
+            &crate::agent::initiative::delivery::day_plan_body(&texts),
+            serde_json::json!({ "agent": agent, "intents": texts, "date": date.to_string() }),
+        ).await;
+    }
+    let _ = engine;
+    if let (Some(router), Some((ch, chat_id))) = (
+        deps.channel_router.as_ref(),
+        crate::agent::initiative::delivery::resolve_owner_target(db, agent, deps.owner_id.as_deref()).await,
+    ) {
+        crate::agent::initiative::delivery::send_day_plan_to_channel(router, &ch, chat_id, &texts, date).await;
+    }
+}
+
+/// Notify the owner that today's day-plan has been fully worked through.
+#[allow(dead_code)] // wired by Task 8 (heartbeat call site)
+async fn notify_plan_done(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &InitiativeDeps) {
+    let _ = engine;
+    if let (Some(router), Some((ch, chat_id))) = (
+        deps.channel_router.as_ref(),
+        crate::agent::initiative::delivery::resolve_owner_target(db, agent, deps.owner_id.as_deref()).await,
+    ) {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let action = crate::agent::channel_actions::ChannelAction {
+            name: "send_message".to_string(),
+            params: serde_json::json!({ "text": format!("✅ {agent}: план на день выполнен") }),
+            context: serde_json::json!({ "chat_id": chat_id }),
+            reply: reply_tx, target_channel: Some(ch),
+        };
+        if router.send(action).await.is_ok() { let _ = tokio::time::timeout(std::time::Duration::from_secs(5), reply_rx).await; }
+    }
+}
 
 #[cfg(test)]
 mod tests {
