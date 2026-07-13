@@ -14,6 +14,7 @@ import { useHotkey } from "@/hooks/use-hotkey";
 import { ChatRuntimeProvider } from "@/providers/assistant-runtime";
 import { useTranslation } from "@/hooks/use-translation";
 import { relativeTime } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 import { Loader } from "@/components/ui/loader";
@@ -51,8 +52,7 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Tabs } from "@/components/ui/tabs";
-import { FilterTabsList } from "@/components/ui/filter-tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChatThread } from "./ChatThread";
 import { ContextBar } from "./ContextBar";
 import { CanvasPanel } from "./CanvasPanel";
@@ -507,7 +507,7 @@ export default function ChatPage() {
   // Agent selector component (reused in desktop header and mobile)
   const agentSelector = (
     <Select value={currentAgent} onValueChange={switchAgent} aria-label={t("chat.switch_agent")}>
-      <SelectTrigger size="sm" className="w-auto min-w-14 max-w-16 sm:min-w-24 sm:max-w-24 md:max-w-40 text-xs font-semibold uppercase tracking-wide bg-card/50 border-border">
+      <SelectTrigger size="sm" className="w-full min-w-0 md:w-auto md:min-w-48 md:max-w-80 shrink text-xs font-semibold uppercase tracking-wide bg-card/50 border-border">
         <SelectValue />
       </SelectTrigger>
       <SelectContent className="border-border">
@@ -578,7 +578,7 @@ export default function ChatPage() {
           <Button
             variant="outline"
             size="sm"
-            className="h-8 px-3 border-primary/30 !bg-primary/10 text-primary text-xs font-medium transition-all hover:bg-primary/10 hover:text-primary hover:border-primary/30"
+            className="hidden lg:inline-flex h-8 px-3 border-primary/30 !bg-primary/10 text-primary text-xs font-medium transition-all hover:bg-primary/10 hover:text-primary hover:border-primary/30"
             onClick={handleNewChat}
           >
             <Plus className="mr-1.5 h-4 w-4" /> {t("chat.new")}
@@ -623,7 +623,7 @@ export default function ChatPage() {
                 const isSelected = selectedSessions.has(s.id);
                 const displayTitle = s.title || s.user_id || t("chat.no_title");
                 return (
-                  <div className="group relative pb-1.5 flex items-stretch gap-1 min-w-0 overflow-hidden">
+                  <div className="group relative pb-1.5 flex items-stretch gap-1 min-w-0">
                     <button
                       onClick={() => toggleSessionSelection(s.id)}
                       className={`shrink-0 self-center h-5 w-5 md:h-3.5 md:w-3.5 rounded border transition-colors flex items-center justify-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
@@ -643,7 +643,7 @@ export default function ChatPage() {
                     </button>
                     <button
                       onClick={() => handleSelectSession(s)}
-                      className={`relative flex w-full min-w-0 flex-col gap-1.5 rounded-lg px-3 py-2.5 pr-12 md:px-4 md:py-3 md:pr-14 text-left transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background overflow-hidden ${
+                      className={`relative flex w-full min-w-0 flex-col gap-1.5 rounded-lg px-3 py-2.5 pb-9 md:px-4 md:py-3 md:pb-3 md:pr-14 text-left transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background overflow-hidden ${
                         activeSessionId === s.id
                         ? "bg-accent shadow-inner"
                         : "hover:bg-accent/40"
@@ -731,7 +731,7 @@ export default function ChatPage() {
                         <div className="absolute left-0 top-1/2 -translate-y-1/2 h-8 w-0.5 rounded-full bg-primary" />
                       )}
                     </button>
-                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex flex-col items-center gap-0.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity duration-150">
+                    <div className="absolute right-1.5 bottom-1 flex flex-row md:right-2 md:top-1/2 md:bottom-auto md:translate-y-0 md:-translate-y-1/2 md:flex-col items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity duration-150 z-10">
                         <Button
                           variant="ghost"
                           size="icon-sm"
@@ -813,12 +813,12 @@ export default function ChatPage() {
         </div>
 
         {/* Mobile/tablet floating actions — visible below lg */}
-        <div className="sticky top-0 z-20 flex shrink-0 items-center gap-0.5 px-1.5 py-1 sm:gap-1 sm:px-2 bg-background/95 backdrop-blur-md border-b border-border/30 lg:hidden">
+        <div className="sticky top-0 z-20 flex shrink-0 items-center gap-0.5 px-1.5 py-1 sm:gap-1 sm:px-2 bg-background/95 backdrop-blur-md border-b border-border/30 lg:hidden overflow-hidden">
           <SidebarTrigger className="h-9 w-9 text-foreground active:scale-90 transition-transform md:hidden shrink-0" />
-          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+          <div className="flex min-w-0 flex-1 items-center overflow-hidden">
             {agentSelector}
-            <ChatCanvasTabs />
           </div>
+          <ChatCanvasTabs />
           <ContextBar
             compact
             tokens={contextTokens}
@@ -840,6 +840,7 @@ export default function ChatPage() {
             </SheetTrigger>
             <SheetContent
               side="left"
+              showCloseButton={false}
               className="w-[85dvw] border-r border-border bg-sidebar p-0"
             >
               <SheetTitle className="sr-only">{t("chat.sessions")}</SheetTitle>
@@ -896,20 +897,23 @@ export default function ChatPage() {
 
 // ── Chat / Canvas tab switching ────────────────────────────────────────────
 
-function ChatCanvasTabs() {
+function ChatCanvasTabs({ className }: { className?: string }) {
   const { t } = useTranslation();
   const panelOpen = useCanvasStore((s) => s.panelOpen);
   const setPanelOpen = useCanvasStore((s) => s.setPanelOpen);
 
   return (
     <Tabs value={panelOpen ? "canvas" : "chat"} onValueChange={(v) => setPanelOpen(v === "canvas")}>
-      <FilterTabsList
-        className="h-8"
-        items={[
-          { value: "chat", label: t("nav.chat"), icon: <MessageSquare /> },
-          { value: "canvas", label: t("nav.canvas"), icon: <PanelRight /> },
-        ]}
-      />
+      <TabsList className={cn("h-8 w-fit", className)}>
+        <TabsTrigger value="chat" className="w-fit gap-1.5 px-2.5 text-xs font-medium">
+          <MessageSquare className="size-4" />
+          <span className="hidden lg:inline">{t("nav.chat")}</span>
+        </TabsTrigger>
+        <TabsTrigger value="canvas" className="w-fit gap-1.5 px-2.5 text-xs font-medium">
+          <PanelRight className="size-4" />
+          <span className="hidden lg:inline">{t("nav.canvas")}</span>
+        </TabsTrigger>
+      </TabsList>
     </Tabs>
   );
 }

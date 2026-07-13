@@ -80,16 +80,7 @@ export function ContextBar({
     return (
       <>
         <CheckpointPanel agent={currentAgent} open={checkpointOpen} onOpenChange={setCheckpointOpen} />
-        <div className="flex items-center gap-1.5 min-w-0 shrink">
-          {/* Model is shown in the composer's model dropdown; omit it here to
-              avoid redundancy in the crowded mobile header. */}
-          {/* Mini progress dot — colored by usage */}
-          {hasUsage && (
-            <span
-              className={`h-1.5 w-1.5 rounded-full shrink-0 ${barColor} ${isGenerating ? "animate-pulse" : ""}`}
-              title={`${pct}%`}
-            />
-          )}
+        <div className="flex items-center gap-1.5 shrink-0">
           {currentAgent && (
             <Button
               variant="outline"
