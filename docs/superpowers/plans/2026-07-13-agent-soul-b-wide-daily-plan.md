@@ -59,6 +59,12 @@ COMMENT ON COLUMN agent_plans.day_plan IS
 -- called once per tick, no long-lived driver) does not retry an empty decompose forever.
 ALTER TABLE session_goals
     ADD COLUMN IF NOT EXISTS decompose_failed BOOLEAN NOT NULL DEFAULT false;
+
+-- Day-plan goals are advanced by day_plan_tick (heartbeat), NOT by the generic crash
+-- redrive sweep. Mark them so list_redrivable can EXCLUDE them — otherwise a mid-day
+-- deploy/restart spawns a continuous driver that races the per-tick advance (review H1).
+ALTER TABLE session_goals
+    ADD COLUMN IF NOT EXISTS day_plan_managed BOOLEAN NOT NULL DEFAULT false;
 ```
 
 - [ ] **Step 2: Failing test — GoalRow.decompose_failed decode + set**
@@ -95,15 +101,25 @@ type GoalRowTuple =
     (String, String, i32, i32, serde_json::Value, Option<String>, i32, String, i32, bool);
 ```
 In `get`: add `, decompose_failed` to the SELECT column list and to the destructuring `|(…, origin, current_chunk, decompose_failed)|` + `decompose_failed,` in the struct literal. Same in `list_active_by_agent_and_origin` (its `Row` type gets trailing `bool`, SELECT adds `g.decompose_failed`, closure destructure + struct literal add it).
-Add fn:
+Add fns:
 ```rust
 pub async fn set_decompose_failed(db: &PgPool, session_id: Uuid, v: bool) -> Result<()> {
     sqlx::query("UPDATE session_goals SET decompose_failed = $2, updated_at = now() WHERE session_id = $1")
         .bind(session_id).bind(v).execute(db).await?;
     Ok(())
 }
+/// Mark a goal as day-plan-owned (advanced by day_plan_tick, excluded from crash redrive).
+pub async fn set_day_plan_managed_tx(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, session_id: Uuid, v: bool) -> Result<()> {
+    sqlx::query("UPDATE session_goals SET day_plan_managed = $2, updated_at = now() WHERE session_id = $1")
+        .bind(session_id).bind(v).execute(&mut **tx).await?;
+    Ok(())
+}
 ```
 Fix the 3 test-helper `GoalRow { … }` literals (`session_goals.rs` `fn row`, `goal/mod.rs` `fn row`, `goal/decompose.rs` `fn row`) — add `decompose_failed: false,` after `current_chunk`.
+
+**Review M1 — restore `decompose_failed` equivalence for continuous goals.** The pre-refactor flag reset to false on every `spawn_goal_driver` (i.e. every `/goal resume` / re-drive). Persisting it as a column would otherwise make a resumed goal never retry decompose. Add `decompose_failed = false` to the `ON CONFLICT ... DO UPDATE SET` list of `upsert`, `upsert_cron_goal`, and `upsert_initiative_goal_tx`. Also reset it in `/goal resume` (Task 2 note: `commands.rs` `GoalCmd::Resume` calls `set_status(active)` — add `set_decompose_failed(db, sid, false)` alongside).
+
+**Review H1 — exclude day-plan goals from crash redrive.** In `list_redrivable`'s SQL, add `AND NOT g.day_plan_managed` to the WHERE clause (day-plan goals are re-driven by `day_plan_tick`, never by the generic sweep — otherwise a mid-day restart spawns a continuous driver racing the per-tick advance). Extend the existing `list_redrivable_selects_only_crashed_cron_goals` test: seed one more `origin='initiative'` interrupted goal, `UPDATE session_goals SET day_plan_managed=true` on it, and assert it is NOT in the result (day-plan goals excluded from redrive).
 
 - [ ] **Step 5: Failing test — agent_plans day_plan round-trip**
 
@@ -117,7 +133,7 @@ Fix the 3 test-helper `GoalRow { … }` literals (`session_goals.rs` `fn row`, `
             DayIntent { session_id: None, intent: "довести X".into(), status: "pending".into() },
             DayIntent { session_id: None, intent: "разобрать Y".into(), status: "pending".into() },
         ];
-        set_day_plan(&pool, "dpA", &intents, today, "pending").await.unwrap();
+        set_day_plan(&pool, "dpA", &intents, today, Some("pending")).await.unwrap();
         let p = get_or_create(&pool, "dpA").await.unwrap();
         assert_eq!(p.day_plan_status.as_deref(), Some("pending"));
         assert_eq!(p.day_plan_date, Some(today));
@@ -153,7 +169,7 @@ In `PlanRow` add fields after `proposal_day`:
     #[allow(dead_code)]
     pub updated_at: DateTime<Utc>,
 ```
-Extend `get_or_create` query tuple + SELECT + struct literal (11 → 15 columns; add `day_plan, day_plan_current, day_plan_date, day_plan_status` before `updated_at`):
+Extend `get_or_create` query tuple + SELECT + struct literal (7 → 11 columns; add `day_plan, day_plan_current, day_plan_date, day_plan_status` before `updated_at`):
 ```rust
     let row = sqlx::query_as::<_, (String, Option<String>, serde_json::Value, Option<DateTime<Utc>>, i32, Option<NaiveDate>, serde_json::Value, i32, Option<NaiveDate>, Option<String>, DateTime<Utc>)>(
         "SELECT agent_id, current_focus, proposals, last_proposal_at, proposals_today, proposal_day,
@@ -169,7 +185,8 @@ Extend `get_or_create` query tuple + SELECT + struct literal (11 → 15 columns;
 ```
 Add fns:
 ```rust
-pub async fn set_day_plan(db: &PgPool, agent_id: &str, intents: &[DayIntent], date: NaiveDate, status: &str) -> Result<()> {
+// status Option so the "no material" branch writes NULL atomically (review L1).
+pub async fn set_day_plan(db: &PgPool, agent_id: &str, intents: &[DayIntent], date: NaiveDate, status: Option<&str>) -> Result<()> {
     sqlx::query(
         "UPDATE agent_plans SET day_plan = $2, day_plan_current = 0, day_plan_date = $3,
            day_plan_status = $4, updated_at = now() WHERE agent_id = $1",
@@ -192,18 +209,31 @@ pub async fn set_day_plan_pointer(db: &PgPool, agent_id: &str, current: i32, int
     Ok(())
 }
 
-/// CAS: flip pending→approved iff pending AND non-empty. Returns the pending intents
-/// (to be materialized into session_goals) iff flipped; None = idempotent no-op.
+/// CAS: flip pending→approved iff pending AND non-empty AND date matches the button's
+/// date (review H2: a stale Telegram button from a prior day must not approve a newer,
+/// differently-generated plan). Returns the pending intents iff flipped; None = no-op.
 pub async fn try_start_day_plan_approval_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     agent_id: &str,
+    date: NaiveDate,
 ) -> Result<Option<Vec<DayIntent>>> {
     let dp = sqlx::query_scalar::<_, serde_json::Value>(
         "UPDATE agent_plans SET day_plan_status = 'approved', updated_at = now()
-         WHERE agent_id = $1 AND day_plan_status = 'pending' AND jsonb_array_length(day_plan) > 0
+         WHERE agent_id = $1 AND day_plan_status = 'pending' AND day_plan_date = $2
+           AND jsonb_array_length(day_plan) > 0
          RETURNING day_plan",
-    ).bind(agent_id).fetch_optional(&mut **tx).await?;
+    ).bind(agent_id).bind(date).fetch_optional(&mut **tx).await?;
     Ok(dp.and_then(|v| serde_json::from_value(v).ok()))
+}
+
+/// CAS dismiss: pending→dismissed iff pending AND date matches (review M4 — atomic,
+/// not read-then-write). Returns true iff flipped.
+pub async fn try_dismiss_day_plan(db: &PgPool, agent_id: &str, date: NaiveDate) -> Result<bool> {
+    let res = sqlx::query(
+        "UPDATE agent_plans SET day_plan_status = 'dismissed', updated_at = now()
+         WHERE agent_id = $1 AND day_plan_status = 'pending' AND day_plan_date = $2",
+    ).bind(agent_id).bind(date).execute(db).await?;
+    Ok(res.rows_affected() > 0)
 }
 
 /// Write intents-with-session_ids back after materialization (same tx as approval).
@@ -218,16 +248,30 @@ pub async fn set_day_plan_intents_tx(
 }
 ```
 
-- [ ] **Step 7: Run check + clippy**
+- [ ] **Step 7: Add `InitiativeConfig.daily_plan` field (needed by Task 2 — review B1/B2)**
+
+Task 2 references `engine.cfg().agent.initiative.daily_plan`, so the field must exist BEFORE Task 2. Add it here (validation + tick-skip stay in Task 7).
+`config/mod.rs` `InitiativeConfig` struct — after `decompose`:
+```rust
+    #[serde(default)]
+    pub decompose: bool,
+    #[serde(default)]
+    pub daily_plan: bool,
+}
+```
+`Default for InitiativeConfig` — add `daily_plan: false,`.
+Fix the two existing field-by-field literals in `config/mod.rs` tests (`initiative_config_defaults_and_validation`, ~lines 3356-3366): `InitiativeConfig { enabled: true, daily_proposal_cap: 0, decompose: false }` → add `, daily_plan: false` (both `bad` and `bad2`).
+
+- [ ] **Step 8: Run check + clippy**
 
 Run (сервер): `cargo check --all-targets -p opex-core && cargo clippy -p opex-core --all-targets -- -D warnings`
 Expected: clean.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add migrations/081_agent_day_plan.sql crates/opex-core/src/db/agent_plans.rs crates/opex-core/src/db/session_goals.rs crates/opex-core/src/agent/goal/mod.rs crates/opex-core/src/agent/goal/decompose.rs
-git commit -m "feat(bwide): m081 day_plan columns + decompose_failed + agent_plans CRUD"
+git add migrations/081_agent_day_plan.sql crates/opex-core/src/db/agent_plans.rs crates/opex-core/src/db/session_goals.rs crates/opex-core/src/agent/goal/mod.rs crates/opex-core/src/agent/goal/decompose.rs crates/opex-core/src/config/mod.rs
+git commit -m "feat(bwide): m081 day_plan+decompose_failed+day_plan_managed cols, agent_plans CRUD, daily_plan field"
 ```
 
 ---
@@ -314,6 +358,11 @@ pub(crate) async fn advance_one_chunk(
         return StepOutcome::Paused;
     }
 
+    // NB (review LOW): the `|| daily_plan` broadening applies to ALL of this agent's
+    // initiative goals. When daily_plan is toggled ON, the only initiative goals are
+    // day-plan intents (single-proposal path is skipped) — but a pre-existing single-
+    // proposal goal still mid-flight at toggle time would switch flat→decompose on its
+    // next turn. Acceptable (rare toggle-timing window); note in the deploy runbook.
     let is_decompose = row.origin == "initiative"
         && (engine.cfg().agent.initiative.decompose || engine.cfg().agent.initiative.daily_plan)
         && !row.decompose_failed;
@@ -426,15 +475,23 @@ async fn run_goal_driver(engine: Arc<AgentEngine>, session_id: Uuid, target: Goa
 ```
 Remove now-unused imports if clippy flags (e.g. `ChunkVerdict` may still be used by chunk_judge — keep). Ensure `Verdict`, `DriverAction`, `next_action`, `continuation_prompt` are imported (they are via `use super::{…}`).
 
-- [ ] **Step 4: Run check + clippy**
+- [ ] **Step 4: Reset `decompose_failed` on `/goal resume` (review M1 equivalence)**
+
+The pre-refactor in-memory flag reset on every driver spawn (incl. `/goal resume`). Persisted as a column it must be reset explicitly. In `crates/opex-core/src/agent/pipeline/commands.rs`, the `GoalCmd::Resume` arm (calls `session_goals::set_status(db, sid, "active")`) — add alongside it:
+```rust
+        let _ = crate::db::session_goals::set_decompose_failed(&db, session_id, false).await;
+```
+(Match the existing binding names for `db`/`session_id` in that arm.)
+
+- [ ] **Step 5: Run check + clippy**
 
 Run (сервер): `cargo check --all-targets -p opex-core && cargo clippy -p opex-core --all-targets -- -D warnings`
 Expected: clean. (Existing pure tests in goal/mod.rs + decompose.rs unchanged and green.)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add crates/opex-core/src/agent/goal/driver.rs
+git add crates/opex-core/src/agent/goal/driver.rs crates/opex-core/src/agent/pipeline/commands.rs
 git commit -m "refactor(goal): extract advance_one_chunk (self-contained, one turn) + StepOutcome"
 ```
 
@@ -500,12 +557,13 @@ use crate::agent::soul::sanitize::sanitize_soul_text;
 /// Max intents in a generated day plan (spec §3.2).
 pub const MAX_DAY_INTENTS: usize = 4;
 
-/// Pure: cap to MAX_DAY_INTENTS, sanitize each, drop trivial ("N/A"/"нет"/empty).
+/// Pure: sanitize each → drop trivial → cap to MAX_DAY_INTENTS (order per spec §3.2 —
+/// cap LAST so a trivial/blocked item among the first few doesn't discard a valid later one).
 pub(crate) fn select_intents(raw: &[String]) -> Vec<String> {
     raw.iter()
-        .take(MAX_DAY_INTENTS)
         .filter_map(|s| sanitize_soul_text(s, EVENT_MAX_CHARS))
         .filter(|s| !super::is_trivial_goal(s))
+        .take(MAX_DAY_INTENTS)
         .collect()
 }
 
@@ -640,9 +698,7 @@ async fn day_plan_tick_inner(db: &PgPool, engine: &AgentEngine, agent: &str, dep
         let latest_refl = crate::db::memory_queries::latest_reflection_at(db, agent).await.ok().flatten();
         let threads = crate::db::memory_queries::recent_open_thread_chunks(db, agent, 5, 5).await.unwrap_or_default();
         if latest_refl.is_none() && threads.is_empty() {
-            agent_plans::set_day_plan(db, agent, &[], today, "dismissed").await.ok(); // sticky date, no plan
-            // set status back to NULL for clarity:
-            let _ = agent_plans::set_day_plan_status(db, agent, None).await;
+            let _ = agent_plans::set_day_plan(db, agent, &[], today, None).await; // sticky date, no plan (single write, review L1)
             return Ok(());
         }
         let reflections: Vec<String> = crate::db::memory_queries::recent_soul_chunks(db, agent, 5).await
@@ -652,14 +708,13 @@ async fn day_plan_tick_inner(db: &PgPool, engine: &AgentEngine, agent: &str, dep
         let provider = engine.cfg().compaction_provider.clone().unwrap_or_else(|| engine.provider_arc());
         let intents_txt = generate_day_plan(&provider, agent, &self_md, &reflections, &threads).await;
         if intents_txt.is_empty() {
-            agent_plans::set_day_plan(db, agent, &[], today, "dismissed").await.ok();
-            let _ = agent_plans::set_day_plan_status(db, agent, None).await;
+            let _ = agent_plans::set_day_plan(db, agent, &[], today, None).await;
             return Ok(());
         }
         let intents: Vec<DayIntent> = intents_txt.into_iter()
             .map(|t| DayIntent { session_id: None, intent: t, status: "pending".into() }).collect();
-        agent_plans::set_day_plan(db, agent, &intents, today, "pending").await?;
-        notify_day_plan(db, engine, agent, deps, &intents).await; // Task 6 provides
+        agent_plans::set_day_plan(db, agent, &intents, today, Some("pending")).await?;
+        notify_day_plan(db, engine, agent, deps, &intents, today).await; // Task 6 provides (date → button)
         return Ok(());
     }
 
@@ -710,7 +765,11 @@ async fn read_self_md(engine: &AgentEngine, agent: &str, workspace_dir: &str) ->
     }
 }
 ```
-> Note: `notify_day_plan` / `notify_plan_done` are provided by Task 6 — for Task 4, stub them as local `async fn notify_day_plan(_db,_engine,_agent,_deps,_intents){}` / `async fn notify_plan_done(_db,_engine,_agent,_deps){}` so this task compiles standalone; Task 6 replaces the stubs.
+> Note: `notify_day_plan` / `notify_plan_done` are STUBBED in Task 4 (compile standalone) and REPLACED by Task 6. Task 4 stubs — exact signatures (Task 6 must match, then delete these stubs before inserting the real bodies):
+> ```rust
+> async fn notify_day_plan(_db: &PgPool, _engine: &AgentEngine, _agent: &str, _deps: &InitiativeDeps, _intents: &[DayIntent], _date: chrono::NaiveDate) {}
+> async fn notify_plan_done(_db: &PgPool, _engine: &AgentEngine, _agent: &str, _deps: &InitiativeDeps) {}
+> ```
 
 Make `today_in_tz` reusable — in `tick.rs`:
 ```rust
@@ -738,7 +797,7 @@ git commit -m "feat(bwide): day_plan_tick + advance_day_plan (finalize prev day,
 
 **Interfaces:**
 - Consumes: Task 1 `agent_plans::{try_start_day_plan_approval_tx, set_day_plan_intents_tx, set_day_plan_status, DayIntent}`; `sessions::create_new_session_tx`; `session_goals::upsert_initiative_goal_tx`; `channel_kind::channel::CRON`.
-- Produces: `pub(crate) async fn approve_day_plan(db, engine) -> Result<bool, ProposalError>` (true = materialized); `pub(crate) async fn dismiss_day_plan(db, engine) -> Result<(), ProposalError>`; routes `POST /api/agents/{name}/plan/day/approve`, `.../day/dismiss`.
+- Produces: `pub(crate) async fn approve_day_plan(db, engine, date: NaiveDate) -> Result<bool, ProposalError>`; `pub(crate) async fn dismiss_day_plan(db, engine, date: NaiveDate) -> Result<(), ProposalError>`; `materialize_day_plan_tx(db, agent, date)`; routes `POST /api/agents/{name}/plan/day/{date}/approve`, `.../day/{date}/dismiss`. Also: add `#[derive(Debug)]` to `ProposalError` (needed for `.unwrap()` in the sqlx test; update the stale `inline.rs` doc comment claiming "no Debug").
 
 - [ ] **Step 1: Failing sqlx test — approve materializes N goals, CAS idempotent**
 
@@ -752,21 +811,25 @@ In `initiative.rs` `mod tests` (or a new sqlx test near existing ones; if none, 
             crate::db::agent_plans::DayIntent { session_id: None, intent: "a".into(), status: "pending".into() },
             crate::db::agent_plans::DayIntent { session_id: None, intent: "b".into(), status: "pending".into() },
         ];
-        crate::db::agent_plans::set_day_plan(&pool, "DP", &intents, today, "pending").await.unwrap();
+        crate::db::agent_plans::set_day_plan(&pool, "DP", &intents, today, Some("pending")).await.unwrap();
         // First approval materializes 2 goals + flips approved.
-        let n = super::materialize_day_plan_tx(&pool, "DP").await.unwrap();
+        let n = super::materialize_day_plan_tx(&pool, "DP", today).await.unwrap();
         assert_eq!(n, 2);
         let plan = crate::db::agent_plans::get_or_create(&pool, "DP").await.unwrap();
         assert_eq!(plan.day_plan_status.as_deref(), Some("approved"));
         let parsed: Vec<crate::db::agent_plans::DayIntent> = serde_json::from_value(plan.day_plan.clone()).unwrap();
         assert!(parsed.iter().all(|i| i.session_id.is_some() && i.status == "active"));
         // Second (concurrent double-click) → CAS no-op, 0 new.
-        let n2 = super::materialize_day_plan_tx(&pool, "DP").await.unwrap();
+        let n2 = super::materialize_day_plan_tx(&pool, "DP", today).await.unwrap();
         assert_eq!(n2, 0);
+        // Stale-date button → CAS no-op (review H2).
+        let yesterday = today.pred_opt().unwrap();
+        crate::db::agent_plans::set_day_plan(&pool, "DP", &intents, today, Some("pending")).await.unwrap(); // reset to pending, date=today
+        assert_eq!(super::materialize_day_plan_tx(&pool, "DP", yesterday).await.unwrap(), 0, "wrong date → no-op");
         Ok(())
     }
 ```
-Provide a small test-only wrapper `materialize_day_plan_tx_test` that runs the same tx body as `approve_day_plan` against the pool (agent "DP", no engine needed since goals are created via db only). Implement it in the tests module calling the shared `materialize_day_plan_tx` (see Step 3).
+The test calls the `pub(crate)` `materialize_day_plan_tx` directly (no engine needed — goals created via db only).
 
 - [ ] **Step 2: Run — verify FAIL**
 
@@ -777,23 +840,26 @@ Expected: FAIL — functions not found.
 
 Add a db-only shared helper (so it's sqlx-testable without engine):
 ```rust
-/// Shared tx body: CAS pending→approved (iff non-empty), create N sessions+goals,
+/// Shared tx body: CAS pending→approved (iff non-empty AND date matches — review H2),
+/// create N sessions+goals (marked day_plan_managed so crash-redrive skips them — review H1),
 /// write session_ids back. Returns count materialized (0 = CAS no-op).
-pub(crate) async fn materialize_day_plan_tx(db: &sqlx::PgPool, agent_name: &str) -> Result<usize, ProposalError> {
+pub(crate) async fn materialize_day_plan_tx(db: &sqlx::PgPool, agent_name: &str, date: chrono::NaiveDate) -> Result<usize, ProposalError> {
     const INITIATIVE_GOAL_MAX_TURNS: i32 = 20;
     let channel = crate::agent::channel_kind::channel::CRON;
     let mut tx = db.begin().await.map_err(|e| ProposalError::Db(e.to_string()))?;
-    let Some(pending) = crate::db::agent_plans::try_start_day_plan_approval_tx(&mut tx, agent_name)
+    let Some(pending) = crate::db::agent_plans::try_start_day_plan_approval_tx(&mut tx, agent_name, date)
         .await.map_err(|e| ProposalError::Db(e.to_string()))?
     else {
         tx.rollback().await.ok();
-        return Ok(0); // not pending / empty → idempotent no-op
+        return Ok(0); // not pending / empty / wrong date → idempotent no-op
     };
     let mut materialized = Vec::with_capacity(pending.len());
     for it in pending {
         let sid = crate::db::sessions::create_new_session_tx(&mut tx, agent_name, "system", channel)
             .await.map_err(|e| ProposalError::Db(e.to_string()))?;
         crate::db::session_goals::upsert_initiative_goal_tx(&mut tx, sid, &it.intent, INITIATIVE_GOAL_MAX_TURNS)
+            .await.map_err(|e| ProposalError::Db(e.to_string()))?;
+        crate::db::session_goals::set_day_plan_managed_tx(&mut tx, sid, true)
             .await.map_err(|e| ProposalError::Db(e.to_string()))?;
         materialized.push(crate::db::agent_plans::DayIntent {
             session_id: Some(sid), intent: it.intent, status: "active".into(),
@@ -808,38 +874,38 @@ pub(crate) async fn materialize_day_plan_tx(db: &sqlx::PgPool, agent_name: &str)
 pub(crate) async fn approve_day_plan(
     db: &sqlx::PgPool,
     engine: &std::sync::Arc<crate::agent::engine::AgentEngine>,
+    date: chrono::NaiveDate,
 ) -> Result<bool, ProposalError> {
     if engine.cfg().agent.base { return Err(ProposalError::BaseAgent); }
     let agent_name = engine.cfg().agent.name.clone();
-    let n = materialize_day_plan_tx(db, &agent_name).await?;
+    let n = materialize_day_plan_tx(db, &agent_name, date).await?;
     Ok(n > 0)
 }
 
 pub(crate) async fn dismiss_day_plan(
     db: &sqlx::PgPool,
     engine: &std::sync::Arc<crate::agent::engine::AgentEngine>,
+    date: chrono::NaiveDate,
 ) -> Result<(), ProposalError> {
     if engine.cfg().agent.base { return Err(ProposalError::BaseAgent); }
     let agent_name = engine.cfg().agent.name.clone();
-    // CAS-style: only clear if still pending.
-    let plan = crate::db::agent_plans::get_or_create(db, &agent_name).await.map_err(|e| ProposalError::Db(e.to_string()))?;
-    if plan.day_plan_status.as_deref() == Some("pending") {
-        crate::db::agent_plans::set_day_plan_status(db, &agent_name, Some("dismissed"))
-            .await.map_err(|e| ProposalError::Db(e.to_string()))?;
-    }
+    // Atomic CAS (review M4): flips only if still pending AND date matches.
+    crate::db::agent_plans::try_dismiss_day_plan(db, &agent_name, date)
+        .await.map_err(|e| ProposalError::Db(e.to_string()))?;
     Ok(())
 }
 ```
-Add routes in `routes()` (next to proposal approve):
+Add `#[derive(Debug)]` to the `ProposalError` enum (search its definition ~line 63) and update its doc comment / the `inline.rs` comment that says it "carries no Debug".
+Add routes in `routes()` (next to proposal approve). Date is in the path so both Telegram (from `dpm:approve:{date}`) and web pass the plan's generation date (review H2):
 ```rust
-        .route("/api/agents/{name}/plan/day/approve", post(api_approve_day_plan))
-        .route("/api/agents/{name}/plan/day/dismiss", post(api_dismiss_day_plan))
+        .route("/api/agents/{name}/plan/day/{date}/approve", post(api_approve_day_plan))
+        .route("/api/agents/{name}/plan/day/{date}/dismiss", post(api_dismiss_day_plan))
 ```
-Add axum handlers (exact mirror of `api_dismiss_proposal`, but `Path(name)` only — no id):
+Add axum handlers (mirror `api_dismiss_proposal`; `Path((name, date))` — axum parses `NaiveDate` from the `YYYY-MM-DD` path segment via its `FromStr`):
 ```rust
 async fn api_approve_day_plan(
     State(app): State<AppState>,
-    Path(name): Path<String>,
+    Path((name, date)): Path<(String, chrono::NaiveDate)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     if validate_agent_name(&name).is_err() {
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "bad name"}))));
@@ -847,7 +913,7 @@ async fn api_approve_day_plan(
     let Some(engine) = app.agents.get_engine(&name).await else {
         return Err((StatusCode::NOT_FOUND, Json(json!({"error": "agent not found"}))));
     };
-    match approve_day_plan(&app.infra.db, &engine).await {
+    match approve_day_plan(&app.infra.db, &engine, date).await {
         Ok(materialized) => Ok(Json(json!({"ok": true, "materialized": materialized}))),
         Err(ProposalError::BaseAgent) => Err((StatusCode::FORBIDDEN, Json(json!({"error": "initiative is non-base only"})))),
         Err(ProposalError::Db(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e})))),
@@ -856,7 +922,7 @@ async fn api_approve_day_plan(
 
 async fn api_dismiss_day_plan(
     State(app): State<AppState>,
-    Path(name): Path<String>,
+    Path((name, date)): Path<(String, chrono::NaiveDate)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     if validate_agent_name(&name).is_err() {
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "bad name"}))));
@@ -864,14 +930,13 @@ async fn api_dismiss_day_plan(
     let Some(engine) = app.agents.get_engine(&name).await else {
         return Err((StatusCode::NOT_FOUND, Json(json!({"error": "agent not found"}))));
     };
-    match dismiss_day_plan(&app.infra.db, &engine).await {
+    match dismiss_day_plan(&app.infra.db, &engine, date).await {
         Ok(()) => Ok(Json(json!({"ok": true}))),
         Err(ProposalError::BaseAgent) => Err((StatusCode::FORBIDDEN, Json(json!({"error": "initiative is non-base only"})))),
         Err(ProposalError::Db(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e})))),
     }
 }
 ```
-The Step-1 test calls `materialize_day_plan_tx` directly (it's `pub(crate)`): `super::materialize_day_plan_tx(&pool, "DP").await.unwrap()` — rename the test's `materialize_day_plan_tx_test` calls to `materialize_day_plan_tx`. (`ProposalError` derives Debug — if not, add `#[derive(Debug)]` to it in this task.)
 
 - [ ] **Step 4: Run check + clippy**
 
@@ -926,11 +991,12 @@ pub(crate) fn day_plan_body(intents: &[String]) -> String {
 }
 
 /// Deliver the morning day-plan (ALL intents enumerated) to the owner's channel.
-pub async fn send_day_plan_to_channel(router: &ChannelActionRouter, channel: &str, chat_id: i64, intents: &[String]) {
+/// `date` (plan generation date) is embedded in the button callback (review H2).
+pub async fn send_day_plan_to_channel(router: &ChannelActionRouter, channel: &str, chat_id: i64, intents: &[String], date: chrono::NaiveDate) {
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     let action = ChannelAction {
         name: "day_plan".to_string(),
-        params: serde_json::json!({ "intents": intents }),
+        params: serde_json::json!({ "intents": intents, "date": date.to_string() }),
         context: serde_json::json!({ "chat_id": chat_id }),
         reply: reply_tx,
         target_channel: Some(channel.to_string()),
@@ -940,15 +1006,15 @@ pub async fn send_day_plan_to_channel(router: &ChannelActionRouter, channel: &st
     }
 }
 ```
-`day_plan.rs` — replace stubs:
+`day_plan.rs` — replace stubs (note the `date` param threaded from `day_plan_tick_inner`'s `today`):
 ```rust
-async fn notify_day_plan(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &InitiativeDeps, intents: &[DayIntent]) {
+async fn notify_day_plan(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &InitiativeDeps, intents: &[DayIntent], date: chrono::NaiveDate) {
     let texts: Vec<String> = intents.iter().map(|i| i.intent.clone()).collect();
     if let Some(tx) = &deps.ui_event_tx {
         let _ = crate::gateway::handlers::notifications::notify(
             db, tx, "day_plan", &format!("{agent}: план на день"),
             &crate::agent::initiative::delivery::day_plan_body(&texts),
-            serde_json::json!({ "agent": agent, "intents": texts }),
+            serde_json::json!({ "agent": agent, "intents": texts, "date": date.to_string() }),
         ).await;
     }
     let _ = engine;
@@ -956,7 +1022,7 @@ async fn notify_day_plan(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &
         deps.channel_router.as_ref(),
         crate::agent::initiative::delivery::resolve_owner_target(db, agent, deps.owner_id.as_deref()).await,
     ) {
-        crate::agent::initiative::delivery::send_day_plan_to_channel(router, &ch, chat_id, &texts).await;
+        crate::agent::initiative::delivery::send_day_plan_to_channel(router, &ch, chat_id, &texts, date).await;
     }
 }
 
@@ -977,24 +1043,26 @@ async fn notify_plan_done(db: &PgPool, engine: &AgentEngine, agent: &str, deps: 
     }
 }
 ```
-`inline.rs` — in `handle_initiative_callback`, extend the prefix guard and add branches:
+`inline.rs` — in `handle_initiative_callback`, extend the prefix guard and add branches (callbacks carry the plan date: `dpm:approve:{YYYY-MM-DD}` — review H2):
 ```rust
     if !(text.starts_with("iappr:") || text.starts_with("idismiss:") || text.starts_with("icancel:")
-        || text == "dpm:approve" || text == "dpm:dismiss") {
+        || text.starts_with("dpm:approve:") || text.starts_with("dpm:dismiss:")) {
         return false;
     }
 ```
 Then before `false` at the end (owner already verified above):
 ```rust
-    if text == "dpm:approve" {
-        match crate::gateway::handlers::agents::initiative::approve_day_plan(db, engine).await {
+    if let Some(d) = text.strip_prefix("dpm:approve:") {
+        let Ok(date) = d.parse::<chrono::NaiveDate>() else { return true; };
+        match crate::gateway::handlers::agents::initiative::approve_day_plan(db, engine, date).await {
             Ok(_) => { let _ = out_tx.send(OutboundMsg::Wire(ChannelOutbound::Done { request_id: request_id.to_string(), text: "✅ План принят".to_string() })).await; }
             Err(e) => { let m = describe_proposal_error(e); let _ = out_tx.send(OutboundMsg::Wire(ChannelOutbound::Error { request_id: request_id.to_string(), message: format!("Failed to approve day plan: {m}") })).await; }
         }
         return true;
     }
-    if text == "dpm:dismiss" {
-        match crate::gateway::handlers::agents::initiative::dismiss_day_plan(db, engine).await {
+    if let Some(d) = text.strip_prefix("dpm:dismiss:") {
+        let Ok(date) = d.parse::<chrono::NaiveDate>() else { return true; };
+        match crate::gateway::handlers::agents::initiative::dismiss_day_plan(db, engine, date).await {
             Ok(_) => { let _ = out_tx.send(OutboundMsg::Wire(ChannelOutbound::Done { request_id: request_id.to_string(), text: "❌ План отклонён".to_string() })).await; }
             Err(e) => { let m = describe_proposal_error(e); let _ = out_tx.send(OutboundMsg::Wire(ChannelOutbound::Error { request_id: request_id.to_string(), message: format!("Failed to dismiss day plan: {m}") })).await; }
         }
@@ -1005,13 +1073,14 @@ Then before `false` at the end (owner already verified above):
 ```ts
     case "day_plan": {
       const intents = (action.params.intents as string[]) ?? [];
+      const date = (action.params.date as string) ?? "";
       if (!strings) { console.error("[tg] day_plan requires strings"); break; }
       const s = strings;
       const list = intents.map((t, i) => `${i + 1}. ${t}`).join("\n");
       const body = `${s.initiativeHeader}\n${list}`;
       const keyboard = new InlineKeyboard()
-        .text(s.initiativeApprove, `dpm:approve`).row()
-        .text(s.initiativeDismiss, `dpm:dismiss`);
+        .text(s.initiativeApprove, `dpm:approve:${date}`).row()
+        .text(s.initiativeDismiss, `dpm:dismiss:${date}`);
       await bot.api.sendMessage(chatId, body, { reply_markup: keyboard, reply_parameters: safeReplyParams(messageId) });
       break;
     }
@@ -1031,48 +1100,56 @@ git commit -m "feat(bwide): day-plan owner notification (all intents) + dpm: app
 
 ---
 
-### Task 7: config `daily_plan` + cross-field валидация + skip single-proposal
+### Task 7: cross-field валидация + skip single-proposal
+
+> Note: the `InitiativeConfig.daily_plan` field itself was added in Task 1 (needed by Task 2). This task adds only the cross-field validation and the tick skip.
 
 **Files:**
-- Modify: `crates/opex-core/src/config/mod.rs` (InitiativeConfig.daily_plan + AgentConfig::load cross-field check + test)
+- Modify: `crates/opex-core/src/config/mod.rs` (AgentConfig::load cross-field checks + test)
 - Modify: `crates/opex-core/src/agent/initiative/tick.rs` (skip Step 2 when daily_plan)
 
 **Interfaces:**
-- Consumes: `HeartbeatConfig` presence (`config.agent.heartbeat`).
-- Produces: `InitiativeConfig.daily_plan: bool`.
+- Consumes: `InitiativeConfig.daily_plan` (Task 1), `HeartbeatConfig` presence (`config.agent.heartbeat`).
 
-- [ ] **Step 1: Failing test — daily_plan without heartbeat is a load error**
+- [ ] **Step 1: Failing test — daily_plan without heartbeat / without enabled is a load error**
 
-`config/mod.rs` `mod tests`:
+`config/mod.rs` `mod tests` (real load-from-TOML, cheap — no DB):
 ```rust
     #[test]
-    fn daily_plan_requires_heartbeat() {
-        assert!(!InitiativeConfig::default().daily_plan);
+    fn daily_plan_requires_heartbeat_and_enabled() {
+        let base = "[agent]\nname=\"A\"\nprovider=\"p\"\nmodel=\"m\"\n[agent.initiative]\nenabled=true\ndaily_plan=true\n";
+        // no [agent.heartbeat] → error
+        let dir = std::env::temp_dir().join(format!("bwide_cfg_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("A.toml");
+        std::fs::write(&p, base).unwrap();
+        assert!(AgentConfig::load(&p).is_err(), "daily_plan without heartbeat must fail load");
+        // enabled=false + daily_plan=true → error
+        std::fs::write(&p, "[agent]\nname=\"A\"\nprovider=\"p\"\nmodel=\"m\"\n[agent.heartbeat]\ncron=\"0 * * * *\"\n[agent.initiative]\nenabled=false\ndaily_plan=true\n").unwrap();
+        assert!(AgentConfig::load(&p).is_err(), "daily_plan without enabled must fail load");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 ```
-(The full load-validation is exercised on the server E2E; this unit asserts the field defaults false.)
+(Adjust the minimal TOML to whatever required top-level `[agent]` fields `AgentConfig::load` demands — inspect an existing agent TOML if load rejects for an unrelated missing field.)
 
 - [ ] **Step 2: Run — verify FAIL**
 
-Run (сервер): `cargo check --all-targets -p opex-core`
-Expected: FAIL — `no field daily_plan`.
+Run (сервер): `cargo check --all-targets -p opex-core` then the test on server.
+Expected: test FAILs (no validation yet — load succeeds).
 
-- [ ] **Step 3: Add field + default + cross-field validation + tick skip**
+- [ ] **Step 3: Add cross-field validation + tick skip**
 
-`InitiativeConfig` struct + Default:
-```rust
-    #[serde(default)]
-    pub decompose: bool,
-    #[serde(default)]
-    pub daily_plan: bool,
-}
-```
-Default: add `daily_plan: false,`.
 In `AgentConfig::load` (after the initiative_errors bail, ~line 1968), add:
 ```rust
         if config.agent.initiative.daily_plan && config.agent.heartbeat.is_none() {
             anyhow::bail!(
                 "agent {:?}: [agent.initiative] daily_plan=true requires a configured [agent.heartbeat] (heartbeat drives day-plan generation + advancement)",
+                config.agent.name
+            );
+        }
+        if config.agent.initiative.daily_plan && !config.agent.initiative.enabled {
+            anyhow::bail!(
+                "agent {:?}: [agent.initiative] daily_plan=true requires enabled=true (review M3: otherwise a silent no-op)",
                 config.agent.name
             );
         }
@@ -1094,7 +1171,7 @@ Expected: clean.
 
 ```bash
 git add crates/opex-core/src/config/mod.rs crates/opex-core/src/agent/initiative/tick.rs
-git commit -m "feat(bwide): initiative.daily_plan flag + heartbeat cross-field validation + skip single-proposal"
+git commit -m "feat(bwide): daily_plan cross-field validation (heartbeat+enabled) + skip single-proposal"
 ```
 
 ---
@@ -1146,16 +1223,22 @@ git commit -m "feat(bwide): drive day_plan_tick from heartbeat cadence under age
 
 ## Финальная проверка (весь батч, на сервере)
 
-- [ ] `cargo test -p opex-core -- goal:: initiative:: db::agent_plans db::session_goals` (throttled `CARGO_BUILD_JOBS=4 nice ionice`, DATABASE_URL=opex_test:5434) — все зелёные, включая существующие goal/decompose регресс-тесты.
+> ГОТЧА (проектная память): `cargo test` берёт ОДИН позиционный фильтр — несколько подстрок ТОЛЬКО после `--`, либо отдельные вызовы. Ниже — отдельные вызовы (надёжнее).
+
+- [ ] `cargo test -p opex-core -- --nocapture goal:: initiative::` (throttled `CARGO_BUILD_JOBS=4 nice ionice`, DATABASE_URL=opex_test:5434) — фильтры ПОСЛЕ `--`; зелёные, включая существующие goal/decompose регресс-тесты (характеризация рефактора Task 2).
+- [ ] `cargo test -p opex-core -- --nocapture db::agent_plans db::session_goals` — day_plan CRUD + approve CAS + decompose_failed + list_redrivable exclusion.
 - [ ] `cargo clippy --all-targets -- -D warnings` — чисто.
 - [ ] Полный `cargo test --bin opex-core` — регрессий нет.
 - [ ] `cd channels && bun test` (или CI tsc) — day_plan case компилится.
 
 ## E2E (manual, после деплоя)
 
-- [ ] Тест-агент: `[agent.soul] enabled=true`, `[agent.initiative] enabled=true daily_plan=true`, `[agent.heartbeat] cron` (частый, напр. каждые 2 мин для теста), non-base, owner_id. Проверить: попытка сохранить daily_plan без heartbeat → конфиг-ошибка на load.
-- [ ] Есть свежий материал (рефлексия/open_thread) → первый heartbeat нового дня → уведомление владельцу со ВСЕМИ N намерениями + кнопки.
-- [ ] Approve → `agent_plans.day_plan_status='approved'`, N строк `session_goals(origin=initiative, active)`.
+- [ ] Тест-агент: `[agent.soul] enabled=true`, `[agent.initiative] enabled=true daily_plan=true`, `[agent.heartbeat] cron` (частый, напр. каждые 2 мин для теста), non-base, owner_id. Проверить: сохранить daily_plan без heartbeat ИЛИ без enabled → конфиг-ошибка на load.
+- [ ] Есть свежий материал (рефлексия/open_thread) → первый heartbeat нового дня → уведомление владельцу со ВСЕМИ N намерениями + кнопки (callback несёт дату).
+- [ ] Approve → `agent_plans.day_plan_status='approved'`, N строк `session_goals(origin=initiative, active, day_plan_managed=true)`.
 - [ ] Последующие heartbeat'ы: `day_plan_current` растёт, чанки исполняются (deliver в чат), намерения → done → план `done` + уведомление.
-- [ ] Двойной approve (быстрый повтор) → второй = no-op (N session_goals не удваивается).
-- [ ] Симулировать смену дня (или подождать) → незакрытое намерение финализируется в `paused` (не active-зомби); генерируется новый план.
+- [ ] Двойной approve (быстрый повтор) → второй = no-op (N session_goals не удваивается). Stale-кнопка со старой датой → no-op.
+- [ ] **GAP-6:** отменить текущее намерение (`POST .../plan/goals/{sid}/cancel` или `/goal stop`) → следующий heartbeat двигает `current++` мимо него (план не застревает).
+- [ ] **GAP-1:** смена дня (или ручной сброс `day_plan_date`) при незакрытом намерении → его `session_goals` → `paused` (не active-зомби); генерируется новый план.
+- [ ] **H1 регресс:** approve план → `make remote-deploy` (рестарт core) в середине дня → НЕ появляется дублирующий непрерывный драйвер по day-plan цели (`list_redrivable` их исключает); heartbeat продолжает продвижение по 1 чанку.
+- [ ] **Регресс автономных целей (Task 2 рефактор):** обычный `/goal <text>` на non-daily-plan агенте (и flat, и decompose ветки) отрабатывает как раньше — прогон до done/pause.
