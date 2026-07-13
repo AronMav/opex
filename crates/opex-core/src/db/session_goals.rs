@@ -159,7 +159,6 @@ pub async fn set_decompose_failed(db: &PgPool, session_id: Uuid, v: bool) -> Res
 }
 
 /// Mark a goal as day-plan-owned (advanced by day_plan_tick, excluded from crash redrive).
-#[allow(dead_code)] // wired by the Task 2 day_plan_tick driver
 pub async fn set_day_plan_managed_tx(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, session_id: Uuid, v: bool) -> Result<()> {
     sqlx::query("UPDATE session_goals SET day_plan_managed = $2, updated_at = now() WHERE session_id = $1")
         .bind(session_id).bind(v).execute(&mut **tx).await?;

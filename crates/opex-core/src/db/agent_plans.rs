@@ -216,7 +216,6 @@ pub async fn set_day_plan_pointer(db: &PgPool, agent_id: &str, current: i32, int
 /// CAS: flip pending→approved iff pending AND non-empty AND date matches the button's
 /// date (review H2: a stale Telegram button from a prior day must not approve a newer,
 /// differently-generated plan). Returns the pending intents iff flipped; None = no-op.
-#[allow(dead_code)] // wired by the Task 2 day-plan approval handler
 pub async fn try_start_day_plan_approval_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     agent_id: &str,
@@ -233,7 +232,6 @@ pub async fn try_start_day_plan_approval_tx(
 
 /// CAS dismiss: pending→dismissed iff pending AND date matches (review M4 — atomic,
 /// not read-then-write). Returns true iff flipped.
-#[allow(dead_code)] // wired by the Task 2 day-plan dismiss handler
 pub async fn try_dismiss_day_plan(db: &PgPool, agent_id: &str, date: NaiveDate) -> Result<bool> {
     let res = sqlx::query(
         "UPDATE agent_plans SET day_plan_status = 'dismissed', updated_at = now()
@@ -243,7 +241,6 @@ pub async fn try_dismiss_day_plan(db: &PgPool, agent_id: &str, date: NaiveDate) 
 }
 
 /// Write intents-with-session_ids back after materialization (same tx as approval).
-#[allow(dead_code)] // wired by the Task 2 day-plan materialization step
 pub async fn set_day_plan_intents_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     agent_id: &str,

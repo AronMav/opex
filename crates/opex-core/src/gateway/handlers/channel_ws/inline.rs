@@ -251,8 +251,8 @@ pub(super) async fn handle_approval_callback(
 
 /// Render a [`ProposalError`](crate::gateway::handlers::agents::initiative::ProposalError)
 /// as a human-readable message for the Telegram error frame / log line.
-/// `ProposalError` carries no `Display`/`Debug` impl, so this is the single
-/// place that knows how to unwrap its two variants.
+/// `ProposalError` derives `Debug` (for sqlx-test `.unwrap()`) but no `Display`
+/// impl, so this is the single place that knows how to unwrap its two variants.
 fn describe_proposal_error(e: crate::gateway::handlers::agents::initiative::ProposalError) -> String {
     use crate::gateway::handlers::agents::initiative::ProposalError;
     match e {
