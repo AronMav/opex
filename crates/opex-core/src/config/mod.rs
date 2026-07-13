@@ -1489,6 +1489,8 @@ pub struct InitiativeConfig {
     pub daily_proposal_cap: u32,
     #[serde(default)]
     pub decompose: bool,
+    #[serde(default)]
+    pub daily_plan: bool,
 }
 
 fn default_initiative_cap() -> u32 {
@@ -1501,6 +1503,7 @@ impl Default for InitiativeConfig {
             enabled: false,
             daily_proposal_cap: default_initiative_cap(),
             decompose: false,
+            daily_plan: false,
         }
     }
 }
@@ -3357,12 +3360,14 @@ model = "gpt-4o"
             enabled: true,
             daily_proposal_cap: 0,
             decompose: false,
+            daily_plan: false,
         };
         assert!(!bad.validate().is_empty());
         let bad2 = InitiativeConfig {
             enabled: true,
             daily_proposal_cap: 99,
             decompose: false,
+            daily_plan: false,
         };
         assert!(!bad2.validate().is_empty());
     }

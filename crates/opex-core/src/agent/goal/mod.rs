@@ -167,6 +167,7 @@ mod tests {
             consecutive_judge_failures: cjf,
             origin: "goal".into(),
             current_chunk: 0,
+            decompose_failed: false,
         }
     }
 

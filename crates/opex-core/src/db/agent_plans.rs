@@ -15,6 +15,18 @@ pub struct Proposal {
     pub acted_at: Option<DateTime<Utc>>,
 }
 
+// B-wide daily plan (Task 1 of the day-plan feature): DB+config foundation only.
+// Not yet wired into any driver — the heartbeat-advanced day_plan_tick consumer
+// lands in Task 2. `#[allow(dead_code)]` below is temporary scaffolding.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[allow(dead_code)]
+pub struct DayIntent {
+    #[serde(default)]
+    pub session_id: Option<Uuid>,
+    pub intent: String,
+    pub status: String, // pending | active | done | cancelled
+}
+
 #[derive(Debug, Clone)]
 pub struct PlanRow {
     // Full row mirror: agent_id/updated_at are decoded for completeness but not
@@ -26,6 +38,15 @@ pub struct PlanRow {
     pub last_proposal_at: Option<DateTime<Utc>>,
     pub proposals_today: i32,
     pub proposal_day: Option<NaiveDate>,
+    // day_plan_* fields: consumed by the Task 2 day_plan_tick driver.
+    #[allow(dead_code)]
+    pub day_plan: serde_json::Value,
+    #[allow(dead_code)]
+    pub day_plan_current: i32,
+    #[allow(dead_code)]
+    pub day_plan_date: Option<NaiveDate>,
+    #[allow(dead_code)]
+    pub day_plan_status: Option<String>,
     #[allow(dead_code)]
     pub updated_at: DateTime<Utc>,
 }
@@ -41,8 +62,9 @@ pub async fn get_or_create(db: &PgPool, agent_id: &str) -> Result<PlanRow> {
         .bind(agent_id)
         .execute(db)
         .await?;
-    let row = sqlx::query_as::<_, (String, Option<String>, serde_json::Value, Option<DateTime<Utc>>, i32, Option<NaiveDate>, DateTime<Utc>)>(
-        "SELECT agent_id, current_focus, proposals, last_proposal_at, proposals_today, proposal_day, updated_at
+    let row = sqlx::query_as::<_, (String, Option<String>, serde_json::Value, Option<DateTime<Utc>>, i32, Option<NaiveDate>, serde_json::Value, i32, Option<NaiveDate>, Option<String>, DateTime<Utc>)>(
+        "SELECT agent_id, current_focus, proposals, last_proposal_at, proposals_today, proposal_day,
+                day_plan, day_plan_current, day_plan_date, day_plan_status, updated_at
          FROM agent_plans WHERE agent_id = $1",
     )
     .bind(agent_id)
@@ -50,7 +72,9 @@ pub async fn get_or_create(db: &PgPool, agent_id: &str) -> Result<PlanRow> {
     .await?;
     Ok(PlanRow {
         agent_id: row.0, current_focus: row.1, proposals: row.2,
-        last_proposal_at: row.3, proposals_today: row.4, proposal_day: row.5, updated_at: row.6,
+        last_proposal_at: row.3, proposals_today: row.4, proposal_day: row.5,
+        day_plan: row.6, day_plan_current: row.7, day_plan_date: row.8, day_plan_status: row.9,
+        updated_at: row.10,
     })
 }
 
@@ -162,6 +186,74 @@ pub async fn try_set_proposal_status_tx(
     Ok(updated.and_then(|v| serde_json::from_value(v).ok()))
 }
 
+// status Option so the "no material" branch writes NULL atomically (review L1).
+#[allow(dead_code)] // wired by the Task 2 day_plan_tick driver
+pub async fn set_day_plan(db: &PgPool, agent_id: &str, intents: &[DayIntent], date: NaiveDate, status: Option<&str>) -> Result<()> {
+    sqlx::query(
+        "UPDATE agent_plans SET day_plan = $2, day_plan_current = 0, day_plan_date = $3,
+           day_plan_status = $4, updated_at = now() WHERE agent_id = $1",
+    ).bind(agent_id).bind(serde_json::to_value(intents)?).bind(date).bind(status)
+     .execute(db).await?;
+    Ok(())
+}
+
+#[allow(dead_code)] // wired by the Task 2 day_plan_tick driver
+pub async fn set_day_plan_status(db: &PgPool, agent_id: &str, status: Option<&str>) -> Result<()> {
+    sqlx::query("UPDATE agent_plans SET day_plan_status = $2, updated_at = now() WHERE agent_id = $1")
+        .bind(agent_id).bind(status).execute(db).await?;
+    Ok(())
+}
+
+/// Persist advanced pointer + updated intent statuses (day_plan JSONB).
+#[allow(dead_code)] // wired by the Task 2 day_plan_tick driver
+pub async fn set_day_plan_pointer(db: &PgPool, agent_id: &str, current: i32, intents: &[DayIntent]) -> Result<()> {
+    sqlx::query(
+        "UPDATE agent_plans SET day_plan = $2, day_plan_current = $3, updated_at = now() WHERE agent_id = $1",
+    ).bind(agent_id).bind(serde_json::to_value(intents)?).bind(current).execute(db).await?;
+    Ok(())
+}
+
+/// CAS: flip pending→approved iff pending AND non-empty AND date matches the button's
+/// date (review H2: a stale Telegram button from a prior day must not approve a newer,
+/// differently-generated plan). Returns the pending intents iff flipped; None = no-op.
+#[allow(dead_code)] // wired by the Task 2 day-plan approval handler
+pub async fn try_start_day_plan_approval_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    agent_id: &str,
+    date: NaiveDate,
+) -> Result<Option<Vec<DayIntent>>> {
+    let dp = sqlx::query_scalar::<_, serde_json::Value>(
+        "UPDATE agent_plans SET day_plan_status = 'approved', updated_at = now()
+         WHERE agent_id = $1 AND day_plan_status = 'pending' AND day_plan_date = $2
+           AND jsonb_array_length(day_plan) > 0
+         RETURNING day_plan",
+    ).bind(agent_id).bind(date).fetch_optional(&mut **tx).await?;
+    Ok(dp.and_then(|v| serde_json::from_value(v).ok()))
+}
+
+/// CAS dismiss: pending→dismissed iff pending AND date matches (review M4 — atomic,
+/// not read-then-write). Returns true iff flipped.
+#[allow(dead_code)] // wired by the Task 2 day-plan dismiss handler
+pub async fn try_dismiss_day_plan(db: &PgPool, agent_id: &str, date: NaiveDate) -> Result<bool> {
+    let res = sqlx::query(
+        "UPDATE agent_plans SET day_plan_status = 'dismissed', updated_at = now()
+         WHERE agent_id = $1 AND day_plan_status = 'pending' AND day_plan_date = $2",
+    ).bind(agent_id).bind(date).execute(db).await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Write intents-with-session_ids back after materialization (same tx as approval).
+#[allow(dead_code)] // wired by the Task 2 day-plan materialization step
+pub async fn set_day_plan_intents_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    agent_id: &str,
+    intents: &[DayIntent],
+) -> Result<()> {
+    sqlx::query("UPDATE agent_plans SET day_plan = $2, day_plan_current = 0, updated_at = now() WHERE agent_id = $1")
+        .bind(agent_id).bind(serde_json::to_value(intents)?).execute(&mut **tx).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,6 +329,27 @@ mod tests {
             try_set_proposal_status(&pool, "raceB", id, "approved")
         );
         assert_eq!([a.unwrap(), b.unwrap()].iter().filter(|x| x.is_some()).count(), 1);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn day_plan_set_get_roundtrip(pool: sqlx::PgPool) -> sqlx::Result<()> {
+        get_or_create(&pool, "dpA").await.unwrap();
+        let today = chrono::Utc::now().date_naive();
+        let intents = vec![
+            DayIntent { session_id: None, intent: "довести X".into(), status: "pending".into() },
+            DayIntent { session_id: None, intent: "разобрать Y".into(), status: "pending".into() },
+        ];
+        set_day_plan(&pool, "dpA", &intents, today, Some("pending")).await.unwrap();
+        let p = get_or_create(&pool, "dpA").await.unwrap();
+        assert_eq!(p.day_plan_status.as_deref(), Some("pending"));
+        assert_eq!(p.day_plan_date, Some(today));
+        assert_eq!(p.day_plan_current, 0);
+        let parsed: Vec<DayIntent> = serde_json::from_value(p.day_plan.clone()).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].intent, "довести X");
+        set_day_plan_status(&pool, "dpA", Some("dismissed")).await.unwrap();
+        assert_eq!(get_or_create(&pool, "dpA").await.unwrap().day_plan_status.as_deref(), Some("dismissed"));
         Ok(())
     }
 }

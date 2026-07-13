@@ -16,6 +16,7 @@ pub struct GoalRow {
     pub consecutive_judge_failures: i32,
     pub origin: String,
     pub current_chunk: i32,
+    pub decompose_failed: bool,
 }
 
 impl GoalRow {
@@ -29,19 +30,19 @@ impl GoalRow {
 
 /// Column tuple returned by the `get` query (factored out to satisfy clippy::type_complexity).
 type GoalRowTuple =
-    (String, String, i32, i32, serde_json::Value, Option<String>, i32, String, i32);
+    (String, String, i32, i32, serde_json::Value, Option<String>, i32, String, i32, bool);
 
 pub async fn get(db: &PgPool, session_id: Uuid) -> Result<Option<GoalRow>> {
     let row: Option<GoalRowTuple> = sqlx::query_as(
         "SELECT goal_text, status, turn_count, max_turns, subgoals, last_verdict, consecutive_judge_failures,
-                origin, current_chunk
+                origin, current_chunk, decompose_failed
          FROM session_goals WHERE session_id = $1",
     )
     .bind(session_id)
     .fetch_optional(db)
     .await?;
     Ok(row.map(
-        |(goal_text, status, turn_count, max_turns, subgoals, last_verdict, cjf, origin, current_chunk)| GoalRow {
+        |(goal_text, status, turn_count, max_turns, subgoals, last_verdict, cjf, origin, current_chunk, decompose_failed)| GoalRow {
             session_id,
             goal_text,
             status,
@@ -52,6 +53,7 @@ pub async fn get(db: &PgPool, session_id: Uuid) -> Result<Option<GoalRow>> {
             consecutive_judge_failures: cjf,
             origin,
             current_chunk,
+            decompose_failed,
         },
     ))
 }
@@ -62,7 +64,7 @@ pub async fn upsert(db: &PgPool, session_id: Uuid, goal_text: &str, max_turns: i
          VALUES ($1, $2, 'active', 0, $3)
          ON CONFLICT (session_id) DO UPDATE SET goal_text = EXCLUDED.goal_text,
            status = 'active', turn_count = 0, max_turns = EXCLUDED.max_turns,
-           last_verdict = NULL, consecutive_judge_failures = 0, updated_at = now()",
+           last_verdict = NULL, consecutive_judge_failures = 0, decompose_failed = false, updated_at = now()",
     )
     .bind(session_id)
     .bind(goal_text)
@@ -99,7 +101,7 @@ pub async fn upsert_cron_goal(
          ON CONFLICT (session_id) DO UPDATE SET goal_text = EXCLUDED.goal_text,
            status = 'active', turn_count = 0, max_turns = EXCLUDED.max_turns,
            origin = 'cron', cron_job_id = EXCLUDED.cron_job_id,
-           last_verdict = NULL, consecutive_judge_failures = 0, updated_at = now()",
+           last_verdict = NULL, consecutive_judge_failures = 0, decompose_failed = false, updated_at = now()",
     )
     .bind(session_id)
     .bind(goal_text)
@@ -131,7 +133,7 @@ pub async fn upsert_initiative_goal_tx(
          ON CONFLICT (session_id) DO UPDATE SET goal_text = EXCLUDED.goal_text,
            status = 'active', turn_count = 0, max_turns = EXCLUDED.max_turns,
            origin = 'initiative',
-           last_verdict = NULL, consecutive_judge_failures = 0, updated_at = now()",
+           last_verdict = NULL, consecutive_judge_failures = 0, decompose_failed = false, updated_at = now()",
     )
     .bind(session_id)
     .bind(goal_text)
@@ -147,6 +149,21 @@ pub async fn set_status(db: &PgPool, session_id: Uuid, status: &str) -> Result<(
         .bind(status)
         .execute(db)
         .await?;
+    Ok(())
+}
+
+#[allow(dead_code)] // wired by the Task 2 decompose driver
+pub async fn set_decompose_failed(db: &PgPool, session_id: Uuid, v: bool) -> Result<()> {
+    sqlx::query("UPDATE session_goals SET decompose_failed = $2, updated_at = now() WHERE session_id = $1")
+        .bind(session_id).bind(v).execute(db).await?;
+    Ok(())
+}
+
+/// Mark a goal as day-plan-owned (advanced by day_plan_tick, excluded from crash redrive).
+#[allow(dead_code)] // wired by the Task 2 day_plan_tick driver
+pub async fn set_day_plan_managed_tx(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, session_id: Uuid, v: bool) -> Result<()> {
+    sqlx::query("UPDATE session_goals SET day_plan_managed = $2, updated_at = now() WHERE session_id = $1")
+        .bind(session_id).bind(v).execute(&mut **tx).await?;
     Ok(())
 }
 
@@ -254,6 +271,7 @@ pub async fn list_redrivable(
            AND s.retry_count < $2
            AND (g.next_redrive_at IS NULL OR g.next_redrive_at <= now())
            AND s.last_message_at > now() - ($1 * interval '1 second')
+           AND NOT g.day_plan_managed
          ORDER BY s.last_message_at",
     )
     .bind(staleness_secs)
@@ -275,11 +293,11 @@ pub async fn list_active_by_agent_and_origin(
     agent_id: &str,
     origin: &str,
 ) -> Result<Vec<GoalRow>> {
-    type Row = (Uuid, String, String, i32, i32, serde_json::Value, Option<String>, i32, String, i32);
+    type Row = (Uuid, String, String, i32, i32, serde_json::Value, Option<String>, i32, String, i32, bool);
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT g.session_id, g.goal_text, g.status, g.turn_count, g.max_turns,
                 g.subgoals, g.last_verdict, g.consecutive_judge_failures,
-                g.origin, g.current_chunk
+                g.origin, g.current_chunk, g.decompose_failed
          FROM session_goals g
          JOIN sessions s ON s.id = g.session_id
          WHERE s.agent_id = $1 AND g.origin = $2 AND g.status = 'active'
@@ -292,7 +310,7 @@ pub async fn list_active_by_agent_and_origin(
     Ok(rows
         .into_iter()
         .map(
-            |(session_id, goal_text, status, turn_count, max_turns, subgoals, last_verdict, cjf, origin, current_chunk)| {
+            |(session_id, goal_text, status, turn_count, max_turns, subgoals, last_verdict, cjf, origin, current_chunk, decompose_failed)| {
                 GoalRow {
                     session_id,
                     goal_text,
@@ -304,6 +322,7 @@ pub async fn list_active_by_agent_and_origin(
                     consecutive_judge_failures: cjf,
                     origin,
                     current_chunk,
+                    decompose_failed,
                 }
             },
         )
@@ -390,6 +409,7 @@ mod tests {
             consecutive_judge_failures: 0,
             origin: "goal".into(),
             current_chunk: 0,
+            decompose_failed: false,
         }
     }
 
@@ -489,6 +509,12 @@ mod tests {
         let _stale = seed(&pool, "interrupted", "cron", 0, 100_000).await; // older than window → excluded
         let _cancelled_initiative = seed(&pool, "interrupted", "initiative", 0, 60).await; // seeded active below is cancelled
         set_status(&pool, _cancelled_initiative, "cancelled").await.unwrap();
+        let _day_plan_managed = seed(&pool, "interrupted", "initiative", 0, 60).await; // day-plan-owned → excluded from generic redrive
+        sqlx::query("UPDATE session_goals SET day_plan_managed = true WHERE session_id = $1")
+            .bind(_day_plan_managed)
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let got = list_redrivable(&pool, 21_600, 3).await.unwrap(); // 6h window, max_retries = 3
         let mut ids: Vec<Uuid> = got.iter().map(|r| r.session_id).collect();
@@ -668,6 +694,16 @@ mod tests {
         let g = get(&pool, sid).await.unwrap().unwrap();
         assert_eq!(g.current_chunk, 3);
         assert_eq!(g.origin, "initiative");
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn set_and_read_decompose_failed(pool: PgPool) -> sqlx::Result<()> {
+        let sid = seed_session(&pool).await;
+        upsert(&pool, sid, "goal", 20).await.unwrap();
+        assert!(!get(&pool, sid).await.unwrap().unwrap().decompose_failed);
+        set_decompose_failed(&pool, sid, true).await.unwrap();
+        assert!(get(&pool, sid).await.unwrap().unwrap().decompose_failed);
         Ok(())
     }
 }

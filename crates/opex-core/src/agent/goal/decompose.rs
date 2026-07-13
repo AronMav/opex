@@ -91,7 +91,8 @@ mod tests {
     fn row(current_chunk: i32, turn_count: i32, max_turns: i32, cjf: i32) -> GoalRow {
         GoalRow { session_id: uuid::Uuid::nil(), goal_text: "G".into(), status: "active".into(),
             turn_count, max_turns, subgoals: vec![], last_verdict: None,
-            consecutive_judge_failures: cjf, origin: "initiative".into(), current_chunk }
+            consecutive_judge_failures: cjf, origin: "initiative".into(), current_chunk,
+            decompose_failed: false }
     }
 
     #[test]
