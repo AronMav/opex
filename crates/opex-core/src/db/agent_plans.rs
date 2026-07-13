@@ -352,4 +352,78 @@ mod tests {
         assert_eq!(get_or_create(&pool, "dpA").await.unwrap().day_plan_status.as_deref(), Some("dismissed"));
         Ok(())
     }
+
+    /// CAS boundary conditions for `try_start_day_plan_approval_tx` (review H2 guard):
+    /// wrong date, non-pending status, and empty plan must all no-op (None), while the
+    /// happy path flips pending → approved and returns the intents.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn try_start_day_plan_approval_tx_cas_boundaries(pool: sqlx::PgPool) -> sqlx::Result<()> {
+        let today = chrono::Utc::now().date_naive();
+        let yesterday = today.pred_opt().unwrap();
+        let intents = vec![
+            DayIntent { session_id: None, intent: "x".into(), status: "pending".into() },
+            DayIntent { session_id: None, intent: "x".into(), status: "pending".into() },
+        ];
+
+        get_or_create(&pool, "capA").await.unwrap();
+        set_day_plan(&pool, "capA", &intents, today, Some("pending")).await.unwrap();
+
+        // Wrong date: stale button referencing yesterday must not approve today's plan.
+        let mut tx = pool.begin().await.unwrap();
+        let r = try_start_day_plan_approval_tx(&mut tx, "capA", yesterday).await.unwrap();
+        assert!(r.is_none());
+        tx.rollback().await.unwrap();
+
+        // Non-pending: already-approved plan must not be re-flipped.
+        set_day_plan_status(&pool, "capA", Some("approved")).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let r = try_start_day_plan_approval_tx(&mut tx, "capA", today).await.unwrap();
+        assert!(r.is_none());
+        tx.rollback().await.unwrap();
+
+        // Empty plan: jsonb_array_length(day_plan) > 0 guard must block approval.
+        get_or_create(&pool, "capB").await.unwrap();
+        set_day_plan(&pool, "capB", &[], today, Some("pending")).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let r = try_start_day_plan_approval_tx(&mut tx, "capB", today).await.unwrap();
+        assert!(r.is_none());
+        tx.rollback().await.unwrap();
+
+        // Happy path: pending + non-empty + matching date flips to approved.
+        set_day_plan(&pool, "capA", &intents, today, Some("pending")).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let r = try_start_day_plan_approval_tx(&mut tx, "capA", today).await.unwrap();
+        assert_eq!(r.as_ref().map(|v| v.len()), Some(2));
+        tx.commit().await.unwrap();
+        assert_eq!(get_or_create(&pool, "capA").await.unwrap().day_plan_status.as_deref(), Some("approved"));
+        Ok(())
+    }
+
+    /// CAS boundary conditions for `try_dismiss_day_plan` (review M4 — atomic flip,
+    /// not read-then-write): wrong date is a no-op, correct date flips once, and a
+    /// second call against the now-`dismissed` row is idempotently rejected.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn try_dismiss_day_plan_cas(pool: sqlx::PgPool) -> sqlx::Result<()> {
+        let today = chrono::Utc::now().date_naive();
+        let yesterday = today.pred_opt().unwrap();
+        let intents = vec![DayIntent { session_id: None, intent: "x".into(), status: "pending".into() }];
+
+        get_or_create(&pool, "disA").await.unwrap();
+        set_day_plan(&pool, "disA", &intents, today, Some("pending")).await.unwrap();
+
+        // Wrong date: no-op, status stays pending.
+        let flipped = try_dismiss_day_plan(&pool, "disA", yesterday).await.unwrap();
+        assert!(!flipped);
+        assert_eq!(get_or_create(&pool, "disA").await.unwrap().day_plan_status.as_deref(), Some("pending"));
+
+        // Correct date: flips pending -> dismissed.
+        let flipped = try_dismiss_day_plan(&pool, "disA", today).await.unwrap();
+        assert!(flipped);
+        assert_eq!(get_or_create(&pool, "disA").await.unwrap().day_plan_status.as_deref(), Some("dismissed"));
+
+        // Idempotent: no longer pending, second call is a no-op.
+        let flipped = try_dismiss_day_plan(&pool, "disA", today).await.unwrap();
+        assert!(!flipped);
+        Ok(())
+    }
 }
