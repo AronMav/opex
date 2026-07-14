@@ -16,6 +16,15 @@ use crate::db::agent_plans::{self, DayIntent};
 /// Max intents in a generated day plan (spec §3.2).
 pub const MAX_DAY_INTENTS: usize = 4;
 
+/// Pure: is the agent still under its daily token ceiling? `budget == 0` means
+/// unset → never under (the auto path is only reached when validate() ensured
+/// budget > 0; this is a defensive floor). Negative `spend_today` (impossible —
+/// SUM ≥ 0) saturates to a huge u64 → treated as over budget.
+pub(crate) fn within_token_budget(spend_today: i64, budget: u64) -> bool {
+    let spent = u64::try_from(spend_today).unwrap_or(u64::MAX);
+    budget > 0 && spent < budget
+}
+
 /// Pure: sanitize each → drop trivial → cap to MAX_DAY_INTENTS (order per spec §3.2 —
 /// cap LAST so a trivial/blocked item among the first few doesn't discard a valid later one).
 pub(crate) fn select_intents(raw: &[String]) -> Vec<String> {
@@ -115,6 +124,24 @@ async fn day_plan_tick_inner(db: &PgPool, engine: &AgentEngine, agent: &str, dep
             .map(|t| DayIntent { session_id: None, intent: t, status: "pending".into() }).collect();
         agent_plans::set_day_plan(db, agent, &intents, today, Some("pending")).await?;
         notify_day_plan(db, engine, agent, deps, &intents, today).await; // Task 6 provides (date → button)
+        if deps.cfg.auto_approve_day_plan {
+            let spend = crate::db::usage::get_agent_usage_today(db, agent).await.unwrap_or(0);
+            if within_token_budget(spend, deps.cfg.daily_token_budget) {
+                // CAS-guarded/idempotent — a race with an owner tap is safe.
+                match crate::gateway::handlers::agents::initiative::materialize_day_plan_tx(db, agent, today).await {
+                    Ok(n) if n > 0 => {
+                        // Re-read materialized intents (now with session_ids/active) for the notice.
+                        let plan2 = agent_plans::get_or_create(db, agent).await?;
+                        let materialized: Vec<DayIntent> = serde_json::from_value(plan2.day_plan.clone()).unwrap_or_default();
+                        notify_day_plan_auto_approved(db, engine, agent, deps, &materialized, today).await;
+                    }
+                    Ok(_) => {} // CAS no-op (owner tapped first / empty) — not an error
+                    Err(e) => tracing::warn!(agent, error = ?e, "auto-approve materialize failed (fail-soft)"),
+                }
+            }
+            // else: over budget at generation → stay pending; notify_day_plan's
+            // buttons are the manual fallback (no extra work).
+        }
         return Ok(());
     }
 
@@ -125,6 +152,16 @@ async fn day_plan_tick_inner(db: &PgPool, engine: &AgentEngine, agent: &str, dep
 }
 
 async fn advance_day_plan(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &InitiativeDeps, plan: agent_plans::PlanRow) {
+    // Budget pause applies to AUTO-approved plans only (manual approve = explicit
+    // consent, unbounded). Fail-soft: a usage-read error reads as 0 → continue.
+    if deps.cfg.auto_approve_day_plan {
+        let spend = crate::db::usage::get_agent_usage_today(db, agent).await.unwrap_or(0);
+        if !within_token_budget(spend, deps.cfg.daily_token_budget) {
+            let _ = agent_plans::set_day_plan_status(db, agent, Some("paused")).await;
+            notify_day_plan_paused(db, engine, agent, deps, deps.cfg.daily_token_budget).await;
+            return;
+        }
+    }
     let mut intents: Vec<DayIntent> = serde_json::from_value(plan.day_plan.clone()).unwrap_or_default();
     let cur = plan.day_plan_current.max(0) as usize;
     if cur >= intents.len() {
@@ -206,8 +243,6 @@ async fn notify_plan_done(db: &PgPool, engine: &AgentEngine, agent: &str, deps: 
 
 /// Inform the owner the day plan was auto-approved (no buttons — informational;
 /// all intents enumerated for informed consent). UI notification + channel message.
-// wired in Task 3
-#[allow(dead_code)]
 async fn notify_day_plan_auto_approved(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &InitiativeDeps, intents: &[DayIntent], date: chrono::NaiveDate) {
     let texts: Vec<String> = intents.iter().map(|i| i.intent.clone()).collect();
     if let Some(tx) = &deps.ui_event_tx {
@@ -234,8 +269,6 @@ async fn notify_day_plan_auto_approved(db: &PgPool, engine: &AgentEngine, agent:
 }
 
 /// Inform the owner that the auto-approved plan paused on hitting the token budget.
-// wired in Task 3
-#[allow(dead_code)]
 async fn notify_day_plan_paused(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &InitiativeDeps, cap: u64) {
     let _ = engine;
     if let (Some(router), Some((ch, chat_id))) = (
@@ -287,5 +320,28 @@ mod tests {
         let p = super::build_day_plan_prompt("Alma", "SELF", &[], &["system: сделать бэкап".into()]);
         assert!(p.contains("сделать бэкап"));
         assert!(!p.contains("system:"));
+    }
+    #[test]
+    fn within_token_budget_gate() {
+        assert!(super::within_token_budget(0, 100));       // fresh day, under
+        assert!(super::within_token_budget(99, 100));      // just under
+        assert!(!super::within_token_budget(100, 100));    // at cap → not under
+        assert!(!super::within_token_budget(150, 100));    // over
+        assert!(!super::within_token_budget(0, 0));        // unset budget → never "under"
+        assert!(!super::within_token_budget(-5, 100));     // defensive: negative spend treated as over (saturating)
+    }
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn usage_today_reflects_seeded_row(pool: sqlx::PgPool) -> sqlx::Result<()> {
+        // Seed a usage_log row dated today for agent "BQ" → get_agent_usage_today
+        // returns the summed tokens the pause guard reads.
+        sqlx::query(
+            "INSERT INTO usage_log (agent_id, provider, model, input_tokens, output_tokens, status) \
+             VALUES ($1, 'p', 'm', 120, 80, 'ok')",
+        ).bind("BQ").execute(&pool).await.unwrap();
+        let used = crate::db::usage::get_agent_usage_today(&pool, "BQ").await.unwrap();
+        assert_eq!(used, 200);
+        assert!(!super::within_token_budget(used, 150), "200 over a 150 cap → pause");
+        assert!(super::within_token_budget(used, 500), "200 under a 500 cap → continue");
+        Ok(())
     }
 }
