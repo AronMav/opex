@@ -1388,11 +1388,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deliver_to_channel_with_msg_id_none_does_not_save_or_notify() {
+    async fn deliver_to_channel_with_msg_id_none_still_sends_and_skips_prepend() {
         // Regression guard for the subagent / openai_compat / cron path:
         // when `tool_message_id` is None, the post-channel-send mirror still
-        // runs (save + notify), but the DB prepend is skipped because there
-        // is no row to target. Channel send must still happen unchanged.
+        // attempts the uploads save, but the DB prepend is skipped because
+        // there is no row to target (and no bell notify fires anymore).
+        // Channel send must still happen unchanged.
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/audio/speech"))

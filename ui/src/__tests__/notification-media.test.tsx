@@ -8,9 +8,9 @@ import {
 } from "@/components/notification-bell";
 
 // `MediaNotificationBody` renders the inline body of a media-flavoured
-// notification (TTS / image / video / generic). Voice keeps the legacy
-// `tts_*` event types for UI back-compat; other kinds use kind-specific
-// events emitted by `media_background.rs`.
+// notification. Media-ready events are no longer emitted (backend stopped
+// sending them, see `media_background.rs`) — only media-*error* events reach
+// the bell now, rendered as a plain error line.
 describe("MediaNotificationBody", () => {
   // ── Voice (legacy tts_* events) ─────────────────────────────────────────────
 
