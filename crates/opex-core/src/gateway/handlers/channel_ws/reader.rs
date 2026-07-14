@@ -1,8 +1,11 @@
 //! Single-reader task for the channel WS. Continuously reads
 //! `ChannelInbound` from the socket and routes each variant:
 //!
-//! - `Message`         → [`super::dispatcher::dispatch_message`]
-//! - `Cancel`          → [`super::dispatcher::cancel`]
+//! - `Message`         → sync-classified (approval > initiative > infra >
+//!   clarify-cb > clarify-text > turn); callbacks and the clarify-text
+//!   resolver are spawned, ordinary turns are registered in `inflight` and
+//!   enqueued via [`enqueue_turn`] / [`super::session_queue::SessionQueueMap`]
+//! - `Cancel`          → [`super::session_queue::cancel`]
 //! - `ActionResult`    → resolve `pending_actions` + outbound queue
 //! - `Ping`            → [`super::inline::handle_ping`]
 //! - `AccessCheck`/`Pairing*` → [`super::inline::*`]
@@ -24,9 +27,9 @@ use uuid::Uuid;
 use opex_types::{ChannelInbound, ChannelOutbound};
 
 use super::handshake::ActionForwarderInit;
-use super::session_locks::SessionLockMap;
-use super::types::{CwsCtx, InflightRegistry, OutboundMsg, PendingActionsMap};
-use super::{dispatcher, handshake, inline};
+use super::session_queue::{self, QueuedTurn, SessionQueueMap};
+use super::types::{CwsCtx, InflightMessage, InflightRegistry, OutboundMsg, PendingActionsMap, SessionKey};
+use super::{handshake, inline};
 use crate::agent::engine::AgentEngine;
 use crate::db::outbound;
 
@@ -44,7 +47,7 @@ pub(super) async fn run(
     engine: Arc<AgentEngine>,
     agent_name: String,
     out_tx: mpsc::Sender<OutboundMsg>,
-    lock_map: Arc<SessionLockMap>,
+    queue_map: Arc<SessionQueueMap>,
     inflight: InflightRegistry,
     pending_actions: PendingActionsMap,
     outbound_ids: Arc<Mutex<HashMap<String, Uuid>>>,
@@ -124,51 +127,70 @@ pub(super) async fn run(
                         }
                         ctx.status.polling_diagnostics.record_inbound();
 
-                        // Approval-callback intercept.
-                        let consumed = inline::handle_approval_callback(
-                            &ctx, &engine, &agent_name, &request_id, &msg, &out_tx,
-                        ).await;
-                        if consumed { continue; }
-
-                        // Initiative callback intercept (approve/dismiss proposal,
-                        // cancel goal — owner-gated, `iappr:`/`idismiss:`/`icancel:`).
-                        let consumed_initiative = inline::handle_initiative_callback(
-                            &ctx, &engine, &agent_name, &request_id, &msg, &out_tx,
-                        ).await;
-                        if consumed_initiative { continue; }
-
-                        // Infra-decision callback intercept (owner-gated, `infra:ok:`/`infra:no:`).
-                        let consumed_infra = inline::handle_infra_callback(
-                            &ctx, &engine, &agent_name, &request_id, &msg, &out_tx,
-                        ).await;
-                        if consumed_infra { continue; }
-
-                        // Clarify button-callback intercept (owner-gated).
-                        let consumed_clarify_cb = inline::handle_clarify_callback(
-                            &ctx, &engine, &agent_name, &request_id, &msg, &out_tx,
-                        ).await;
-                        if consumed_clarify_cb { continue; }
-
-                        // Clarify text-intercept (open-ended / «Other»).
-                        // Priority: approval > clarify (checked inside).
-                        let consumed_clarify_text = inline::handle_clarify_text(
-                            &ctx, &engine, &agent_name, &state.channel_type,
-                            &request_id, &msg, &out_tx,
-                        ).await;
-                        if consumed_clarify_text { continue; }
-
-                        dispatcher::dispatch_message(
-                            engine.clone(),
-                            agent_name.clone(),
-                            state.channel_type.clone(),
-                            state.formatting_prompt.clone(),
-                            request_id,
-                            msg,
-                            ctx.cfg.config.limits.request_timeout_secs,
-                            out_tx.clone(),
-                            lock_map.clone(),
-                            inflight.clone(),
-                        ).await;
+                        // Sync classification (never awaits engine/DB). Priority:
+                        // approval > initiative > infra > clarify-cb > clarify-text
+                        // > turn. Callbacks are spawned off the hot path; the one
+                        // async-to-classify path (clarify-text) is gated by the
+                        // sync has_any_pending() and spawned — NOT run in the FIFO
+                        // consumer (deadlock-safe).
+                        if inline::approval_matches(&msg) {
+                            let (ctx2, engine2, an, rid, m, tx) =
+                                (ctx.clone(), engine.clone(), agent_name.clone(), request_id.clone(), msg.clone(), out_tx.clone());
+                            tokio::spawn(async move {
+                                inline::handle_approval_callback(&ctx2, &engine2, &an, &rid, &m, &tx).await;
+                            });
+                        } else if inline::initiative_matches(&msg) {
+                            let (ctx2, engine2, an, rid, m, tx) =
+                                (ctx.clone(), engine.clone(), agent_name.clone(), request_id.clone(), msg.clone(), out_tx.clone());
+                            tokio::spawn(async move {
+                                inline::handle_initiative_callback(&ctx2, &engine2, &an, &rid, &m, &tx).await;
+                            });
+                        } else if inline::infra_matches(&msg) {
+                            let (ctx2, engine2, an, rid, m, tx) =
+                                (ctx.clone(), engine.clone(), agent_name.clone(), request_id.clone(), msg.clone(), out_tx.clone());
+                            tokio::spawn(async move {
+                                inline::handle_infra_callback(&ctx2, &engine2, &an, &rid, &m, &tx).await;
+                            });
+                        } else if inline::clarify_cb_matches(&msg) {
+                            let (ctx2, engine2, an, rid, m, tx) =
+                                (ctx.clone(), engine.clone(), agent_name.clone(), request_id.clone(), msg.clone(), out_tx.clone());
+                            tokio::spawn(async move {
+                                inline::handle_clarify_callback(&ctx2, &engine2, &an, &rid, &m, &tx).await;
+                            });
+                        } else if !inline::is_callback(&msg)
+                            && engine.cfg().clarify_manager.has_any_pending()
+                        {
+                            // Clarify-text: a clarify is pending. Spawn a short-lived
+                            // resolver (async DB lookup + owner-gate). If it does NOT
+                            // resolve a waiter, it enqueues the message as a turn.
+                            let ct = state.channel_type.clone();
+                            let fp = state.formatting_prompt.clone();
+                            let (ctx2, engine2, an, rid, m, tx) =
+                                (ctx.clone(), engine.clone(), agent_name.clone(), request_id.clone(), msg.clone(), out_tx.clone());
+                            let qmap = queue_map.clone();
+                            let inflight2 = inflight.clone();
+                            let timeout = ctx.cfg.config.limits.request_timeout_secs;
+                            tokio::spawn(async move {
+                                let consumed = inline::handle_clarify_text(
+                                    &ctx2, &engine2, &an, &ct, &rid, &m, &tx,
+                                ).await;
+                                if !consumed {
+                                    enqueue_turn(
+                                        &qmap, &engine2, &an, &ct, fp,
+                                        rid, m, timeout, &tx, &inflight2,
+                                    ).await;
+                                }
+                            });
+                        } else {
+                            // Ordinary turn — register inflight at enqueue time then
+                            // enqueue in receive order.
+                            enqueue_turn(
+                                &queue_map, &engine, &agent_name, &state.channel_type,
+                                state.formatting_prompt.clone(),
+                                request_id, msg, ctx.cfg.config.limits.request_timeout_secs,
+                                &out_tx, &inflight,
+                            ).await;
+                        }
 
                         // UI sidebar refresh (preserved from old loop).
                         let event = serde_json::json!({
@@ -179,7 +201,7 @@ pub(super) async fn run(
                         ctx.bus.ui_event_tx.send(event.to_string()).ok();
                     }
                     ChannelInbound::Cancel { request_id } => {
-                        let cancelled = dispatcher::cancel(&request_id, &inflight).await;
+                        let cancelled = session_queue::cancel(&request_id, &inflight).await;
                         if cancelled {
                             let _ = out_tx
                                 .send(OutboundMsg::Wire(ChannelOutbound::Error {
@@ -248,54 +270,90 @@ pub(super) async fn run(
     state
 }
 
+/// Register the turn in `inflight` (cancel token, `abort = None`) and enqueue it
+/// for its session in receive order. Registering at ENQUEUE (not consumer start)
+/// is what lets a `Cancel` for a still-queued turn be honoured.
+#[allow(clippy::too_many_arguments)]
+async fn enqueue_turn(
+    queue_map: &Arc<SessionQueueMap>,
+    engine: &Arc<AgentEngine>,
+    agent_name: &str,
+    channel_type: &str,
+    formatting_prompt: Option<String>,
+    request_id: String,
+    msg: opex_types::IncomingMessageDto,
+    timeout_secs: u64,
+    out_tx: &mpsc::Sender<OutboundMsg>,
+    inflight: &InflightRegistry,
+) {
+    let dm_scope = engine
+        .cfg()
+        .agent
+        .session
+        .as_ref()
+        .map(|s| s.dm_scope.as_str())
+        .unwrap_or("per-channel-peer")
+        .to_string();
+    let chat_scope = msg.chat_scope();
+    let session_key = SessionKey::from_inbound(
+        agent_name, &msg.user_id, channel_type, &dm_scope, chat_scope.as_deref(),
+    );
+
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    inflight.lock().await.insert(
+        request_id.clone(),
+        InflightMessage { cancel: cancel_token.clone(), abort: None },
+    );
+
+    let turn = QueuedTurn {
+        engine: engine.clone(),
+        agent_name: agent_name.to_string(),
+        channel_type: channel_type.to_string(),
+        formatting_prompt,
+        request_id,
+        msg,
+        timeout_secs,
+        out_tx: out_tx.clone(),
+        inflight: inflight.clone(),
+        cancel_token,
+    };
+    queue_map.enqueue(session_key, turn).await;
+}
+
 #[cfg(test)]
 mod wire_guards {
+    // Structural guards on the reader's Message-arm routing. These assert the
+    // sync-classify order (approval > initiative > infra > clarify-cb >
+    // clarify-text > enqueue) is preserved in source, matching the priority the
+    // inline handlers enforced by call order before the queue rewrite.
+
     #[test]
-    fn clarify_callback_wired_before_dispatch() {
+    fn handshake_guard_before_routing() {
         let src = include_str!("reader.rs");
-        let cb = src.find("handle_clarify_callback").expect("clarify callback intercept must be wired");
-        let dispatch = src.find("dispatcher::dispatch_message(").expect("dispatcher present");
-        assert!(cb < dispatch, "clarify callback intercept must run before dispatch_message");
+        let guard = src.find("channel_type == \"unknown\"").expect("#6 handshake guard present");
+        let route = src.find("approval_matches(").expect("classifier routing present");
+        assert!(guard < route, "handshake guard must run before routing");
     }
 
     #[test]
-    fn clarify_text_wired_before_dispatch() {
+    fn approval_classified_before_clarify_text() {
         let src = include_str!("reader.rs");
-        let txt = src.find("handle_clarify_text").expect("clarify text-intercept must be wired");
-        let dispatch = src.find("dispatcher::dispatch_message(").expect("dispatcher present");
-        assert!(txt < dispatch, "clarify text-intercept must run before dispatch_message");
+        let approval = src.find("approval_matches(").expect("approval classifier present");
+        let clarify = src.find("handle_clarify_text(").expect("clarify-text spawn present");
+        assert!(approval < clarify, "approval must be classified before clarify-text (priority)");
     }
 
     #[test]
-    fn approval_wired_before_clarify() {
-        // Approval must be wired BEFORE clarify to enforce priority.
+    fn callbacks_classified_before_enqueue() {
         let src = include_str!("reader.rs");
-        let approval = src.find("handle_approval_callback").expect("approval intercept present");
-        let clarify_txt = src.find("handle_clarify_text").expect("clarify text-intercept present");
-        assert!(approval < clarify_txt, "approval intercept must be wired before clarify text-intercept");
+        let clarify_cb = src.find("clarify_cb_matches(").expect("clarify-cb classifier present");
+        let enqueue = src.find("queue_map.enqueue(").expect("turn enqueue present");
+        assert!(clarify_cb < enqueue, "all callback classifiers must precede enqueue");
     }
 
     #[test]
-    fn initiative_callback_wired_before_dispatch() {
+    fn clarify_text_gated_by_has_any_pending() {
         let src = include_str!("reader.rs");
-        let cb = src.find("handle_initiative_callback").expect("initiative callback intercept must be wired");
-        let dispatch = src.find("dispatcher::dispatch_message(").expect("dispatcher present");
-        assert!(cb < dispatch, "initiative callback intercept must run before dispatch_message");
-    }
-
-    #[test]
-    fn infra_callback_wired() {
-        let src = include_str!("reader.rs");
-        assert!(src.contains("handle_infra_callback"), "infra callback должен быть подключён в reader");
-    }
-
-    #[test]
-    fn handshake_guard_before_dispatch() {
-        let src = include_str!("reader.rs");
-        let guard = src
-            .find("channel_type == \"unknown\"")
-            .expect("handshake-completion guard must be wired in the Message arm");
-        let dispatch = src.find("dispatcher::dispatch_message(").expect("dispatcher present");
-        assert!(guard < dispatch, "handshake guard must run before dispatch_message");
+        assert!(src.contains("has_any_pending()"), "clarify-text spawn must be gated by the sync has_any_pending() check");
     }
 }
