@@ -1491,6 +1491,15 @@ pub struct InitiativeConfig {
     pub decompose: bool,
     #[serde(default)]
     pub daily_plan: bool,
+    /// Opt-in: materialize the morning day plan automatically (no owner tap),
+    /// bounded by `daily_token_budget`. Requires `daily_plan = true`.
+    #[serde(default)]
+    pub auto_approve_day_plan: bool,
+    /// Daily token ceiling (input+output, whole-agent) for the auto-approved
+    /// day plan. Advancement pauses for the day once usage-today reaches it.
+    /// Must be > 0 when `auto_approve_day_plan` is true.
+    #[serde(default)]
+    pub daily_token_budget: u64,
 }
 
 fn default_initiative_cap() -> u32 {
@@ -1504,6 +1513,8 @@ impl Default for InitiativeConfig {
             daily_proposal_cap: default_initiative_cap(),
             decompose: false,
             daily_plan: false,
+            auto_approve_day_plan: false,
+            daily_token_budget: 0,
         }
     }
 }
@@ -1515,7 +1526,84 @@ impl InitiativeConfig {
         if !(1..=10).contains(&self.daily_proposal_cap) {
             errors.push("initiative.daily_proposal_cap must be in [1, 10]".to_string());
         }
+        if self.auto_approve_day_plan {
+            if !self.daily_plan {
+                errors.push("initiative.auto_approve_day_plan requires daily_plan = true".to_string());
+            }
+            if self.daily_token_budget == 0 {
+                errors.push(
+                    "initiative.daily_token_budget must be > 0 when auto_approve_day_plan is true"
+                        .to_string(),
+                );
+            }
+        }
         errors
+    }
+}
+
+#[cfg(test)]
+mod initiative_config_tests {
+    use super::*;
+
+    fn base() -> InitiativeConfig {
+        InitiativeConfig {
+            enabled: true,
+            daily_proposal_cap: 1,
+            decompose: true,
+            daily_plan: true,
+            auto_approve_day_plan: false,
+            daily_token_budget: 0,
+        }
+    }
+
+    #[test]
+    fn auto_approve_requires_daily_plan_and_budget() {
+        // valid: auto on, daily_plan on, budget > 0
+        let ok = InitiativeConfig {
+            auto_approve_day_plan: true,
+            daily_token_budget: 100_000,
+            ..base()
+        };
+        assert!(
+            ok.validate().is_empty(),
+            "well-formed auto-approve config must pass: {:?}",
+            ok.validate()
+        );
+
+        // invalid: auto on but daily_plan off
+        let no_plan = InitiativeConfig {
+            auto_approve_day_plan: true,
+            daily_token_budget: 100_000,
+            daily_plan: false,
+            ..base()
+        };
+        assert!(
+            no_plan.validate().iter().any(|e| e.contains("daily_plan")),
+            "must require daily_plan"
+        );
+
+        // invalid: auto on but budget == 0
+        let no_budget = InitiativeConfig {
+            auto_approve_day_plan: true,
+            daily_token_budget: 0,
+            ..base()
+        };
+        assert!(
+            no_budget
+                .validate()
+                .iter()
+                .any(|e| e.contains("daily_token_budget")),
+            "must require budget > 0"
+        );
+
+        // auto off → no auto-related errors regardless of budget/plan
+        let off = InitiativeConfig {
+            auto_approve_day_plan: false,
+            daily_token_budget: 0,
+            daily_plan: false,
+            ..base()
+        };
+        assert!(off.validate().is_empty(), "auto off must not add errors");
     }
 }
 
@@ -3374,6 +3462,8 @@ model = "gpt-4o"
             daily_proposal_cap: 0,
             decompose: false,
             daily_plan: false,
+            auto_approve_day_plan: false,
+            daily_token_budget: 0,
         };
         assert!(!bad.validate().is_empty());
         let bad2 = InitiativeConfig {
@@ -3381,6 +3471,8 @@ model = "gpt-4o"
             daily_proposal_cap: 99,
             decompose: false,
             daily_plan: false,
+            auto_approve_day_plan: false,
+            daily_token_budget: 0,
         };
         assert!(!bad2.validate().is_empty());
     }
