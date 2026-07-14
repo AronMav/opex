@@ -105,7 +105,7 @@ export const useNotificationStore = create<NotificationState>()(
             const target = s.notifications.find(
               (n) =>
                 !n.read &&
-                (n.data as Record<string, unknown>)?.approval_id === approvalId,
+                n.data.approval_id === approvalId,
             );
             if (!target) return s;
             return {

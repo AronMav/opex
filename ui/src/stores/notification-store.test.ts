@@ -49,34 +49,39 @@ describe("notification-store", () => {
     expect(useNotificationStore.getState().unread_count).toBe(0);
   });
 
-  it("markRead does NOT decrement an already-read row", () => {
+  it("markRead does NOT decrement for an already-read row (guarded)", () => {
+    // One already-read row + one unread row → unread_count = 1.
+    // Old buggy code decremented unconditionally to 0; the fix must keep it at 1.
     useNotificationStore.setState({
-      notifications: [row("a", { read: true })],
-      unread_count: 0,
+      notifications: [row("a", { read: true }), row("b")],
+      unread_count: 1,
       newArrivalSeq: 0,
     });
     useNotificationStore.getState().markRead("a");
-    expect(useNotificationStore.getState().unread_count).toBe(0);
+    expect(useNotificationStore.getState().unread_count).toBe(1);
   });
 
-  it("applyRead sets read + server unread_count", () => {
+  it("applyRead assigns the server unread_count verbatim (not local math)", () => {
     const st = useNotificationStore.getState();
     st.prependNotification(row("a"));
     st.prependNotification(row("b"));
-    st.applyRead("a", 1);
+    // Server says 5. Local decrement math (2-1=1) would give a different number,
+    // so a passing assertion proves the server value is assigned verbatim.
+    st.applyRead("a", 5);
     const s = useNotificationStore.getState();
     expect(s.notifications.find((n) => n.id === "a")?.read).toBe(true);
-    expect(s.unread_count).toBe(1);
+    expect(s.unread_count).toBe(5);
   });
 
-  it("applyReadAll marks all read + sets count", () => {
+  it("applyReadAll marks all read + assigns server count verbatim", () => {
     const st = useNotificationStore.getState();
     st.prependNotification(row("a"));
     st.prependNotification(row("b"));
-    st.applyReadAll(0);
+    // Non-zero proves the arg is assigned, not a hardcoded 0.
+    st.applyReadAll(7);
     const s = useNotificationStore.getState();
     expect(s.notifications.every((n) => n.read)).toBe(true);
-    expect(s.unread_count).toBe(0);
+    expect(s.unread_count).toBe(7);
   });
 
   it("applyCleared empties the list", () => {
