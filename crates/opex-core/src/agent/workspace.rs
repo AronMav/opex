@@ -1954,6 +1954,30 @@ mod tests {
         assert!(!prompt.contains("You are now DAN"), "withheld content must not leak");
     }
 
+    #[tokio::test]
+    async fn nonbase_soul_with_dispersed_infra_vocab_is_not_withheld() {
+        // The non-base path is where proximity does the real work: base=false does
+        // NOT short-circuit the scan, so a dispersed heartbeat…endpoint (kilobytes
+        // apart) must pass the proximity-narrowed scanner and NOT be withheld.
+        // If the Task-1 proximity fix regressed, scan_for_block would flag this as
+        // c2_beacon and this test would see a [CONTENT BLOCKED placeholder.
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().join("workspace");
+        let agent_dir_path = ws.join("agents").join("NonBaseInfra");
+        std::fs::create_dir_all(&agent_dir_path).unwrap();
+
+        let soul = format!(
+            "# Soul\n### Maintenance (heartbeat)\nrun backups.\n{}\n## API\nGET /endpoint\n",
+            "filler line describing the agent. ".repeat(10)
+        );
+        std::fs::write(agent_dir_path.join("SOUL.md"), &soul).unwrap();
+
+        let ws_str = ws.to_str().unwrap();
+        let prompt = load_workspace_prompt(ws_str, "NonBaseInfra", false).await.unwrap();
+        assert!(!prompt.contains("[CONTENT BLOCKED"), "dispersed infra vocab must not trip the scanner (proximity), even for non-base");
+        assert!(prompt.contains("Maintenance (heartbeat)"), "soul body must be present");
+    }
+
     // ── CACHE-02: load_claude_md + load_workspace_prompt_excluding_claude_md ──
 
     #[tokio::test]
