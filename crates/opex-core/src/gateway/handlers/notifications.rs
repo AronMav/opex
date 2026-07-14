@@ -35,6 +35,28 @@ pub(crate) struct CreateNotificationBody {
 
 fn default_notification_type() -> String { "watchdog_alert".to_string() }
 
+// ── Cross-tab read-sync broadcast events ─────────────────────────────────────
+// Emitted over `ui_event_tx` so every open tab reconciles read-state to the
+// server-authoritative unread count (fixes blind local decrement drift).
+
+fn notification_read_event(id: Uuid, unread_count: i64) -> serde_json::Value {
+    serde_json::json!({
+        "type": "notification_read",
+        "data": { "id": id.to_string(), "unread_count": unread_count }
+    })
+}
+
+fn notifications_read_all_event(unread_count: i64) -> serde_json::Value {
+    serde_json::json!({
+        "type": "notifications_read_all",
+        "data": { "unread_count": unread_count }
+    })
+}
+
+fn notifications_cleared_event() -> serde_json::Value {
+    serde_json::json!({ "type": "notifications_cleared" })
+}
+
 /// POST /api/notifications — create a notification (bell + WS broadcast).
 /// Auth-gated like every other /api route. Used by internal ops (e.g. the
 /// hourly YouTube-cookies health check) to surface alerts to the operator.
@@ -100,42 +122,69 @@ pub(crate) async fn api_list_notifications(
 /// PATCH /api/notifications/{id}  — mark single notification read
 pub(crate) async fn api_mark_notification_read(
     State(infra): State<InfraServices>,
+    State(bus): State<ChannelBus>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     match crate::db::notifications::mark_read(&infra.db, id).await {
-        Ok(updated) => Json(serde_json::json!({"ok": true, "updated": updated})).into_response(),
+        Ok(updated) => {
+            if updated {
+                let unread = crate::db::notifications::count_unread(&infra.db)
+                    .await
+                    .unwrap_or(0);
+                bus.ui_event_tx
+                    .send(notification_read_event(id, unread).to_string())
+                    .ok();
+            }
+            Json(serde_json::json!({"ok": true, "updated": updated})).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
 /// POST /api/notifications/read-all  — mark all notifications read
 pub(crate) async fn api_mark_all_notifications_read(
     State(infra): State<InfraServices>,
+    State(bus): State<ChannelBus>,
 ) -> impl IntoResponse {
     match crate::db::notifications::mark_all_read(&infra.db).await {
-        Ok(count) => Json(serde_json::json!({"ok": true, "updated": count})).into_response(),
+        Ok(count) => {
+            // After mark-all, unread count is authoritatively 0.
+            bus.ui_event_tx
+                .send(notifications_read_all_event(0).to_string())
+                .ok();
+            Json(serde_json::json!({"ok": true, "updated": count})).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
 pub(crate) async fn api_clear_all_notifications(
     State(infra): State<InfraServices>,
+    State(bus): State<ChannelBus>,
 ) -> impl IntoResponse {
     match sqlx::query("DELETE FROM notifications")
         .execute(&infra.db)
         .await
     {
-        Ok(r) => Json(serde_json::json!({"ok": true, "deleted": r.rows_affected()})).into_response(),
+        Ok(r) => {
+            bus.ui_event_tx
+                .send(notifications_cleared_event().to_string())
+                .ok();
+            Json(serde_json::json!({"ok": true, "deleted": r.rows_affected()})).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -167,4 +216,31 @@ pub async fn notify(
     ).ok();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_event_shape() {
+        let id = Uuid::nil();
+        let ev = notification_read_event(id, 3);
+        assert_eq!(ev["type"], "notification_read");
+        assert_eq!(ev["data"]["id"], id.to_string());
+        assert_eq!(ev["data"]["unread_count"], 3);
+    }
+
+    #[test]
+    fn read_all_event_shape() {
+        let ev = notifications_read_all_event(0);
+        assert_eq!(ev["type"], "notifications_read_all");
+        assert_eq!(ev["data"]["unread_count"], 0);
+    }
+
+    #[test]
+    fn cleared_event_shape() {
+        let ev = notifications_cleared_event();
+        assert_eq!(ev["type"], "notifications_cleared");
+    }
 }
