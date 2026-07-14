@@ -148,7 +148,7 @@ pub async fn cleanup_old_notifications(db: &PgPool) -> anyhow::Result<u64> {
 mod tests {
     use super::*;
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn count_unread_counts_only_unread(pool: PgPool) -> Result<()> {
         create_notification(&pool, "agent_error", "a", "b", serde_json::json!({})).await?;
         let n2 = create_notification(&pool, "agent_error", "c", "d", serde_json::json!({})).await?;
@@ -158,7 +158,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn mark_tool_approval_read_by_approval_id_marks_only_match(pool: PgPool) -> Result<()> {
         let n = create_notification(&pool, "tool_approval", "t", "b",
             serde_json::json!({"approval_id": "ap-123"})).await?;
