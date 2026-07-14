@@ -172,9 +172,11 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     /// (None, None) when [agent.soul] is disabled. Fail-soft inside.
     async fn soul_blocks(&self, user_text: &str, session_id: Uuid) -> (Option<String>, Option<String>);
 
-    /// Persona-drift probe (spec stage B): self-baseline drift score → session_timeline.
-    /// Detect+log only, no prompt injection. No-op when `[agent.drift]` disabled or on error.
-    async fn drift_probe(&self, history: &[opex_db::sessions::MessageRow], session_id: Uuid);
+    /// Persona-drift probe (Stage B). Returns the identity-anchor block to append
+    /// to the system prompt when correction fires (`[agent.drift] correct=true`
+    /// and drift over threshold), else `None`. Detect-only + timeline logging are
+    /// unchanged; the return is `None` on every non-correcting path.
+    async fn drift_probe(&self, history: &[opex_db::sessions::MessageRow], session_id: Uuid) -> Option<String>;
 
     /// Stage C: read-only «current focus + active initiative goals» block.
     /// Framed + sanitized; None when nothing to show or initiative disabled.
@@ -290,8 +292,9 @@ impl ContextBuilder for DefaultContextBuilder {
             deps.session_load_messages(session_id, limit).await?
         };
 
-        // Stage B: persona-drift probe (detect+log only, fail-soft, no injection).
-        deps.drift_probe(&history, session_id).await;
+        // Stage B: persona-drift probe (detect+log, fail-soft; correction anchor
+        // injected at the tail of the system prompt below when it fires).
+        let drift_anchor = deps.drift_probe(&history, session_id).await;
 
         // T17: conversation-history size estimate (chars/4 heuristic, same as
         // the system-prompt estimate below) — captured pre-repair, before any
@@ -544,6 +547,12 @@ impl ContextBuilder for DefaultContextBuilder {
             system_prompt.push_str(&todo_block);
         }
         let todo_len = system_prompt.len() - pre_todo_len;
+
+        // Stage B Phase 2: identity anchor at the tail (highest salience) when
+        // drift crossed the threshold this turn. Rare (only over-threshold turns).
+        if let Some(block) = drift_anchor {
+            system_prompt.push_str(&block);
+        }
 
         tracing::info!(
             agent = %deps.agent_name(),

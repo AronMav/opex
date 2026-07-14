@@ -52,9 +52,6 @@ pub fn drift_score(baseline_centroid: &[f32], recent: &[f32]) -> f32 {
 /// Compact identity-reminder block appended to the system prompt on an
 /// over-threshold turn. Operator's `anchor` when set/non-blank, else a generic
 /// name-based fallback. Trusted input (operator config / agent name) — not sanitized.
-// TODO(stage-B-phase-2 task 2): wired into context_builder.rs — remove once the
-// call site lands.
-#[allow(dead_code)]
 pub fn build_anchor_block(anchor: Option<&str>, agent_name: &str) -> String {
     let body = match anchor {
         Some(a) if !a.trim().is_empty() => a.trim().to_string(),
@@ -66,9 +63,6 @@ pub fn build_anchor_block(anchor: Option<&str>, agent_name: &str) -> String {
 /// Correction decision: the anchor block to inject, or None. Some iff correction
 /// is enabled AND the score is strictly over threshold (mirrors drift_probe's
 /// `over = score > threshold`).
-// TODO(stage-B-phase-2 task 2): wired into context_builder.rs — remove once the
-// call site lands.
-#[allow(dead_code)]
 pub fn correction_anchor(
     score: f32,
     threshold: f32,

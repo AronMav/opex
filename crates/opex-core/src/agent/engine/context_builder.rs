@@ -299,19 +299,19 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         (self_block, l1_block)
     }
 
-    async fn drift_probe(&self, history: &[opex_db::sessions::MessageRow], session_id: Uuid) {
+    async fn drift_probe(&self, history: &[opex_db::sessions::MessageRow], session_id: Uuid) -> Option<String> {
         let cfg = &self.cfg().agent.drift;
         if !cfg.enabled {
-            return;
+            return None;
         }
         if history.len() < cfg.min_history {
-            return;
+            return None;
         }
         let agent = self.agent_name();
         let texts = crate::agent::drift::own_assistant_texts(history, agent);
         // нужно ≥ baseline_turns эталонных + ≥1 свежий
         if texts.len() < cfg.baseline_turns + 1 {
-            return;
+            return None;
         }
         let embedder = &self.cfg().embedder;
 
@@ -323,10 +323,10 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
             let base_texts: Vec<&str> = texts.iter().take(cfg.baseline_turns).map(|s| s.as_str()).collect();
             let embs = match embedder.embed_batch(&base_texts).await {
                 Ok(e) => e,
-                Err(e) => { tracing::warn!(agent, error = %e, "drift baseline embed failed"); return; }
+                Err(e) => { tracing::warn!(agent, error = %e, "drift baseline embed failed"); return None; }
             };
             let Some(c) = crate::agent::drift::centroid(&embs) else {
-                tracing::warn!(agent, "drift baseline centroid degenerate"); return;
+                tracing::warn!(agent, "drift baseline centroid degenerate"); return None;
             };
             let arc = std::sync::Arc::new(c);
             // soft-cap backstop: не даём кэшу расти безгранично (спека §3; основная
@@ -345,13 +345,16 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         };
 
         // recent: последний собственный ответ
-        let Some(recent_text) = texts.last() else { return };
+        let recent_text = texts.last()?;
         let recent = match embedder.embed(recent_text).await {
             Ok(v) => v,
-            Err(e) => { tracing::warn!(agent, error = %e, "drift recent embed failed"); return; }
+            Err(e) => { tracing::warn!(agent, error = %e, "drift recent embed failed"); return None; }
         };
         let score = crate::agent::drift::drift_score(&baseline, &recent);
         let over = score > cfg.threshold;
+        let anchor = crate::agent::drift::correction_anchor(
+            score, cfg.threshold, cfg.correct, cfg.anchor.as_deref(), agent,
+        );
 
         // cos напрямую для наблюдаемости (декомпозиция — ревью F13)
         let cos = 1.0 - score;
@@ -362,17 +365,21 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
             "baseline_turns_used": cfg.baseline_turns,
             "history_len": history.len(),
             "over_threshold": over,
+            "corrected": anchor.is_some(),
         });
         if let Err(e) = opex_db::session_timeline::log_event(
             &self.cfg().db, session_id, "drift_probe", Some(&payload),
         ).await {
             tracing::warn!(agent, error = %e, "drift timeline write failed");
         }
-        if over {
+        if anchor.is_some() {
+            tracing::info!(agent, drift_score = score, "drift anchor injected");
+        } else if over {
             tracing::warn!(agent, drift_score = score, "persona drift over threshold");
         } else {
             tracing::debug!(agent, drift_score = score, "drift probe");
         }
+        anchor
     }
 
     /// Stage C: read-only «current focus + active initiative goals» block.
