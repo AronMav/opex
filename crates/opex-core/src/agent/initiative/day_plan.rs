@@ -157,7 +157,9 @@ async fn advance_day_plan(db: &PgPool, engine: &AgentEngine, agent: &str, deps: 
     if deps.cfg.auto_approve_day_plan {
         let spend = crate::db::usage::get_agent_usage_today(db, agent).await.unwrap_or(0);
         if !within_token_budget(spend, deps.cfg.daily_token_budget) {
-            let _ = agent_plans::set_day_plan_status(db, agent, Some("paused")).await;
+            if let Err(e) = agent_plans::set_day_plan_status(db, agent, Some("paused")).await {
+                tracing::warn!(agent, error = %e, "failed to persist day_plan_status=paused");
+            }
             notify_day_plan_paused(db, engine, agent, deps, deps.cfg.daily_token_budget).await;
             return;
         }
@@ -342,6 +344,18 @@ mod tests {
         assert_eq!(used, 200);
         assert!(!super::within_token_budget(used, 150), "200 over a 150 cap → pause");
         assert!(super::within_token_budget(used, 500), "200 under a 500 cap → continue");
+        Ok(())
+    }
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn paused_status_persists(pool: sqlx::PgPool) -> sqlx::Result<()> {
+        // Regression: "paused" must satisfy the day_plan_status CHECK (migration 082).
+        crate::db::agent_plans::get_or_create(&pool, "PZ").await.unwrap();
+        let today = chrono::Utc::now().date_naive();
+        let intents = vec![crate::db::agent_plans::DayIntent { session_id: None, intent: "a".into(), status: "pending".into() }];
+        crate::db::agent_plans::set_day_plan(&pool, "PZ", &intents, today, Some("approved")).await.unwrap();
+        crate::db::agent_plans::set_day_plan_status(&pool, "PZ", Some("paused")).await.unwrap();
+        let plan = crate::db::agent_plans::get_or_create(&pool, "PZ").await.unwrap();
+        assert_eq!(plan.day_plan_status.as_deref(), Some("paused"));
         Ok(())
     }
 }
