@@ -60,7 +60,7 @@ pub async fn run_subagent_with_session(
     // spawns via `[agent.delegation] max_depth`.
     let cfg = ctx.cfg;
     let ws_prompt =
-        workspace::load_workspace_prompt(&cfg.workspace_dir, &cfg.agent.name).await?;
+        workspace::load_workspace_prompt(&cfg.workspace_dir, &cfg.agent.name, cfg.agent.base).await?;
     let capabilities = workspace::CapabilityFlags {
         has_search: executor.has_tool("search_web").await,
         has_memory: cfg.memory_store.is_available(),

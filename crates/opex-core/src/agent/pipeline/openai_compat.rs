@@ -58,7 +58,7 @@ pub async fn handle_openai(
 
     if !has_system {
         let ws_prompt =
-            workspace::load_workspace_prompt(&cfg.workspace_dir, &cfg.agent.name)
+            workspace::load_workspace_prompt(&cfg.workspace_dir, &cfg.agent.name, cfg.agent.base)
                 .await
                 .unwrap_or_default();
 
