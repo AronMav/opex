@@ -48,16 +48,10 @@ interface MediaNotificationBodyProps {
   notification: NotificationRow;
 }
 
-// Event types emitted by `media_background.rs`.
-// Voice keeps the historical `tts_*` names for back-compat with code paths
-// outside the notification bell (e.g. analytics, hooks). Photo / video / other
-// have dedicated events with kind-appropriate inline rendering.
-const READY_EVENTS = new Set([
-  "tts_ready",
-  "image_ready",
-  "video_ready",
-  "media_ready",
-]);
+// Error-flavoured event types emitted by `media_background.rs`. The
+// corresponding `*_ready` events are no longer sent by the backend — the
+// bell only ever needs to render the error path inline; success is
+// communicated some other way (e.g. the channel action itself).
 const ERROR_EVENTS = new Set([
   "tts_error",
   "image_error",
@@ -65,68 +59,8 @@ const ERROR_EVENTS = new Set([
   "media_error",
 ]);
 
-function readyKindFromType(type: string): "voice" | "image" | "video" | "media" | null {
-  switch (type) {
-    case "tts_ready":   return "voice";
-    case "image_ready": return "image";
-    case "video_ready": return "video";
-    case "media_ready": return "media";
-    default:            return null;
-  }
-}
-
 export function MediaNotificationBody({ notification }: MediaNotificationBodyProps) {
-  const { type, title, body, data } = notification;
-  const url = typeof data?.url === "string" ? (data.url as string) : null;
-
-  // Success path — render an inline preview when we have a url, otherwise
-  // fall through to a plain body line.
-  const readyKind = readyKindFromType(type);
-  if (readyKind && url) {
-    return (
-      <div className="flex flex-col gap-1 w-full" onClick={(e) => e.stopPropagation()}>
-        <span className="text-xs text-muted-foreground">{body}</span>
-        {readyKind === "voice" && (
-          <audio
-            controls
-            src={url}
-            className="w-full mt-1 h-8"
-            data-testid="tts-audio-player"
-          />
-        )}
-        {readyKind === "image" && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={url}
-            alt={title}
-            className="mt-1 max-h-48 w-auto rounded-md border border-border object-contain"
-            data-testid="image-preview"
-            loading="lazy"
-          />
-        )}
-        {readyKind === "video" && (
-          <video
-            controls
-            src={url}
-            className="w-full mt-1 max-h-48 rounded-md border border-border"
-            data-testid="video-player"
-            preload="metadata"
-          />
-        )}
-        {readyKind === "media" && (
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-1 text-xs text-primary underline underline-offset-2"
-            data-testid="media-download"
-          >
-            {url.split("/").pop() || url}
-          </a>
-        )}
-      </div>
-    );
-  }
+  const { type, body } = notification;
 
   // Error path for any media-flavoured event.
   if (ERROR_EVENTS.has(type)) {
@@ -135,18 +69,14 @@ export function MediaNotificationBody({ notification }: MediaNotificationBodyPro
     );
   }
 
-  // Default body line — also used when a ready event arrives without a usable url.
+  // Default body line for everything else.
   return <span className="text-xs text-muted-foreground line-clamp-2">{body}</span>;
 }
-
-// Back-compat alias — kept so any external consumer still imports the old name
-// without breaking. Internal code uses `MediaNotificationBody` directly.
-export const TtsNotificationBody = MediaNotificationBody;
 
 // Used by `getNotificationRoute` to decide that a notification is rendered
 // inline (no navigation) rather than linking somewhere.
 function isMediaEvent(type: string): boolean {
-  return READY_EVENTS.has(type) || ERROR_EVENTS.has(type);
+  return ERROR_EVENTS.has(type);
 }
 
 // ── Notification type → target route ─────────────────────────────────────────
@@ -165,7 +95,7 @@ function isMediaEvent(type: string): boolean {
 // initiative — see `agent/initiative/tick.rs`'s
 // `notify(..., "initiative_proposal", ..., {agent, proposal_id, text, rationale})`.
 export function getNotificationRoute(type: string, data?: Record<string, unknown>): string | null {
-  // Media events (tts/image/video/media — ready + error) render inline; no nav.
+  // Media error events (tts/image/video/media) render inline; no nav.
   if (isMediaEvent(type)) return null;
   switch (type) {
     case "infra_decision":      return null; // actionable buttons, not navigation

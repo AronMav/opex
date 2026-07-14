@@ -4,7 +4,6 @@ import React from "react";
 
 import {
   MediaNotificationBody,
-  TtsNotificationBody,
   getNotificationRoute,
 } from "@/components/notification-bell";
 
@@ -14,25 +13,6 @@ import {
 // events emitted by `media_background.rs`.
 describe("MediaNotificationBody", () => {
   // ── Voice (legacy tts_* events) ─────────────────────────────────────────────
-
-  it("renders an audio player for tts_ready with url", () => {
-    render(
-      <MediaNotificationBody
-        notification={{
-          id: "1",
-          type: "tts_ready",
-          title: "Аудио готово",
-          body: "Подготовлено агентом Arty",
-          data: { url: "/uploads/test.wav", mediaType: "audio/wav" },
-          read: false,
-          created_at: new Date().toISOString(),
-        }}
-      />,
-    );
-    const audio = screen.getByTestId("tts-audio-player");
-    expect(audio).toBeTruthy();
-    expect(audio.getAttribute("src")).toBe("/uploads/test.wav");
-  });
 
   it("renders error text for tts_error", () => {
     render(
@@ -53,28 +33,6 @@ describe("MediaNotificationBody", () => {
 
   // ── Image ───────────────────────────────────────────────────────────────────
 
-  it("renders an inline image preview for image_ready with url", () => {
-    render(
-      <MediaNotificationBody
-        notification={{
-          id: "3",
-          type: "image_ready",
-          title: "Изображение готово",
-          body: "Подготовлено агентом Arty",
-          data: { url: "/uploads/test.png", mediaType: "image/png" },
-          read: false,
-          created_at: new Date().toISOString(),
-        }}
-      />,
-    );
-    const img = screen.getByTestId("image-preview") as HTMLImageElement;
-    expect(img).toBeTruthy();
-    expect(img.getAttribute("src")).toBe("/uploads/test.png");
-    // Accessibility: the preview must carry an alt attribute (even if empty
-    // is acceptable, here we expect a meaningful alt from the title).
-    expect(img.getAttribute("alt")).toBeTruthy();
-  });
-
   it("renders error text for image_error", () => {
     render(
       <MediaNotificationBody
@@ -94,25 +52,6 @@ describe("MediaNotificationBody", () => {
 
   // ── Video ───────────────────────────────────────────────────────────────────
 
-  it("renders an inline video player for video_ready with url", () => {
-    render(
-      <MediaNotificationBody
-        notification={{
-          id: "5",
-          type: "video_ready",
-          title: "Видео готово",
-          body: "Подготовлено агентом Arty",
-          data: { url: "/uploads/test.mp4", mediaType: "video/mp4" },
-          read: false,
-          created_at: new Date().toISOString(),
-        }}
-      />,
-    );
-    const video = screen.getByTestId("video-player") as HTMLVideoElement;
-    expect(video).toBeTruthy();
-    expect(video.getAttribute("src")).toBe("/uploads/test.mp4");
-  });
-
   it("renders error text for video_error", () => {
     render(
       <MediaNotificationBody
@@ -131,25 +70,6 @@ describe("MediaNotificationBody", () => {
   });
 
   // ── Generic media fallback ──────────────────────────────────────────────────
-
-  it("renders a download link for media_ready with url", () => {
-    render(
-      <MediaNotificationBody
-        notification={{
-          id: "7",
-          type: "media_ready",
-          title: "Медиа готово",
-          body: "Подготовлено агентом Arty",
-          data: { url: "/uploads/blob.bin", mediaType: "application/octet-stream" },
-          read: false,
-          created_at: new Date().toISOString(),
-        }}
-      />,
-    );
-    const link = screen.getByTestId("media-download") as HTMLAnchorElement;
-    expect(link).toBeTruthy();
-    expect(link.getAttribute("href")).toBe("/uploads/blob.bin");
-  });
 
   it("renders error text for media_error", () => {
     render(
@@ -186,70 +106,27 @@ describe("MediaNotificationBody", () => {
     );
     expect(screen.getByText(/Worker crashed/)).toBeTruthy();
   });
-
-  // ── Missing url graceful handling (parametrised over media kinds) ──────────
-
-  it.each([
-    ["image_ready", "image-preview"],
-    ["video_ready", "video-player"],
-    ["media_ready", "media-download"],
-    ["tts_ready",   "tts-audio-player"],
-  ])(
-    "renders body text when %s arrives without a url and skips %s",
-    (eventType, testId) => {
-      render(
-        <MediaNotificationBody
-          notification={{
-            id: `nourl-${eventType}`,
-            type: eventType,
-            title: "Готово",
-            body: "Подготовлено агентом Arty",
-            data: {},
-            read: false,
-            created_at: new Date().toISOString(),
-          }}
-        />,
-      );
-      expect(screen.queryByTestId(testId)).toBeNull();
-      expect(screen.getByText(/Подготовлено/)).toBeTruthy();
-    },
-  );
-
-  // ── TtsNotificationBody back-compat alias smoke ────────────────────────────
-
-  it("TtsNotificationBody alias renders the same audio player as MediaNotificationBody", () => {
-    render(
-      <TtsNotificationBody
-        notification={{
-          id: "alias-1",
-          type: "tts_ready",
-          title: "Аудио готово",
-          body: "alias path",
-          data: { url: "/uploads/alias.wav", mediaType: "audio/wav" },
-          read: false,
-          created_at: new Date().toISOString(),
-        }}
-      />,
-    );
-    const audio = screen.getByTestId("tts-audio-player");
-    expect(audio.getAttribute("src")).toBe("/uploads/alias.wav");
-  });
 });
 
 // ── getNotificationRoute ─────────────────────────────────────────────────────
 
 describe("getNotificationRoute", () => {
   it.each([
-    ["tts_ready"],
     ["tts_error"],
-    ["image_ready"],
     ["image_error"],
-    ["video_ready"],
     ["video_error"],
-    ["media_ready"],
     ["media_error"],
-  ])("returns null for media event %s (rendered inline, no nav)", (type) => {
+  ])("returns null for media-error event %s (rendered inline, no nav)", (type) => {
     expect(getNotificationRoute(type)).toBeNull();
+  });
+
+  it.each([
+    ["tts_ready"],
+    ["image_ready"],
+    ["video_ready"],
+    ["media_ready"],
+  ])("routes former media-ready event %s to /monitor/ (no longer emitted)", (type) => {
+    expect(getNotificationRoute(type)).toBe("/monitor/");
   });
 
   it.each([
