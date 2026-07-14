@@ -1,8 +1,10 @@
 //! Self-baseline persona-drift detector (spec stage B §2): drift = 1 − cos(recent,
 //! baseline_centroid), где baseline = центроид собственных ранних ответов агента в
-//! этой сессии. Embedding-only, detect+log v1 (никаких инъекций). Чистые функции;
-//! обвязка (embed через cfg().embedder, кэш, запись в session_timeline) — в
-//! engine/context_builder.rs.
+//! этой сессии. Phase 1 = detect+log; Phase 2 = A-anchor коррекция: при drift >
+//! threshold И `[agent.drift] correct=true` в системный промпт дописывается
+//! компактный identity-якорь (build_anchor_block / correction_anchor — чистые
+//! функции здесь). Обвязка (embed через cfg().embedder, кэш, запись в
+//! session_timeline, возврат якоря) — в engine/context_builder.rs.
 
 /// L2-нормализация. Вырожденный/нулевой вектор → None.
 fn normalize(v: &[f32]) -> Option<Vec<f32>> {
