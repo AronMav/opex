@@ -123,24 +123,27 @@ async fn day_plan_tick_inner(db: &PgPool, engine: &AgentEngine, agent: &str, dep
         let intents: Vec<DayIntent> = intents_txt.into_iter()
             .map(|t| DayIntent { session_id: None, intent: t, status: "pending".into() }).collect();
         agent_plans::set_day_plan(db, agent, &intents, today, Some("pending")).await?;
-        notify_day_plan(db, engine, agent, deps, &intents, today).await; // Task 6 provides (date → button)
+        // Auto-approve when opted in and under budget → materialize + inform (no
+        // buttons). Otherwise (not opted in, over budget, or materialize failed)
+        // send the buttoned approval request. Exactly one notification.
+        let mut auto_approved = false;
         if deps.cfg.auto_approve_day_plan {
             let spend = crate::db::usage::get_agent_usage_today(db, agent).await.unwrap_or(0);
             if within_token_budget(spend, deps.cfg.daily_token_budget) {
-                // CAS-guarded/idempotent — a race with an owner tap is safe.
                 match crate::gateway::handlers::agents::initiative::materialize_day_plan_tx(db, agent, today).await {
                     Ok(n) if n > 0 => {
-                        // Re-read materialized intents (now with session_ids/active) for the notice.
                         let plan2 = agent_plans::get_or_create(db, agent).await?;
                         let materialized: Vec<DayIntent> = serde_json::from_value(plan2.day_plan.clone()).unwrap_or_default();
                         notify_day_plan_auto_approved(db, engine, agent, deps, &materialized, today).await;
+                        auto_approved = true;
                     }
-                    Ok(_) => {} // CAS no-op (owner tapped first / empty) — not an error
+                    Ok(_) => auto_approved = true, // CAS no-op (already approved) — don't also prompt
                     Err(e) => tracing::warn!(agent, error = ?e, "auto-approve materialize failed (fail-soft)"),
                 }
             }
-            // else: over budget at generation → stay pending; notify_day_plan's
-            // buttons are the manual fallback (no extra work).
+        }
+        if !auto_approved {
+            notify_day_plan(db, engine, agent, deps, &intents, today).await;
         }
         return Ok(());
     }
