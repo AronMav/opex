@@ -42,6 +42,12 @@ class MiniMaxTTS:
                          response_format: str = "mp3",
                          registry=None) -> bytes:
         fmt = response_format if response_format in _SUPPORTED_FORMATS else "mp3"
+        # MiniMax opus accepts only a subset of sample rates (16000/24000) and
+        # rejects 32000/48000 with err 2013. Telegram voice notes (send_voice)
+        # request opus, so clamp to a supported rate; opus is returned as a
+        # ready OGG-Opus container (magic "OggS"). Other formats keep the
+        # configured rate (default 32000).
+        sample_rate = 24000 if fmt == "opus" else self.sample_rate
         url = f"{self.base_url}/v1/t2a_v2"
         if self.group_id:
             url = f"{url}?GroupId={self.group_id}"
@@ -57,7 +63,7 @@ class MiniMaxTTS:
                 "pitch": 0,
             },
             "audio_setting": {
-                "sample_rate": self.sample_rate,
+                "sample_rate": sample_rate,
                 "bitrate": self.bitrate,
                 "format": fmt,
                 "channel": 1,
