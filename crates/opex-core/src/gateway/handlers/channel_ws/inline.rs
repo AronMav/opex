@@ -176,23 +176,14 @@ pub(super) async fn handle_approval_callback(
     msg: &IncomingMessageDto,
     out_tx: &mpsc::Sender<OutboundMsg>,
 ) -> bool {
-    let is_callback = msg
-        .context
-        .get("is_callback")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    if !is_callback {
+    if !approval_matches(msg) {
         return false;
     }
-
     let text = msg.text.as_deref().unwrap_or("");
-    let approval_id_str = match text
+    let approval_id_str = text
         .strip_prefix("approve:")
         .or_else(|| text.strip_prefix("reject:"))
-    {
-        Some(s) => s,
-        None => return false, // callback flag was set but format unfamiliar — let dispatcher try
-    };
+        .expect("approval_matches guaranteed a known prefix");
     let approved = text.starts_with("approve:");
     let user_id = msg.user_id.clone();
 
@@ -306,20 +297,10 @@ pub(super) async fn handle_initiative_callback(
     msg: &IncomingMessageDto,
     out_tx: &mpsc::Sender<OutboundMsg>,
 ) -> bool {
-    let is_callback = msg
-        .context
-        .get("is_callback")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    if !is_callback {
+    if !initiative_matches(msg) {
         return false;
     }
-
     let text = msg.text.as_deref().unwrap_or("");
-    if !(text.starts_with("iappr:") || text.starts_with("idismiss:") || text.starts_with("icancel:")
-        || text.starts_with("dpm:approve:") || text.starts_with("dpm:dismiss:")) {
-        return false; // not an initiative callback — let other interceptors / dispatcher try
-    }
 
     let user_id = msg.user_id.clone();
 
@@ -463,12 +444,7 @@ pub(super) async fn handle_infra_callback(
     msg: &IncomingMessageDto,
     out_tx: &mpsc::Sender<OutboundMsg>,
 ) -> bool {
-    let is_callback = msg
-        .context
-        .get("is_callback")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    if !is_callback {
+    if !infra_matches(msg) {
         return false;
     }
 
@@ -543,6 +519,42 @@ pub(super) fn parse_clarify_callback(text: &str) -> Option<(uuid::Uuid, String)>
     Some((id, slot.to_string()))
 }
 
+/// True iff the adapter tagged this message as an inline-button callback.
+pub(super) fn is_callback(msg: &IncomingMessageDto) -> bool {
+    msg.context
+        .get("is_callback")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Sync classifier: is this an approval callback (`approve:`/`reject:`)?
+pub(super) fn approval_matches(msg: &IncomingMessageDto) -> bool {
+    if !is_callback(msg) { return false; }
+    let t = msg.text.as_deref().unwrap_or("");
+    t.starts_with("approve:") || t.starts_with("reject:")
+}
+
+/// Sync classifier: is this an initiative callback?
+pub(super) fn initiative_matches(msg: &IncomingMessageDto) -> bool {
+    if !is_callback(msg) { return false; }
+    let t = msg.text.as_deref().unwrap_or("");
+    t.starts_with("iappr:") || t.starts_with("idismiss:") || t.starts_with("icancel:")
+        || t.starts_with("dpm:approve:") || t.starts_with("dpm:dismiss:")
+}
+
+/// Sync classifier: is this an infra-decision callback?
+pub(super) fn infra_matches(msg: &IncomingMessageDto) -> bool {
+    if !is_callback(msg) { return false; }
+    let t = msg.text.as_deref().unwrap_or("");
+    t.starts_with("infra:ok:") || t.starts_with("infra:no:")
+}
+
+/// Sync classifier: is this a clarify button callback (`clarify:{id}:{slot}`)?
+pub(super) fn clarify_cb_matches(msg: &IncomingMessageDto) -> bool {
+    if !is_callback(msg) { return false; }
+    parse_clarify_callback(msg.text.as_deref().unwrap_or("")).is_some()
+}
+
 /// Intercept `clarify:{id}:{idx_or_other}` inline-button callbacks.
 ///
 /// - `idx` (numeric) → look up choice text in the button payload; resolve waiter.
@@ -558,19 +570,12 @@ pub(super) async fn handle_clarify_callback(
     msg: &IncomingMessageDto,
     out_tx: &mpsc::Sender<OutboundMsg>,
 ) -> bool {
-    let is_callback = msg
-        .context
-        .get("is_callback")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    if !is_callback {
+    if !clarify_cb_matches(msg) {
         return false;
     }
-
     let text = msg.text.as_deref().unwrap_or("");
-    let Some((clarify_id, slot)) = parse_clarify_callback(text) else {
-        return false;
-    };
+    let (clarify_id, slot) = parse_clarify_callback(text)
+        .expect("clarify_cb_matches guaranteed a valid clarify callback");
     let user_id = msg.user_id.clone();
 
     // Owner gate — same pattern as approval callbacks.
@@ -823,5 +828,63 @@ mod clarify_text_owner_gate_tests {
     #[test]
     fn non_owner_falls_through() {
         assert!(!clarify_text_is_owner_allowed(false), "non-owner must not resolve — falls through to a turn");
+    }
+}
+
+#[cfg(test)]
+mod classifier_tests {
+    use super::*;
+    use opex_types::IncomingMessageDto;
+
+    // `IncomingMessageDto` does not derive `Default` — construct explicitly.
+    fn dto(text: &str, is_cb: bool) -> IncomingMessageDto {
+        IncomingMessageDto {
+            user_id: "u1".to_string(),
+            display_name: None,
+            text: Some(text.to_string()),
+            attachments: Vec::new(),
+            context: serde_json::json!({ "is_callback": is_cb }),
+            timestamp: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn approval_matches_only_with_callback_flag() {
+        assert!(approval_matches(&dto("approve:abc", true)));
+        assert!(approval_matches(&dto("reject:abc", true)));
+        assert!(!approval_matches(&dto("approve:abc", false)), "plain text lookalike is NOT a callback");
+        assert!(!approval_matches(&dto("hello", true)));
+    }
+
+    #[test]
+    fn initiative_matches_all_prefixes() {
+        for p in ["iappr:x", "idismiss:x", "icancel:x", "dpm:approve:x", "dpm:dismiss:x"] {
+            assert!(initiative_matches(&dto(p, true)), "{p} must match");
+        }
+        assert!(!initiative_matches(&dto("iappr:x", false)));
+        assert!(!initiative_matches(&dto("infra:ok:x", true)));
+    }
+
+    #[test]
+    fn infra_matches_prefixes() {
+        assert!(infra_matches(&dto("infra:ok:x", true)));
+        assert!(infra_matches(&dto("infra:no:x", true)));
+        assert!(!infra_matches(&dto("infra:ok:x", false)));
+        assert!(!infra_matches(&dto("infra:maybe:x", true)));
+    }
+
+    #[test]
+    fn clarify_cb_matches_valid_form() {
+        assert!(clarify_cb_matches(&dto("clarify:11111111-1111-1111-1111-111111111111:0", true)));
+        assert!(!clarify_cb_matches(&dto("clarify:bad", true)), "malformed clarify is not a clarify callback");
+        assert!(!clarify_cb_matches(&dto("clarify:11111111-1111-1111-1111-111111111111:0", false)));
+    }
+
+    #[test]
+    fn plain_text_that_looks_like_prefix_is_not_a_callback() {
+        // The design-review "message vanishes" case: user types "infra:ok: yes".
+        let m = dto("infra:ok: yes", false);
+        assert!(!approval_matches(&m) && !initiative_matches(&m) && !infra_matches(&m) && !clarify_cb_matches(&m),
+            "no classifier may claim a plain-text message");
     }
 }
