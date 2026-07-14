@@ -128,12 +128,16 @@ pub(crate) async fn api_mark_notification_read(
     match crate::db::notifications::mark_read(&infra.db, id).await {
         Ok(updated) => {
             if updated {
-                let unread = crate::db::notifications::count_unread(&infra.db)
-                    .await
-                    .unwrap_or(0);
-                bus.ui_event_tx
-                    .send(notification_read_event(id, unread).to_string())
-                    .ok();
+                match crate::db::notifications::count_unread(&infra.db).await {
+                    Ok(unread) => {
+                        bus.ui_event_tx
+                            .send(notification_read_event(id, unread).to_string())
+                            .ok();
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "count_unread failed after mark_read; skipping read-sync broadcast");
+                    }
+                }
             }
             Json(serde_json::json!({"ok": true, "updated": updated})).into_response()
         }
