@@ -60,6 +60,7 @@ pub mod file_handler_worker;
 pub(crate) mod soul;
 pub(crate) mod drift;
 pub(crate) mod initiative;
+pub(crate) mod emotion;
 
 /// Delete upload files older than `max_age` from workspace/uploads/.
 pub async fn cleanup_stale_uploads(workspace_dir: &str, max_age: std::time::Duration) -> usize {

@@ -977,6 +977,10 @@ pub struct AgentSettings {
     /// Proactive-initiative daily proposal cap (spec stage C, 2026-07-11).
     #[serde(default)]
     pub initiative: InitiativeConfig,
+    /// Emotion layer v1: appraisal + mood (spec 2026-07-14). Opt-in, requires
+    /// `soul.enabled = true` (cross-checked in `AgentConfig::load()`).
+    #[serde(default)]
+    pub emotion: EmotionConfig,
     pub compaction: Option<CompactionConfig>,
     pub skill_review: Option<SkillReviewConfig>,
     pub session: Option<SessionConfig>,
@@ -1636,6 +1640,72 @@ mod initiative_config_tests {
     }
 }
 
+/// Configuration for the emotion layer v1 (appraisal + mood; spec
+/// `docs/superpowers/specs/2026-07-14-agent-soul-emotion-layer-v1.md`).
+/// Maps to `[agent.emotion]`. All fields default — section can be omitted.
+/// Opt-in: requires `[agent.soul] enabled = true` (cross-checked in
+/// `AgentConfig::load()`, `EmotionConfig` alone can't see `SoulConfig`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EmotionConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_emotion_k")]
+    pub intensity_importance_k: f32,
+    #[serde(default = "default_emotion_blend")]
+    pub blend_rate: f32,
+    #[serde(default = "default_emotion_halflife")]
+    pub decay_half_life_hours: f32,
+}
+fn default_emotion_k() -> f32 {
+    3.0
+}
+fn default_emotion_blend() -> f32 {
+    0.3
+}
+fn default_emotion_halflife() -> f32 {
+    12.0
+}
+impl Default for EmotionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            intensity_importance_k: 3.0,
+            blend_rate: 0.3,
+            decay_half_life_hours: 12.0,
+        }
+    }
+}
+impl EmotionConfig {
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if !(0.0..=5.0).contains(&self.intensity_importance_k) {
+            errors.push("emotion.intensity_importance_k must be in [0.0, 5.0]".to_string());
+        }
+        if !(self.blend_rate > 0.0 && self.blend_rate <= 1.0) {
+            errors.push("emotion.blend_rate must be in (0.0, 1.0]".to_string());
+        }
+        if self.decay_half_life_hours <= 0.0 {
+            errors.push("emotion.decay_half_life_hours must be > 0".to_string());
+        }
+        errors
+    }
+}
+
+#[cfg(test)]
+mod emotion_config_tests {
+    use super::*;
+    #[test]
+    fn validate_ranges() {
+        assert!(EmotionConfig::default().validate().is_empty());
+        let bad_k = EmotionConfig { intensity_importance_k: 9.0, ..Default::default() };
+        assert!(bad_k.validate().iter().any(|e| e.contains("intensity_importance_k")));
+        let bad_blend = EmotionConfig { blend_rate: 0.0, ..Default::default() };
+        assert!(bad_blend.validate().iter().any(|e| e.contains("blend_rate")));
+        let bad_hl = EmotionConfig { decay_half_life_hours: 0.0, ..Default::default() };
+        assert!(bad_hl.validate().iter().any(|e| e.contains("decay_half_life_hours")));
+    }
+}
+
 /// Configuration for the tool dispatcher meta-tool (`tool_use`).
 ///
 /// Maps to `[agent.tool_dispatcher]` section in agent TOML config. All fields
@@ -2096,6 +2166,27 @@ impl AgentConfig {
         if config.agent.initiative.daily_plan && !config.agent.initiative.enabled {
             anyhow::bail!(
                 "agent {:?}: [agent.initiative] daily_plan=true requires enabled=true (review M3: otherwise a silent no-op)",
+                config.agent.name
+            );
+        }
+
+        // Validate emotion policy. Errors here block agent load — same
+        // treatment as initiative (misconfiguration surfaced at startup, not runtime).
+        let emotion_errors = config.agent.emotion.validate();
+        if !emotion_errors.is_empty() {
+            anyhow::bail!(
+                "agent {:?}: invalid [agent.emotion] section:\n  - {}",
+                config.agent.name,
+                emotion_errors.join("\n  - ")
+            );
+        }
+
+        // Emotion is opt-in on top of soul: `EmotionConfig::validate()` can't see
+        // `SoulConfig`, so the cross-check lives here (mirrors the
+        // `initiative.daily_plan` cross-checks above).
+        if config.agent.emotion.enabled && !config.agent.soul.enabled {
+            anyhow::bail!(
+                "agent {:?}: [agent.emotion] enabled=true requires [agent.soul] enabled=true",
                 config.agent.name
             );
         }
@@ -2620,6 +2711,7 @@ owner_id = "123"
                 soul: SoulConfig::default(),
                 drift: DriftConfig::default(),
                 initiative: InitiativeConfig::default(),
+                emotion: EmotionConfig::default(),
                 compaction: Some(CompactionConfig {
                     enabled: true,
                     threshold: 0.9,
@@ -2704,6 +2796,7 @@ owner_id = "123"
                 soul: SoulConfig::default(),
                 drift: DriftConfig::default(),
                 initiative: InitiativeConfig::default(),
+                emotion: EmotionConfig::default(),
                 compaction: None,
                 skill_review: None,
                 session: None,
