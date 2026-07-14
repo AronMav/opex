@@ -740,6 +740,10 @@ pub(crate) async fn api_update_agent(
     // (TOML hand-edit `[agent.delegation] max_depth = 2`) silently resets to
     // default on the next UI update of ANY field. See PR #24 review C5.
     cfg.agent.delegation = existing_cfg.agent.delegation.clone();
+    // Preserve emotion from existing config — same gap/fix as `delegation`:
+    // `[agent.emotion]` has no payload field, so a PUT would otherwise reset
+    // an operator's TOML-enabled emotion layer back to default (disabled).
+    cfg.agent.emotion = existing_cfg.agent.emotion.clone();
     // Preserve fields not in payload
     if cfg.agent.hooks.is_none() {
         cfg.agent.hooks = existing_cfg.agent.hooks.clone();

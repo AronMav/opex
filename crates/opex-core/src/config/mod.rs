@@ -3620,6 +3620,25 @@ model = "gpt-4o"
         assert!(AgentConfig::load(&p).is_err(), "daily_plan without enabled must fail load");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // ── EmotionConfig cross-check (emotion.enabled requires soul.enabled) ──
+
+    #[test]
+    fn emotion_requires_soul_enabled() {
+        let dir = std::env::temp_dir().join(format!("emotion_cfg_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("A.toml");
+        // emotion.enabled=true, soul.enabled=false (default) → error mentioning emotion/soul
+        std::fs::write(&p, "[agent]\nname=\"A\"\nprovider=\"p\"\nmodel=\"m\"\n[agent.emotion]\nenabled=true\n").unwrap();
+        let err = AgentConfig::load(&p).expect_err("emotion.enabled without soul.enabled must fail load");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("emotion"), "error should mention emotion: {msg}");
+        assert!(msg.contains("soul"), "error should mention soul: {msg}");
+        // emotion.enabled=true + soul.enabled=true → ok
+        std::fs::write(&p, "[agent]\nname=\"A\"\nprovider=\"p\"\nmodel=\"m\"\n[agent.soul]\nenabled=true\n[agent.emotion]\nenabled=true\n").unwrap();
+        assert!(AgentConfig::load(&p).is_ok(), "emotion.enabled with soul.enabled must load");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]

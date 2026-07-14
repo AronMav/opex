@@ -17,6 +17,18 @@ pub const EMOTION_LABELS: &[&str] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Agency { Self_, Other, None }
 
+impl Agency {
+    /// Clean string label for telemetry (timeline payload etc.) — avoids the
+    /// `Debug` rendering of `Self_` leaking its trailing underscore escape.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Agency::Self_ => "self",
+            Agency::Other => "other",
+            Agency::None => "none",
+        }
+    }
+}
+
 /// Exponential decay of an affect value toward 0 (neutral) over elapsed time.
 /// `elapsed_hours.max(0.0)` guards clock-skew / racing writers from AMPLIFYING.
 pub fn decay(value: f32, elapsed_hours: f32, half_life_hours: f32) -> f32 {

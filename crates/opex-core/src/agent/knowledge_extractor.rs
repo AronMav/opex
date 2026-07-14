@@ -43,8 +43,14 @@ struct ExtractedKnowledge {
     /// soul.enabled.
     #[serde(default)]
     open_items: Vec<String>,
+    /// Kept as raw `serde_json::Value` (not `RawEmotion`) so a malformed
+    /// `emotion` object (e.g. `"agency": null`, `"intensity": "high"`) can
+    /// NEVER fail the top-level `serde_json::from_value` parse of the whole
+    /// extraction payload — spec §5: a clamp/parse failure here must not
+    /// abort events/facts/open-threads/summary. The fallible mapping into
+    /// `RawEmotion` happens later, where a failure can be swallowed alone.
     #[serde(default)]
-    emotion: Option<crate::agent::emotion::RawEmotion>,
+    emotion: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,7 +168,15 @@ async fn extract_and_save_inner(
     // Normalize (whitelist/clamp) here so downstream boost + mood + timeline all
     // see the same bounded values; never the raw LLM output.
     let appraised = if emotion_on {
-        extracted.emotion.take().map(|raw| raw.normalize())
+        extracted.emotion.take().and_then(|v| {
+            match serde_json::from_value::<crate::agent::emotion::RawEmotion>(v) {
+                Ok(raw) => Some(raw.normalize()),
+                Err(e) => {
+                    tracing::warn!(agent = agent_name, error = %e, "emotion appraisal parse failed (ignored)");
+                    None
+                }
+            }
+        })
     } else {
         None
     };
@@ -194,7 +208,7 @@ async fn extract_and_save_inner(
         let payload = serde_json::json!({
             "label": a.label, "intensity": a.intensity, "valence": a.valence,
             "desirability": a.desirability, "likelihood": a.likelihood,
-            "agency": format!("{:?}", a.agency), "novelty": a.novelty,
+            "agency": a.agency.as_str(), "novelty": a.novelty,
             "controllability": a.controllability,
         });
         if let Err(e) = opex_db::session_timeline::log_event(db, session_id, "emotion_appraised", Some(&payload)).await {
