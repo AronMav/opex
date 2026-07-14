@@ -672,6 +672,21 @@ pub(super) async fn handle_clarify_text(
         return false;
     }
 
+    // Owner gate (#5): only the owner may answer a clarify directed at the
+    // owner. A non-owner's plain text falls through to a normal turn — unlike
+    // the callback path, we do NOT consume with an error frame here.
+    let is_owner = ctx
+        .auth
+        .access_guards
+        .read()
+        .await
+        .get(agent_name)
+        .is_some_and(|g| g.is_owner(&msg.user_id));
+    if !clarify_text_is_owner_allowed(is_owner) {
+        tracing::debug!(user_id = %msg.user_id, "clarify text-intercept: non-owner, falling through to turn");
+        return false;
+    }
+
     let text = match msg.text.as_deref() {
         Some(t) if !t.trim().is_empty() => t.trim().to_string(),
         _ => return false,
@@ -742,6 +757,15 @@ pub(super) async fn handle_clarify_text(
     }
 }
 
+// ── Owner gate helpers ────────────────────────────────────────────────────────
+
+/// Owner-gate decision for clarify text-intercept (#5): only the owner may
+/// resolve a clarify the agent directed at the owner. A non-owner's message
+/// falls through to a normal turn (caller returns `false`).
+pub(super) fn clarify_text_is_owner_allowed(is_owner: bool) -> bool {
+    is_owner
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -784,5 +808,20 @@ mod clarify_callback_tests {
     fn rejects_missing_slot() {
         let id = Uuid::nil();
         assert!(parse_clarify_callback(&format!("clarify:{id}")).is_none());
+    }
+}
+
+#[cfg(test)]
+mod clarify_text_owner_gate_tests {
+    use super::clarify_text_is_owner_allowed;
+
+    #[test]
+    fn owner_allowed() {
+        assert!(clarify_text_is_owner_allowed(true), "owner may resolve clarify text");
+    }
+
+    #[test]
+    fn non_owner_falls_through() {
+        assert!(!clarify_text_is_owner_allowed(false), "non-owner must not resolve — falls through to a turn");
     }
 }
