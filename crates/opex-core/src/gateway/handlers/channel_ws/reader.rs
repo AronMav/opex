@@ -99,6 +99,19 @@ pub(super) async fn run(
                         ).await;
                     }
                     ChannelInbound::Message { request_id, msg } => {
+                        // Handshake-completion guard (#6): a Message before the
+                        // adapter's Ready would create a bogus "unknown"-channel
+                        // session with no formatting prompt. Reject it.
+                        if state.channel_type == "unknown" {
+                            let _ = out_tx
+                                .send(OutboundMsg::Wire(ChannelOutbound::Error {
+                                    request_id,
+                                    message: "handshake not complete: send Ready before Message".to_string(),
+                                }))
+                                .await;
+                            continue;
+                        }
+
                         // Bump last_activity for stale-channel detection.
                         {
                             let mut chans = ctx.bus.connected_channels.write().await;
@@ -274,5 +287,15 @@ mod wire_guards {
     fn infra_callback_wired() {
         let src = include_str!("reader.rs");
         assert!(src.contains("handle_infra_callback"), "infra callback должен быть подключён в reader");
+    }
+
+    #[test]
+    fn handshake_guard_before_dispatch() {
+        let src = include_str!("reader.rs");
+        let guard = src
+            .find("channel_type == \"unknown\"")
+            .expect("handshake-completion guard must be wired in the Message arm");
+        let dispatch = src.find("dispatcher::dispatch_message(").expect("dispatcher present");
+        assert!(guard < dispatch, "handshake guard must run before dispatch_message");
     }
 }
