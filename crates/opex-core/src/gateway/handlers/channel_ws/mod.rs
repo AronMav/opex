@@ -297,10 +297,28 @@ async fn channel_ws_loop(
             for im in &drained {
                 im.cancel.cancel();
             }
+            // Poll for cooperative wind-down; break as soon as every running
+            // turn (those with an attached AbortHandle) has finished, instead of
+            // always blocking the full grace. Queued turns have abort=None and
+            // were already neutralized by draining `inflight`.
             let grace = std::time::Duration::from_secs(15);
-            tokio::time::sleep(grace).await;
+            let poll = std::time::Duration::from_millis(50);
+            let mut waited = std::time::Duration::ZERO;
+            while waited < grace {
+                if drained
+                    .iter()
+                    .all(|im| im.abort.as_ref().is_none_or(|a| a.is_finished()))
+                {
+                    break;
+                }
+                tokio::time::sleep(poll).await;
+                waited += poll;
+            }
+            // Hard-abort any straggler that ignored the cooperative token.
             for im in &drained {
-                if let Some(abort) = &im.abort {
+                if let Some(abort) = &im.abort
+                    && !abort.is_finished()
+                {
                     abort.abort();
                 }
             }

@@ -5,6 +5,10 @@
 //! consumer task drains its queue and runs each turn body serially, awaited to
 //! completion before the next — this is the FIFO guarantee (fixes the mutex
 //! race where two same-session tasks could win the free lock out of order).
+//! This strict per-session FIFO holds for turns enqueued directly by the
+//! reader; when a clarify is pending, two plain-text messages routed through
+//! spawned clarify-text resolvers may enqueue out of receive order (inherent
+//! to spawning them off the FIFO consumer for deadlock-safety).
 //!
 //! Lifecycle: consumers exit on `recv() == None` (all senders dropped). There
 //! is NO active idle-eviction — entries live for the connection's lifetime and
@@ -46,40 +50,33 @@ impl SessionQueueMap {
         Arc::new(Self { inner: DashMap::new() })
     }
 
-    /// Enqueue a turn for its session, in caller (receive) order. Get-or-create
-    /// the per-key sender, spawning a consumer on first use. If the existing
-    /// sender's consumer has died (panicked/exited — `send` returns `Err`),
-    /// evict the stale entry, respawn a consumer, and resend. Never blocks: the
-    /// unbounded send is synchronous.
-    pub async fn enqueue(self: &Arc<Self>, key: SessionKey, turn: QueuedTurn) {
-        // Fast path: existing live sender.
-        if let Some(sender) = self.inner.get(&key) {
-            if let Err(mpsc::error::SendError(returned)) = sender.send(turn) {
-                // Consumer gone — fall through to respawn with the returned turn.
-                drop(sender);
-                self.respawn_and_send(key, returned);
+    /// Enqueue a turn for its session, in caller (receive) order. Atomically
+    /// gets-or-creates the per-key sender+consumer via DashMap's `entry` API
+    /// (the shard write lock is held across the synchronous `tokio::spawn`, so
+    /// exactly ONE consumer is ever created per key — no double-consumer race).
+    /// Panic-safe: if the consumer has died (sender closed), evict and retry,
+    /// which re-creates a fresh consumer on the next `or_insert_with`.
+    pub async fn enqueue(self: &Arc<Self>, key: SessionKey, mut turn: QueuedTurn) {
+        loop {
+            let sender = self
+                .inner
+                .entry(key.clone())
+                .or_insert_with(|| {
+                    let (tx, rx) = mpsc::unbounded_channel::<QueuedTurn>();
+                    tokio::spawn(consumer(rx, run_turn_body));
+                    tx
+                })
+                .clone();
+            match sender.send(turn) {
+                Ok(()) => return,
+                Err(mpsc::error::SendError(returned)) => {
+                    // Consumer died (receiver dropped) → evict the closed sender
+                    // so the next iteration's or_insert_with makes a fresh one.
+                    self.inner.remove_if(&key, |_, v| v.is_closed());
+                    turn = returned;
+                }
             }
-            return;
         }
-        // Slow path: create sender + consumer.
-        self.respawn_and_send(key, turn);
-    }
-
-    /// Create a fresh sender+consumer for `key` (replacing any stale entry) and
-    /// send `turn`. The consumer captures ONLY `rx` — never `self`.
-    ///
-    /// NOTE: under a rare concurrent double-respawn race for the same dead key
-    /// (two callers both observe a dead sender and both respawn), two consumers
-    /// may transiently run for that key — no message is lost, but strict
-    /// cross-turn FIFO isn't guaranteed across that pair.
-    fn respawn_and_send(self: &Arc<Self>, key: SessionKey, turn: QueuedTurn) {
-        let (tx, rx) = mpsc::unbounded_channel::<QueuedTurn>();
-        // Insert BEFORE sending so a concurrent enqueue for the same key finds
-        // the live sender. `insert` overwrites any stale (dead-consumer) entry.
-        self.inner.insert(key, tx.clone());
-        tokio::spawn(consumer(rx, run_turn_body));
-        // The consumer is alive; this send cannot fail.
-        let _ = tx.send(turn);
     }
 }
 
@@ -362,5 +359,39 @@ mod tests {
         assert!(reg.lock().await.is_empty());
         assert!(token.is_cancelled());
         assert!(!cancel("never", &reg).await);
+    }
+
+    /// The primitive `enqueue`'s dead-consumer retry loop relies on: once the
+    /// receiver end is dropped (simulating a consumer that panicked/exited),
+    /// the sender reports `is_closed() == true`, and `remove_if` keyed on that
+    /// predicate evicts the stale entry so the next `entry(...).or_insert_with`
+    /// creates a fresh live sender. Exercised at the map level (no
+    /// `AgentEngine` needed) since the production `enqueue`/`consumer` require
+    /// a real engine to build a `QueuedTurn`.
+    #[tokio::test]
+    async fn dead_sender_is_detected_and_evicted() {
+        let map: DashMap<SessionKey, mpsc::UnboundedSender<()>> = DashMap::new();
+        let key = SessionKey {
+            agent_name: "agent".to_string(),
+            eff_user: "user".to_string(),
+            eff_channel: "telegram".to_string(),
+            eff_chat_scope: None,
+        };
+
+        let (tx, rx) = mpsc::unbounded_channel::<()>();
+        map.insert(key.clone(), tx.clone());
+        drop(rx); // simulate the consumer task having exited
+
+        assert!(tx.is_closed(), "sender must report closed once its receiver is dropped");
+        assert!(map.contains_key(&key), "stale entry is still present before eviction");
+
+        map.remove_if(&key, |_, v| v.is_closed());
+        assert!(!map.contains_key(&key), "remove_if must evict the closed sender");
+
+        // A fresh entry() after eviction creates a brand-new live sender, as
+        // `enqueue`'s retry loop does on its next iteration.
+        let (tx2, _rx2) = mpsc::unbounded_channel::<()>();
+        map.entry(key.clone()).or_insert(tx2);
+        assert!(!map.get(&key).unwrap().is_closed(), "replacement sender must be live");
     }
 }
