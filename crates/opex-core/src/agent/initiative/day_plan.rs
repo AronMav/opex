@@ -204,6 +204,55 @@ async fn notify_plan_done(db: &PgPool, engine: &AgentEngine, agent: &str, deps: 
     }
 }
 
+/// Inform the owner the day plan was auto-approved (no buttons — informational;
+/// all intents enumerated for informed consent). UI notification + channel message.
+// wired in Task 3
+#[allow(dead_code)]
+async fn notify_day_plan_auto_approved(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &InitiativeDeps, intents: &[DayIntent], date: chrono::NaiveDate) {
+    let texts: Vec<String> = intents.iter().map(|i| i.intent.clone()).collect();
+    if let Some(tx) = &deps.ui_event_tx {
+        let _ = crate::gateway::handlers::notifications::notify(
+            db, tx, "day_plan", &format!("{agent}: план на день (авто)"),
+            &crate::agent::initiative::delivery::day_plan_body(&texts),
+            serde_json::json!({ "agent": agent, "intents": texts, "date": date.to_string(), "auto_approved": true }),
+        ).await;
+    }
+    let _ = engine;
+    if let (Some(router), Some((ch, chat_id))) = (
+        deps.channel_router.as_ref(),
+        crate::agent::initiative::delivery::resolve_owner_target(db, agent, deps.owner_id.as_deref()).await,
+    ) {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let action = crate::agent::channel_actions::ChannelAction {
+            name: "send_message".to_string(),
+            params: serde_json::json!({ "text": crate::agent::initiative::delivery::day_plan_auto_approved_body(agent, &texts) }),
+            context: serde_json::json!({ "chat_id": chat_id }),
+            reply: reply_tx, target_channel: Some(ch),
+        };
+        if router.send(action).await.is_ok() { let _ = tokio::time::timeout(std::time::Duration::from_secs(5), reply_rx).await; }
+    }
+}
+
+/// Inform the owner that the auto-approved plan paused on hitting the token budget.
+// wired in Task 3
+#[allow(dead_code)]
+async fn notify_day_plan_paused(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &InitiativeDeps, cap: u64) {
+    let _ = engine;
+    if let (Some(router), Some((ch, chat_id))) = (
+        deps.channel_router.as_ref(),
+        crate::agent::initiative::delivery::resolve_owner_target(db, agent, deps.owner_id.as_deref()).await,
+    ) {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let action = crate::agent::channel_actions::ChannelAction {
+            name: "send_message".to_string(),
+            params: serde_json::json!({ "text": crate::agent::initiative::delivery::day_plan_paused_text(agent, cap) }),
+            context: serde_json::json!({ "chat_id": chat_id }),
+            reply: reply_tx, target_channel: Some(ch),
+        };
+        if router.send(action).await.is_ok() { let _ = tokio::time::timeout(std::time::Duration::from_secs(5), reply_rx).await; }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

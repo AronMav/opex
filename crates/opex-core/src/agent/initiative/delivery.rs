@@ -44,6 +44,16 @@ pub(crate) fn day_plan_body(intents: &[String]) -> String {
     intents.iter().enumerate().map(|(i, t)| format!("{}. {t}", i + 1)).collect::<Vec<_>>().join("\n")
 }
 
+/// Pure: informational auto-approve message — header + numbered intents.
+pub(crate) fn day_plan_auto_approved_body(agent: &str, intents: &[String]) -> String {
+    format!("🤖 {agent}: план на день принят автоматически\n{}", day_plan_body(intents))
+}
+
+/// Pure: pause notice when the daily token budget is reached.
+pub(crate) fn day_plan_paused_text(agent: &str, cap: u64) -> String {
+    format!("⏸ {agent}: дневной лимит {cap} токенов достигнут — план приостановлен до завтра")
+}
+
 /// Deliver the morning day-plan (ALL intents enumerated) to the owner's channel.
 /// `date` (plan generation date) is embedded in the button callback (review H2).
 pub async fn send_day_plan_to_channel(router: &ChannelActionRouter, channel: &str, chat_id: i64, intents: &[String], date: chrono::NaiveDate) {
@@ -75,5 +85,20 @@ mod tests {
         let body = super::day_plan_body(&["довести X".to_string(), "разобрать Y".to_string()]);
         assert!(body.contains("1.") && body.contains("довести X"));
         assert!(body.contains("2.") && body.contains("разобрать Y"));
+    }
+
+    #[test]
+    fn paused_text_names_agent_and_cap() {
+        let s = super::day_plan_paused_text("Arty", 200_000);
+        assert!(s.contains("Arty"));
+        assert!(s.contains("200000"));
+    }
+
+    #[test]
+    fn auto_approved_body_has_header_and_all_intents() {
+        let s = super::day_plan_auto_approved_body("Arty", &["довести X".to_string(), "разобрать Y".to_string()]);
+        assert!(s.contains("Arty"));
+        assert!(s.contains("автоматически"));
+        assert!(s.contains("довести X") && s.contains("разобрать Y"));
     }
 }
