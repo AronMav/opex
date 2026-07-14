@@ -727,6 +727,7 @@ pub fn finalize_context_from_engine(
             checkpoint: engine.cfg().checkpoint_manager.clone(),
             ui_event_tx: engine.state().ui_event_tx.clone(),
             runtime: engine.cfg().soul_runtime.clone(),
+            emotion: engine.cfg().agent.emotion.clone(),
         },
         initiative: {
             let a = &engine.cfg().agent;
@@ -971,6 +972,7 @@ mod tests {
                 checkpoint: None,
                 ui_event_tx: None,
                 runtime: Arc::default(),
+                emotion: crate::config::EmotionConfig::default(),
             },
             initiative: None,
         }

@@ -37,6 +37,7 @@ pub struct SoulDeps {
     /// FinalizeContext.ui_event_tx — Option в источнике (finalize.rs:358) — ревью.
     pub ui_event_tx: Option<tokio::sync::broadcast::Sender<String>>,
     pub runtime: Arc<SoulRuntime>,
+    pub emotion: crate::config::EmotionConfig,
 }
 
 /// Counter (spec §3): per-session (by source) sums capped at 30; reflections excluded.
@@ -350,6 +351,7 @@ mod tests {
             checkpoint: None,
             ui_event_tx: None,
             runtime: runtime.clone(),
+            emotion: crate::config::EmotionConfig::default(),
         };
         let provider: std::sync::Arc<dyn crate::agent::providers::LlmProvider> =
             std::sync::Arc::new(NeverProvider);
@@ -372,6 +374,7 @@ mod tests {
             checkpoint: None,
             ui_event_tx: None,
             runtime: runtime.clone(),
+            emotion: crate::config::EmotionConfig::default(),
         };
         let provider: std::sync::Arc<dyn crate::agent::providers::LlmProvider> =
             std::sync::Arc::new(NeverProvider);

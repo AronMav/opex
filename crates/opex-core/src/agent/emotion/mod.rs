@@ -2,14 +2,6 @@
 //! Pure math + a normalizing parser here; persistence in `db/agent_emotion.rs`,
 //! appraisal wiring in `knowledge_extractor.rs`. v1 renders nothing into the
 //! system prompt (spec §2).
-//!
-//! Task 1 of 3 (spec `docs/superpowers/specs/2026-07-14-agent-soul-emotion-layer-v1.md`):
-//! this module ships the pure math/parser in isolation. Nothing in the binary
-//! calls it yet — Task 2 (mood persistence) and Task 3 (appraisal wiring in
-//! `knowledge_extractor.rs`) are the consumers. Suppress `dead_code` for this
-//! interim state rather than leave it unimplemented; drop the allow once
-//! Task 2/3 land.
-#![allow(dead_code)]
 
 use serde::Deserialize;
 
