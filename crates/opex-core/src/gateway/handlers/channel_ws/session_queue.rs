@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 
 use opex_types::{ChannelOutbound, IncomingMessageDto};
 
-use super::types::{InflightMessage, InflightRegistry, OutboundMsg, SessionKey};
+use super::types::{InflightRegistry, OutboundMsg, SessionKey};
 use crate::agent::engine::{AgentEngine, ProcessingPhase};
 
 /// Everything a queued turn needs to run without borrowing reader state.
@@ -81,11 +81,6 @@ impl SessionQueueMap {
         // The consumer is alive; this send cannot fail.
         let _ = tx.send(turn);
     }
-
-    #[cfg(test)]
-    pub fn entry_count(&self) -> usize {
-        self.inner.len()
-    }
 }
 
 /// The per-turn bookkeeping the queue consumer needs, abstracted so the
@@ -94,6 +89,9 @@ pub(super) trait QueuedItem: Send + 'static {
     fn request_id(&self) -> &str;
     fn inflight(&self) -> &InflightRegistry;
     /// The turn's cancel token clone (same token registered in `inflight`).
+    /// Only exercised by tests, which simulate a `Cancel` racing ahead of the
+    /// consumer by cancelling the token before the turn is sent.
+    #[cfg(test)]
     fn cancel_token(&self) -> &tokio_util::sync::CancellationToken;
 }
 
@@ -104,6 +102,7 @@ impl QueuedItem for QueuedTurn {
     fn inflight(&self) -> &InflightRegistry {
         &self.inflight
     }
+    #[cfg(test)]
     fn cancel_token(&self) -> &tokio_util::sync::CancellationToken {
         &self.cancel_token
     }
@@ -250,16 +249,8 @@ pub(super) async fn cancel(request_id: &str, inflight: &InflightRegistry) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::types::InflightMessage;
     use tokio::sync::Mutex;
-
-    fn key(user: &str) -> SessionKey {
-        SessionKey {
-            agent_name: "Arty".to_string(),
-            eff_user: user.to_string(),
-            eff_channel: "telegram".to_string(),
-            eff_chat_scope: None,
-        }
-    }
 
     fn inflight() -> InflightRegistry {
         Arc::new(Mutex::new(std::collections::HashMap::new()))

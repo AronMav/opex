@@ -137,7 +137,7 @@ async fn channel_ws_loop(
     let (ws_out, ws_in) = socket.split();
 
     let (out_tx, out_rx) = tokio::sync::mpsc::channel::<types::OutboundMsg>(256);
-    let lock_map = session_locks::SessionLockMap::new();
+    let queue_map = session_queue::SessionQueueMap::new();
     let inflight: types::InflightRegistry = Arc::new(Mutex::new(HashMap::new()));
     let pending_actions: types::PendingActionsMap = Arc::new(Mutex::new(HashMap::new()));
     let outbound_ids: Arc<Mutex<HashMap<String, uuid::Uuid>>> =
@@ -265,7 +265,7 @@ async fn channel_ws_loop(
         engine.clone(),
         agent_name.to_string(),
         out_tx.clone(),
-        lock_map,
+        queue_map,
         inflight.clone(),
         pending_actions,
         outbound_ids,
@@ -283,12 +283,11 @@ async fn channel_ws_loop(
     drop(out_tx);
     let _ = writer_handle.await;
 
-    // Tear down remaining in-flight tasks COOPERATIVELY (R-CHANNEL). A WS
-    // disconnect / adapter restart must not hard-abort live turns — that drops
-    // each turn's SessionLifecycleGuard while Running and marks the session
-    // 'failed'. Instead: signal every turn's cancel token (so execute() returns
-    // Interrupted → finalize marks 'interrupted'), give them one SHARED bounded
-    // grace window to wind down, then abort only the stragglers.
+    // Tear down in-flight turns COOPERATIVELY (R-CHANNEL). The queue map was
+    // dropped when the reader returned, so consumers are already draining to
+    // exit; we only need to interrupt RUNNING turns promptly (cancel token →
+    // execute() returns Interrupted → finalize marks 'interrupted') and, after a
+    // bounded grace, hard-abort any sync-wedged turn via its stored AbortHandle.
     {
         let drained: Vec<_> = {
             let mut g = inflight.lock().await;
@@ -298,16 +297,11 @@ async fn channel_ws_loop(
             for im in &drained {
                 im.cancel.cancel();
             }
-            let mut joins: Vec<_> = drained.into_iter().map(|im| im.join_handle).collect();
             let grace = std::time::Duration::from_secs(15);
-            let _ = tokio::time::timeout(
-                grace,
-                futures_util::future::join_all(joins.iter_mut()),
-            )
-            .await;
-            for j in &joins {
-                if !j.is_finished() {
-                    j.abort();
+            tokio::time::sleep(grace).await;
+            for im in &drained {
+                if let Some(abort) = &im.abort {
+                    abort.abort();
                 }
             }
         }
