@@ -16,11 +16,10 @@ use std::sync::Arc;
 use super::super::AppState;
 use crate::gateway::clusters::{AgentCore, AuthServices, ChannelBus, ConfigServices, InfraServices, StatusMonitor};
 
-mod dispatcher;
 mod handshake;
 mod inline;
 mod reader;
-mod session_locks;
+mod session_queue;
 mod types;
 mod writer;
 

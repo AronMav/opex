@@ -18,7 +18,6 @@ use opex_types::ChannelOutbound;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 /// Cluster-state bundle. Cheap to clone — every field is `Arc`-backed.
@@ -80,15 +79,19 @@ pub(super) enum OutboundMsg {
     Shutdown,
 }
 
-/// One in-flight message tracked by the dispatcher so a `Cancel` for ANY
-/// request_id can stop it (not just the currently-foregrounded one).
+/// One in-flight message tracked so a `Cancel` for ANY request_id can stop it.
+/// Registered at ENQUEUE with `abort = None`; the per-session consumer fills
+/// `abort` once it spawns the turn body, enabling a post-grace hard-abort of a
+/// sync-wedged turn without killing the consumer (which serves the whole
+/// session's queue).
 pub(super) struct InflightMessage {
-    pub join_handle: JoinHandle<()>,
-    /// Per-turn cancellation token wired into `handle_with_status` → `execute`.
-    /// R-CHANNEL: cancelling it stops the turn COOPERATIVELY (engine reaches
-    /// finalize → session marked 'interrupted'), as opposed to a hard
-    /// `join_handle.abort()` which guard-drops the session to 'failed'.
+    /// Per-turn cooperative cancellation token wired into `handle_with_status`.
+    /// R-CHANNEL: cancelling stops the turn COOPERATIVELY (finalize →
+    /// 'interrupted'), not a hard abort (which guard-drops to 'failed').
     pub cancel: CancellationToken,
+    /// Abort handle for the spawned turn task; `None` while the turn is still
+    /// queued. Used only as a post-grace backstop for a sync-wedged turn.
+    pub abort: Option<tokio::task::AbortHandle>,
 }
 
 /// Concurrent registry: `request_id` → in-flight task.
