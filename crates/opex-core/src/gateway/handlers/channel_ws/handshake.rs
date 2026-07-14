@@ -44,6 +44,12 @@ pub(super) async fn handle_ready(
         has_formatting_prompt = formatting_prompt.is_some(),
         "adapter ready",
     );
+
+    // First `Ready` on this connection? (`action_install_tx` is taken on the
+    // first Ready; the router always exists for a channel WS.) Drives both the
+    // subscribe-once guard (#2) and connected_channels dedup (#7).
+    let is_first_ready = action_install_tx.is_some();
+
     state.channel_type = adapter_type.clone();
     state.formatting_prompt = formatting_prompt.clone();
 
@@ -75,7 +81,7 @@ pub(super) async fn handle_ready(
         ),
     };
 
-    // Register in connected_channels.
+    // Register / refresh in connected_channels (dedup on repeat Ready — #7).
     {
         let now = chrono::Utc::now();
         let entry = crate::gateway::state::ConnectedChannel {
@@ -87,25 +93,27 @@ pub(super) async fn handle_ready(
             connected_at: now,
             last_activity: now,
         };
-        ctx.bus.connected_channels.write().await.push(entry);
+        let mut chans = ctx.bus.connected_channels.write().await;
+        upsert_connected_channel(&mut chans, is_first_ready, entry);
     }
     ctx.bus
         .ui_event_tx
         .send(serde_json::json!({"type": "channels_changed", "agent": agent_name}).to_string())
         .ok();
 
-    // Subscribe to channel action router and hand off the receiver to the
-    // action-forwarder task (single oneshot — only the first Ready wins).
+    // Subscribe to the channel action router and hand off the receiver to the
+    // action-forwarder — ONLY on the first Ready. A duplicate Ready must not
+    // register a second (dead) subscription or overwrite channel_conn_id (#2).
     if let Some(ref router) = engine.state().channel_router {
-        let (id, rx) = router.subscribe(&state.channel_type).await;
-        state.channel_conn_id = Some(id);
         if let Some(tx) = action_install_tx.take() {
+            let (id, rx) = router.subscribe(&state.channel_type).await;
+            state.channel_conn_id = Some(id);
             let _ = tx.send(ActionForwarderInit {
                 channel_type: state.channel_type.clone(),
                 channel_action_rx: rx,
             });
         } else {
-            tracing::warn!(%agent_name, "Ready received twice on same WS — second handshake ignored");
+            tracing::warn!(%agent_name, "Ready received twice on same WS — subscribe skipped");
         }
     }
 
@@ -275,5 +283,65 @@ async fn replay_outbound_queue(
                 tracing::warn!(queue_id = %queue_id, error = %e, "outbound mark_sent failed");
             }
         });
+    }
+}
+
+/// Push a `connected_channels` entry only on the first `Ready` of a
+/// connection; on a repeated `Ready`, update the matching row's
+/// `last_activity` instead of duplicating it (defect #7). Pure so it is
+/// unit-testable without a DB.
+pub(super) fn upsert_connected_channel(
+    chans: &mut Vec<crate::gateway::state::ConnectedChannel>,
+    is_first_ready: bool,
+    entry: crate::gateway::state::ConnectedChannel,
+) {
+    if is_first_ready {
+        chans.push(entry);
+        return;
+    }
+    if let Some(existing) = chans
+        .iter_mut()
+        .find(|c| c.agent_name == entry.agent_name && c.channel_type == entry.channel_type)
+    {
+        existing.last_activity = entry.last_activity;
+    } else {
+        // No prior row despite not-first-Ready (e.g. evicted) — push to stay consistent.
+        chans.push(entry);
+    }
+}
+
+#[cfg(test)]
+mod ready_guard_tests {
+    use super::*;
+    use crate::gateway::state::ConnectedChannel;
+
+    fn chan(agent: &str, ctype: &str) -> ConnectedChannel {
+        let now = chrono::Utc::now();
+        ConnectedChannel {
+            agent_name: agent.to_string(),
+            channel_id: None,
+            channel_type: ctype.to_string(),
+            display_name: format!("{agent}/{ctype}"),
+            adapter_version: "test".to_string(),
+            connected_at: now,
+            last_activity: now,
+        }
+    }
+
+    #[test]
+    fn first_ready_pushes_row() {
+        let mut chans: Vec<ConnectedChannel> = vec![];
+        upsert_connected_channel(&mut chans, /*is_first_ready=*/ true, chan("Arty", "telegram"));
+        assert_eq!(chans.len(), 1, "first Ready must push a row");
+    }
+
+    #[test]
+    fn repeat_ready_does_not_duplicate_row() {
+        let mut chans: Vec<ConnectedChannel> = vec![chan("Arty", "telegram")];
+        let before = chans[0].last_activity;
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        upsert_connected_channel(&mut chans, /*is_first_ready=*/ false, chan("Arty", "telegram"));
+        assert_eq!(chans.len(), 1, "repeat Ready must not push a duplicate row");
+        assert!(chans[0].last_activity > before, "repeat Ready must bump last_activity");
     }
 }
