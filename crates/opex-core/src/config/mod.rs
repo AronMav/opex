@@ -1438,6 +1438,13 @@ pub struct DriftConfig {
     pub min_history: usize,
     #[serde(default = "default_drift_baseline_turns")]
     pub baseline_turns: usize,
+    /// Opt-in: inject an identity anchor into the system prompt when drift is
+    /// over threshold. Requires `enabled = true`.
+    #[serde(default)]
+    pub correct: bool,
+    /// Operator identity reminder (~1-2 sentences). None → generic name-based fallback.
+    #[serde(default)]
+    pub anchor: Option<String>,
 }
 
 fn default_drift_threshold() -> f32 {
@@ -1457,6 +1464,8 @@ impl Default for DriftConfig {
             threshold: default_drift_threshold(),
             min_history: default_drift_min_history(),
             baseline_turns: default_drift_baseline_turns(),
+            correct: false,
+            anchor: None,
         }
     }
 }
@@ -1474,7 +1483,27 @@ impl DriftConfig {
         if !(1..=10).contains(&self.baseline_turns) {
             errors.push("drift.baseline_turns must be in [1, 10]".to_string());
         }
+        if self.correct && !self.enabled {
+            errors.push("drift.correct requires drift.enabled = true".to_string());
+        }
         errors
+    }
+}
+
+#[cfg(test)]
+mod drift_config_tests {
+    use super::*;
+
+    #[test]
+    fn correct_requires_enabled() {
+        let ok = DriftConfig { enabled: true, correct: true, ..DriftConfig::default() };
+        assert!(ok.validate().is_empty(), "correct+enabled must pass: {:?}", ok.validate());
+
+        let bad = DriftConfig { enabled: false, correct: true, ..DriftConfig::default() };
+        assert!(bad.validate().iter().any(|e| e.contains("correct")), "correct without enabled must error");
+
+        let off = DriftConfig { enabled: false, correct: false, ..DriftConfig::default() };
+        assert!(off.validate().is_empty(), "correct off → no error");
     }
 }
 
@@ -3442,6 +3471,8 @@ model = "gpt-4o"
             threshold: 3.0,
             min_history: 1,
             baseline_turns: 20,
+            correct: false,
+            anchor: None,
         };
         let errs = bad.validate();
         assert_eq!(errs.len(), 3, "each violated rule reports once: {errs:?}");

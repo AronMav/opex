@@ -49,6 +49,40 @@ pub fn drift_score(baseline_centroid: &[f32], recent: &[f32]) -> f32 {
     1.0 - cosine(recent, baseline_centroid)
 }
 
+/// Compact identity-reminder block appended to the system prompt on an
+/// over-threshold turn. Operator's `anchor` when set/non-blank, else a generic
+/// name-based fallback. Trusted input (operator config / agent name) — not sanitized.
+// TODO(stage-B-phase-2 task 2): wired into context_builder.rs — remove once the
+// call site lands.
+#[allow(dead_code)]
+pub fn build_anchor_block(anchor: Option<&str>, agent_name: &str) -> String {
+    let body = match anchor {
+        Some(a) if !a.trim().is_empty() => a.trim().to_string(),
+        _ => format!("Ты — {agent_name}. Сохраняй свой характер, тон и манеру речи."),
+    };
+    format!("\n\n[Идентичность — напоминание]\n{body}\n")
+}
+
+/// Correction decision: the anchor block to inject, or None. Some iff correction
+/// is enabled AND the score is strictly over threshold (mirrors drift_probe's
+/// `over = score > threshold`).
+// TODO(stage-B-phase-2 task 2): wired into context_builder.rs — remove once the
+// call site lands.
+#[allow(dead_code)]
+pub fn correction_anchor(
+    score: f32,
+    threshold: f32,
+    correct: bool,
+    anchor: Option<&str>,
+    agent_name: &str,
+) -> Option<String> {
+    if correct && score > threshold {
+        Some(build_anchor_block(anchor, agent_name))
+    } else {
+        None
+    }
+}
+
 /// Тексты СОБСТВЕННЫХ assistant-ответов агента с натуральным содержимым,
 /// хронологически. Фильтр: role=assistant, agent_id == свой ИЛИ None (untagged —
 /// считаем своим; чужие peer-агенты в пуле тегируются своим id и исключаются),
@@ -134,5 +168,30 @@ mod tests {
         ];
         let texts = own_assistant_texts(&hist, "A");
         assert_eq!(texts, vec!["ответ A1", "ответ без тега", "ответ A2"]);
+    }
+
+    #[test]
+    fn anchor_uses_operator_string_or_falls_back() {
+        let a = build_anchor_block(Some("Ты — Опекс, инфра-ассистент."), "Opex");
+        assert!(a.contains("Опекс, инфра-ассистент"));
+        assert!(a.contains("[Идентичность — напоминание]"));
+        // blank/None → generic fallback naming the agent
+        let f = build_anchor_block(None, "Arty");
+        assert!(f.contains("Arty"));
+        assert!(f.contains("[Идентичность — напоминание]"));
+        let b = build_anchor_block(Some("   "), "Arty");
+        assert!(b.contains("Arty"), "blank anchor → fallback");
+    }
+
+    #[test]
+    fn correction_anchor_gates_on_correct_and_threshold() {
+        // over threshold + correct → Some(block)
+        assert!(correction_anchor(0.5, 0.15, true, None, "A").is_some());
+        // over threshold but correct off → None (detect-only)
+        assert!(correction_anchor(0.5, 0.15, false, None, "A").is_none());
+        // under threshold + correct → None
+        assert!(correction_anchor(0.10, 0.15, true, None, "A").is_none());
+        // exactly at threshold → None (strict >, matches drift_probe's `score > threshold`)
+        assert!(correction_anchor(0.15, 0.15, true, None, "A").is_none());
     }
 }
