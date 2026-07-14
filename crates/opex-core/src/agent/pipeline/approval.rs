@@ -68,18 +68,20 @@ pub async fn resolve_approval(
         )
         .await
         {
-            Ok(Some(notif_id)) => {
-                let unread = crate::db::notifications::count_unread(&ctx.cfg.db)
-                    .await
-                    .unwrap_or(0);
-                tx.send(
-                    crate::gateway::handlers::notifications::notification_read_event(
-                        notif_id, unread,
+            Ok(Some(notif_id)) => match crate::db::notifications::count_unread(&ctx.cfg.db).await {
+                Ok(unread) => {
+                    tx.send(
+                        crate::gateway::handlers::notifications::notification_read_event(
+                            notif_id, unread,
+                        )
+                        .to_string(),
                     )
-                    .to_string(),
-                )
-                .ok();
-            }
+                    .ok();
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, approval_id = %approval_id, "count_unread failed after marking tool_approval read; skipping notification_read broadcast");
+                }
+            },
             Ok(None) => {}
             Err(e) => {
                 tracing::warn!(error = %e, approval_id = %approval_id, "mark tool_approval notification read failed");
