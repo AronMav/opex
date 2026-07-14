@@ -92,6 +92,29 @@ pub async fn count_unread(db: &PgPool) -> Result<i64> {
     Ok(n)
 }
 
+/// Mark the `tool_approval` notification for a given approval id as read.
+/// Returns the notification id if an unread row was updated (so the caller can
+/// broadcast a `notification_read` reconciliation event), else None.
+pub async fn mark_tool_approval_read_by_approval_id(
+    db: &PgPool,
+    approval_id: &str,
+) -> Result<Option<Uuid>> {
+    let id: Option<Uuid> = sqlx::query_scalar(
+        r"
+        UPDATE notifications
+        SET read = TRUE
+        WHERE type = 'tool_approval'
+          AND read = FALSE
+          AND data->>'approval_id' = $1
+        RETURNING id
+        ",
+    )
+    .bind(approval_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(id)
+}
+
 /// Mark a single notification as read by id. Returns true if a row was updated.
 pub async fn mark_read(db: &PgPool, id: Uuid) -> Result<bool> {
     let result = sqlx::query(
@@ -132,6 +155,20 @@ mod tests {
         assert_eq!(count_unread(&pool).await?, 2);
         mark_read(&pool, n2.id).await?;
         assert_eq!(count_unread(&pool).await?, 1);
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn mark_tool_approval_read_by_approval_id_marks_only_match(pool: PgPool) -> Result<()> {
+        let n = create_notification(&pool, "tool_approval", "t", "b",
+            serde_json::json!({"approval_id": "ap-123"})).await?;
+        create_notification(&pool, "tool_approval", "t2", "b2",
+            serde_json::json!({"approval_id": "other"})).await?;
+        let marked = mark_tool_approval_read_by_approval_id(&pool, "ap-123").await?;
+        assert_eq!(marked, Some(n.id));
+        assert_eq!(count_unread(&pool).await?, 1); // only "other" remains unread
+        // idempotent: second call finds nothing to update
+        assert_eq!(mark_tool_approval_read_by_approval_id(&pool, "ap-123").await?, None);
         Ok(())
     }
 }

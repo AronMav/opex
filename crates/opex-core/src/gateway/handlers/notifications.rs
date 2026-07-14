@@ -39,7 +39,7 @@ fn default_notification_type() -> String { "watchdog_alert".to_string() }
 // Emitted over `ui_event_tx` so every open tab reconciles read-state to the
 // server-authoritative unread count (fixes blind local decrement drift).
 
-fn notification_read_event(id: Uuid, unread_count: i64) -> serde_json::Value {
+pub(crate) fn notification_read_event(id: Uuid, unread_count: i64) -> serde_json::Value {
     serde_json::json!({
         "type": "notification_read",
         "data": { "id": id.to_string(), "unread_count": unread_count }

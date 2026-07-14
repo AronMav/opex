@@ -57,6 +57,36 @@ pub async fn resolve_approval(
         }).to_string()).ok();
     }
 
+    // N7 durability: mark the persistent `tool_approval` notification row read in
+    // the DB and broadcast `notification_read` so every tab reconciles — else
+    // the periodic notification refetch resurfaces the resolved approval as
+    // unread within ~60s.
+    if let Some(ref tx) = ctx.state.ui_event_tx {
+        match crate::db::notifications::mark_tool_approval_read_by_approval_id(
+            &ctx.cfg.db,
+            &approval_id.to_string(),
+        )
+        .await
+        {
+            Ok(Some(notif_id)) => {
+                let unread = crate::db::notifications::count_unread(&ctx.cfg.db)
+                    .await
+                    .unwrap_or(0);
+                tx.send(
+                    crate::gateway::handlers::notifications::notification_read_event(
+                        notif_id, unread,
+                    )
+                    .to_string(),
+                )
+                .ok();
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, approval_id = %approval_id, "mark tool_approval notification read failed");
+            }
+        }
+    }
+
     // Emit SSE event for inline approval resolution in chat UI.
     // ApprovalResolved is non-text and MUST be delivered (the client is
     // actively waiting on this event); use send_async to honor the
