@@ -104,6 +104,15 @@ impl MediaKind {
     /// UI notification event type for the success path. Voice keeps the
     /// historical `"tts_ready"` for UI backward-compat (audio player handler);
     /// other kinds use kind-specific events that the UI bell renders inline.
+    ///
+    /// No longer called from production code — the "media ready" bell
+    /// notification was removed (see [`deliver_to_ui`]/`persist_channel_media_inline`).
+    /// Kept for symmetry with [`Self::notification_error_event`] and covered
+    /// by unit tests; `#[allow(dead_code)]` because the bin target doesn't
+    /// see the `#[cfg(test)]` call sites.
+    ///
+    /// [`deliver_to_ui`]: BackgroundMediaTask::deliver_to_ui
+    #[allow(dead_code)]
     pub fn notification_ready_event(self) -> &'static str {
         match self {
             Self::Voice => "tts_ready",
@@ -140,6 +149,11 @@ impl MediaKind {
     }
 
     /// Localised (ru) title for the success-path UI notification.
+    ///
+    /// No longer called from production code (see
+    /// [`Self::notification_ready_event`] doc); kept for symmetry and unit
+    /// test coverage.
+    #[allow(dead_code)]
     pub fn notification_ready_title(self) -> &'static str {
         match self {
             Self::Voice => "Аудио готово",
@@ -341,8 +355,8 @@ impl BackgroundMediaTask {
             ui_event_tx:    ctx.state.ui_event_tx.clone(),
             bg_tasks:       ctx.state.bg_tasks.clone(),
             // Root-relative: the upload URL is only ever rendered in the
-            // same-origin web UI (`__file__:` marker + `*_ready` notify), so it
-            // must not depend on `gateway.public_url`. See web_uploads_base().
+            // same-origin web UI (`__file__:` marker), so it must not depend
+            // on `gateway.public_url`. See web_uploads_base().
             base_url:       crate::uploads::web_uploads_base().to_string(),
             db:             ctx.cfg.db.clone(),
             upload_key:     ctx.tex.secrets.get_upload_hmac_key(),
@@ -413,24 +427,24 @@ impl BackgroundMediaTask {
     /// Send media bytes to the channel adapter (Telegram / Discord / ...).
     ///
     /// On a successful channel send, ALSO save the bytes to the `uploads` DB
-    /// table (owner_type='tool_output'),
-    /// prepend a `__file__:{url, mediaType}\n` marker to the persisted tool
-    /// message row (via [`prepend_message_content`]), and emit a
-    /// `<kind>_ready` notification on `ui_event_tx` so live UI viewers receive
-    /// a bell ping. All three additions are best-effort: failures are logged
-    /// at `warn!` level and do NOT regress the channel-delivery promise (the
-    /// user already received the bytes in Telegram / Discord).
+    /// table (owner_type='tool_output') and prepend a
+    /// `__file__:{url, mediaType}\n` marker to the persisted tool message row
+    /// (via [`prepend_message_content`]) so reloading the session in the web
+    /// UI renders the media inline. Both additions are best-effort: failures
+    /// are logged at `warn!` level and do NOT regress the channel-delivery
+    /// promise (the user already received the bytes in Telegram / Discord).
+    /// No web-bell notification is emitted for this path — the user already
+    /// has the media in-channel.
     ///
     /// On any non-success channel-send arm, NOTHING after the send is
-    /// attempted — the user already saw the channel error and a bell ping
-    /// would be a lie since there's no URL to point at.
+    /// attempted.
     ///
     /// [`prepend_message_content`]: crate::db::sessions::prepend_message_content
     async fn deliver_to_channel(self, bytes: Vec<u8>) {
         // Hold onto everything we need post-send BEFORE destructuring the
         // router out for ownership. Using individual `let` bindings (rather
-        // than a struct destructure) keeps the post-send save/update/notify
-        // path readable without having to thread fields through a helper.
+        // than a struct destructure) keeps the post-send save/update path
+        // readable without having to thread fields through a helper.
         let kind = self.kind;
         let agent_name = self.agent_name.clone();
         let action = self.ca.action.clone();
@@ -533,20 +547,17 @@ impl BackgroundMediaTask {
         }
     }
 
-    /// Save to uploads and create a UI notification.
-    ///
-    /// All media kinds emit a notification via kind-specific event types
-    /// ([`MediaKind::notification_ready_event`] /
-    /// [`MediaKind::notification_error_event`]). Voice retains
-    /// `"tts_ready"`/`"tts_error"` for backward compatibility with the
-    /// existing UI audio-player handler; Photo/Video/Other use dedicated
-    /// events that the UI notification bell renders inline (image preview,
-    /// video player, etc.).
+    /// Save to uploads. On success, the media is available at the returned
+    /// URL but no web-bell notification is emitted (the ready-notify was
+    /// removed — the UI no longer pings on background media completion).
+    /// On failure, a kind-specific error notification is still emitted via
+    /// [`MediaKind::notification_error_event`] so the user learns generation
+    /// failed.
     async fn deliver_to_ui(self, bytes: Vec<u8>, kind: MediaKind) {
         use crate::agent::pipeline::handlers::save_binary_to_uploads;
         use crate::gateway::notify;
 
-        let (url, media_type) = match save_binary_to_uploads(
+        let (_url, _media_type) = match save_binary_to_uploads(
             &self.db,
             self.retention_days,
             &bytes,
@@ -576,18 +587,6 @@ impl BackgroundMediaTask {
                 return;
             }
         };
-
-        if let Some(tx) = self.ui_event_tx.as_ref() {
-            let _ = notify(
-                &self.db,
-                tx,
-                kind.notification_ready_event(),
-                kind.notification_ready_title(),
-                &format!("Подготовлено агентом {}", self.agent_name),
-                serde_json::json!({ "url": url, "mediaType": media_type }),
-            )
-            .await;
-        }
     }
 
     /// Dispatch error either to channel or log only (no UI notify — requires DB).
@@ -620,13 +619,14 @@ impl BackgroundMediaTask {
 ///    (only when `tool_message_id` is `Some(_)`) so reloading the session in
 ///    the web UI renders the media inline. The `chat-history.ts:196` parser
 ///    keys off `FILE_PREFIX`.
-/// 3. Emit a `<kind>_ready` notification so live UI viewers see the bell
-///    ping without needing to reload.
 ///
-/// All three steps are best-effort and cascade independently:
-/// - If save fails, neither prepend nor notify fires (no URL ⇒ both would lie).
-/// - If prepend fails, notify still fires (user can find the media via bell).
-/// - If notify fails (broadcast closed, DB unreachable), it's logged-and-skipped.
+/// No web-bell `<kind>_ready` notification is emitted here anymore — the
+/// user already received the media in-channel, so a bell ping would be
+/// redundant. `ui_event_tx` is accepted but unused (kept for call-site /
+/// signature stability).
+///
+/// Both steps are best-effort and cascade independently: if save fails, the
+/// prepend never fires (no URL to point at).
 ///
 /// In every error arm, the channel delivery already happened — failure here
 /// must NOT abort the caller, only log a `warn!`.
@@ -639,11 +639,10 @@ async fn persist_channel_media_inline(
     kind: MediaKind,
     upload_key: &[u8; 32],
     tool_message_id: Option<Uuid>,
-    ui_event_tx: Option<&broadcast::Sender<String>>,
+    _ui_event_tx: Option<&broadcast::Sender<String>>,
     agent_name: &str,
 ) {
     use crate::agent::pipeline::handlers::save_binary_to_uploads;
-    use crate::gateway::notify;
 
     let (url, media_type) = match save_binary_to_uploads(
         db,
@@ -680,23 +679,6 @@ async fn persist_channel_media_inline(
         tracing::debug!(
             agent = %agent_name, kind = ?kind,
             "background media: tool_message_id absent; skipping inline DB prepend"
-        );
-    }
-
-    if let Some(tx) = ui_event_tx
-        && let Err(e) = notify(
-            db,
-            tx,
-            kind.notification_ready_event(),
-            kind.notification_ready_title(),
-            &format!("Подготовлено агентом {agent_name}"),
-            serde_json::json!({"url": url, "mediaType": media_type}),
-        )
-        .await
-    {
-        tracing::warn!(
-            agent = %agent_name, kind = ?kind, error = %e,
-            "background media: notify failed; channel delivery already succeeded"
         );
     }
 }
@@ -1191,12 +1173,13 @@ mod tests {
         task.run().await;
     }
 
-    // ── deliver_to_ui notify event-type wiring (#[sqlx::test], needs DB) ──
+    // ── deliver_to_ui notify wiring (#[sqlx::test], needs DB) ───────────────
     //
-    // Closes the gap between MediaKind::notification_*_event() / *_title()
-    // (covered by unit tests) and the actual `notify(...)` call inside
-    // deliver_to_ui. Without these, swapping `kind.notification_ready_event()`
-    // for a hardcoded "tts_ready" in deliver_to_ui would not be caught.
+    // The web-bell `*_ready` notification was removed from deliver_to_ui —
+    // these tests guard the regression where it silently comes back (e.g. a
+    // future edit re-adding the notify() call on the success path). The
+    // error-path notify (generation/save failure) is untouched and still
+    // covered below.
     //
     // Requires DATABASE_URL — runs under `make test-db`. Skipped silently
     // by `cargo test` without DB (matches the existing 8 sqlx::test gates
@@ -1252,8 +1235,19 @@ mod tests {
         assert_eq!(title, expected_title, "notification.title mismatch");
     }
 
+    async fn assert_no_ready_notification(pool: &sqlx::PgPool) {
+        // deliver_to_ui must NOT insert a *_ready notification anymore.
+        let count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM notifications WHERE type LIKE '%\\_ready'",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("count query must run");
+        assert_eq!(count.0, 0, "no *_ready notification must be inserted");
+    }
+
     #[sqlx::test(migrations = "../../migrations")]
-    async fn deliver_to_ui_voice_emits_tts_ready(pool: sqlx::PgPool) {
+    async fn deliver_to_ui_voice_does_not_notify_ready(pool: sqlx::PgPool) {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/audio/speech"))
@@ -1262,49 +1256,7 @@ mod tests {
             .await;
         let task = make_task_with_db(&server.uri(), "send_voice", pool.clone(), serde_json::json!({}));
         task.run().await;
-        assert_notification_inserted(&pool, "tts_ready", "Аудио готово").await;
-    }
-
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn deliver_to_ui_photo_emits_image_ready(pool: sqlx::PgPool) {
-        // Regression test for the original generate_image bug: image MUST emit
-        // image_ready, not tts_ready (which would render an audio player around
-        // a PNG in the UI bell).
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/audio/speech"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"\x89PNG\r\n\x1a\nfake"))
-            .mount(&server)
-            .await;
-        let task = make_task_with_db(&server.uri(), "send_photo", pool.clone(), serde_json::json!({}));
-        task.run().await;
-        assert_notification_inserted(&pool, "image_ready", "Изображение готово").await;
-    }
-
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn deliver_to_ui_video_emits_video_ready(pool: sqlx::PgPool) {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/audio/speech"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"\x00\x00\x00 ftypisomfake"))
-            .mount(&server)
-            .await;
-        let task = make_task_with_db(&server.uri(), "send_video", pool.clone(), serde_json::json!({}));
-        task.run().await;
-        assert_notification_inserted(&pool, "video_ready", "Видео готово").await;
-    }
-
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn deliver_to_ui_other_emits_media_ready(pool: sqlx::PgPool) {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/audio/speech"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"arbitrary-bytes"))
-            .mount(&server)
-            .await;
-        let task = make_task_with_db(&server.uri(), "send_sticker", pool.clone(), serde_json::json!({}));
-        task.run().await;
-        assert_notification_inserted(&pool, "media_ready", "Медиа готово").await;
+        assert_no_ready_notification(&pool).await;
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -1348,14 +1300,14 @@ mod tests {
         task.run().await;
     }
 
-    // ── deliver_to_channel save+update+notify (QUICK-260508-0dj) ────────────
+    // ── deliver_to_channel save+update mirror (QUICK-260508-0dj) ────────────
     //
     // These tests cover the post-channel-send mirror: when a Telegram-paired
     // session calls a YAML channel-action
     // tool, the bytes that successfully reach the channel must ALSO be
-    // saved to uploads, the persisted tool message row prepended with a
-    // `__file__:{json}\n` marker, and a `<kind>_ready` notify emitted —
-    // all best-effort, none allowed to regress the channel-delivery promise.
+    // saved to uploads and the persisted tool message row prepended with a
+    // `__file__:{json}\n` marker — best-effort, not allowed to regress the
+    // channel-delivery promise. No web-bell notify is emitted on this path.
 
     /// Variant of `make_task_with_db` that lets the test pin a specific
     /// `tool_message_id` and a real `ChannelActionRouter` so we can drive the
@@ -1635,10 +1587,10 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
-    async fn deliver_to_channel_happy_path_emits_image_ready_notify(pool: sqlx::PgPool) {
-        // Same scenario as the prepend test — assert the bell ping side:
-        // a `<kind>_ready` notification row lands in the DB and the
-        // broadcast event fires on `ui_event_tx`.
+    async fn deliver_to_channel_happy_path_does_not_notify_ready(pool: sqlx::PgPool) {
+        // Same scenario as the prepend test — but the post-channel-send
+        // mirror must NOT ping the web bell anymore (media already reached
+        // the user via the channel); only the inline DB marker is mirrored.
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/audio/speech"))
@@ -1676,20 +1628,20 @@ mod tests {
         let _ = action.reply.send(Ok(()));
         run.await.expect("task completes");
 
-        // 1) DB row created via notify() ⇒ `notifications` has an `image_ready`.
-        assert_notification_inserted(&pool, "image_ready", "Изображение готово").await;
+        // 1) No `*_ready` notification row is created anymore.
+        assert_no_ready_notification(&pool).await;
 
-        // 2) UI broadcast fired — payload is JSON with type=notification.
-        let payload = ui_rx
-            .try_recv()
-            .expect("ui_event_tx must receive the notification broadcast");
-        let v: serde_json::Value =
-            serde_json::from_str(&payload).expect("broadcast must be valid JSON");
-        assert_eq!(
-            v.get("type").and_then(|x| x.as_str()),
-            Some("notification"),
-            "broadcast envelope must be `type=notification`, got: {v}"
-        );
+        // 2) No UI broadcast fired either.
+        match ui_rx.try_recv() {
+            Err(broadcast::error::TryRecvError::Empty)
+            | Err(broadcast::error::TryRecvError::Closed) => {}
+            Ok(payload) => panic!(
+                "no UI notification expected on channel-send success, got: {payload}"
+            ),
+            Err(broadcast::error::TryRecvError::Lagged(_)) => panic!(
+                "no UI notification expected on channel-send success (lagged)"
+            ),
+        }
     }
 
     #[sqlx::test(migrations = "../../migrations")]
