@@ -72,6 +72,20 @@ export interface WsNotification {
   data: import("./api").NotificationRow;
 }
 
+export interface WsNotificationRead {
+  type: "notification_read";
+  data: { id: string; unread_count: number };
+}
+
+export interface WsNotificationsReadAll {
+  type: "notifications_read_all";
+  data: { unread_count: number };
+}
+
+export interface WsNotificationsCleared {
+  type: "notifications_cleared";
+}
+
 export interface WsFileJobProgress {
   type: "file_job_progress";
   job_id: string;
@@ -93,6 +107,9 @@ export type WsEvent =
   | WsApprovalResolved
   | WsAuditEvent
   | WsNotification
+  | WsNotificationRead
+  | WsNotificationsReadAll
+  | WsNotificationsCleared
   | WsPong
   | WsFileJobProgress;
 

@@ -1,8 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 import { toast } from "sonner"
 import { apiGet, apiPost, apiPut, apiDelete, apiPatch, listCheckpoints, restoreCheckpoint, getAgentPlan, approveProposal, dismissProposal, cancelGoal } from "./api"
 import { useNotificationStore } from "@/stores/notification-store"
+import { useWsStore } from "@/stores/ws-store"
 import { useWsSubscription } from "@/hooks/use-ws-subscription"
 import type { NotificationsResponse, SessionFailuresResponse, SessionChainResponse } from "@/types/api"
 import type { CheckpointListDto, RestoreReportDto } from "@/types/api.generated"
@@ -680,6 +681,9 @@ export function useNotifications() {
   const query = useQuery({
     queryKey: qk.notifications,
     queryFn: () => apiGet<NotificationsResponse>("/api/notifications?limit=20&offset=0"),
+    refetchOnWindowFocus: true,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   });
   useEffect(() => {
     if (query.data) {
@@ -736,9 +740,45 @@ export function useResolveInfraDecision() {
 
 export function useNotificationWsSync() {
   const prependNotification = useNotificationStore((s) => s.prependNotification);
+  const applyRead = useNotificationStore((s) => s.applyRead);
+  const applyReadAll = useNotificationStore((s) => s.applyReadAll);
+  const applyCleared = useNotificationStore((s) => s.applyCleared);
+  const resolveApproval = useNotificationStore((s) => s.resolveApproval);
+
   useWsSubscription("notification", (event) => {
     prependNotification(event.data);
   });
+  useWsSubscription("notification_read", (event) => {
+    applyRead(event.data.id, event.data.unread_count);
+  });
+  useWsSubscription("notifications_read_all", (event) => {
+    applyReadAll(event.data.unread_count);
+  });
+  useWsSubscription("notifications_cleared", () => {
+    applyCleared();
+  });
+  // N7: when an approval is resolved anywhere (toast / channel / another tab),
+  // mark its persistent bell row read so it stops lingering unread.
+  useWsSubscription("approval_resolved", (event) => {
+    resolveApproval(event.approval_id);
+  });
+}
+
+/**
+ * N1 recovery: when the WS transitions disconnected -> connected, any
+ * notifications created during the outage exist only in the DB. Refetch the
+ * (newest-first, capped) list to reconcile the badge and recent items.
+ */
+export function useNotificationRecovery() {
+  const qc = useQueryClient();
+  const connected = useWsStore((s) => s.connected);
+  const prev = useRef(connected);
+  useEffect(() => {
+    if (connected && !prev.current) {
+      qc.invalidateQueries({ queryKey: qk.notifications });
+    }
+    prev.current = connected;
+  }, [connected, qc]);
 }
 
 // ── Checkpoints ──────────────────────────────────────────────────────────────
