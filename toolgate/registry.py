@@ -67,6 +67,7 @@ def _build_driver_map() -> dict[tuple[str, str], type]:
     from providers.tts_fish_audio import FishAudioTTS
     from providers.tts_murf import MurfTTS
     from providers.tts_mimo import MiMoTTS
+    from providers.tts_minimax import MiniMaxTTS
     from providers.tts_silero import SileroTTS
 
     # ImageGen providers
@@ -113,6 +114,7 @@ def _build_driver_map() -> dict[tuple[str, str], type]:
         ("tts", "fish-audio"): FishAudioTTS,
         ("tts", "murf"): MurfTTS,
         ("tts", "mimo"): MiMoTTS,
+        ("tts", "minimax"): MiniMaxTTS,
         ("tts", "silero"): SileroTTS,
         # ImageGen
         ("imagegen", "openai"): OpenAIImageGen,
