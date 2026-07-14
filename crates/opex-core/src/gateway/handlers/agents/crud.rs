@@ -87,6 +87,7 @@ pub(super) const TABLES_WITH_AGENT_ID_NOT_NULL: &[&str] = &[
     "agent_github_repos",
     "agent_oauth_bindings",
     "agent_plans",
+    "agent_emotion_state",
     "approval_allowlist",
     "audit_events",
     "audit_log",
