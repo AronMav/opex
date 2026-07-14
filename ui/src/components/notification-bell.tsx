@@ -11,10 +11,11 @@ import {
 import { useNotificationStore } from "@/stores/notification-store";
 import {
   useNotifications,
+  useNotificationWsSync,
+  useNotificationRecovery,
   useMarkNotificationRead,
   useMarkAllRead,
   useClearAllNotifications,
-  useNotificationWsSync,
 } from "@/lib/queries";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/hooks/use-translation";
@@ -118,29 +119,33 @@ export function NotificationBell() {
   const router = useRouter();
   const notifications = useNotificationStore((s) => s.notifications);
   const unread_count = useNotificationStore((s) => s.unread_count);
+  const newArrivalSeq = useNotificationStore((s) => s.newArrivalSeq);
 
   const [flashing, setFlashing] = useState(false);
-  const prevUnreadRef = useRef(unread_count);
+  const prevSeqRef = useRef(newArrivalSeq);
 
-  // Fetch initial notifications and wire WS real-time updates
+  // Fetch initial notifications, wire WS real-time updates + reconnect recovery
   useNotifications();
   useNotificationWsSync();
+  useNotificationRecovery();
 
   const markRead = useMarkNotificationRead();
   const markAllRead = useMarkAllRead();
   const clearAll = useClearAllNotifications();
 
-  // Flash + sound on new notification arrival
+  // Flash + sound ONLY on a genuine live arrival (newArrivalSeq bump).
+  // Refetch-on-reconnect and the initial cold-load fetch do not bump the seq,
+  // so they never beep.
   useEffect(() => {
-    if (unread_count > prevUnreadRef.current) {
+    if (newArrivalSeq > prevSeqRef.current) {
       setFlashing(true);
       playNotificationSound();
       const timer = setTimeout(() => setFlashing(false), 1500);
-      prevUnreadRef.current = unread_count;
+      prevSeqRef.current = newArrivalSeq;
       return () => clearTimeout(timer);
     }
-    prevUnreadRef.current = unread_count;
-  }, [unread_count]);
+    prevSeqRef.current = newArrivalSeq;
+  }, [newArrivalSeq]);
 
   return (
     <DropdownMenu>
