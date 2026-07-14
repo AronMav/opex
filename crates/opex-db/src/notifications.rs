@@ -83,6 +83,15 @@ pub async fn list_notifications(
     Ok((rows, unread))
 }
 
+/// Count currently-unread notifications. Used to build cross-tab read-sync
+/// broadcast payloads with a server-authoritative unread count.
+pub async fn count_unread(db: &PgPool) -> Result<i64> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notifications WHERE read = FALSE")
+        .fetch_one(db)
+        .await?;
+    Ok(n)
+}
+
 /// Mark a single notification as read by id. Returns true if a row was updated.
 pub async fn mark_read(db: &PgPool, id: Uuid) -> Result<bool> {
     let result = sqlx::query(
@@ -110,4 +119,19 @@ pub async fn cleanup_old_notifications(db: &PgPool) -> anyhow::Result<u64> {
     .execute(db)
     .await?;
     Ok(result.rows_affected())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[sqlx::test]
+    async fn count_unread_counts_only_unread(pool: PgPool) -> Result<()> {
+        create_notification(&pool, "agent_error", "a", "b", serde_json::json!({})).await?;
+        let n2 = create_notification(&pool, "agent_error", "c", "d", serde_json::json!({})).await?;
+        assert_eq!(count_unread(&pool).await?, 2);
+        mark_read(&pool, n2.id).await?;
+        assert_eq!(count_unread(&pool).await?, 1);
+        Ok(())
+    }
 }
