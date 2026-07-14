@@ -12,6 +12,11 @@ use tokio::sync::mpsc;
 use super::types::OutboundMsg;
 use super::ws_json;
 
+/// Max time a single WS write may take before the writer gives up and exits,
+/// tearing down the connection. Chosen above the 30s app-level ping and the
+/// 20s tool-action grace so a healthy-but-idle adapter is never killed (#4).
+const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+
 /// Drain `rx` and write every message to `sink`. Returns when `rx` closes,
 /// `Shutdown` arrives, or the sink errors.
 ///
@@ -26,15 +31,34 @@ where
     while let Some(msg) = rx.recv().await {
         match msg {
             OutboundMsg::Wire(payload) => {
-                if let Err(e) = sink.send(ws_json(&payload)).await {
-                    tracing::debug!(error = %e, "channel WS writer: sink send failed, exiting");
-                    return;
+                match tokio::time::timeout(WRITE_TIMEOUT, sink.send(ws_json(&payload))).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        tracing::debug!(error = %e, "channel WS writer: sink send failed, exiting");
+                        return;
+                    }
+                    Err(_) => {
+                        tracing::warn!("channel WS writer: send timed out ({WRITE_TIMEOUT:?}), exiting — adapter stuck");
+                        return;
+                    }
                 }
             }
             OutboundMsg::Ping => {
-                if let Err(e) = sink.send(WsMessage::Ping(vec![1, 2, 3, 4].into())).await {
-                    tracing::debug!(error = %e, "channel WS writer: ping send failed, exiting");
-                    return;
+                match tokio::time::timeout(
+                    WRITE_TIMEOUT,
+                    sink.send(WsMessage::Ping(vec![1, 2, 3, 4].into())),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        tracing::debug!(error = %e, "channel WS writer: ping send failed, exiting");
+                        return;
+                    }
+                    Err(_) => {
+                        tracing::warn!("channel WS writer: ping timed out ({WRITE_TIMEOUT:?}), exiting — adapter stuck");
+                        return;
+                    }
                 }
             }
             OutboundMsg::Shutdown => return,
@@ -85,6 +109,54 @@ mod tests {
 
     // Note: `std::convert::Infallible` already implements `Display` in std,
     // satisfying the writer's `S::Error: Display` bound.
+
+    /// A sink whose `poll_ready` never resolves — simulates a stuck-but-open
+    /// adapter. `tokio::time::timeout`'s own timer fires regardless of whether
+    /// this registers a waker, so the writer still exits.
+    struct StuckSink;
+
+    impl Sink<WsMessage> for StuckSink {
+        type Error = std::convert::Infallible;
+        fn poll_ready(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Pending
+        }
+        fn start_send(self: std::pin::Pin<&mut Self>, _item: WsMessage) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Pending
+        }
+        fn poll_close(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn writer_exits_on_stuck_sink_after_timeout() {
+        let (tx, rx) = mpsc::channel::<OutboundMsg>(4);
+        let h = tokio::spawn(run(StuckSink, rx));
+        tx.send(OutboundMsg::Wire(ChannelOutbound::Chunk {
+            request_id: "r".to_string(),
+            text: "stuck".to_string(),
+        }))
+        .await
+        .unwrap();
+        // Advance virtual time past WRITE_TIMEOUT; the writer must return.
+        tokio::time::advance(WRITE_TIMEOUT + std::time::Duration::from_secs(1)).await;
+        tokio::time::timeout(std::time::Duration::from_secs(1), h)
+            .await
+            .expect("writer must exit after WRITE_TIMEOUT")
+            .unwrap();
+    }
 
     #[tokio::test]
     async fn writer_serialises_in_order_then_exits_on_shutdown() {
