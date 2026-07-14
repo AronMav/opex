@@ -67,12 +67,17 @@ impl SessionQueueMap {
 
     /// Create a fresh sender+consumer for `key` (replacing any stale entry) and
     /// send `turn`. The consumer captures ONLY `rx` — never `self`.
+    ///
+    /// NOTE: under a rare concurrent double-respawn race for the same dead key
+    /// (two callers both observe a dead sender and both respawn), two consumers
+    /// may transiently run for that key — no message is lost, but strict
+    /// cross-turn FIFO isn't guaranteed across that pair.
     fn respawn_and_send(self: &Arc<Self>, key: SessionKey, turn: QueuedTurn) {
         let (tx, rx) = mpsc::unbounded_channel::<QueuedTurn>();
         // Insert BEFORE sending so a concurrent enqueue for the same key finds
         // the live sender. `insert` overwrites any stale (dead-consumer) entry.
         self.inner.insert(key, tx.clone());
-        tokio::spawn(consumer(rx));
+        tokio::spawn(consumer(rx, run_turn_body));
         // The consumer is alive; this send cannot fail.
         let _ = tx.send(turn);
     }
@@ -83,27 +88,61 @@ impl SessionQueueMap {
     }
 }
 
+/// The per-turn bookkeeping the queue consumer needs, abstracted so the
+/// consumer loop can be unit-tested with a lightweight fake turn (no engine).
+pub(super) trait QueuedItem: Send + 'static {
+    fn request_id(&self) -> &str;
+    fn inflight(&self) -> &InflightRegistry;
+    /// The turn's cancel token clone (same token registered in `inflight`).
+    fn cancel_token(&self) -> &tokio_util::sync::CancellationToken;
+}
+
+impl QueuedItem for QueuedTurn {
+    fn request_id(&self) -> &str {
+        &self.request_id
+    }
+    fn inflight(&self) -> &InflightRegistry {
+        &self.inflight
+    }
+    fn cancel_token(&self) -> &tokio_util::sync::CancellationToken {
+        &self.cancel_token
+    }
+}
+
 /// Drain one session's queue serially. Runs each turn body to completion before
 /// the next (FIFO). Exits when all senders drop (`recv() == None`).
-async fn consumer(mut rx: mpsc::UnboundedReceiver<QueuedTurn>) {
+async fn consumer<T, R, Fut>(mut rx: mpsc::UnboundedReceiver<T>, run: R)
+where
+    T: QueuedItem,
+    R: Fn(T) -> Fut,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
     while let Some(turn) = rx.recv().await {
-        let request_id = turn.request_id.clone();
-        let inflight = turn.inflight.clone();
+        let request_id = turn.request_id().to_string();
+        let inflight = turn.inflight().clone();
 
-        // Cancelled while queued: the reader's Cancel arm already emitted the
-        // "Cancelled" frame (dispatcher::cancel returned true for the registered
-        // request_id). Just drop the entry and skip — do NOT re-run or re-emit.
-        if turn.cancel_token.is_cancelled() {
-            inflight.lock().await.remove(&request_id);
-            continue;
-        }
-
-        // Spawn the turn body so a sync-wedged turn can be hard-aborted via its
-        // AbortHandle without killing this consumer. Await it → strict FIFO.
-        let handle = tokio::spawn(run_turn_body(turn));
-        if let Some(im) = inflight.lock().await.get_mut(&request_id) {
-            im.abort = Some(handle.abort_handle());
-        }
+        // Atomically decide skip-or-run and attach the abort handle under ONE
+        // lock acquisition, so a concurrent cancel() cannot remove an
+        // abort:None entry between the spawn and the attach (which would drop
+        // the sync-wedge hard-abort backstop).
+        let handle = {
+            let mut guard = inflight.lock().await;
+            match guard.get_mut(&request_id) {
+                // cancel() removed the entry while it was queued → skip (the
+                // reader's Cancel arm already emitted the "Cancelled" frame).
+                None => continue,
+                // token cancelled while queued → skip, drop the entry.
+                Some(im) if im.cancel.is_cancelled() => {
+                    guard.remove(&request_id);
+                    continue;
+                }
+                Some(im) => {
+                    let h = tokio::spawn(run(turn));
+                    im.abort = Some(h.abort_handle());
+                    h
+                }
+            }
+        };
         let _ = handle.await;
         inflight.lock().await.remove(&request_id);
     }
@@ -226,39 +265,96 @@ mod tests {
         Arc::new(Mutex::new(std::collections::HashMap::new()))
     }
 
-    /// FIFO: a single unbounded receiver drains in send order. We assert the
-    /// ordering property of the queue transport directly (the consumer awaits
-    /// each turn, so send-order == process-order).
+    /// Lightweight fake turn so the generic `consumer` can be driven without an
+    /// `AgentEngine`.
+    struct TestTurn {
+        request_id: String,
+        inflight: InflightRegistry,
+        cancel: tokio_util::sync::CancellationToken,
+    }
+    impl QueuedItem for TestTurn {
+        fn request_id(&self) -> &str {
+            &self.request_id
+        }
+        fn inflight(&self) -> &InflightRegistry {
+            &self.inflight
+        }
+        fn cancel_token(&self) -> &tokio_util::sync::CancellationToken {
+            &self.cancel
+        }
+    }
+
+    /// Register an inflight entry for `rid` (as the reader would at enqueue)
+    /// and build a matching `TestTurn`.
+    fn make_turn(reg: &InflightRegistry, rid: &str) -> TestTurn {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        // Best-effort synchronous insert: tests run on the single-threaded
+        // current_thread flavor by default, but `blocking_lock` would panic in
+        // an async context, so use `try_lock` (registry is uncontended here).
+        reg.try_lock()
+            .expect("registry uncontended in test setup")
+            .insert(
+                rid.to_string(),
+                InflightMessage { cancel: cancel.clone(), abort: None },
+            );
+        TestTurn { request_id: rid.to_string(), inflight: reg.clone(), cancel }
+    }
+
+    /// FIFO + exactly-once: turns are processed in send order and each
+    /// inflight entry is removed once its turn completes.
     #[tokio::test]
-    async fn unbounded_queue_preserves_send_order() {
-        let (tx, mut rx) = mpsc::unbounded_channel::<usize>();
-        for i in 0..10 { tx.send(i).unwrap(); }
+    async fn consumer_processes_turns_in_fifo_order() {
+        let reg = inflight();
+        let (tx, rx) = mpsc::unbounded_channel::<TestTurn>();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let recorder = seen.clone();
+        let handle = tokio::spawn(consumer(rx, move |turn: TestTurn| {
+            let recorder = recorder.clone();
+            async move {
+                recorder.lock().await.push(turn.request_id().to_string());
+            }
+        }));
+
+        for rid in ["a", "b", "c"] {
+            let turn = make_turn(&reg, rid);
+            tx.send(turn).unwrap();
+        }
         drop(tx);
-        let mut seen = vec![];
-        while let Some(v) = rx.recv().await { seen.push(v); }
-        assert_eq!(seen, (0..10).collect::<Vec<_>>(), "queue must drain in send order");
+        handle.await.unwrap();
+
+        assert_eq!(*seen.lock().await, vec!["a", "b", "c"], "must process in send order");
+        assert!(reg.lock().await.is_empty(), "all inflight entries must be removed after processing");
     }
 
-    /// Respawn signal: `enqueue`'s dead-consumer detection relies on a sender
-    /// reporting `is_closed()` once its receiver is dropped. Assert that signal
-    /// (the full run_turn_body respawn path needs a live engine → covered by
-    /// the server test session + E2E, not this unit test).
+    /// A turn whose token was cancelled BEFORE the consumer reaches it (e.g. a
+    /// `Cancel` raced ahead while queued) is skipped, never run, and its entry
+    /// is removed.
     #[tokio::test]
-    async fn dropped_receiver_closes_sender() {
-        let (tx, rx) = mpsc::unbounded_channel::<QueuedTurn>();
-        assert!(!tx.is_closed(), "sender live while receiver exists");
-        drop(rx); // consumer "died"
-        assert!(tx.is_closed(), "sender must report closed once its receiver dropped — enqueue respawns on this");
-    }
+    async fn consumer_skips_turn_cancelled_while_queued() {
+        let reg = inflight();
+        let (tx, rx) = mpsc::unbounded_channel::<TestTurn>();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
-    /// Cancel-of-queued: an entry registered with a cancelled token is skipped
-    /// by the consumer's `is_cancelled()` guard (asserted at the guard level).
-    #[tokio::test]
-    async fn cancelled_token_is_observed() {
-        use tokio_util::sync::CancellationToken;
-        let token = CancellationToken::new();
-        token.cancel();
-        assert!(token.is_cancelled(), "consumer skip-guard reads is_cancelled()");
+        let first = make_turn(&reg, "cancelled");
+        first.cancel_token().cancel(); // simulate Cancel racing ahead of the consumer
+        let second = make_turn(&reg, "runs");
+
+        let recorder = seen.clone();
+        let handle = tokio::spawn(consumer(rx, move |turn: TestTurn| {
+            let recorder = recorder.clone();
+            async move {
+                recorder.lock().await.push(turn.request_id().to_string());
+            }
+        }));
+
+        tx.send(first).unwrap();
+        tx.send(second).unwrap();
+        drop(tx);
+        handle.await.unwrap();
+
+        assert_eq!(*seen.lock().await, vec!["runs"], "cancelled-while-queued turn must be skipped, not run");
+        assert!(reg.lock().await.is_empty(), "both entries must be removed (skip path removes explicitly)");
     }
 
     /// cancel() removes the entry, cancels the token, returns true; unknown → false.
