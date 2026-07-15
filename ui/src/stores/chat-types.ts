@@ -209,13 +209,6 @@ export interface AgentState {
   connectionError: string | null;
   /** When true, next sendMessage will force backend to create a new session. */
   forceNewSession: boolean;
-  /**
-   * Resume boundary reported by the server on `sync_begin` (T3/T6). Marks the
-   * last persisted message id the replayed envelope resumes after. Set by the
-   * single connect path's `onBoundary`; consumed by the id-based live→history
-   * handoff (T8). Null when no turn has streamed yet for this agent.
-   */
-  boundaryMessageId: string | null;
   /** Server-driven list of session IDs currently being processed.
    *  Updated ONLY from WS agent_processing events — never optimistically.
    *  Array (not Set) because Immer doesn't support Set without enableMapSet(). */
@@ -314,10 +307,11 @@ export interface ChatStore {
 
   resumeStream: (agent: string, sessionId: string) => void;
   /**
-   * T8 id-based live→history handoff. Called from ChatThread once the finished
-   * turn's fresh rows land in the refetched sessionMessages cache: drops the
-   * frozen live overlay to history mode and clears boundaryMessageId. No-ops
-   * unless a finished turn is still shown as a live/finishing overlay.
+   * Id-based live→history handoff. Called from ChatThread once the finished
+   * turn's fresh rows land in the refetched sessionMessages cache (matched by
+   * the live turn's assistant id): drops the frozen live overlay to history
+   * mode. No-ops unless a finished turn is still shown as a live/finishing
+   * overlay.
    */
   finalizeHandoff: (agent: string, sessionId: string) => void;
   setThinking: (agent: string, sessionId: string | null) => void;
@@ -349,7 +343,6 @@ export function emptyAgentState(): AgentState {
     connectionPhase: "idle",
     connectionError: null,
     forceNewSession: false,
-    boundaryMessageId: null,
     activeSessionIds: [],
     renderLimit: 100,
     modelOverride: null,

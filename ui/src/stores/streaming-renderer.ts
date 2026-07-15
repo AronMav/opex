@@ -175,16 +175,15 @@ export function createStreamingRenderer(store: StoreAccess) {
     recordEventActivity(agent);
 
     openTurnStream(agent, sessionId, session, {
-      onBoundary: (boundaryMessageId) => update(agent, { boundaryMessageId }),
       onEnvelopeApplied: () => update(agent, { connectionPhase: "streaming" }),
       onFinished: () => {
         // Turn is authoritatively over. Do NOT clear live messages here — the
-        // id-based live→history handoff (T8) is driven by an effect in
-        // ChatThread that watches the refetched sessionMessages and, once the
-        // turn's fresh rows are present, sets boundaryMessageId=null + drops the
-        // live overlay to history. Until then the frozen overlay stays visible,
-        // and the voice falling-edge flush (ChatComposer) reads the last
-        // assistant on the render where the phase flips out of an active state.
+        // id-based live→history handoff is driven by an effect in ChatThread
+        // that watches the refetched sessionMessages and, once the turn's fresh
+        // rows are present (matched by the live assistant id), drops the live
+        // overlay to history. Until then the frozen overlay stays visible, and
+        // the voice falling-edge flush (ChatComposer) reads the last assistant
+        // on the render where the phase flips out of an active state.
         update(agent, { connectionPhase: "idle" });
         queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
         queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sessionId) });
@@ -251,7 +250,6 @@ export function createStreamingRenderer(store: StoreAccess) {
       connectionError: null,
       turnLimitMessage: null,
       isLlmReconnecting: false,
-      boundaryMessageId: null,
     });
     recordEventActivity(agent);
     saveUiState(agent);

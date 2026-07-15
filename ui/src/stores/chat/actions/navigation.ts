@@ -246,7 +246,6 @@ export function createNavigationActions(deps: ActionDeps) {
       if (st.messageSource.mode !== "live" && st.messageSource.mode !== "finishing") return;
       update(agent, {
         messageSource: { mode: "history", sessionId },
-        boundaryMessageId: null,
       });
     },
 

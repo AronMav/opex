@@ -12,14 +12,14 @@ import { queryClient } from "@/lib/query-client";
 import { qk } from "@/lib/queries";
 import type { MessageRow } from "@/types/api";
 
-// ── Boundary-render dedup helpers (id-based seam dedup) ─────────────────────
+// ── Render-merge cases (id-keyed merge over FULL history) ──────────────────
 //
-// Root cause under test: `sendMessage` pre-allocates the turn's user message
-// id and the server persists + echoes it back as `boundaryMessageId` on
-// `sync_begin`. `historyUpToIncluding` is INCLUSIVE of that id, and the live
-// overlay's optimistic user echo carries the SAME id — so once history is
-// refetched mid-turn, the user message exists in BOTH the history slice and
-// the live overlay, and renders twice unless deduped at the seam.
+// Root cause the merge fixes: `sendMessage` pre-allocates the turn's user
+// message id; the server persists the row under that same id. The optimistic
+// user echo in the live overlay carries the SAME id. Once history refetches
+// mid-turn the user row exists in BOTH history and the live overlay. The old
+// positional model (inclusive boundary slice + concat) rendered it twice; the
+// id-keyed merge renders each id once (live wins for shared ids).
 
 function seedHistory(sessionId: string, agent: string, rows: MessageRow[]): void {
   queryClient.setQueryData([...qk.sessionMessages(sessionId), agent], { messages: rows });
@@ -135,9 +135,14 @@ describe("chat-selectors (derived)", () => {
     // tested via the chat-history overlay-dedup unit tests; here we only
     // guard the mode-switch dispatch.
 
-    // ── Boundary dup bug (T8 seam) ─────────────────────────────────────────
-    it("case 1: fresh send, history already contains the boundary user message — U1 renders ONCE (bug repro)", () => {
-      const sessionId = "sess-dup-1";
+    function renderedText(msg: ReturnType<typeof selectRenderMessages>[number]): string {
+      return msg.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("");
+    }
+
+    // ── Render-merge cases ─────────────────────────────────────────────────
+    it("case 1: fresh send, history refetched mid-turn — user id renders ONCE", () => {
+      // history [U0, A0, U1(id=b)]  +  live [U1(id=b echo), A1] → [U0,A0,U1,A1]
+      const sessionId = "sess-merge-1";
       seedHistory(sessionId, agent, [
         makeUserRow("u0", "first", "2026-07-15T00:00:00Z"),
         makeAssistantRow("a0", "reply one", "2026-07-15T00:00:01Z", agent),
@@ -145,7 +150,6 @@ describe("chat-selectors (derived)", () => {
       ]);
       const state = makeState(agent, {
         activeSessionId: sessionId,
-        boundaryMessageId: "b",
         messageSource: {
           mode: "finishing",
           sessionId,
@@ -163,7 +167,7 @@ describe("chat-selectors (derived)", () => {
     });
 
     it("case 1b: same repro in live mode (not just finishing)", () => {
-      const sessionId = "sess-dup-1b";
+      const sessionId = "sess-merge-1b";
       seedHistory(sessionId, agent, [
         makeUserRow("u0", "first", "2026-07-15T00:00:00Z"),
         makeAssistantRow("a0", "reply one", "2026-07-15T00:00:01Z", agent),
@@ -171,7 +175,6 @@ describe("chat-selectors (derived)", () => {
       ]);
       const state = makeState(agent, {
         activeSessionId: sessionId,
-        boundaryMessageId: "b",
         messageSource: {
           mode: "live",
           messages: [
@@ -187,15 +190,15 @@ describe("chat-selectors (derived)", () => {
       expect(rendered.map((m) => m.id)).toEqual(["u0", "a0", "b", "a1"]);
     });
 
-    it("case 2: fresh send, history NOT yet refetched — boundary absent from history, live echo still renders", () => {
-      const sessionId = "sess-dup-2";
+    it("case 2: fresh send, history NOT yet refetched — live echo appends", () => {
+      // history [U0, A0]  +  live [U1(id=b), A1] → [U0,A0,U1,A1]
+      const sessionId = "sess-merge-2";
       seedHistory(sessionId, agent, [
         makeUserRow("u0", "first", "2026-07-15T00:00:00Z"),
         makeAssistantRow("a0", "reply one", "2026-07-15T00:00:01Z", agent),
       ]);
       const state = makeState(agent, {
         activeSessionId: sessionId,
-        boundaryMessageId: "b",
         messageSource: {
           mode: "live",
           messages: [
@@ -210,51 +213,54 @@ describe("chat-selectors (derived)", () => {
       expect(rendered.map((m) => m.id)).toEqual(["u0", "a0", "b", "a1"]);
     });
 
-    it("case 3: resume — live overlay has no optimistic user echo, only the assistant continuation", () => {
-      const sessionId = "sess-dup-3";
+    it("case 3: resume, partial assistant persisted under shared id — LIVE WINS", () => {
+      // history [..., U1, A1_partial(id=X)]  +  live [A1_live(id=X, fuller)]
+      // shared id X → live wins → shows the fuller live text, NOT the stale partial.
+      const sessionId = "sess-merge-3";
       seedHistory(sessionId, agent, [
         makeUserRow("u0", "first", "2026-07-15T00:00:00Z"),
-        makeAssistantRow("a0", "reply one", "2026-07-15T00:00:01Z", agent),
-        makeUserRow("b", "second message", "2026-07-15T00:00:02Z"),
+        makeUserRow("u1", "question", "2026-07-15T00:00:02Z"),
+        makeAssistantRow("X", "partial", "2026-07-15T00:00:03Z", agent),
       ]);
       const state = makeState(agent, {
         activeSessionId: sessionId,
-        boundaryMessageId: "b",
         messageSource: {
           mode: "live",
           messages: [
-            { id: "a1", role: "assistant", parts: [{ type: "text", text: "reply two" }] },
+            { id: "X", role: "assistant", parts: [{ type: "text", text: "partial and then much more" }] },
           ],
         },
       });
 
       const rendered = selectRenderMessages(state, agent);
 
-      expect(rendered.map((m) => m.id)).toEqual(["u0", "a0", "b", "a1"]);
+      expect(countById(rendered, "X")).toBe(1);
+      expect(rendered.map((m) => m.id)).toEqual(["u0", "u1", "X"]);
+      // live-wins: the rendered X is the fuller live copy, not the stale partial.
+      const x = rendered.find((m) => m.id === "X")!;
+      expect(renderedText(x)).toBe("partial and then much more");
     });
 
-    it("case 4: null boundary — dedup still drops any live message whose id is already in full history", () => {
-      const sessionId = "sess-dup-4";
+    it("case 4: resume, assistant not yet persisted — live assistant appends", () => {
+      // history [..., U1]  +  live [A1(id=X)] → [..., U1, X]
+      const sessionId = "sess-merge-4";
       seedHistory(sessionId, agent, [
         makeUserRow("u0", "first", "2026-07-15T00:00:00Z"),
-        makeAssistantRow("a0", "reply one", "2026-07-15T00:00:01Z", agent),
+        makeUserRow("u1", "question", "2026-07-15T00:00:02Z"),
       ]);
       const state = makeState(agent, {
         activeSessionId: sessionId,
-        boundaryMessageId: null,
         messageSource: {
           mode: "live",
           messages: [
-            { id: "a0", role: "assistant", parts: [{ type: "text", text: "reply one" }] },
-            { id: "a1", role: "assistant", parts: [{ type: "text", text: "reply two" }] },
+            { id: "X", role: "assistant", parts: [{ type: "text", text: "streaming reply" }] },
           ],
         },
       });
 
       const rendered = selectRenderMessages(state, agent);
 
-      expect(countById(rendered, "a0")).toBe(1);
-      expect(rendered.map((m) => m.id)).toEqual(["u0", "a0", "a1"]);
+      expect(rendered.map((m) => m.id)).toEqual(["u0", "u1", "X"]);
     });
   });
 });

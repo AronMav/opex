@@ -266,7 +266,6 @@ describe("STATE-01: history to live transition", () => {
           connectionPhase: "idle",
           connectionError: null,
           forceNewSession: false,
-          boundaryMessageId: null,
           activeSessionIds: [],
           renderLimit: 100,
           modelOverride: null,

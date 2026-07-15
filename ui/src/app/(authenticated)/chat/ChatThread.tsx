@@ -105,7 +105,7 @@ export function ChatThread({
   // The single connect path (renderer) freezes the finished turn as a live/
   // finishing overlay and invalidates sessionMessages. Once the refetch lands
   // the turn's fresh rows in the cache (matched by the live turn's last
-  // assistant message id), drop the overlay to history and clear the boundary.
+  // assistant message id), drop the overlay to history.
   // Purely data-driven + idempotent: finalizeHandoff no-ops unless a finished
   // turn is still shown, and once messageSource is history the live id is empty
   // so this effect stops firing.
@@ -127,8 +127,9 @@ export function ChatThread({
   const hasMoreHistory = useChatStore((s) => s.agents[s.currentAgent]?.hasMoreHistory ?? false);
   const isScrollLoadingHistory = useChatStore((s) => s.agents[s.currentAgent]?.isLoadingHistory ?? false);
 
-  // Server-authoritative render (T8): boundary-filtered history + the live turn
-  // overlay, concatenated with no content dedup (see selectRenderMessages).
+  // Server-authoritative render (T8): id-keyed merge of the full branch-resolved
+  // history with the live turn overlay (live wins for shared ids; see
+  // selectRenderMessages/mergeRender).
   const sourceMessages = useRenderMessages(currentAgent);
 
   // Filter out inter-agent routing messages (internal inter-agent context passed between agents).

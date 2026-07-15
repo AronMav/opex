@@ -11,6 +11,7 @@ import {
 import { queryClient } from "@/lib/query-client";
 import { qk } from "@/lib/queries";
 import { useChatStore } from "@/stores/chat-store";
+import { getCachedRawMessages } from "../chat-history";
 import type { SessionRow } from "@/types/api";
 
 import type {
@@ -58,15 +59,6 @@ export interface StreamProcessorCallbacks {
   // are dead for the legacy transport — zero behavior change for the existing
   // SSE renderer.
 
-  /**
-   * Fired on `sync_begin`. Reports the resume boundary metadata. `runStatus`
-   * is NOT authoritative for terminal error/interrupted UI state — the
-   * server collapses an in-memory stream that ended in ERROR to
-   * "running"/"finished" in the active-stream branch, and the real terminal
-   * signal is still the replayed `error`/`sync` event (handled elsewhere in
-   * this file, unaffected by batchMode). This callback is purely informational.
-   */
-  onBoundary?: (boundaryMessageId: string | null, runStatus: string, truncated: boolean) => void;
   /** Fired after `sync_end` — the replayed envelope has been committed to the store as a single batch. */
   onEnvelopeApplied?: () => void;
   /** Fired when the turn is authoritatively over: an explicit `finish` event, or
@@ -89,7 +81,7 @@ export interface StreamProcessorOpts {
   /**
    * T6: opt-in batch-apply mode. When true, `sync_begin`/`sync_end` gate the
    * throttled `scheduleCommit()` calls so a whole replayed envelope lands as
-   * a single store commit at `sync_end`, and the new `onBoundary` /
+   * a single store commit at `sync_end`, and the
    * `onEnvelopeApplied` / `onFinished` / `onConnectionLost` callbacks are
    * dispatched. Defaults to false/undefined — the legacy per-event-throttled
    * path (legacy non-batch transport) is unchanged when this is omitted.
@@ -515,10 +507,13 @@ export async function processSSEStream(
           // callers never observe any behavior change from these two cases.
           case "sync_begin": {
             if (!batchMode) break;
+            // `runStatus` gates the finished-vs-dropped decision in the finally
+            // block below. `boundaryMessageId` is intentionally ignored — the
+            // client render is id-keyed (see selectRenderMessages/mergeRender),
+            // not positionally boundary-sliced. The server still emits it.
             lastRunStatus = event.runStatus;
             session.buffer.reset();
             batching = true;
-            callbacks.onBoundary?.(event.boundaryMessageId, event.runStatus, event.truncated);
             break;
           }
 
@@ -698,12 +693,25 @@ export async function processSSEStream(
         queryKey: qk.sessionMessages(completedSessionId),
       });
 
-      // Step 4: RQ cache now has the fresh exchange — safe to switch to history.
-      // Phase is already "idle" (T7) unless the turn ended in "error", which the
-      // finally block above preserved; switching messageSource never clobbers it.
-      session.write({
-        messageSource: { mode: "history" as const, sessionId: completedSessionId },
-      });
+      // Step 4 (bug D): settle to history ONLY when the refetched cache actually
+      // contains the turn's assistant row. With the id-keyed merge render the
+      // frozen assistant stays visible via the live overlay until history has
+      // it; forcing history unconditionally here would flash the assistant out
+      // when the row is not yet persisted under the same id (aborted/partial
+      // turns, or a lagging read replica). If the assistant id is not present
+      // we leave the overlay in "finishing" — mergeRender keeps it on screen,
+      // and ChatThread's id-guarded finalizeHandoff (same guard) completes the
+      // switch once the row lands. When there is no assistant to protect
+      // (e.g. an error before any assistant text) we settle immediately.
+      const assistantId = [...frozenLive].reverse().find((m) => m.role === "assistant")?.id;
+      const rowsAfterRefetch = getCachedRawMessages(completedSessionId);
+      const assistantPersisted =
+        !assistantId || rowsAfterRefetch.some((r) => r.id === assistantId);
+      if (assistantPersisted) {
+        session.write({
+          messageSource: { mode: "history" as const, sessionId: completedSessionId },
+        });
+      }
     } else {
       queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
     }

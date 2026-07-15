@@ -38,10 +38,6 @@ function trackCallbacks(overrides: Partial<TurnStreamCallbacks> = {}) {
     resolveSettled = resolve;
   });
   const cb: TurnStreamCallbacks = {
-    onBoundary: (boundaryMessageId, runStatus, truncated) => {
-      order.push("onBoundary");
-      overrides.onBoundary?.(boundaryMessageId, runStatus, truncated);
-    },
     onEnvelopeApplied: () => {
       order.push("onEnvelopeApplied");
       overrides.onEnvelopeApplied?.();
@@ -123,7 +119,7 @@ describe("openTurnStream", () => {
   it("applies envelope as a single batch and fires callbacks in order", async () => {
     const session = streamSessionManager.start("Arty");
     const frames = [
-      frame({ type: "sync_begin", boundaryMessageId: "b-1", runStatus: "running", truncated: false }),
+      frame({ type: "sync_begin", runStatus: "running", truncated: false }),
       frame({ type: "start", messageId: "m-1" }),
       frame({ type: "text-start", id: "t1" }),
       frame({ type: "text-delta", delta: "Привет" }),
@@ -131,17 +127,11 @@ describe("openTurnStream", () => {
     ];
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(makeStream(frames), { status: 200 }));
 
-    let textAtBoundary: string | null = null;
     let textAtEnvelopeApplied: string | null = null;
     const { cb, order, settled } = trackCallbacks({
-      onBoundary: (boundaryMessageId, runStatus, truncated) => {
-        expect(boundaryMessageId).toBe("b-1");
-        expect(runStatus).toBe("running");
-        expect(truncated).toBe(false);
-        // Batch gate: replay must not have committed anything yet.
-        textAtBoundary = liveText("Arty");
-      },
       onEnvelopeApplied: () => {
+        // Batch gate: the whole envelope commits at sync_end, so by the time
+        // onEnvelopeApplied fires the accumulated text is present.
         textAtEnvelopeApplied = liveText("Arty");
       },
     });
@@ -150,8 +140,6 @@ describe("openTurnStream", () => {
     await settled;
     await flush();
 
-    expect(order.indexOf("onBoundary")).toBeLessThan(order.indexOf("onEnvelopeApplied"));
-    expect(textAtBoundary).toBe("");
     expect(textAtEnvelopeApplied).toBe("Привет");
     // runStatus was "running" and no `finish` event arrived before the fake
     // stream closed — the connection dropped without a terminal signal.
@@ -162,23 +150,17 @@ describe("openTurnStream", () => {
   it("empty finished envelope fires onFinished without touching live state", async () => {
     const session = streamSessionManager.start("Arty");
     const frames = [
-      frame({ type: "sync_begin", boundaryMessageId: null, runStatus: "finished", truncated: false }),
+      frame({ type: "sync_begin", runStatus: "finished", truncated: false }),
       frame({ type: "sync_end", lastSeq: null }),
     ];
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(makeStream(frames), { status: 200 }));
 
-    const boundaries: Array<[string | null, string, boolean]> = [];
-    const { cb, order, settled } = trackCallbacks({
-      onBoundary: (boundaryMessageId, runStatus, truncated) => {
-        boundaries.push([boundaryMessageId, runStatus, truncated]);
-      },
-    });
+    const { cb, order, settled } = trackCallbacks();
 
     openTurnStream("Arty", "s1", session, cb);
     await settled;
     await flush();
 
-    expect(boundaries).toEqual([[null, "finished", false]]);
     expect(order).toContain("onFinished");
     expect(order).not.toContain("onConnectionLost");
     expect(liveText("Arty")).toBe("");
@@ -198,7 +180,7 @@ describe("openTurnStream", () => {
 
   it("envelope with tool events rebuilds tool parts in one batch (idempotent on re-apply)", async () => {
     const buildFrames = () => [
-      frame({ type: "sync_begin", boundaryMessageId: "b-1", runStatus: "running", truncated: false }),
+      frame({ type: "sync_begin", runStatus: "running", truncated: false }),
       frame({ type: "start", messageId: "m-1" }),
       frame({ type: "tool-input-start", toolCallId: "tc1", toolName: "search_web" }),
       frame({ type: "tool-input-available", toolCallId: "tc1", input: { query: "q" } }),

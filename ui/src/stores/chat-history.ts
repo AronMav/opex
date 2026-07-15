@@ -300,32 +300,6 @@ export function getCachedRawMessages(sessionId: string | null): MessageRow[] {
   return cached?.messages ?? [];
 }
 
-// ── Boundary render filter (T8) ─────────────────────────────────────────────
-
-/**
- * Positional slice of history up to AND INCLUDING the turn's boundary message.
- *
- * Server-authoritative render contract (T8): the live turn's replayed envelope
- * resumes AFTER `boundaryMessageId` (the last message persisted before the
- * turn). Rendering `historyUpToIncluding(history, boundaryId)` followed by the
- * live turn messages reproduces the full conversation with NO content dedup —
- * history contributes everything up to the boundary, live contributes the turn.
- *
- * The boundary is matched against BRANCH-RESOLVED history (callers pass the
- * output of getCachedHistoryMessages, which already runs resolveActivePath).
- * If the id is absent (null, or not in this branch), the full history is
- * returned unchanged — a safe default that never hides messages.
- */
-export function historyUpToIncluding(
-  history: ChatMessage[],
-  boundaryId: string | null,
-): ChatMessage[] {
-  if (!boundaryId) return history;
-  const idx = history.findIndex((m) => m.id === boundaryId);
-  if (idx < 0) return history;
-  return history.slice(0, idx + 1);
-}
-
 // ── Branch resolution ─────────────────────────────────────────────────────
 
 /**

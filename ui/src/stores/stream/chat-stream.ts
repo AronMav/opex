@@ -27,8 +27,6 @@ import type { StreamSession } from "../stream-session";
 import type { AgentState } from "../chat-types";
 
 export interface TurnStreamCallbacks {
-  /** Fired on `sync_begin` — resume boundary metadata (informational only). */
-  onBoundary(boundaryMessageId: string | null, runStatus: string, truncated: boolean): void;
   /** Fired after `sync_end` — the replayed envelope has been committed as a single batch. */
   onEnvelopeApplied(): void;
   /** Fired when the turn is authoritatively over (finish / [DONE] / empty finished envelope). */
@@ -91,8 +89,6 @@ export function openTurnStream(
           getAgentState: (a: string): AgentState | undefined => useChatStore.getState().agents[a],
           updateSessionParticipants: (sid: string, participants: string[]) =>
             useChatStore.getState().updateSessionParticipants(sid, participants),
-          onBoundary: (boundaryMessageId, runStatus, truncated) =>
-            cb.onBoundary(boundaryMessageId, runStatus, truncated),
           onEnvelopeApplied: () => cb.onEnvelopeApplied(),
           onFinished: () => cb.onFinished(),
           onConnectionLost: () => cb.onConnectionLost(),

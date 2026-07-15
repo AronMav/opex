@@ -151,7 +151,7 @@ describe("processSSEStream", () => {
     // overwrote its parts with the (empty) buffer snapshot, blanking it.
     const session = streamSessionManager.start("Arty");
     const frames = [
-      `data: ${JSON.stringify({ type: "sync_begin", boundaryMessageId: null, runStatus: "finished", truncated: false })}\n\n`,
+      `data: ${JSON.stringify({ type: "sync_begin", runStatus: "finished", truncated: false })}\n\n`,
       `data: ${JSON.stringify({ type: "sync", content: "resumed text", toolCalls: [], status: "finished", error: null })}\n\n`,
       `data: ${JSON.stringify({ type: "sync_end", lastSeq: null })}\n\n`,
     ];

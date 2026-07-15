@@ -10,7 +10,7 @@ import { qk } from "@/lib/queries";
 /**
  * Subscribes to the underlying stable fields (not the derived array)
  * and memoizes the result. `selectRenderMessages` creates a fresh
- * array on every call (`[]` / boundary-filtered history + live), so
+ * array on every call (`[]` / id-keyed merge of history + live), so
  * passing it to `useChatStore` directly as a selector causes an infinite render
  * loop: Zustand's `Object.is` comparison of the returned reference
  * against the previous one is always false, triggering a re-render
@@ -25,7 +25,6 @@ export function useRenderMessages(agent: string): ChatMessage[] {
   const messageSource = useChatStore((s) => s.agents[agent]?.messageSource);
   const selectedBranches = useChatStore((s) => s.agents[agent]?.selectedBranches);
   const activeSessionId = useChatStore((s) => s.agents[agent]?.activeSessionId ?? null);
-  const boundaryMessageId = useChatStore((s) => s.agents[agent]?.boundaryMessageId ?? null);
 
   // Read-only RQ subscription: re-render when the cache for this session
   // is populated by ChatThread's useSessionMessages. staleTime + disabled
@@ -54,7 +53,6 @@ export function useRenderMessages(agent: string): ChatMessage[] {
           messageSource,
           selectedBranches,
           activeSessionId,
-          boundaryMessageId,
         },
       },
     } as unknown as ChatState;
@@ -63,10 +61,9 @@ export function useRenderMessages(agent: string): ChatMessage[] {
     // filled by ChatThread's useSessionMessages).
     void dataUpdatedAt;
     return selectRenderMessages(fakeState, agent);
-    // messageSource, selectedBranches, activeSessionId, boundaryMessageId are
-    // the only inputs that can influence the result. All have stable identity
-    // across renders when their values do not change (Immer draft).
-    // dataUpdatedAt triggers recomputation when ChatThread's useSessionMessages
-    // fills the RQ cache for this session.
-  }, [messageSource, selectedBranches, activeSessionId, boundaryMessageId, agent, dataUpdatedAt]);
+    // messageSource, selectedBranches, activeSessionId are the only inputs that
+    // can influence the result. All have stable identity across renders when
+    // their values do not change (Immer draft). dataUpdatedAt triggers
+    // recomputation when ChatThread's useSessionMessages fills the RQ cache.
+  }, [messageSource, selectedBranches, activeSessionId, agent, dataUpdatedAt]);
 }
