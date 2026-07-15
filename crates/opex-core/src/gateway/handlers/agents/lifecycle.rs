@@ -44,13 +44,7 @@ pub async fn start_agent_from_config(
     // all-enabled common case the filtered map is identical to the raw slots.
     let raw_slots = crate::agent::profile_resolver::resolve_slots_for_agent(
         &infra.db, &agent_cfg.agent.profile, name).await;
-    let mut profile_slots = crate::db::profiles::Slots::new();
-    for cap in crate::db::profiles::PROFILE_CAPABILITIES {
-        let chain = crate::agent::profile_resolver::effective_chain(&infra.db, &raw_slots, cap).await;
-        if !chain.is_empty() {
-            profile_slots.insert(cap.to_string(), chain);
-        }
-    }
+    let profile_slots = crate::agent::profile_resolver::filter_slots_enabled(&infra.db, &raw_slots).await;
     let text_chain = profile_slots.get("text").cloned().unwrap_or_default();
 
     // Use routing provider if routing rules are configured, otherwise resolve the

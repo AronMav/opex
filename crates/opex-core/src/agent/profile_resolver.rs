@@ -65,6 +65,21 @@ pub async fn effective_chain(db: &PgPool, slots: &Slots, capability: &str) -> Ve
     out
 }
 
+/// Build an enabled-filtered copy of `raw_slots`: each capability's chain is
+/// passed through `effective_chain` (drops disabled/missing providers,
+/// preserves order); empty chains are omitted. This is what the engine stores
+/// as `AgentConfig.profile_slots` so disabled reserves are skipped everywhere.
+pub async fn filter_slots_enabled(db: &PgPool, raw_slots: &Slots) -> Slots {
+    let mut out = Slots::new();
+    for cap in crate::db::profiles::PROFILE_CAPABILITIES {
+        let chain = effective_chain(db, raw_slots, cap).await;
+        if !chain.is_empty() {
+            out.insert(cap.to_string(), chain);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,9 +157,9 @@ mod tests {
         assert_eq!(chain[0].provider, "b");
     }
 
-    /// Mirrors the enabled-filtering loop in
-    /// `gateway/handlers/agents/lifecycle.rs` (spec §8): a DISABLED leading
-    /// `text` entry must be dropped so the stored slots have primary == raw
+    /// Exercises `filter_slots_enabled` — the same helper the engine-build
+    /// path in `gateway/handlers/agents/lifecycle.rs` calls (spec §8): a
+    /// DISABLED leading `text` entry must be dropped so the stored slots have primary == raw
     /// text[1] and the first failover reserve == raw text[2]. This keeps
     /// `create_fallback_provider(chain_idx)`'s `text[1 + chain_idx]` indexing
     /// aligned with the live primary at `text[0]`.
@@ -163,14 +178,8 @@ mod tests {
             crate::db::profiles::SlotEntry { provider: "p_c".into(), model: None, voice: None },
         ]);
 
-        // Same shape as the engine-build filtering loop.
-        let mut filtered = crate::db::profiles::Slots::new();
-        for cap in crate::db::profiles::PROFILE_CAPABILITIES {
-            let chain = effective_chain(&pool, &raw_slots, cap).await;
-            if !chain.is_empty() {
-                filtered.insert(cap.to_string(), chain);
-            }
-        }
+        // Same shared helper the engine-build path uses.
+        let filtered = filter_slots_enabled(&pool, &raw_slots).await;
 
         let text = &filtered["text"];
         assert_eq!(text.len(), 2, "disabled leader must be dropped");
@@ -192,13 +201,7 @@ mod tests {
             crate::db::profiles::SlotEntry { provider: "e_b".into(), model: None, voice: None },
         ]);
 
-        let mut filtered = crate::db::profiles::Slots::new();
-        for cap in crate::db::profiles::PROFILE_CAPABILITIES {
-            let chain = effective_chain(&pool, &raw_slots, cap).await;
-            if !chain.is_empty() {
-                filtered.insert(cap.to_string(), chain);
-            }
-        }
+        let filtered = filter_slots_enabled(&pool, &raw_slots).await;
         assert_eq!(filtered, raw_slots, "all-enabled: filtered == raw");
     }
 }

@@ -92,15 +92,18 @@ pub fn should_block_interrupted_batch(
 
 /// Switch the live LLM provider to a fallback after N consecutive failures.
 ///
-/// **Trigger.** LLM call returns `Err(_)` and the consecutive-failure
-/// counter has crossed `consecutive_failure_threshold`.
+/// **Trigger.** LLM call returns `Err(_)` and either the error is
+/// failover-worthy (`is_failover_worthy()` — transport/Unknown errors swap
+/// immediately, on the first failure) OR the consecutive-failure counter has
+/// crossed `consecutive_failure_threshold`.
 ///
 /// **Action.** Lazily construct the fallback via the supplied builder
-/// (typically `engine.create_fallback_provider().await`). If construction
-/// returns `Some(_)`, the engine swaps the live provider for the fallback
-/// for all subsequent iterations of this turn. The consecutive-failure
-/// counter resets to 0 on the swap and on every subsequent successful
-/// call (whether on primary or fallback).
+/// (typically `engine.create_fallback_provider(chain_idx).await`, walking
+/// the profile's `text` chain one reserve at a time via `chain_idx`). If
+/// construction returns `Some(_)`, the engine swaps the live provider for the
+/// fallback for all subsequent iterations of this turn. The
+/// consecutive-failure counter resets to 0 on the swap and on every
+/// subsequent successful call (whether on primary or fallback).
 ///
 /// **Why a closure-style builder, not a pre-resolved `Arc`.** Construction
 /// is async and can fail; the engine should only do that work when the

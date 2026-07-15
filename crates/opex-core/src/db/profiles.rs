@@ -79,20 +79,35 @@ pub async fn delete_profile(db: &PgPool, id: Uuid) -> sqlx::Result<bool> {
     Ok(res.rows_affected() > 0)
 }
 
-/// Копия с уникализированным именем: "{name} (copy)", "{name} (copy 2)", …
+/// Copy with uniquified name: "{name} (copy)", "{name} (copy 2)", …
+///
+/// Attempts the INSERT directly with each candidate name instead of
+/// check-then-insert (which races: two concurrent copies can both pass a
+/// `get_profile_by_name` check for the same candidate and then one hits the
+/// UNIQUE constraint → 500). On a unique-violation error we bump the suffix
+/// and retry; any other DB error propagates. Bounded at `MAX_COPY_ATTEMPTS`
+/// so a pathological case (e.g. a UNIQUE constraint that always collides for
+/// an unrelated reason) can't loop forever.
+const MAX_COPY_ATTEMPTS: usize = 100;
+
 pub async fn copy_profile(db: &PgPool, id: Uuid) -> sqlx::Result<Option<ProfileRow>> {
     let Some(src) = get_profile(db, id).await? else { return Ok(None) };
-    let mut n = 1usize;
-    loop {
+    let mut last_err = None;
+    for n in 1..=MAX_COPY_ATTEMPTS {
         let candidate = if n == 1 { format!("{} (copy)", src.name) } else { format!("{} (copy {n})", src.name) };
-        if get_profile_by_name(db, &candidate).await?.is_none() {
-            let row = sqlx::query_as(
-                "INSERT INTO profiles (name, slots) VALUES ($1, $2) RETURNING *")
-                .bind(&candidate).bind(&src.slots).fetch_one(db).await?;
-            return Ok(Some(row));
+        let res: sqlx::Result<ProfileRow> = sqlx::query_as(
+            "INSERT INTO profiles (name, slots) VALUES ($1, $2) RETURNING *")
+            .bind(&candidate).bind(&src.slots).fetch_one(db).await;
+        match res {
+            Ok(row) => return Ok(Some(row)),
+            Err(e) if e.as_database_error().map(|d| d.is_unique_violation()).unwrap_or(false) => {
+                last_err = Some(e);
+                continue;
+            }
+            Err(e) => return Err(e),
         }
-        n += 1;
     }
+    Err(last_err.expect("loop ran at least once"))
 }
 
 /// Имена профилей, в чьих слотах встречается провайдер `name` (любая capability).

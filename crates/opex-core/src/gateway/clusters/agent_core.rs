@@ -101,27 +101,6 @@ impl AgentCore {
         names.into_iter().map(|(_, n)| n).collect()
     }
 
-    /// Get list of running agents with name (base agents first, then alphabetical).
-    pub async fn agent_summaries(&self) -> Vec<serde_json::Value> {
-        let mut summaries: Vec<(bool, String, serde_json::Value)> =
-            self.map.read().await.values()
-                .map(|h| {
-                    (
-                        h.engine.cfg().agent.base,
-                        h.engine.cfg().agent.name.clone(),
-                        serde_json::json!({
-                            "name": h.engine.cfg().agent.name,
-                        }),
-                    )
-                })
-                .collect();
-        summaries.sort_by(|a, b| {
-            b.0.cmp(&a.0)
-                .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
-        });
-        summaries.into_iter().map(|(_, _, v)| v).collect()
-    }
-
     // ── Test helpers ─────────────────────────────────────────────────────────
 
     /// Construct a minimal `AgentCore` for unit tests that require a sync constructor.
@@ -189,12 +168,6 @@ mod tests {
     async fn agent_core_get_engines_map_returns_empty_map() {
         let core = AgentCore::test_empty().await;
         assert!(core.get_engines_map().await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn agent_core_agent_summaries_returns_empty_when_no_agents() {
-        let core = AgentCore::test_empty().await;
-        assert!(core.agent_summaries().await.is_empty());
     }
 
     #[tokio::test]
