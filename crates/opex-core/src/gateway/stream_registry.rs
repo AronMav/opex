@@ -9,8 +9,13 @@ use uuid::Uuid;
 
 use super::stream_jobs;
 
-const BROADCAST_CAPACITY: usize = 1024;
-const MAX_BUFFER_SIZE: usize = 1_000;
+// Single-user system, buffer must hold a full tool-turn worth of events — see
+// spec §5.3. Events are held TWICE — once in the `events` Vec and once in the
+// broadcast ring (the ring retains up to capacity even with zero receivers) —
+// i.e. ~2x the bytes of buffered events × up to MAX_ACTIVE_STREAMS concurrent
+// streams. This is a deliberate tradeoff, not an oversight.
+const BROADCAST_CAPACITY: usize = 10_000;
+const MAX_BUFFER_SIZE: usize = 10_000;
 /// Max concurrent active streams (prevent memory exhaustion on Pi)
 const MAX_ACTIVE_STREAMS: usize = 50;
 
@@ -19,6 +24,9 @@ struct ActiveStreamInner {
     events: Vec<(u64, String)>,
     finished_at: Option<Instant>,
     next_event_id: u64,
+    /// Set once the buffer overflows `MAX_BUFFER_SIZE` — signals to late
+    /// subscribers that the replayed snapshot is missing early events.
+    truncated: bool,
 }
 
 /// A single SSE stream. `broadcast_tx` is outside the Mutex because
@@ -34,6 +42,10 @@ struct ActiveStream {
     /// Link to `stream_jobs` row in `PostgreSQL` for persistence.
     pub job_id: Uuid,
     created_at: Instant,
+    /// Boundary message id (the user message that opened this turn) — carried
+    /// through to `subscribe()` so late subscribers (T4) can build the sync
+    /// envelope without a separate DB round-trip.
+    boundary_message_id: Uuid,
 }
 
 // AUDIT:SSE-03 (verified 2026-03-30): Session cleanup on disconnect:
@@ -53,6 +65,17 @@ pub struct StreamRegistry {
     db: PgPool,
 }
 
+/// Result of `StreamRegistry::subscribe` — buffered events + live receiver + metadata
+/// needed by callers (T4's resume/GET-stream handler) to build the sync envelope
+/// without a separate DB round-trip.
+pub struct StreamSubscription {
+    pub events: Vec<(u64, String)>,
+    pub rx: broadcast::Receiver<(u64, String)>,
+    pub finished: bool,
+    pub boundary_message_id: Uuid,
+    pub truncated: bool,
+}
+
 impl StreamRegistry {
     pub fn new(db: PgPool) -> Self {
         Self {
@@ -70,6 +93,7 @@ impl StreamRegistry {
         session_id: Uuid,
         agent_id: &str,
         cancel_token: CancellationToken,
+        boundary_message_id: Uuid,
     ) -> Option<Uuid> {
         let job_id = match stream_jobs::create_job(&self.db, session_id, agent_id).await {
             Ok(id) => id,
@@ -110,6 +134,7 @@ impl StreamRegistry {
                     events: Vec::new(),
                     finished_at: None,
                     next_event_id: 0,
+                    truncated: false,
                 }),
                 broadcast_tx,
                 cancel_token,
@@ -117,6 +142,7 @@ impl StreamRegistry {
                 session_id,
                 job_id,
                 created_at: Instant::now(),
+                boundary_message_id,
             }),
         );
 
@@ -152,6 +178,7 @@ impl StreamRegistry {
                 let _ = stream.broadcast_tx.send((id, owned));
             } else {
                 // Buffer full: broadcast only
+                inner.truncated = true;
                 let _ = stream.broadcast_tx.send((id, owned));
             }
             id
@@ -198,24 +225,29 @@ impl StreamRegistry {
         self.streams.read().await.len() as u64
     }
 
-    /// Subscribe to a stream: returns (buffered events snapshot, broadcast receiver, `is_finished`).
+    /// Subscribe to a stream: buffered events snapshot + broadcast receiver + metadata.
     ///
     /// The subscribe + snapshot is atomic (same per-stream lock) to prevent event loss.
     /// The receiver is created BEFORE the snapshot, so any events pushed between
     /// `subscribe()` and the first `recv()` will appear in both the snapshot and the receiver.
     /// The caller must deduplicate using the snapshot length as an offset.
-    pub async fn subscribe(
-        &self,
-        session_id: &str,
-    ) -> Option<(Vec<(u64, String)>, broadcast::Receiver<(u64, String)>, bool)> {
+    pub async fn subscribe(&self, session_id: &str) -> Option<StreamSubscription> {
         let streams = self.streams.read().await;
         let stream = streams.get(session_id)?;
         let inner = stream.inner.lock().await;
-        // Subscribe first (under per-stream lock), then snapshot — guarantees no gap
+        // Subscribe first (under per-stream lock), then snapshot — guarantees no gap.
+        // boundary_message_id/truncated are read under the same per-stream lock as
+        // the events snapshot, so all four fields are atomic with each other.
         let rx = stream.broadcast_tx.subscribe();
-        let snapshot = inner.events.clone();
+        let events = inner.events.clone();
         let finished = stream.finished.load(Ordering::Relaxed);
-        Some((snapshot, rx, finished))
+        Some(StreamSubscription {
+            events,
+            rx,
+            finished,
+            boundary_message_id: stream.boundary_message_id,
+            truncated: inner.truncated,
+        })
     }
 
     /// Remove finished streams older than `max_age`.
@@ -260,5 +292,38 @@ mod tests {
         let db = PgPool::connect_lazy("postgres://invalid").unwrap();
         let registry = StreamRegistry::new(db);
         assert!(!registry.cancel("nonexistent").await);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn subscribe_carries_boundary_and_truncated(pool: sqlx::PgPool) {
+        let registry = StreamRegistry::new(pool);
+        let sid = Uuid::new_v4();
+        let boundary = Uuid::new_v4();
+        let token = CancellationToken::new();
+        registry
+            .register_with_token(sid, "A", token, boundary)
+            .await
+            .expect("register");
+        let sub = registry.subscribe(&sid.to_string()).await.expect("subscribed");
+        assert_eq!(sub.boundary_message_id, boundary);
+        assert!(!sub.truncated);
+        assert!(sub.events.is_empty());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn overflow_sets_truncated(pool: sqlx::PgPool) {
+        let registry = StreamRegistry::new(pool);
+        let sid = Uuid::new_v4();
+        registry
+            .register_with_token(sid, "A", CancellationToken::new(), Uuid::new_v4())
+            .await
+            .unwrap();
+        let key = sid.to_string();
+        for i in 0..(10_000 + 5) {
+            registry.push_event(&key, &format!("{{\"i\":{i}}}")).await;
+        }
+        let sub = registry.subscribe(&key).await.unwrap();
+        assert_eq!(sub.events.len(), 10_000);
+        assert!(sub.truncated);
     }
 }

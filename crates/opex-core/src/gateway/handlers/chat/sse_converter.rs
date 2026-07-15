@@ -233,7 +233,8 @@ pub(super) async fn run_converter(
                 // that was passed to handle_sse: POST /api/chat/{id}/abort →
                 // registry.cancel() cancels pipeline_cancel → propagates into execute().
                 if let Some(uuid) = parsed_uuid
-                    && let Some(jid) = registry.register_with_token(uuid, &agent_name, pipeline_cancel.clone()).await {
+                    // T3 moves registration to the POST handler with the real boundary (user_message_id)
+                    && let Some(jid) = registry.register_with_token(uuid, &agent_name, pipeline_cancel.clone(), uuid::Uuid::nil()).await {
                         cancel_token = Some(pipeline_cancel.clone());
                         job_id = Some(jid);
                     }

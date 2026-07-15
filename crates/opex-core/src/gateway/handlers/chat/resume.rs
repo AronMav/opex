@@ -104,7 +104,9 @@ pub(crate) async fn api_chat_resume_stream(
             }
             StatusCode::NO_CONTENT.into_response()
         }
-        Some((buffered_events, mut broadcast_rx, already_finished)) => {
+        Some(sub) => {
+            let (buffered_events, mut broadcast_rx, already_finished) =
+                (sub.events, sub.rx, sub.finished);
             // Filter buffer by client's last seen seq before counting replays.
             let filtered: Vec<(u64, String)> = buffered_events
                 .into_iter()
