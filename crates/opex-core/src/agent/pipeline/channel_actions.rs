@@ -158,20 +158,19 @@ async fn execute_inline_for_ui(
     ca: &crate::tools::yaml_tools::ChannelActionConfig,
 ) -> String {
     use crate::agent::pipeline::handlers::save_binary_to_uploads;
-    use crate::agent::pipeline::media_background::{provider_header_for, MediaKind};
+    use crate::agent::pipeline::media_background::{provider_attempts_for, MediaKind};
 
     let kind = MediaKind::from_action(&ca.action);
     let resolver = make_resolver(&ctx.tex.secrets, &ctx.cfg.agent.name);
     let oauth_ctx = make_oauth_context(ctx.tex.oauth.as_ref(), &ctx.cfg.agent.name);
 
-    let mut tool_headers: Vec<(String, String)> = Vec::new();
-    if let Some(header) = provider_header_for(
-        kind,
-        ctx.cfg.agent.tts_provider.as_deref(),
-        ctx.cfg.agent.imagegen_provider.as_deref(),
-    ) {
-        tool_headers.push(header);
-    }
+    // Inline (web-UI) path is synchronous and short-lived — the caller (LLM
+    // tool loop) sees the error and can itself decide to retry, so we only
+    // ever use the first provider in the chain here. No per-attempt retry
+    // loop (unlike BackgroundMediaTask::run) — that's the LLM's job for this
+    // path.
+    let tool_headers: Vec<(String, String)> =
+        provider_attempts_for(kind, &ctx.cfg.profile_slots).into_iter().next().unwrap_or_default();
 
     // Lift the per-tool timeout the same way BackgroundMediaTask does — UI
     // sessions still have to wait, but FLUX / Qwen3-TTS on Pi can take

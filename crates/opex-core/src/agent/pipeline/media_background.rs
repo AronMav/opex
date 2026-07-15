@@ -204,26 +204,69 @@ impl MediaKind {
 
 // ── Per-kind routing ─────────────────────────────────────────────────────────
 
-/// Resolve the per-agent provider override header for this media kind.
-/// Returns `Some(("X-Opex-Provider", value))` when the agent has a
-/// non-empty override for the kind's capability; `None` otherwise.
+/// Resolve the ordered provider-chain header sets for this media kind from
+/// the profile slots. Returns one header-set per attempt, in chain order:
+/// `[("X-Opex-Provider", provider)]`, plus `("X-Opex-Voice", voice)` for
+/// [`MediaKind::Voice`] when that chain entry has a non-empty `voice`.
 ///
-/// Each kind reads only its own provider field — Voice never reads
-/// `imagegen_provider` and Photo never reads `tts_provider`. Keeping this
-/// as a free function (not tied to `CommandContext`) lets us unit-test the
+/// Each kind reads only its own capability slot — Voice never reads the
+/// `imagegen` slot and Photo never reads the `tts` slot. Keeping this as a
+/// free function (not tied to `CommandContext`) lets us unit-test the
 /// cross-contamination guard without a full engine setup.
-pub fn provider_header_for(
+pub fn provider_attempts_for(
     kind: MediaKind,
-    tts_provider: Option<&str>,
-    imagegen_provider: Option<&str>,
-) -> Option<(String, String)> {
-    let prov = match kind {
-        MediaKind::Voice => tts_provider,
-        MediaKind::Photo => imagegen_provider,
-        MediaKind::Video | MediaKind::Other => None,
+    slots: &crate::db::profiles::Slots,
+) -> Vec<Vec<(String, String)>> {
+    let cap = match kind {
+        MediaKind::Voice => "tts",
+        MediaKind::Photo => "imagegen",
+        MediaKind::Video | MediaKind::Other => return Vec::new(),
     };
-    prov.filter(|s| !s.is_empty())
-        .map(|p| ("X-Opex-Provider".to_string(), p.to_string()))
+    slots
+        .get(cap)
+        .map(|chain| {
+            chain
+                .iter()
+                .map(|e| {
+                    let mut h = vec![("X-Opex-Provider".to_string(), e.provider.clone())];
+                    if kind == MediaKind::Voice
+                        && let Some(v) = e.voice.as_deref().filter(|v| !v.is_empty())
+                    {
+                        h.push(("X-Opex-Voice".to_string(), v.to_string()));
+                    }
+                    h
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether a background-media provider failure is worth retrying against the
+/// next provider in the profile chain. Network/transport failures (`None` —
+/// no HTTP response was ever received) and server-side/rate-limit responses
+/// (5xx, 429) are retryable; any other 4xx is treated as a permanent
+/// rejection of this request (bad input, auth, etc.) that another provider
+/// would also reject, so it is not retried.
+pub fn is_provider_retryable(status: Option<reqwest::StatusCode>) -> bool {
+    match status {
+        None => true,
+        Some(s) => s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS,
+    }
+}
+
+/// Best-effort extraction of the HTTP status code embedded in the error
+/// message produced by [`crate::tools::yaml_tools::YamlToolDef::execute_binary`]
+/// (`"tool '{name}' returned HTTP {status}: {body}"`, `reqwest::StatusCode`'s
+/// `Display` prints only the numeric code). Transport-level failures (the
+/// request never got a response) don't carry this substring and correctly
+/// resolve to `None`, which [`is_provider_retryable`] treats as retryable.
+fn extract_status_from_error(e: &anyhow::Error) -> Option<reqwest::StatusCode> {
+    const MARKER: &str = "returned HTTP ";
+    let s = e.to_string();
+    let idx = s.find(MARKER)?;
+    let rest = &s[idx + MARKER.len()..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse::<u16>().ok().and_then(|n| reqwest::StatusCode::from_u16(n).ok())
 }
 
 // ── BackgroundMediaTask ──────────────────────────────────────────────────────
@@ -245,7 +288,11 @@ pub struct BackgroundMediaTask {
     pub(crate) db:             sqlx::PgPool,
     pub(crate) upload_key:     [u8; 32],
     pub(crate) retention_days: u32,
-    pub(crate) tool_headers:   Vec<(String, String)>,
+    /// Ordered header-sets, one per provider-chain attempt (see
+    /// `provider_attempts_for`). Empty when the media kind has no profile
+    /// slot (Video/Other) — `run()` then falls back to a single attempt
+    /// with no extra headers.
+    pub(crate) provider_attempts: Vec<Vec<(String, String)>>,
     pub(crate) context:        serde_json::Value,
     pub(crate) agent_name:     String,
     /// Pre-allocated `messages` row id for the persisted tool result. When
@@ -274,15 +321,8 @@ impl BackgroundMediaTask {
 
         let kind = MediaKind::from_action(&ca.action);
 
-        // Per-kind routing headers — see `provider_header_for` for the policy.
-        let mut tool_headers: Vec<(String, String)> = Vec::new();
-        if let Some(header) = provider_header_for(
-            kind,
-            ctx.cfg.agent.tts_provider.as_deref(),
-            ctx.cfg.agent.imagegen_provider.as_deref(),
-        ) {
-            tool_headers.push(header);
-        }
+        // Per-kind provider chain — see `provider_attempts_for` for the policy.
+        let provider_attempts = provider_attempts_for(kind, &ctx.cfg.profile_slots);
 
         let context = args.get("_context").cloned().unwrap_or(serde_json::Value::Null);
 
@@ -361,7 +401,7 @@ impl BackgroundMediaTask {
             db:             ctx.cfg.db.clone(),
             upload_key:     ctx.tex.secrets.get_upload_hmac_key(),
             retention_days: ctx.cfg.app_config.cleanup.uploads_retention_days,
-            tool_headers,
+            provider_attempts,
             context,
             agent_name:     ctx.cfg.agent.name.clone(),
             tool_message_id,
@@ -384,32 +424,71 @@ impl BackgroundMediaTask {
         let has_channel = self.context.get("chat_id").is_some();
         let kind = self.kind;
 
-        // ── 1. Generate / synthesise ──────────────────────────────────────────
+        // ── 1. Generate / synthesise, retrying down the profile provider chain ──
+        //
+        // Each attempt uses the next provider's header-set (X-Opex-Provider [+
+        // X-Opex-Voice]). Media kinds without a profile slot (Video/Other) get
+        // a single no-extra-headers attempt. On success we break out with the
+        // bytes and fall through to the existing (unduplicated) delivery path
+        // below; on a permanent failure — or the chain exhausted — we fall
+        // through to the existing (unduplicated) error path.
         let resolver_ref = self
             .resolver
             .as_ref()
             .map(|r| r as &dyn crate::tools::yaml_tools::EnvResolver);
-        let bytes = match tokio::time::timeout(
-            std::time::Duration::from_secs(600),
-            self.tool.execute_binary(
-                &self.args,
-                &self.http_client,
-                resolver_ref,
-                self.oauth_ctx.as_ref(),
-                &self.tool_headers,
-            ),
-        )
-        .await
-        {
-            Ok(Ok(b)) => b,
-            Ok(Err(e)) => {
-                tracing::warn!(tool = %self.tool.name, kind = ?kind, error = %e, "background media generation failed");
-                self.handle_error(&format!("media generation failed: {e}"), has_channel).await;
-                return;
+        let attempts: Vec<Vec<(String, String)>> = if self.provider_attempts.is_empty() {
+            vec![Vec::new()]
+        } else {
+            self.provider_attempts.clone()
+        };
+
+        let mut generated: Option<Vec<u8>> = None;
+        let mut failure: Option<String> = None;
+
+        for (i, headers) in attempts.iter().enumerate() {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(600),
+                self.tool.execute_binary(
+                    &self.args,
+                    &self.http_client,
+                    resolver_ref,
+                    self.oauth_ctx.as_ref(),
+                    headers,
+                ),
+            )
+            .await
+            {
+                Ok(Ok(b)) => {
+                    generated = Some(b);
+                    break;
+                }
+                Ok(Err(e)) => {
+                    let status = extract_status_from_error(&e);
+                    if i + 1 < attempts.len() && is_provider_retryable(status) {
+                        tracing::warn!(
+                            tool = %self.tool.name, kind = ?kind, attempt = i, error = %e,
+                            "media provider failed; trying next in profile chain"
+                        );
+                        continue;
+                    }
+                    tracing::warn!(tool = %self.tool.name, kind = ?kind, error = %e, "background media generation failed");
+                    failure = Some(format!("media generation failed: {e}"));
+                    break;
+                }
+                Err(_) => {
+                    tracing::warn!(tool = %self.tool.name, kind = ?kind, "background media generation timed out after 600s");
+                    failure = Some("media generation timed out after 600s".to_string());
+                    break;
+                }
             }
-            Err(_) => {
-                tracing::warn!(tool = %self.tool.name, kind = ?kind, "background media generation timed out after 600s");
-                self.handle_error("media generation timed out after 600s", has_channel).await;
+        }
+
+        let bytes = match generated {
+            Some(b) => b,
+            None => {
+                let msg = failure
+                    .unwrap_or_else(|| "media generation failed: no provider attempt ran".to_string());
+                self.handle_error(&msg, has_channel).await;
                 return;
             }
         };
@@ -742,69 +821,101 @@ mod tests {
         assert_eq!(MediaKind::Voice.notification_error_event(), "tts_error");
     }
 
-    // ── provider_header_for ─────────────────────────────────────────────────
+    // ── provider_attempts_for ────────────────────────────────────────────────
     //
-    // Pure function — no CommandContext / async / I/O. Drives the per-agent
-    // routing header that `from_ctx` injects on `tool_headers`. Covers the
-    // critical regression: must NOT cross provider override fields between
-    // kinds (Voice→tts_provider, Photo→imagegen_provider).
+    // Pure function — no CommandContext / async / I/O. Drives the profile
+    // provider chain that `from_ctx` injects on `provider_attempts`. Covers
+    // the critical regression: must NOT cross capability slots between kinds
+    // (Voice→tts slot, Photo→imagegen slot).
 
     #[test]
-    fn provider_header_voice_with_tts_provider_returns_header() {
-        let h = provider_header_for(MediaKind::Voice, Some("nova-cloud"), None);
-        assert_eq!(h, Some(("X-Opex-Provider".into(), "nova-cloud".into())));
+    fn attempts_voice_chain_with_voice_header() {
+        let mut slots = crate::db::profiles::Slots::new();
+        slots.insert(
+            "tts".into(),
+            vec![
+                crate::db::profiles::SlotEntry {
+                    provider: "mm".into(),
+                    model: None,
+                    voice: Some("Champ".into()),
+                },
+                crate::db::profiles::SlotEntry { provider: "silero".into(), model: None, voice: None },
+            ],
+        );
+        let a = provider_attempts_for(MediaKind::Voice, &slots);
+        assert_eq!(a.len(), 2);
+        assert!(a[0].contains(&("X-Opex-Provider".into(), "mm".into())));
+        assert!(a[0].contains(&("X-Opex-Voice".into(), "Champ".into())));
+        assert_eq!(a[1], vec![("X-Opex-Provider".to_string(), "silero".to_string())]);
     }
 
     #[test]
-    fn provider_header_photo_with_imagegen_provider_returns_header() {
-        let h = provider_header_for(MediaKind::Photo, None, Some("flux-pro"));
-        assert_eq!(h, Some(("X-Opex-Provider".into(), "flux-pro".into())));
+    fn attempts_photo_never_reads_tts_slot() {
+        // Cross-contamination guard: a Photo action must never read the tts slot.
+        let mut slots = crate::db::profiles::Slots::new();
+        slots.insert(
+            "tts".into(),
+            vec![crate::db::profiles::SlotEntry { provider: "mm".into(), model: None, voice: None }],
+        );
+        assert!(provider_attempts_for(MediaKind::Photo, &slots).is_empty());
     }
 
     #[test]
-    fn provider_header_voice_without_tts_provider_returns_none() {
-        assert_eq!(provider_header_for(MediaKind::Voice, None, Some("ignored")), None);
+    fn attempts_voice_never_reads_imagegen_slot() {
+        // Cross-contamination guard: a Voice action must never read the imagegen slot.
+        let mut slots = crate::db::profiles::Slots::new();
+        slots.insert(
+            "imagegen".into(),
+            vec![crate::db::profiles::SlotEntry { provider: "flux-pro".into(), model: None, voice: None }],
+        );
+        assert!(provider_attempts_for(MediaKind::Voice, &slots).is_empty());
     }
 
     #[test]
-    fn provider_header_voice_with_empty_tts_provider_returns_none() {
-        assert_eq!(provider_header_for(MediaKind::Voice, Some(""), None), None);
+    fn attempts_video_and_other_always_empty() {
+        let mut slots = crate::db::profiles::Slots::new();
+        slots.insert(
+            "tts".into(),
+            vec![crate::db::profiles::SlotEntry { provider: "mm".into(), model: None, voice: None }],
+        );
+        slots.insert(
+            "imagegen".into(),
+            vec![crate::db::profiles::SlotEntry { provider: "flux-pro".into(), model: None, voice: None }],
+        );
+        assert!(provider_attempts_for(MediaKind::Video, &slots).is_empty());
+        assert!(provider_attempts_for(MediaKind::Other, &slots).is_empty());
     }
 
     #[test]
-    fn provider_header_photo_without_imagegen_provider_returns_none() {
-        assert_eq!(provider_header_for(MediaKind::Photo, Some("ignored"), None), None);
+    fn attempts_empty_slot_returns_empty() {
+        let slots = crate::db::profiles::Slots::new();
+        assert!(provider_attempts_for(MediaKind::Voice, &slots).is_empty());
+        assert!(provider_attempts_for(MediaKind::Photo, &slots).is_empty());
+    }
+
+    // ── is_provider_retryable ────────────────────────────────────────────────
+
+    #[test]
+    fn retryable_statuses() {
+        assert!(is_provider_retryable(None)); // сеть/timeout
+        assert!(is_provider_retryable(Some(reqwest::StatusCode::BAD_GATEWAY)));
+        assert!(is_provider_retryable(Some(reqwest::StatusCode::SERVICE_UNAVAILABLE)));
+        assert!(is_provider_retryable(Some(reqwest::StatusCode::TOO_MANY_REQUESTS))); // 429
+        assert!(!is_provider_retryable(Some(reqwest::StatusCode::BAD_REQUEST))); // 4xx
+    }
+
+    // ── extract_status_from_error ────────────────────────────────────────────
+
+    #[test]
+    fn extract_status_parses_execute_binary_error_format() {
+        let e = anyhow::anyhow!("tool 'synthesize_speech' returned HTTP 503: upstream busy");
+        assert_eq!(extract_status_from_error(&e), Some(reqwest::StatusCode::SERVICE_UNAVAILABLE));
     }
 
     #[test]
-    fn provider_header_photo_with_empty_imagegen_provider_returns_none() {
-        assert_eq!(provider_header_for(MediaKind::Photo, None, Some("")), None);
-    }
-
-    #[test]
-    fn provider_header_voice_does_not_use_imagegen_provider() {
-        // Cross-contamination guard: a Voice action must never read imagegen_provider.
-        let h = provider_header_for(MediaKind::Voice, None, Some("flux-pro"));
-        assert_eq!(h, None, "Voice must not pick up imagegen_provider");
-    }
-
-    #[test]
-    fn provider_header_photo_does_not_use_tts_provider() {
-        // Cross-contamination guard: a Photo action must never read tts_provider.
-        let h = provider_header_for(MediaKind::Photo, Some("nova-cloud"), None);
-        assert_eq!(h, None, "Photo must not pick up tts_provider");
-    }
-
-    #[test]
-    fn provider_header_video_returns_none_even_with_both_set() {
-        let h = provider_header_for(MediaKind::Video, Some("nova"), Some("flux"));
-        assert_eq!(h, None, "Video has no provider override yet");
-    }
-
-    #[test]
-    fn provider_header_other_returns_none_even_with_both_set() {
-        let h = provider_header_for(MediaKind::Other, Some("nova"), Some("flux"));
-        assert_eq!(h, None, "Other has no provider override");
+    fn extract_status_transport_error_returns_none() {
+        let e = anyhow::anyhow!("HTTP request failed: error sending request");
+        assert_eq!(extract_status_from_error(&e), None);
     }
 
     // ── inline_tool_result (web UI in-chat delivery) ────────────────────────
@@ -1019,7 +1130,7 @@ mod tests {
             db:             fake_db(),
             upload_key:     [0u8; 32],
             retention_days: 30,
-            tool_headers:   vec![],
+            provider_attempts: vec![],
             context:        context.clone(),
             agent_name:     "Arty".into(),
             tool_message_id: None,
@@ -1212,7 +1323,7 @@ mod tests {
             db,
             upload_key:     [0u8; 32],
             retention_days: 30,
-            tool_headers:   vec![],
+            provider_attempts: vec![],
             context:        context.clone(),
             agent_name:     "Arty".into(),
             tool_message_id: None,
@@ -1341,7 +1452,7 @@ mod tests {
             db,
             upload_key:     [0u8; 32],
             retention_days: 30,
-            tool_headers:   vec![],
+            provider_attempts: vec![],
             context:        ctx_json.clone(),
             agent_name:     "Arty".into(),
             tool_message_id,
