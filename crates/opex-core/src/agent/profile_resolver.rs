@@ -141,4 +141,64 @@ mod tests {
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0].provider, "b");
     }
+
+    /// Mirrors the enabled-filtering loop in
+    /// `gateway/handlers/agents/lifecycle.rs` (spec §8): a DISABLED leading
+    /// `text` entry must be dropped so the stored slots have primary == raw
+    /// text[1] and the first failover reserve == raw text[2]. This keeps
+    /// `create_fallback_provider(chain_idx)`'s `text[1 + chain_idx]` indexing
+    /// aligned with the live primary at `text[0]`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn filtered_slots_drop_disabled_leader_and_align_reserves(pool: sqlx::PgPool) {
+        // p_a disabled leader; p_b (primary) and p_c (reserve) enabled.
+        sqlx::query("INSERT INTO providers (name, type, provider_type, enabled) VALUES \
+            ('p_a','llm','openai_compat',false),\
+            ('p_b','llm','openai_compat',true),\
+            ('p_c','llm','openai_compat',true)")
+            .execute(&pool).await.unwrap();
+        let mut raw_slots = crate::db::profiles::Slots::new();
+        raw_slots.insert("text".into(), vec![
+            crate::db::profiles::SlotEntry { provider: "p_a".into(), model: None, voice: None },
+            crate::db::profiles::SlotEntry { provider: "p_b".into(), model: None, voice: None },
+            crate::db::profiles::SlotEntry { provider: "p_c".into(), model: None, voice: None },
+        ]);
+
+        // Same shape as the engine-build filtering loop.
+        let mut filtered = crate::db::profiles::Slots::new();
+        for cap in crate::db::profiles::PROFILE_CAPABILITIES {
+            let chain = effective_chain(&pool, &raw_slots, cap).await;
+            if !chain.is_empty() {
+                filtered.insert(cap.to_string(), chain);
+            }
+        }
+
+        let text = &filtered["text"];
+        assert_eq!(text.len(), 2, "disabled leader must be dropped");
+        // Primary is text[0]; first failover (chain_idx 0) is text[1].
+        assert_eq!(text[0].provider, "p_b", "primary == first enabled entry");
+        assert_eq!(text[1].provider, "p_c", "first reserve == next enabled entry");
+    }
+
+    /// Common-path invariant: when every referenced provider is enabled, the
+    /// filtered map equals the raw slots exactly (no behavioral change).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn filtered_slots_equal_raw_when_all_enabled(pool: sqlx::PgPool) {
+        sqlx::query("INSERT INTO providers (name, type, provider_type, enabled) VALUES \
+            ('e_a','llm','openai_compat',true),('e_b','llm','openai_compat',true)")
+            .execute(&pool).await.unwrap();
+        let mut raw_slots = crate::db::profiles::Slots::new();
+        raw_slots.insert("text".into(), vec![
+            crate::db::profiles::SlotEntry { provider: "e_a".into(), model: None, voice: None },
+            crate::db::profiles::SlotEntry { provider: "e_b".into(), model: None, voice: None },
+        ]);
+
+        let mut filtered = crate::db::profiles::Slots::new();
+        for cap in crate::db::profiles::PROFILE_CAPABILITIES {
+            let chain = effective_chain(&pool, &raw_slots, cap).await;
+            if !chain.is_empty() {
+                filtered.insert(cap.to_string(), chain);
+            }
+        }
+        assert_eq!(filtered, raw_slots, "all-enabled: filtered == raw");
+    }
 }

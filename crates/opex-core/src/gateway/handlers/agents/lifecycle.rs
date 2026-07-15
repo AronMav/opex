@@ -34,10 +34,24 @@ pub async fn start_agent_from_config(
     // Resolve the agent's profile slots once — primary (`text`) and
     // `compaction` providers are both derived from this. Stored on AgentConfig
     // so downstream code can read `engine.cfg().profile_slots`.
-    let profile_slots = crate::agent::profile_resolver::resolve_slots_for_agent(
+    //
+    // Spec §8 ("reserve on pause"): a slot entry whose provider row is
+    // `enabled=false` (or missing) must be skipped EVERYWHERE, not just in the
+    // text-primary / compaction resolution below. We therefore store the
+    // ENABLED-FILTERED chains on AgentConfig — every downstream consumer
+    // (fallback-provider indexing, media background, websearch header,
+    // capability-tool gating) reads the same enabled-only view. For the
+    // all-enabled common case the filtered map is identical to the raw slots.
+    let raw_slots = crate::agent::profile_resolver::resolve_slots_for_agent(
         &infra.db, &agent_cfg.agent.profile, name).await;
-    let text_chain = crate::agent::profile_resolver::effective_chain(
-        &infra.db, &profile_slots, "text").await;
+    let mut profile_slots = crate::db::profiles::Slots::new();
+    for cap in crate::db::profiles::PROFILE_CAPABILITIES {
+        let chain = crate::agent::profile_resolver::effective_chain(&infra.db, &raw_slots, cap).await;
+        if !chain.is_empty() {
+            profile_slots.insert(cap.to_string(), chain);
+        }
+    }
+    let text_chain = profile_slots.get("text").cloned().unwrap_or_default();
 
     // Use routing provider if routing rules are configured, otherwise resolve the
     // primary provider from the profile's highest-priority `text` slot. Routing
@@ -78,8 +92,9 @@ pub async fn start_agent_from_config(
 
     // Load dedicated compaction provider from the profile's `compaction` slot
     // (optional — empty slot → None → falls back to primary at call time).
-    let compaction_entry = crate::agent::profile_resolver::effective_chain(
-        &infra.db, &profile_slots, "compaction").await.into_iter().next();
+    // `profile_slots` is already enabled-filtered above, so read the first
+    // surviving entry directly.
+    let compaction_entry = profile_slots.get("compaction").and_then(|v| v.first()).cloned();
     let compaction_provider: Option<Arc<dyn crate::agent::providers::LlmProvider>> = {
         match compaction_entry {
             Some(entry) => {
