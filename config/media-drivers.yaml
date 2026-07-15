@@ -49,6 +49,7 @@ drivers:
     - { driver: stability,     label: "Stability AI (SD3/SD3.5)",      requires_key: true }
     - { driver: fal,           label: "fal.ai (FLUX fast)",            requires_key: true }
     - { driver: pixazo,        label: "Pixazo",                        requires_key: true }
+    - { driver: comfyui,       label: "ComfyUI (self-hosted)",         requires_key: false }
 
   embedding:
     - { driver: ollama,        label: "Ollama Embedding",              requires_key: false }

@@ -76,6 +76,7 @@ def _build_driver_map() -> dict[tuple[str, str], type]:
     from providers.imagegen_stability import StabilityImageGen
     from providers.imagegen_fal import FalImageGen
     from providers.imagegen_pixazo import PixazoImageGen
+    from providers.imagegen_comfyui import ComfyUIImageGen
 
     # Embedding providers
     from providers.embedding_ollama import OllamaEmbedding
@@ -122,6 +123,7 @@ def _build_driver_map() -> dict[tuple[str, str], type]:
         ("imagegen", "stability"): StabilityImageGen,
         ("imagegen", "fal"): FalImageGen,
         ("imagegen", "pixazo"): PixazoImageGen,
+        ("imagegen", "comfyui"): ComfyUIImageGen,
         # Embedding
         ("embedding", "ollama"): OllamaEmbedding,
         ("embedding", "openai"): OpenAIEmbedding,
