@@ -16,7 +16,19 @@ COMMAND = json.loads(os.environ.get("MCP_COMMAND", '["echo","no MCP_COMMAND conf
 
 
 async def stdio_call(method: str, params: dict, req_id):
-    """Spawn MCP subprocess with initialize handshake, return matching response."""
+    """Spawn MCP subprocess, run the initialize handshake, and return the
+    response line matching `req_id`.
+
+    We stream stdin and then read stdout line-by-line until the matching
+    response arrives — instead of `communicate()`, which closes stdin and
+    waits for the process to exit before returning any output. An async MCP
+    tool (e.g. `fetch`, which performs network I/O inside `tools/call`) often
+    exits on stdin EOF BEFORE its coroutine finishes writing the response, so
+    `communicate()` returned only the synchronous `initialize` reply and
+    silently dropped the actual call — surfacing as
+    "No valid JSON response from MCP" with empty stderr. Keeping stdin open
+    until we've read our response lets the async handler complete.
+    """
     messages = [
         {"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
             "protocolVersion": "2024-11-05", "capabilities": {},
@@ -33,25 +45,52 @@ async def stdio_call(method: str, params: dict, req_id):
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(stdin_data), timeout=30)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise RuntimeError("MCP process timeout (30s)")
 
-    for line in stdout.decode("utf-8", errors="replace").splitlines():
-        line = line.strip()
-        if not line:
-            continue
+    async def _write_then_read():
         try:
-            obj = json.loads(line)
+            proc.stdin.write(stdin_data)
+            await proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            # Process died before consuming stdin; the readline below hits EOF.
+            pass
+        # Do NOT close stdin — keep the process alive so an async handler can
+        # finish its I/O and emit the response.
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                return None  # stdout EOF before a matching response
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
             if obj.get("id") == req_id:
                 return obj
-        except json.JSONDecodeError:
-            pass
 
-    err = stderr.decode("utf-8", errors="replace")[:500]
+    timed_out = False
+    try:
+        result = await asyncio.wait_for(_write_then_read(), timeout=30)
+    except asyncio.TimeoutError:
+        result = None
+        timed_out = True
+    finally:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            err_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=2)
+        except (asyncio.TimeoutError, Exception):
+            err_bytes = b""
+        await proc.wait()
+
+    if result is not None:
+        return result
+    err = err_bytes.decode("utf-8", errors="replace")[:500]
+    if timed_out:
+        raise RuntimeError(f"MCP process timeout (30s). stderr: {err}")
     raise RuntimeError(f"No valid JSON response from MCP. stderr: {err}")
 
 
