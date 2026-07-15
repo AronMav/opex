@@ -38,13 +38,23 @@ fn is_protected_profile(name: &str) -> bool {
 /// Names of loaded agents whose config `profile` equals `profile_name`.
 /// Reads the agent config directory on disk (same source `agents.rs` uses),
 /// so the result reflects the current TOML files, not in-memory engines.
-fn agents_using_profile(profile_name: &str) -> Vec<String> {
-    crate::config::load_agent_configs("config/agents")
-        .unwrap_or_default()
+/// `Err` propagates a config-enumeration failure so destructive guards
+/// (DELETE, rename) can fail closed instead of silently treating "cannot
+/// verify" as "not in use".
+fn agents_using_profile_checked(profile_name: &str) -> anyhow::Result<Vec<String>> {
+    Ok(crate::config::load_agent_configs("config/agents")?
         .into_iter()
         .filter(|c| c.agent.profile == profile_name)
         .map(|c| c.agent.name)
-        .collect()
+        .collect())
+}
+
+/// Tolerant wrapper for display-only use (GET-list `agents` array): an
+/// enumeration failure degrades to an empty list rather than blocking the
+/// read. Never use this for a destructive guard — see
+/// `agents_using_profile_checked`.
+fn agents_using_profile(profile_name: &str) -> Vec<String> {
+    agents_using_profile_checked(profile_name).unwrap_or_default()
 }
 
 /// Serialize a profile row and attach the `agents` array (names of agents
@@ -220,6 +230,18 @@ pub(crate) async fn api_update_profile(
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response();
     }
 
+    // Reject a blank name outright — mirrors the POST guard. Without this,
+    // `name: Some("")` flows through `COALESCE($2, name)` and blanks the row.
+    if let Some(ref new_name) = body.name
+        && new_name.trim().is_empty()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "profile name cannot be empty" })),
+        )
+            .into_response();
+    }
+
     // The Default profile cannot be renamed.
     if is_protected_profile(&existing.name)
         && let Some(ref new_name) = body.name
@@ -230,6 +252,40 @@ pub(crate) async fn api_update_profile(
             Json(json!({ "error": "the Default profile cannot be renamed" })),
         )
             .into_response();
+    }
+
+    // Renaming a non-Default profile does NOT cascade to agent TOMLs — an
+    // in-use profile being renamed would silently detach every agent whose
+    // config still points at the old name (they'd fall back to Default at
+    // next resolve). Same footgun the DELETE in-use guard protects against.
+    // Only fires on an actual name CHANGE — a no-op self-rename is allowed.
+    if let Some(ref new_name) = body.name
+        && *new_name != existing.name
+    {
+        match agents_using_profile_checked(&existing.name) {
+            Ok(names) if !names.is_empty() => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": "profile_in_use",
+                        "agents": names,
+                        "hint": "rename blocked: profile is assigned to agents; reassign them first",
+                    })),
+                )
+                    .into_response();
+            }
+            Ok(_) => {}
+            Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "error": "cannot verify profile usage",
+                        "hint": "agent config enumeration failed",
+                    })),
+                )
+                    .into_response();
+            }
+        }
     }
 
     let updated = match profiles::update_profile(
@@ -308,8 +364,22 @@ pub(crate) async fn api_delete_profile(
             .into_response();
     }
 
-    // In-use guard: refuse if any agent references this profile.
-    let in_use = agents_using_profile(&existing.name);
+    // In-use guard: refuse if any agent references this profile. Fail closed
+    // on a config-enumeration error — an unreadable config dir must NOT be
+    // treated as "no agents use this profile" (see agents_using_profile_checked).
+    let in_use = match agents_using_profile_checked(&existing.name) {
+        Ok(names) => names,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "cannot verify profile usage",
+                    "hint": "agent config enumeration failed",
+                })),
+            )
+                .into_response();
+        }
+    };
     if !in_use.is_empty() {
         return (
             StatusCode::CONFLICT,
