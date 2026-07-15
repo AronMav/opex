@@ -5,7 +5,13 @@ import type { CreateProviderInput } from "@/types/api";
 export const ALL_CATEGORIES = ["text", "stt", "tts", "vision", "imagegen", "embedding", "websearch"] as const;
 export type ProviderCategory = typeof ALL_CATEGORIES[number];
 
-export const ALL_CAPABILITIES = ["stt", "tts", "vision", "imagegen", "embedding", "websearch"] as const;
+// Capabilities that still get an "Active provider(s)" group with a
+// priority-ordered drag list on the Providers page. Profiles now own
+// agent-facing routing for stt/tts/vision/imagegen/websearch (per-profile
+// slots), so `embedding` is the only capability left with a *global* active
+// provider — the backend rejects PUT /api/provider-active for any other
+// capability (400).
+export const ALL_CAPABILITIES = ["embedding"] as const;
 
 export const CATEGORY_ICONS: Record<ProviderCategory, React.ReactNode> = {
   text: <Link2 className="h-3.5 w-3.5" />,

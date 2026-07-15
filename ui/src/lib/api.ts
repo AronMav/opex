@@ -73,12 +73,19 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   }
 }
 
-async function extractError(resp: Response): Promise<string> {
+/**
+ * Parses an error response body once, returning both the human-readable
+ * message (same extraction rules as before) and — when the body was a JSON
+ * object — the parsed object itself, so callers that need structured fields
+ * beyond `error` (e.g. DELETE /api/providers/{id}'s 409 `{error, profiles}`)
+ * don't have to re-fetch/re-parse the (already-consumed) response body.
+ */
+async function extractErrorDetails(resp: Response): Promise<{ message: string; body?: unknown }> {
   const text = await resp.text().catch(() => "");
   try {
     const data = JSON.parse(text);
     if (data && typeof data === "object" && "error" in data) {
-      return (data as { error: string }).error;
+      return { message: (data as { error: string }).error, body: data };
     }
   } catch {
     // not JSON
@@ -86,8 +93,12 @@ async function extractError(resp: Response): Promise<string> {
   const trimmed = text.trim();
   // HTML error pages (dev-server 404s, proxy/gateway errors) are noise in a
   // banner/toast — collapse them to the status code.
-  if (!trimmed || /^<!doctype\b|^<html\b/i.test(trimmed)) return `HTTP ${resp.status}`;
-  return trimmed.length > 300 ? `${trimmed.slice(0, 300)}…` : trimmed;
+  if (!trimmed || /^<!doctype\b|^<html\b/i.test(trimmed)) return { message: `HTTP ${resp.status}` };
+  return { message: trimmed.length > 300 ? `${trimmed.slice(0, 300)}…` : trimmed };
+}
+
+async function extractError(resp: Response): Promise<string> {
+  return (await extractErrorDetails(resp)).message;
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
@@ -126,7 +137,13 @@ export async function apiPatch<T>(path: string, body?: unknown): Promise<T> {
 
 export async function apiDelete(path: string): Promise<void> {
   const resp = await apiFetch(path, { method: "DELETE" });
-  if (!resp.ok) throw new Error(await extractError(resp));
+  if (!resp.ok) {
+    const { message, body } = await extractErrorDetails(resp);
+    // Attach the parsed JSON body (when present) so callers can branch on
+    // structured error shapes (e.g. `{error:"provider_in_profiles", profiles}`)
+    // without losing the plain `.message` contract other callers rely on.
+    throw Object.assign(new Error(message), { body });
+  }
 }
 
 /**

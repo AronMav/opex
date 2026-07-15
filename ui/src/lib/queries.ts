@@ -568,7 +568,10 @@ export function useDeleteProvider() {
       qc.invalidateQueries({ queryKey: qk.providers })
       qc.invalidateQueries({ queryKey: qk.providerActive })
     },
-    onError: (e: Error) => toast.error(e.message),
+    // No generic onError here: the only caller (providers page) supplies its
+    // own onError per-mutate() call to distinguish the 409 "used by profiles"
+    // case from other failures — a hook-level toast here would double-fire
+    // alongside it (TanStack calls both).
   })
 }
 

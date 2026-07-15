@@ -11,17 +11,23 @@ import type { CreateProviderInput, Provider } from "@/types/api";
 
 // ── websearch presence ────────────────────────────────────────────────────────
 
-describe("ALL_CATEGORIES / ALL_CAPABILITIES — websearch", () => {
-  it("includes websearch in ALL_CATEGORIES", () => {
+describe("ALL_CATEGORIES / ALL_CAPABILITIES — profiles own capability routing", () => {
+  it("includes websearch in ALL_CATEGORIES (still a provider-record category)", () => {
     expect(ALL_CATEGORIES).toContain("websearch");
   });
 
-  it("includes websearch in ALL_CAPABILITIES", () => {
-    expect(ALL_CAPABILITIES).toContain("websearch");
+  it("ALL_CAPABILITIES contains only 'embedding' — profiles own routing for the rest", () => {
+    expect(ALL_CAPABILITIES).toEqual(["embedding"]);
   });
 
   it("ALL_CAPABILITIES does not include 'text' (text providers are LLM, not capability-selectable)", () => {
     expect(ALL_CAPABILITIES).not.toContain("text");
+  });
+
+  it("ALL_CAPABILITIES does not include stt/tts/vision/imagegen/websearch (moved to profile-owned routing)", () => {
+    for (const cap of ["stt", "tts", "vision", "imagegen", "websearch"]) {
+      expect(ALL_CAPABILITIES).not.toContain(cap);
+    }
   });
 });
 
@@ -106,31 +112,31 @@ describe("splitProviders", () => {
 
 // ── group_hint visibility predicate (I-1 regression) ─────────────────────────
 
-describe("group_hint predicate — shown for non-websearch capability groups only", () => {
+describe("group_hint predicate — only embedding renders the active-provider group now", () => {
   const hintVisible = (cap: string) =>
     (ALL_CAPABILITIES as readonly string[]).includes(cap) && cap !== "websearch";
 
-  it("returns false for websearch (websearch legitimately allows multiple active providers)", () => {
+  it("returns false for websearch (moved to profile-owned routing)", () => {
     expect(hintVisible("websearch")).toBe(false);
   });
 
-  it("returns true for stt", () => {
-    expect(hintVisible("stt")).toBe(true);
+  it("returns false for stt (moved to profile-owned routing)", () => {
+    expect(hintVisible("stt")).toBe(false);
   });
 
-  it("returns true for tts", () => {
-    expect(hintVisible("tts")).toBe(true);
+  it("returns false for tts (moved to profile-owned routing)", () => {
+    expect(hintVisible("tts")).toBe(false);
   });
 
-  it("returns true for vision", () => {
-    expect(hintVisible("vision")).toBe(true);
+  it("returns false for vision (moved to profile-owned routing)", () => {
+    expect(hintVisible("vision")).toBe(false);
   });
 
-  it("returns true for imagegen", () => {
-    expect(hintVisible("imagegen")).toBe(true);
+  it("returns false for imagegen (moved to profile-owned routing)", () => {
+    expect(hintVisible("imagegen")).toBe(false);
   });
 
-  it("returns true for embedding", () => {
+  it("returns true for embedding (the sole remaining global active-provider capability)", () => {
     expect(hintVisible("embedding")).toBe(true);
   });
 

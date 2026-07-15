@@ -1091,6 +1091,8 @@
   "providers.field_enabled": "Включён",
   "providers.save_error": "Ошибка сохранения провайдера: {{error}}",
   "providers.delete_error": "Ошибка удаления: {{error}}",
+  "providers.delete_in_profiles": "Провайдер используется в профилях: {{profiles}}. Сначала отвяжите его от этих профилей.",
+  "providers.embedding_section": "Эмбеддинг",
   "providers.cap_text": "Текст",
   "providers.cap_stt": "STT",
   "providers.cap_tts": "TTS",

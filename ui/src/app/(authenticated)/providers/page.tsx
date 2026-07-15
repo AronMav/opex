@@ -242,7 +242,22 @@ export default function ProvidersPage() {
     const target = deleteTarget;
     setDeleteTarget(null);
     deleteProvider.mutate(target.id, {
-      onError: (e: Error) => toast.error(t("providers.delete_error", { error: e.message })),
+      onError: (e: Error) => {
+        // 409 shape: {"error":"provider_in_profiles","profiles":[...]} — apiDelete
+        // attaches the parsed body so we can surface the actual profile names
+        // instead of the raw machine-readable error string.
+        const body = (e as Error & { body?: unknown }).body;
+        const isProfileConflict =
+          (body != null && typeof body === "object" && (body as { error?: string }).error === "provider_in_profiles") ||
+          e.message === "provider_in_profiles";
+        if (isProfileConflict) {
+          const profileNames = (body as { profiles?: unknown }).profiles;
+          const profiles = Array.isArray(profileNames) ? profileNames.join(", ") : "";
+          toast.error(t("providers.delete_in_profiles", { profiles }));
+          return;
+        }
+        toast.error(t("providers.delete_error", { error: e.message }));
+      },
     });
   };
 
@@ -370,6 +385,7 @@ export default function ProvidersPage() {
 
                   {isCapabilityGroup ? (
                     <div className="space-y-6">
+                      <h3 className="text-sm font-semibold">{t("providers.embedding_section")}</h3>
                       {/* Active — draggable */}
                       <div>
                         <SectionHeader

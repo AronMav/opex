@@ -1091,6 +1091,8 @@
   "providers.field_enabled": "Enabled",
   "providers.save_error": "Failed to save provider: {{error}}",
   "providers.delete_error": "Failed to delete: {{error}}",
+  "providers.delete_in_profiles": "Provider is used by profiles: {{profiles}}. Detach it from those profiles first.",
+  "providers.embedding_section": "Embedding",
   "providers.cap_text": "Text",
   "providers.cap_stt": "STT",
   "providers.cap_tts": "TTS",
