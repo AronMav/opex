@@ -106,11 +106,15 @@ export function createStreamActions(deps: ActionDeps) {
       set((draft) => {
         if (!draft.agents[agent]) draft.agents[agent] = emptyAgentState();
         const prev = draft.agents[agent].pendingMessage;
+        const isVoice = opts?.voice === true;
         // If a previous voice message is already queued and this one is also
         // voice, append with "\n" — the user spoke several phrases during the
-        // same turn instead of replacing the earlier one.
-        const content = prev?.voice && opts?.voice ? `${prev.content}\n${text}` : text;
-        draft.agents[agent].pendingMessage = { content, attachments, voice: opts?.voice ?? prev?.voice };
+        // same turn instead of replacing the earlier one. A NON-voice queue call
+        // (e.g. Shift+Enter, or the F085 interrupt-race path) must NOT inherit a
+        // prior pending voice flag — a typed message supersedes a queued voice
+        // one and must not be read aloud once sent.
+        const content = prev?.voice && isVoice ? `${prev.content}\n${text}` : text;
+        draft.agents[agent].pendingMessage = { content, attachments, voice: isVoice };
       });
     },
 
