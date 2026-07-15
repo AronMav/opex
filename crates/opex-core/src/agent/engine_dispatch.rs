@@ -355,8 +355,19 @@ impl AgentEngine {
                 } else {
                     self.ssrf_http_client()
                 };
-                return match yaml_tool.execute_oauth(
-                    arguments, client, Some(&resolver), oauth_ctx.as_ref(),
+                // search_web carries the ordered `websearch` profile chain so
+                // toolgate can retry across providers in the agent's configured
+                // order. Every other yaml tool keeps the empty header slice it
+                // always had (mirrors `execute_oauth`'s `&[]`) — this is scoped
+                // strictly to the search capability, not a shared header path.
+                let mut injected_headers: Vec<(String, String)> = Vec::new();
+                if name == "search_web"
+                    && let Some(h) = websearch_header(&self.cfg().profile_slots)
+                {
+                    injected_headers.push(h);
+                }
+                return match yaml_tool.execute_with_ctx(
+                    arguments, client, Some(&resolver), oauth_ctx.as_ref(), &injected_headers,
                 ).await {
                     Ok(result) => {
                         if CACHEABLE_SEARCH_TOOLS.contains(&name)
@@ -437,4 +448,61 @@ impl AgentEngine {
         )
     }
 
+}
+
+/// Builds the `X-Opex-Providers` header carrying the ordered `websearch`
+/// profile-slot provider chain (e.g. `"searxng,ollama,brave"`), joined by
+/// comma, so toolgate can retry `search_web` across providers in the agent's
+/// configured order. Returns `None` when the slot is missing or empty — in
+/// that case toolgate falls back to its own default provider selection.
+fn websearch_header(slots: &crate::db::profiles::Slots) -> Option<(String, String)> {
+    let chain = slots
+        .get("websearch")?
+        .iter()
+        .map(|e| e.provider.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    if chain.is_empty() {
+        None
+    } else {
+        Some(("X-Opex-Providers".to_string(), chain))
+    }
+}
+
+#[cfg(test)]
+mod websearch_header_tests {
+    use super::websearch_header;
+    use crate::db::profiles::SlotEntry;
+    use std::collections::HashMap;
+
+    fn entry(provider: &str) -> SlotEntry {
+        SlotEntry {
+            provider: provider.to_string(),
+            model: None,
+            voice: None,
+        }
+    }
+
+    #[test]
+    fn joins_multiple_providers_in_order() {
+        let mut slots = HashMap::new();
+        slots.insert("websearch".to_string(), vec![entry("a"), entry("b")]);
+        assert_eq!(
+            websearch_header(&slots),
+            Some(("X-Opex-Providers".to_string(), "a,b".to_string()))
+        );
+    }
+
+    #[test]
+    fn missing_slot_returns_none() {
+        let slots: HashMap<String, Vec<SlotEntry>> = HashMap::new();
+        assert_eq!(websearch_header(&slots), None);
+    }
+
+    #[test]
+    fn empty_slot_returns_none() {
+        let mut slots = HashMap::new();
+        slots.insert("websearch".to_string(), vec![]);
+        assert_eq!(websearch_header(&slots), None);
+    }
 }
