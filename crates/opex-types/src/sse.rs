@@ -183,6 +183,30 @@ pub enum SseEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// Открывает авторитетный snapshot-конверт: всё, что придёт до SyncEnd,
+    /// клиент применяет батчем (без анимации). boundaryMessageId — id
+    /// user-сообщения активного хода: история рендерится ВПЛОТЬ ДО него
+    /// включительно, всё после — live-состояние. None + finished = активного
+    /// хода нет, конверт пуст (клиент рисует чисто REST-историю).
+    #[serde(rename = "sync_begin")]
+    SyncBegin {
+        #[serde(rename = "boundaryMessageId")]
+        #[cfg_attr(feature = "ts-gen", ts(type = "string | null"))]
+        boundary_message_id: Option<uuid::Uuid>,
+        #[serde(rename = "runStatus")]
+        run_status: SyncStatus,
+        /// Буфер переполнился — replay неполон; клиент берёт частичный текст
+        /// из REST (streaming_db персистит инкрементально) + хвост буфера.
+        truncated: bool,
+    },
+    /// Закрывает конверт. lastSeq — seq последнего replay-события (None при
+    /// пустом конверте). После него идут live-события.
+    #[serde(rename = "sync_end")]
+    SyncEnd {
+        #[serde(rename = "lastSeq")]
+        #[cfg_attr(feature = "ts-gen", ts(type = "number | null"))]
+        last_seq: Option<u64>,
+    },
     Usage(UsagePayload),
 }
 
@@ -342,5 +366,18 @@ mod tests {
             }
             _ => panic!("expected Other fallback on malformed table"),
         }
+    }
+
+    #[test]
+    fn sync_envelope_wire_format() {
+        let b = SseEvent::SyncBegin {
+            boundary_message_id: None,
+            run_status: SyncStatus::Finished,
+            truncated: false,
+        };
+        let s = serde_json::to_string(&b).unwrap();
+        assert!(s.contains("\"sync_begin\""), "{s}");
+        let e = SseEvent::SyncEnd { last_seq: Some(41) };
+        assert!(serde_json::to_string(&e).unwrap().contains("\"sync_end\""));
     }
 }

@@ -16,7 +16,12 @@ export type SseEvent = { "type": "data-session-id", data: DataSessionIdPayload, 
 /**
  * u64 to match StreamEvent. Rendered as `number` in TS via override.
  */
-timeoutMs: number, } | { "type": "tool-approval-resolved", approvalId: string, action: ApprovalAction, modifiedInput: unknown | null, } | { "type": "finish", agentName: string, } | { "type": "error", errorText: string, } | { "type": "reconnecting", attempt: number, delay_ms: number, } | { "type": "sync", content: string, toolCalls: Array<unknown>, status: SyncStatus, error: string | null, } | { "type": "usage" } & UsagePayload;
+timeoutMs: number, } | { "type": "tool-approval-resolved", approvalId: string, action: ApprovalAction, modifiedInput: unknown | null, } | { "type": "finish", agentName: string, } | { "type": "error", errorText: string, } | { "type": "reconnecting", attempt: number, delay_ms: number, } | { "type": "sync", content: string, toolCalls: Array<unknown>, status: SyncStatus, error: string | null, } | { "type": "sync_begin", boundaryMessageId: string | null, runStatus: SyncStatus, 
+/**
+ * Буфер переполнился — replay неполон; клиент берёт частичный текст
+ * из REST (streaming_db персистит инкрементально) + хвост буфера.
+ */
+truncated: boolean, } | { "type": "sync_end", lastSeq: number | null, } | { "type": "usage" } & UsagePayload;
 
 export type SyncStatus = "finished" | "error" | "interrupted" | "running";
 

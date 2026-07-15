@@ -289,6 +289,38 @@ fn sse_rich_card_metric_trend_up_fixture() {
 }
 
 #[test]
+fn sse_sync_begin_fixture() {
+    let ev = SseEvent::SyncBegin {
+        boundary_message_id: Some(Uuid::nil()),
+        run_status: SyncStatus::Running,
+        truncated: false,
+    };
+    write_fixture("sync-begin", &ev);
+}
+
+#[test]
+fn sse_sync_begin_empty_fixture() {
+    let ev = SseEvent::SyncBegin {
+        boundary_message_id: None,
+        run_status: SyncStatus::Finished,
+        truncated: false,
+    };
+    write_fixture("sync-begin-empty", &ev);
+}
+
+#[test]
+fn sse_sync_end_fixture() {
+    let ev = SseEvent::SyncEnd { last_seq: Some(41) };
+    write_fixture("sync-end", &ev);
+}
+
+#[test]
+fn sse_sync_end_empty_fixture() {
+    let ev = SseEvent::SyncEnd { last_seq: None };
+    write_fixture("sync-end-empty", &ev);
+}
+
+#[test]
 fn sse_rich_card_metric_trend_flat_fixture() {
     let ev = SseEvent::RichCard(RichCardData::Metric(MetricCard {
         title: Some("Memory".to_string()),
