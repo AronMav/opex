@@ -175,7 +175,13 @@ export function ChatComposer() {
   const emptyCountRef = useRef(0);
 
   // Voice reply: speak the agent's answer aloud when the turn was sent by voice.
-  const voiceReplyPendingRef = useRef(false);
+  // voiceTurnPending is the single source of truth (agent-state store field) for
+  // "the turn about to start / that just started was voice-initiated" — set
+  // either by a direct voice submit below (while idle) or by ChatThread's
+  // pendingMessage drain (a queued voice message sent after streaming ends).
+  // No local ref duplicates this: both the direct-submit and drained-queue
+  // paths only ever arm the store flag.
+  const voiceTurnPending = useChatStore((s) => s.agents[s.currentAgent]?.voiceTurnPending ?? false);
   const ttsPlayingRef = useRef(false);
   const [ttsPlaying, setTtsPlaying] = useState(false);
   // Drives the composer's voice-status indicator: true from a voice submit until
@@ -240,8 +246,17 @@ export function ChatComposer() {
     (text: string) => {
       if (text) {
         emptyCountRef.current = 0;
+        if (isStreaming) {
+          // A turn is already running — queue instead of interrupting it (the
+          // previous behavior lost the in-flight turn's work). Drains after the
+          // turn via ChatThread; the drain arms voiceTurnPending so the reply
+          // is still spoken. voice:true also appends (via "\n") if the user
+          // speaks more than once during the same turn.
+          useChatStore.getState().queueMessage(text, undefined, { voice: true });
+          return;
+        }
         insertTranscript(text);
-        voiceReplyPendingRef.current = true;
+        useChatStore.getState().setVoiceTurnPending(true, currentAgent);
         setVoiceReplyActive(true);
         formRef.current?.requestSubmit();
       } else if (continuousRef.current) {
@@ -253,7 +268,7 @@ export function ChatComposer() {
         }
       }
     },
-    [insertTranscript, t],
+    [insertTranscript, t, isStreaming, currentAgent],
   );
 
   const voice = useVoiceRecorder({ vad: true, vadConfig, onAutoResult: handleAutoResult });
@@ -353,12 +368,15 @@ export function ChatComposer() {
   );
 
   // When a voice-initiated turn finishes streaming, speak the agent's reply.
+  // voiceTurnPending covers BOTH a direct voice submit (armed above, while idle,
+  // right before requestSubmit) AND a drained queued voice message (armed by
+  // ChatThread right before it calls sendMessage for the drained turn).
   const prevStreamingRef = useRef(false);
   useEffect(() => {
     const was = prevStreamingRef.current;
     prevStreamingRef.current = isStreaming;
-    if (was && !isStreaming && voiceReplyPendingRef.current) {
-      voiceReplyPendingRef.current = false;
+    if (was && !isStreaming && voiceTurnPending) {
+      useChatStore.getState().setVoiceTurnPending(false, currentAgent);
       // Prefer the voice the model produced itself (synthesize_speech audio part);
       // otherwise synthesise the reply TEXT. Mutually exclusive — synthesize_speech
       // ends the turn with empty text, so this never double-voices.
@@ -373,7 +391,7 @@ export function ChatComposer() {
         setVoiceReplyActive(false); // nothing to voice — clear the indicator
       }
     }
-  }, [isStreaming, messageSource, playReply, playAudioUrl]);
+  }, [isStreaming, messageSource, playReply, playAudioUrl, voiceTurnPending, currentAgent]);
 
   // Continuous loop: re-arm recording once a turn finishes (idle, not streaming,
   // and not while the spoken reply is still playing — avoids recording the TTS).
@@ -672,8 +690,14 @@ export function ChatComposer() {
       // Manual stop: transcribe, insert, and auto-send so the agent replies.
       const text = await voice.stop();
       if (text) {
+        if (isStreaming) {
+          // Same reasoning as handleAutoResult: don't interrupt the running
+          // turn, queue instead and let the drain arm the spoken reply.
+          useChatStore.getState().queueMessage(text, undefined, { voice: true });
+          return;
+        }
         insertTranscript(text);
-        voiceReplyPendingRef.current = true;
+        useChatStore.getState().setVoiceTurnPending(true, currentAgent);
         setVoiceReplyActive(true);
         formRef.current?.requestSubmit();
       }
@@ -681,7 +705,7 @@ export function ChatComposer() {
       primeTtsAudio(); // unlock TTS playback while we still have the user gesture
       await voice.start();
     }
-  }, [voice, insertTranscript, primeTtsAudio]);
+  }, [voice, insertTranscript, primeTtsAudio, isStreaming, currentAgent]);
 
   const formatElapsed = (secs: number): string => {
     const m = Math.floor(secs / 60);
@@ -692,13 +716,18 @@ export function ChatComposer() {
   return (
     <div className="shrink-0 w-full p-3 md:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-border/50 bg-background/80 backdrop-blur-sm">
       <div className="mx-auto max-w-4xl">
-        {(voiceReplyActive || ttsPlaying) && (
+        {(pendingMessage?.voice || voiceReplyActive || ttsPlaying) && (
           <div
             role="status"
             aria-live="polite"
             className="mb-2 flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-1.5 text-xs font-medium text-primary"
           >
-            {ttsPlaying ? (
+            {pendingMessage?.voice ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                {t("chat.voice_queued")}
+              </>
+            ) : ttsPlaying ? (
               <>
                 <Volume2 className="h-3.5 w-3.5 animate-pulse" />
                 {t("chat.voice_speaking")}

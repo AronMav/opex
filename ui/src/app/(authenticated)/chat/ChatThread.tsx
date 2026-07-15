@@ -156,7 +156,13 @@ export function ChatThread({
     prevPhaseRef.current = connectionPhase;
 
     if (connectionPhase === "idle" && prevPhase !== "idle" && pendingMessage) {
-      // Clean transition to idle — drain queue.
+      // Clean transition to idle — drain queue. If the queued message was a
+      // voice submit made while streaming, arm voiceTurnPending BEFORE starting
+      // the drained turn so ChatComposer's spoken-reply effect (which reads
+      // this store flag on turn-end) speaks the reply once it completes.
+      if (pendingMessage.voice) {
+        useChatStore.getState().setVoiceTurnPending(true, currentAgent);
+      }
       useChatStore.getState().sendMessage(pendingMessage.content, pendingMessage.attachments);
       useChatStore.getState().clearPending(currentAgent);
     } else if (connectionPhase === "error" && pendingMessage) {

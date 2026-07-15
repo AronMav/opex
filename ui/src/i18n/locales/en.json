@@ -289,6 +289,7 @@
   "chat.tts_error": "Failed to synthesize speech",
   "chat.voice_preparing": "Preparing voice reply…",
   "chat.voice_speaking": "Speaking…",
+  "chat.voice_queued": "Will send after the reply",
   "chat.feedback_error": "Failed to submit feedback",
   "chat.copy_error": "Failed to copy to clipboard",
   "chat.more_actions": "More actions",

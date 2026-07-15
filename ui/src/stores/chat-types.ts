@@ -237,8 +237,20 @@ export interface AgentState {
    * Single-slot message queue. When the user presses Shift+Enter while streaming,
    * the message is stored here. A useEffect in ChatThread drains it when
    * connectionPhase transitions to idle (clean success only).
+   * `voice: true` marks a message queued from a voice submit made while
+   * streaming — ChatThread arms `voiceTurnPending` (below) when draining it so
+   * the reply is spoken once the drained turn completes.
    */
-  pendingMessage: { content: string; attachments?: Array<MessageAttachment> } | null;
+  pendingMessage: { content: string; attachments?: Array<MessageAttachment>; voice?: boolean } | null;
+  /**
+   * Single source of truth for "the turn that is about to start / just started
+   * was voice-initiated" — set by a direct voice submit (ChatComposer, while
+   * idle) or by ChatThread's pendingMessage drain (a queued voice message sent
+   * after streaming ends). ChatComposer's spoken-reply effect reads and clears
+   * it when the marked turn finishes, instead of relying on component-local
+   * ref state (which can't be armed from ChatThread's drain effect).
+   */
+  voiceTurnPending?: boolean;
   /**
    * Input token count from the most recent LLM response (from the "usage" SSE event).
    * Only inputTokens is stored — outputTokens do not consume context window for display.
@@ -288,8 +300,9 @@ export interface ChatStore {
 
   sendMessage: (text: string, attachments?: Array<MessageAttachment>) => void;
   interruptAndSend: (text: string, attachments?: Array<MessageAttachment>) => Promise<void>;
-  queueMessage: (text: string, attachments?: Array<MessageAttachment>) => void;
+  queueMessage: (text: string, attachments?: Array<MessageAttachment>, opts?: { voice?: boolean }) => void;
   clearPending: (agent?: string) => void;
+  setVoiceTurnPending: (pending: boolean, agent?: string) => void;
   stopStream: () => void;
   regenerate: () => void;
   regenerateFrom: (messageId: string) => void;
@@ -337,6 +350,7 @@ export function emptyAgentState(): AgentState {
     lastEventId: null,
     selectedBranches: {},
     pendingMessage: null,
+    voiceTurnPending: false,
     contextTokens: null,
     contextOutputTokens: null,
     cacheReadTokens: null,

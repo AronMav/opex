@@ -101,11 +101,16 @@ export function createStreamActions(deps: ActionDeps) {
       }
     },
 
-    queueMessage: (text: string, attachments?: Array<MessageAttachment>) => {
+    queueMessage: (text: string, attachments?: Array<MessageAttachment>, opts?: { voice?: boolean }) => {
       const agent = get().currentAgent;
       set((draft) => {
         if (!draft.agents[agent]) draft.agents[agent] = emptyAgentState();
-        draft.agents[agent].pendingMessage = { content: text, attachments };
+        const prev = draft.agents[agent].pendingMessage;
+        // If a previous voice message is already queued and this one is also
+        // voice, append with "\n" — the user spoke several phrases during the
+        // same turn instead of replacing the earlier one.
+        const content = prev?.voice && opts?.voice ? `${prev.content}\n${text}` : text;
+        draft.agents[agent].pendingMessage = { content, attachments, voice: opts?.voice ?? prev?.voice };
       });
     },
 
@@ -115,6 +120,14 @@ export function createStreamActions(deps: ActionDeps) {
         if (draft.agents[targetAgent]) {
           draft.agents[targetAgent].pendingMessage = null;
         }
+      });
+    },
+
+    setVoiceTurnPending: (pending: boolean, agent?: string) => {
+      const targetAgent = agent ?? get().currentAgent;
+      set((draft) => {
+        if (!draft.agents[targetAgent]) draft.agents[targetAgent] = emptyAgentState();
+        draft.agents[targetAgent].voiceTurnPending = pending;
       });
     },
 
