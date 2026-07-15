@@ -92,6 +92,12 @@ pub(crate) struct ListQuery {
     pub limit: i64,
     #[serde(default)]
     pub offset: i64,
+    /// History cursor: RFC3339 `created_at` of the oldest row already loaded.
+    #[serde(default)]
+    pub before: Option<String>,
+    /// History cursor tiebreak: `id` of that same oldest row.
+    #[serde(default)]
+    pub before_id: Option<Uuid>,
 }
 
 fn default_limit() -> i64 { 50 }
@@ -99,23 +105,51 @@ fn default_limit() -> i64 { 50 }
 // ── REST handlers ───────────────────────────────────────────────
 
 /// GET /api/notifications?limit=50&offset=0
+/// GET /api/notifications?limit=20&before=<rfc3339>&before_id=<uuid>  (history page)
 pub(crate) async fn api_list_notifications(
     State(infra): State<InfraServices>,
     Query(q): Query<ListQuery>,
 ) -> impl IntoResponse {
     let limit = q.limit.clamp(1, 200);
     let offset = q.offset.max(0);
-    match crate::db::notifications::list_notifications(&infra.db, limit, offset).await {
+
+    let result = match (q.before.as_deref(), q.before_id) {
+        (Some(before_str), Some(before_id)) => {
+            match chrono::DateTime::parse_from_rfc3339(before_str) {
+                Ok(dt) => {
+                    crate::db::notifications::list_notifications_before(
+                        &infra.db,
+                        dt.with_timezone(&chrono::Utc),
+                        before_id,
+                        limit,
+                    )
+                    .await
+                }
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"error": format!("invalid `before` cursor: {e}")})),
+                    )
+                        .into_response();
+                }
+            }
+        }
+        _ => crate::db::notifications::list_notifications(&infra.db, limit, offset).await,
+    };
+
+    match result {
         Ok((items, unread_count)) => Json(crate::db::notifications::NotificationsResponseDto {
             items,
             unread_count,
             limit,
             offset,
-        }).into_response(),
+        })
+        .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
