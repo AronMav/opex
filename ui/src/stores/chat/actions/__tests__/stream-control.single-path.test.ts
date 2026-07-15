@@ -26,6 +26,7 @@ vi.mock("@/lib/query-client", () => ({
     invalidateQueries: vi.fn(),
     setQueryData: vi.fn(),
     getQueryData: vi.fn(() => undefined),
+    getQueriesData: vi.fn(() => []),
     refetchQueries: vi.fn().mockResolvedValue(undefined),
   },
 }));
@@ -83,6 +84,40 @@ describe("single connect path", () => {
 
     // No POST on the resume path — it re-enters the identical connect point.
     expect(startTurnMock).not.toHaveBeenCalled();
+    expect(openTurnStreamMock).toHaveBeenCalledWith(
+      AGENT,
+      "s1",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("regenerate posts then connects (202 path, not legacy POST-SSE)", async () => {
+    // Seed a live overlay with a completed user→assistant exchange so
+    // regenerate can derive the last user text.
+    useChatStore.setState({
+      currentAgent: AGENT,
+      agents: {
+        [AGENT]: {
+          ...emptyAgentState(),
+          activeSessionId: "s1",
+          messageSource: {
+            mode: "live",
+            messages: [
+              { id: "u1", role: "user", parts: [{ type: "text", text: "hi" }], createdAt: "", status: "complete" },
+              { id: "a1", role: "assistant", parts: [{ type: "text", text: "yo" }], createdAt: "", status: "complete" },
+            ],
+          },
+        },
+      },
+    });
+
+    useChatStore.getState().regenerate();
+    await flush();
+
+    // Goes through the 202 turn-start (startTurn) then the single connect point,
+    // NOT the deleted legacy POST-then-read-body-as-SSE transport.
+    expect(startTurnMock).toHaveBeenCalledTimes(1);
     expect(openTurnStreamMock).toHaveBeenCalledWith(
       AGENT,
       "s1",

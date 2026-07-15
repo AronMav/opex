@@ -88,7 +88,6 @@ beforeEach(() => {
         connectionError: null,
         streamError: null,
         streamGeneration: 0,
-        reconnectAttempt: 0,
         selectedBranches: {},
         renderLimit: 100,
         turnLimitMessage: null,

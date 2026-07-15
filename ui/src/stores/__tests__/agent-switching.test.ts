@@ -36,7 +36,8 @@ vi.mock("@/lib/query-client", () => ({
 
 vi.mock("@/stores/streaming-renderer", () => ({
   createStreamingRenderer: () => ({
-    startStream: vi.fn(),
+    sendTurn: vi.fn(),
+    connect: vi.fn(),
     resumeStream: vi.fn(),
     abortActiveStream: vi.fn(),
     abortLocalOnly: vi.fn(),

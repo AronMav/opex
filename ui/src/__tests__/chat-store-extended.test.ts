@@ -312,7 +312,7 @@ describe("STATE-01: history to live transition", () => {
     fetchSpy.mockRestore();
 
     // After sendMessage, every transition to "live" messageSource must have non-empty messages.
-    // (startStream atomically sets { mode: "live", messages: [...seedMessages, userMsg] })
+    // (sendTurn atomically sets { mode: "live", messages: [userMsg] })
     const liveTransitions = stateSnapshots.filter((s) => s.messageSource.mode === "live");
     for (const snap of liveTransitions) {
       if (snap.messageSource.mode === "live") {

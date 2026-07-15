@@ -1211,8 +1211,6 @@
   "chat.chain_sessions_many": "({{count}} sessions)",
   "chat.chain_sessions_other": "({{count}} sessions)",
   "chat.reconnecting": "Reconnecting",
-  "chat.reconnecting_attempt_word": "attempt",
-  "chat.reconnecting_aria": "Reconnecting, attempt {{attempt}} of {{max}}",
   "chat.switch_agent": "Switch agent",
   "chat.session_list": "Session list",
   "chat.render_error": "Failed to render message content.",

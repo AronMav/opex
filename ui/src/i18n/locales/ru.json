@@ -1211,8 +1211,6 @@
   "chat.chain_sessions_many": "({{count}} сессий)",
   "chat.chain_sessions_other": "({{count}} сессии)",
   "chat.reconnecting": "Переподключение",
-  "chat.reconnecting_attempt_word": "попытка",
-  "chat.reconnecting_aria": "Переподключение, попытка {{attempt}} из {{max}}",
   "chat.switch_agent": "Сменить агента",
   "chat.session_list": "Список сессий",
   "chat.render_error": "Не удалось отобразить сообщение.",

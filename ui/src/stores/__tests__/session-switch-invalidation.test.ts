@@ -28,7 +28,8 @@ vi.mock("@/lib/query-client", () => ({
 // / `cleanupAgent` as side effects; we don't exercise them here.
 vi.mock("@/stores/streaming-renderer", () => ({
   createStreamingRenderer: () => ({
-    startStream: vi.fn(),
+    sendTurn: vi.fn(),
+    connect: vi.fn(),
     resumeStream: vi.fn(),
     abortActiveStream: vi.fn(),
     abortLocalOnly: vi.fn(),

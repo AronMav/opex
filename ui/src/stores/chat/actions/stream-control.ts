@@ -15,7 +15,7 @@ export function createStreamActions(deps: ActionDeps) {
   // F085: agents with an interruptAndSend in flight. abortLocalOnly flips
   // connectionPhase to 'idle' synchronously, so a rapid second sendMessage would
   // read phase='idle', take the non-interrupt branch, and start a racing stream
-  // that the delayed first startStream then tears down (a dropped/reordered
+  // that the delayed first sendTurn then tears down (a dropped/reordered
   // message). The phase alone is not a reliable concurrency gate; this flag is.
   const interrupting = new Set<string>();
 
@@ -29,7 +29,7 @@ export function createStreamActions(deps: ActionDeps) {
 
       // An interrupt is already in flight for this agent — queue this message
       // into pendingMessage (drained by ChatThread when the phase reaches idle)
-      // instead of racing a fresh startStream (F085).
+      // instead of racing a fresh sendTurn (F085).
       if (interrupting.has(agent)) {
         get().queueMessage(text, attachments);
         return;
@@ -144,7 +144,7 @@ export function createStreamActions(deps: ActionDeps) {
       let messages: ChatMessage[];
 
       if (st.messageSource.mode === "history") {
-        // Do NOT flip messageSource here; startStream sets messageSource atomically.
+        // Do NOT flip messageSource here; sendTurn sets messageSource atomically.
         messages = getCachedHistoryMessages(sessionId, st.selectedBranches);
       } else {
         messages = getLiveMessages(st.messageSource);
@@ -163,10 +163,10 @@ export function createStreamActions(deps: ActionDeps) {
         .map((p) => p.text)
         .join("\n");
 
-      // Remove last user message too (startStream will re-add it)
-      messages = messages.slice(0, messages.lastIndexOf(lastUser));
-
-      renderer.startStream(agent, sessionId, messages, userText);
+      // Server-authoritative 202+connect path (T8): sendTurn re-adds the user
+      // message as the optimistic echo; the branch tip (leaf_message_id) is
+      // resolved inside sendTurn, so no seed-message array is needed.
+      void renderer.sendTurn(agent, sessionId, userText);
     },
 
     regenerateFrom: (messageId: string) => {
@@ -182,13 +182,14 @@ export function createStreamActions(deps: ActionDeps) {
       let messages: ChatMessage[];
 
       if (st.messageSource.mode === "history") {
-        // Do NOT flip messageSource here; startStream sets messageSource atomically.
+        // Do NOT flip messageSource here; sendTurn sets messageSource atomically.
         messages = getCachedHistoryMessages(sessionId, st.selectedBranches);
       } else {
         messages = getLiveMessages(st.messageSource);
       }
 
-      // Find the target user message and truncate everything after it
+      // Find the target user message (only its text is needed — sendTurn re-adds
+      // it as the optimistic echo and resolves the branch tip itself).
       const targetIdx = messages.findIndex((m) => m.id === messageId);
       if (targetIdx === -1) {
         // Fallback to normal regenerate if message not found
@@ -207,10 +208,7 @@ export function createStreamActions(deps: ActionDeps) {
         .map((p) => (p as { text: string }).text)
         .join("\n");
 
-      // Keep only messages before the target (startStream re-adds the user message)
-      const seedMessages = messages.slice(0, targetIdx);
-
-      renderer.startStream(agent, sessionId, seedMessages, userText);
+      void renderer.sendTurn(agent, sessionId, userText);
     },
 
     forkAndRegenerate: async (messageId: string, newContent: string) => {
@@ -230,17 +228,6 @@ export function createStreamActions(deps: ActionDeps) {
           content: newContent,
         });
 
-        const currentSt = get().agents[agent] ?? emptyAgentState();
-        let messages: ChatMessage[];
-        if (currentSt.messageSource.mode === "history") {
-          messages = getCachedHistoryMessages(sessionId, currentSt.selectedBranches);
-        } else {
-          messages = getLiveMessages(currentSt.messageSource);
-        }
-
-        const forkIdx = messages.findIndex((m) => m.id === messageId);
-        const seedMessages = forkIdx >= 0 ? messages.slice(0, forkIdx) : messages;
-
         set((draft) => {
           const s = draft.agents[agent];
           if (s && resp.parent_message_id) {
@@ -248,9 +235,11 @@ export function createStreamActions(deps: ActionDeps) {
           }
         });
 
-        // Pass resp.message_id so the backend reuses the already-persisted branch
-        // user message instead of creating a duplicate via /api/chat.
-        renderer.startStream(agent, sessionId, seedMessages, newContent, undefined, resp.message_id);
+        // Pass resp.message_id (userMessageId) so the backend reuses the
+        // already-persisted branch user message instead of creating a duplicate
+        // via /api/chat. sendTurn resolves the branch tip (leaf_message_id) from
+        // the freshly-selected branch itself, so no seed-message array is needed.
+        void renderer.sendTurn(agent, sessionId, newContent, undefined, resp.message_id);
       } catch (e) {
         // F084: surface the failure — a silent console.error leaves the composer
         // looking idle so the user can't tell the edit-and-regenerate failed.

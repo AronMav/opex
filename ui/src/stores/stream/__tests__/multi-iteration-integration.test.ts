@@ -46,7 +46,6 @@ beforeEach(() => {
         connectionError: null,
         streamError: null,
         streamGeneration: 0,
-        reconnectAttempt: 0,
         selectedBranches: {},
         renderLimit: 100,
         turnLimitMessage: null,
@@ -80,7 +79,6 @@ describe("multi-iteration: one step-start opens one ChatMessage per iteration", 
     ];
     await processSSEStream(session, makeStream(frames), {
       sessionId: null,
-      reconnectAttempt: 0,
       callbacks: makeCallbacks(),
     });
     // Wait for any throttled commits
@@ -117,7 +115,6 @@ describe("multi-iteration: one step-start opens one ChatMessage per iteration", 
     ];
     await processSSEStream(session, makeStream(frames), {
       sessionId: null,
-      reconnectAttempt: 0,
       callbacks: makeCallbacks(),
     });
     await new Promise(r => setTimeout(r, 100));
@@ -149,7 +146,6 @@ describe("Finish event guarantee — closes connectionPhase cleanly", () => {
     ];
     await processSSEStream(session, makeStream(frames), {
       sessionId: null,
-      reconnectAttempt: 0,
       callbacks: makeCallbacks(),
     });
     // Phase passes through "complete" during the post-finally refetch window
@@ -168,7 +164,6 @@ describe("Finish event guarantee — closes connectionPhase cleanly", () => {
     ];
     await processSSEStream(session, makeStream(frames), {
       sessionId: null,
-      reconnectAttempt: 0,
       callbacks: makeCallbacks(),
     });
     expect(useChatStore.getState().agents.Arty.connectionPhase).toBe("error");

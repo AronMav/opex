@@ -42,7 +42,6 @@ beforeEach(() => {
         connectionError: null,
         streamError: null,
         streamGeneration: 0,
-        reconnectAttempt: 0,
         selectedBranches: {},
         renderLimit: 100,
         turnLimitMessage: null,
@@ -64,7 +63,6 @@ describe("processSSEStream", () => {
     ];
     await processSSEStream(session, makeStream(frames), {
       sessionId: null,
-      reconnectAttempt: 0,
       callbacks,
     });
     expect(callbacks.onSessionId).toHaveBeenCalledWith("s1");
@@ -83,7 +81,6 @@ describe("processSSEStream", () => {
     ];
     await processSSEStream(session, makeStream(frames), {
       sessionId: null,
-      reconnectAttempt: 0,
       callbacks,
     });
     const phase = useChatStore.getState().agents.Arty.connectionPhase;
@@ -103,7 +100,6 @@ describe("processSSEStream", () => {
     ];
     await processSSEStream(session, makeStream(frames), {
       sessionId: null,
-      reconnectAttempt: 0,
       callbacks,
     });
     expect(useChatStore.getState().agents.Arty.connectionPhase).toBe("idle");
@@ -122,7 +118,6 @@ describe("processSSEStream", () => {
     ];
     await processSSEStream(session, makeStream(frames), {
       sessionId: null,
-      reconnectAttempt: 0,
       callbacks: makeCallbacks(),
     });
     const msgs = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
@@ -140,7 +135,6 @@ describe("processSSEStream", () => {
     ];
     await processSSEStream(session, makeStream(frames), {
       sessionId: null,
-      reconnectAttempt: 0,
       callbacks: makeCallbacks(),
     });
     expect(useChatStore.getState().agents.Arty.connectionPhase).toBe("error");
@@ -156,7 +150,6 @@ describe("processSSEStream", () => {
     ];
     await processSSEStream(session, makeStream(frames), {
       sessionId: null,
-      reconnectAttempt: 0,
       callbacks: makeCallbacks(),
     });
     // finish after sync-error must NOT overwrite "error" with "streaming"

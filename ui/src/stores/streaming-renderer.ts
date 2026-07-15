@@ -2,9 +2,8 @@
 // Factory module encapsulating SSE stream processing, rAF throttling,
 // reconnection logic, and per-agent cleanup (MEM-01, PERF-02).
 
-import { processSSEStream } from "./stream/stream-processor";
 import { startTurn, openTurnStream } from "./stream/chat-stream";
-import { apiPatch, apiPost, assertToken } from "@/lib/api";
+import { apiPatch, apiPost } from "@/lib/api";
 import { queryClient } from "@/lib/query-client";
 import { qk } from "@/lib/queries";
 
@@ -85,7 +84,7 @@ export function createStreamingRenderer(store: StoreAccess) {
   // ── Stream lifecycle ────────────────────────────────────────────────────
 
   /** Internal: local abort only (no backend notification). Used by
-   * startStream to clean up lingering fetch controllers before launching
+   * sendTurn/connect to clean up lingering fetch controllers before launching
    * a new stream on the same agent. Calling /abort here would race with
    * the new stream's registration on the same session id and cancel it
    * prematurely.
@@ -143,170 +142,6 @@ export function createStreamingRenderer(store: StoreAccess) {
     abortLocalOnly(agent);
   }
 
-  // ── SSE stream handler ──────────────────────────────────────────────────
-  // Reconnect policy is in stream/stream-reconnect.ts (SSE-02).
-
-  function startStream(agent: string, sessionId: string | null, messages: ChatMessage[], userText: string, attachments?: Array<MessageAttachment>, userMessageId?: string) {
-    // Local-only cleanup for the same reason documented in connect.
-    abortLocalOnly(agent);
-
-    // Create a new StreamSession after abortLocalOnly's generation bump.
-    // streamSessionManager.start() disposes the previous session (bumping
-    // generation once) and creates a new session whose .generation is the
-    // current store value — used as the authoritative generation reference
-    // inside processSSEStream.
-    const session = streamSessionManager.start(agent);
-
-    const userParts: MessagePart[] = [];
-    if (userText) userParts.push({ type: "text", text: userText });
-
-    const apiAttachments: Array<{
-      url: string;
-      media_type: string;
-      file_name: string;
-      mime_type: string;
-    }> = [];
-    if (attachments && attachments.length > 0) {
-      for (const att of attachments) {
-        for (const content of att.content) {
-          userParts.push({
-            type: "file",
-            url: content.data,
-            mediaType: content.mimeType,
-          });
-
-          apiAttachments.push({
-            url: content.data,
-            media_type: content.mimeType.startsWith("image/") ? "image" : "document",
-            file_name: content.filename ?? att.name,
-            mime_type: content.mimeType,
-          });
-        }
-      }
-    }
-
-    if (userParts.length === 0) {
-      userParts.push({ type: "text", text: "" });
-    }
-
-    // Build user message — use the pre-allocated UUID so the optimistic message
-    // ID matches the DB row after bootstrap saves it via save_message_ex_with_id.
-    const userMsg: ChatMessage = {
-      id: userMessageId ?? uuid(),
-      role: "user",
-      parts: userParts,
-      createdAt: new Date().toISOString(),
-      status: "sending",
-    };
-    // Architecture C: live = overlay only. History provides past messages.
-    // Overlay contains just the optimistic user message (until history picks it up).
-    update(agent, {
-      messageSource: { mode: "live", messages: [userMsg] },
-      streamError: null,
-      connectionPhase: "submitted",
-      connectionError: null,
-      turnLimitMessage: null,
-      isLlmReconnecting: false,
-    });
-    // Seed _lastEventTime so visibilitychange recovery does not force-reconnect
-    // a freshly-submitted stream during the first-event window.
-    recordEventActivity(agent);
-    saveUiState(agent);
-
-    // Build request body -- backend only uses the last user message + session_id
-    const agentState = store.get().agents[agent];
-    const forceNew = agentState?.forceNewSession ?? false;
-    const body: Record<string, unknown> = {
-      agent,
-      messages: [{ role: "user", content: userText }],
-    };
-    if (apiAttachments.length > 0) {
-      body.attachments = apiAttachments;
-    }
-    if (sessionId) {
-      body.session_id = sessionId;
-      // Send leaf_message_id — the tip of the currently viewed branch.
-      // Use resolveActivePath to find the correct leaf (not the absolute last message,
-      // which could be on a different branch).
-      const rawMsgs = getCachedRawMessages(sessionId);
-      if (rawMsgs.length > 0) {
-        const agentSt = store.get().agents[agent];
-        const branches = agentSt?.selectedBranches ?? {};
-        const hasBranching = rawMsgs.some(m => m.parent_message_id != null);
-        if (hasBranching) {
-          const activePath = resolveActivePath(rawMsgs, branches);
-          if (activePath.length > 0) {
-            body.leaf_message_id = activePath[activePath.length - 1].id;
-          }
-        } else {
-          body.leaf_message_id = rawMsgs[rawMsgs.length - 1].id;
-        }
-      }
-    }
-    if (userMessageId) {
-      body.user_message_id = userMessageId;
-    }
-    if (forceNew) {
-      body.force_new_session = true;
-      update(agent, { forceNewSession: false });
-    }
-
-    const token = assertToken();
-
-    fetch("/api/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-      signal: session.signal,
-    })
-      .then((resp) => {
-        if (resp.status === 401) {
-          import("@/lib/api").then(({ handleUnauthorized }) => handleUnauthorized());
-          return;
-        }
-        if (!resp.ok) {
-          return resp.text().then((t) => {
-            throw new Error(t || `HTTP ${resp.status}`);
-          });
-        }
-        return processSSEStream(session, resp.body!, {
-          sessionId: null,
-          reconnectAttempt: 0,
-          callbacks: {
-            onSessionId: (sid) => { _onSessionId?.(agent, sid); },
-            getAgentState: (a) => store.get().agents[a],
-            updateSessionParticipants: (sid, participants) => store.get().updateSessionParticipants(sid, participants),
-            onStreamDone: () => saveUiState(agent),
-            onEventActivity: () => recordEventActivity(agent),
-          },
-        });
-      })
-      .catch((err) => {
-        if (err.name === "AbortError") return;
-        const errMsg = err.message || "Stream failed";
-        // SSE-03: Mark the optimistic user message as failed so the UI shows an error indicator.
-        session.writeDraft((agentDraft: AgentState) => {
-          if (agentDraft.messageSource.mode !== "live") return;
-          const msgs = agentDraft.messageSource.messages;
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            if (msgs[i].role === "user" && msgs[i].status === "sending") {
-              msgs[i].status = "failed";
-              break;
-            }
-          }
-        });
-        update(agent, {
-          streamError: errMsg,
-          connectionPhase: "error",
-          connectionError: errMsg,
-        });
-        saveUiState(agent);
-      });
-  }
-
   // ── Server-authoritative single connect path (T7/T8) ─────────────────────
   // `connect` is the ONE place the client opens a turn stream — used after a
   // POST (sendTurn), on mount/refresh (resumeStream action → connect), on a
@@ -323,7 +158,7 @@ export function createStreamingRenderer(store: StoreAccess) {
    */
   function connect(agent: string, sessionId: string) {
     // Dispose the previous session (generation bump) before creating a new one,
-    // mirroring startStream. abortLocalOnly is local-only — it never POSTs
+    // mirroring sendTurn. abortLocalOnly is local-only — it never POSTs
     // /abort, so re-opening the same session id can't cancel it.
     abortLocalOnly(agent);
     const session = streamSessionManager.start(agent);
@@ -376,7 +211,7 @@ export function createStreamingRenderer(store: StoreAccess) {
     attachments?: Array<MessageAttachment>,
     userMessageId?: string,
   ) {
-    // ── Optimistic user echo (formerly startStream:350-401) ──
+    // ── Optimistic user echo ──
     const userParts: MessagePart[] = [];
     if (userText) userParts.push({ type: "text", text: userText });
 
@@ -420,7 +255,7 @@ export function createStreamingRenderer(store: StoreAccess) {
     recordEventActivity(agent);
     saveUiState(agent);
 
-    // ── Build request body (formerly startStream:407-443) ──
+    // ── Build request body ──
     const agentState = store.get().agents[agent];
     const forceNew = agentState?.forceNewSession ?? false;
     const body: Record<string, unknown> = {
@@ -557,7 +392,6 @@ export function createStreamingRenderer(store: StoreAccess) {
   // ── Public API ─────────────────────────────────────────────────────────
 
   return {
-    startStream,
     sendTurn,
     connect,
     abortActiveStream,

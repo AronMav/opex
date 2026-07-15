@@ -72,7 +72,7 @@ describe("chat-selectors (derived)", () => {
       expect(selectRenderMessages(makeState(agent), agent)).toEqual([]);
     });
     // history mode / live mode / live overlay over history exhaustively
-    // tested via existing chat-overlay-dedup.test.ts; here we only
+    // tested via the chat-history overlay-dedup unit tests; here we only
     // guard the mode-switch dispatch.
   });
 });

@@ -53,10 +53,10 @@ export interface StreamProcessorCallbacks {
 
   // ── T6: batch-apply transport (chat-stream.ts / TurnStreamCallbacks) ────
   // Optional — only populated (and only ever invoked) when `batchMode` is
-  // set in StreamProcessorOpts. Old callers (startStream/resumeStream) never
-  // set batchMode, so these fields stay undefined and the code paths below
-  // that reference them are dead for the legacy transport — zero behavior
-  // change for the existing SSE renderer.
+  // set in StreamProcessorOpts. A non-batch caller never sets batchMode, so
+  // these fields stay undefined and the code paths below that reference them
+  // are dead for the legacy transport — zero behavior change for the existing
+  // SSE renderer.
 
   /**
    * Fired on `sync_begin`. Reports the resume boundary metadata. `runStatus`
@@ -85,7 +85,6 @@ export interface StreamProcessorCallbacks {
 
 export interface StreamProcessorOpts {
   sessionId: string | null;
-  reconnectAttempt: number;
   callbacks: StreamProcessorCallbacks;
   /**
    * T6: opt-in batch-apply mode. When true, `sync_begin`/`sync_end` gate the
@@ -93,7 +92,7 @@ export interface StreamProcessorOpts {
    * a single store commit at `sync_end`, and the new `onBoundary` /
    * `onEnvelopeApplied` / `onFinished` / `onConnectionLost` callbacks are
    * dispatched. Defaults to false/undefined — the legacy per-event-throttled
-   * path (startStream/resumeStream) is unchanged when this is omitted.
+   * path (legacy non-batch transport) is unchanged when this is omitted.
    */
   batchMode?: boolean;
 }
@@ -635,7 +634,7 @@ export async function processSSEStream(
           callbacks.onFinished?.();
         }
       }
-      // Non-batchMode (legacy startStream) drop without finish no longer
+      // Non-batchMode (legacy transport) drop without finish no longer
       // reconnects (T8): control falls through to the settle below, which lands
       // connectionPhase="idle" and the finishing→history handoff.
 

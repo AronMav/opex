@@ -81,7 +81,6 @@ export function openTurnStream(
       }
       return processSSEStream(session, resp.body!, {
         sessionId,
-        reconnectAttempt: 0,
         batchMode: true,
         callbacks: {
           // Required legacy fields — no-ops / direct store reads. Safe to
