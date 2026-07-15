@@ -14,13 +14,21 @@ export interface SlotEntry {
  *  (a subset of) {@link PROFILE_CAPABILITIES}. */
 export type ProfileSlots = Record<string, SlotEntry[]>;
 
-export interface ProfileRow {
+/** Fields returned by every profile endpoint (create/update/copy/get-one). The
+ *  list endpoint additionally splices in `agents` — see {@link ProfileRow}. */
+export interface ProfileBase {
   id: string;
   name: string;
   slots: ProfileSlots;
-  agents: string[];
   created_at: string;
   updated_at: string;
+}
+
+/** A profile row as returned by GET /api/profiles (list) ONLY — the list
+ *  handler splices in `agents`. Other endpoints (create/update/copy/get-one)
+ *  return {@link ProfileBase} without it. */
+export interface ProfileRow extends ProfileBase {
+  agents: string[];
 }
 
 /** Fixed capability set a profile's `slots` map may key into. */
@@ -55,7 +63,7 @@ export interface CreateProfileInput {
 export function useCreateProfile() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: CreateProfileInput) => apiPost<ProfileRow>("/api/profiles", data),
+    mutationFn: (data: CreateProfileInput) => apiPost<ProfileBase>("/api/profiles", data),
     onSuccess: () => qc.invalidateQueries({ queryKey: profilesKey }),
     onError: (e: Error) => toast.error(e.message),
   });
@@ -65,7 +73,6 @@ export interface UpdateProfileInput {
   id: string;
   name?: string;
   slots?: ProfileSlots;
-  agents?: string[];
 }
 
 /** PUT /api/profiles/{id} — update an existing profile. */
@@ -73,23 +80,19 @@ export function useUpdateProfile() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, ...body }: UpdateProfileInput) =>
-      apiPut<ProfileRow>(`/api/profiles/${encodeURIComponent(id)}`, body),
+      apiPut<ProfileBase>(`/api/profiles/${encodeURIComponent(id)}`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: profilesKey }),
     onError: (e: Error) => toast.error(e.message),
   });
 }
 
-export interface CopyProfileInput {
-  id: string;
-  name?: string;
-}
-
-/** POST /api/profiles/{id}/copy — duplicate a profile (optionally renamed). */
+/** POST /api/profiles/{id}/copy — duplicate a profile. The backend takes no
+ *  request body: it auto-generates the copy name ("{name} (copy)", "{name}
+ *  (copy 2)", ...) — any body sent would be ignored. */
 export function useCopyProfile() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, name }: CopyProfileInput) =>
-      apiPost<ProfileRow>(`/api/profiles/${encodeURIComponent(id)}/copy`, name ? { name } : undefined),
+    mutationFn: (id: string) => apiPost<ProfileBase>(`/api/profiles/${encodeURIComponent(id)}/copy`),
     onSuccess: () => qc.invalidateQueries({ queryKey: profilesKey }),
     onError: (e: Error) => toast.error(e.message),
   });

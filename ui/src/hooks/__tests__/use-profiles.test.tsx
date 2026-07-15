@@ -17,9 +17,11 @@ import { apiGet, apiPost, apiDelete } from "@/lib/api";
 import {
   useProfiles,
   useCreateProfile,
+  useCopyProfile,
   useDeleteProfile,
   PROFILE_CAPABILITIES,
   type ProfileRow,
+  type ProfileBase,
 } from "@/hooks/use-profiles";
 
 function makeClient() {
@@ -37,6 +39,16 @@ const MOCK_PROFILE: ProfileRow = {
   name: "Default",
   slots: { text: [{ provider: "openai", model: "gpt-5" }] },
   agents: ["Opex"],
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+};
+
+// create/update/copy responses do NOT include `agents` — only the list
+// endpoint splices that in.
+const MOCK_PROFILE_BASE: ProfileBase = {
+  id: "p1",
+  name: "Default",
+  slots: { text: [{ provider: "openai", model: "gpt-5" }] },
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 };
@@ -85,19 +97,46 @@ describe("useProfiles", () => {
 describe("useCreateProfile", () => {
   it("posts to /api/profiles and invalidates the [\"profiles\"] query", async () => {
     vi.mocked(apiGet).mockResolvedValue({ profiles: [] });
-    vi.mocked(apiPost).mockResolvedValue(MOCK_PROFILE);
+    vi.mocked(apiPost).mockResolvedValue(MOCK_PROFILE_BASE);
 
     const qc = makeClient();
     const wrapper = wrapperFor(qc);
     const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 
     const { result } = renderHook(() => useCreateProfile(), { wrapper });
+    let created: ProfileBase | undefined;
     await act(async () => {
-      await result.current.mutateAsync({ name: "Default" });
+      created = await result.current.mutateAsync({ name: "Default" });
     });
 
     expect(apiPost).toHaveBeenCalledWith("/api/profiles", { name: "Default" });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["profiles"] });
+    // The create response is a ProfileBase — no `agents` field.
+    expect(created).toEqual(MOCK_PROFILE_BASE);
+    expect(created).not.toHaveProperty("agents");
+  });
+});
+
+describe("useCopyProfile", () => {
+  it("posts to /api/profiles/{id}/copy with NO body (backend auto-names the copy)", async () => {
+    vi.mocked(apiPost).mockResolvedValue({ ...MOCK_PROFILE_BASE, name: "Default (copy)" });
+
+    const qc = makeClient();
+    const wrapper = wrapperFor(qc);
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+    const { result } = renderHook(() => useCopyProfile(), { wrapper });
+    let copied: ProfileBase | undefined;
+    await act(async () => {
+      copied = await result.current.mutateAsync("p1");
+    });
+
+    // Exactly one arg — no name/body passed as a second argument.
+    expect(apiPost).toHaveBeenCalledWith("/api/profiles/p1/copy");
+    expect(apiPost).toHaveBeenCalledTimes(1);
+    expect((apiPost as ReturnType<typeof vi.fn>).mock.calls[0]).toHaveLength(1);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["profiles"] });
+    expect(copied).not.toHaveProperty("agents");
   });
 });
 
@@ -122,7 +161,7 @@ describe("useDeleteProfile", () => {
 describe("useProfiles + useCreateProfile integration", () => {
   it("an active useProfiles() list refetches and reflects new data after a create mutation", async () => {
     vi.mocked(apiGet).mockResolvedValueOnce({ profiles: [] });
-    vi.mocked(apiPost).mockResolvedValue(MOCK_PROFILE);
+    vi.mocked(apiPost).mockResolvedValue(MOCK_PROFILE_BASE);
 
     const qc = makeClient();
     const wrapper = wrapperFor(qc);
