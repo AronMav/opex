@@ -338,6 +338,8 @@ Chat endpoint streams `StreamEvent` variants over SSE (Vercel AI SDK v3 compatib
 | `"file"` | inline media | `url`, `mediaType?` |
 | `"rich-card"` | structured card | `cardType`, `data` |
 | `"sync"` | message sync | `content`, `toolCalls`, `status`, `error?` |
+| `"sync_begin"` | envelope open | `boundaryMessageId?`, `runStatus`, `truncated` |
+| `"sync_end"` | envelope close | `lastSeq?` |
 | `"finish"` | stream end | — |
 | `"error"` | stream error | `errorText` |
 

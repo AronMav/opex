@@ -170,10 +170,12 @@ pub enum SseEvent {
         #[cfg_attr(feature = "ts-gen", ts(type = "number"))]
         delay_ms: u64,
     },
-    /// Resume snapshot — emitted by `gateway/handlers/chat/resume.rs`
-    /// when a client reconnects to a session that finished/errored/was
-    /// interrupted while in-memory broadcast was lost. NOT emitted by
-    /// sse_converter (live streaming path); only by the resume handler.
+    /// Resume snapshot — emitted by `gateway/handlers/chat/stream.rs`
+    /// (`api_chat_stream`'s DB-only branch) when a client connects/reconnects
+    /// to a session with no live in-memory stream (finished/errored/
+    /// interrupted, or Core restarted mid-run). NOT emitted by
+    /// sse_converter (live streaming path); only by the GET stream handler's
+    /// `stream_jobs` fallback.
     Sync {
         content: String,
         #[serde(rename = "toolCalls")]
@@ -271,8 +273,11 @@ pub enum MetricTrend {
     Flat,
 }
 
-/// Status values for Sync event. Verified against
-/// `gateway/handlers/chat/resume.rs:47-59`.
+/// Status values for Sync event. Verified against the `job.status` →
+/// `SyncStatus` mapping in `gateway/handlers/chat/stream.rs`'s
+/// `api_chat_stream` DB-only branch (line-pinning avoided here — that
+/// function has moved once already after the `resume.rs` → `stream.rs`
+/// rename).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]

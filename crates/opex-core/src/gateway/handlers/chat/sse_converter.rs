@@ -96,8 +96,14 @@ pub(super) async fn run_converter(
             };
             if !sse_tx.is_closed() {
                 client_gone_logged = false;
-                // SSE `id:` field — client tracks via Last-Event-ID for
-                // dedup-free reconnect. seq=0 (no session yet) emits no id.
+                // SSE `id:` field kept for wire-format/devtools completeness
+                // only — no consumer relies on Last-Event-ID anymore. T3's
+                // `sse.rs` drops `sse_rx` immediately after spawning this
+                // converter, so this branch is effectively unreachable in
+                // production; the authoritative reconnect path is
+                // `GET /api/chat/{id}/stream` (`stream.rs`), which always
+                // does a full envelope replay and ignores Last-Event-ID
+                // entirely (T4). seq=0 (no session yet) emits no id.
                 let event = if seq > 0 {
                     Event::default().id(seq.to_string()).data($json_str)
                 } else {

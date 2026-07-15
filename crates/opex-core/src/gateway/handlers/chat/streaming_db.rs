@@ -1,5 +1,10 @@
-//! Streaming-message DB helpers shared between `sse.rs` (live producer) and
-//! `resume.rs` (no-op consumer of the same row schema).
+//! Streaming-message DB helpers used by `sse_converter.rs` (the converter
+//! task spawned from `sse.rs`'s POST handler) to persist the streaming
+//! assistant text into the `messages` row as it accumulates. GET
+//! `/api/chat/{id}/stream` (`stream.rs`) does NOT read this row — it
+//! replays from `StreamRegistry`/`stream_jobs` instead (the old `resume.rs`
+//! consumer of this row schema no longer exists; renamed/rewritten as
+//! `stream.rs` in T4).
 //!
 //! - [`StreamingMessageGuard`]: RAII finalizer that schedules a `DELETE` of
 //!   the streaming row if the converter task panics or exits unexpectedly.
