@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from config import ProviderConfig, ProvidersConfig
 from registry import ProviderRegistry
 from routers import search as search_router_module
+from routers import tts as tts_router_module
 
 
 def _make_registry(providers: dict, active: dict) -> ProviderRegistry:
@@ -52,6 +53,28 @@ def _build_search_app(registry: ProviderRegistry) -> FastAPI:
     app.include_router(search_router_module.router)
     app.state.registry = registry
     app.state.http_client = None  # fake providers never touch it
+    return app
+
+
+class _FakeTTSProvider:
+    """Minimal TTSProvider stand-in — records the `voice` arg it was called
+    with instead of doing any real synthesis, so tests can assert on it."""
+
+    def __init__(self, name: str = "fake-tts"):
+        self.name = name
+        self.model = None
+        self.calls: list[dict] = []
+
+    async def synthesize(self, http, text, voice, model=None, response_format="mp3", registry=None):
+        self.calls.append({"text": text, "voice": voice, "model": model, "response_format": response_format})
+        return b"fake-audio-bytes"
+
+
+def _build_tts_app(registry: ProviderRegistry) -> FastAPI:
+    app = FastAPI()
+    app.include_router(tts_router_module.router)
+    app.state.registry = registry
+    app.state.http_client = None  # fake provider never touches it
     return app
 
 
@@ -172,3 +195,77 @@ def test_search_no_header_falls_back_to_legacy_active():
         resp = client.post("/v1/search", json={"query": "q"})
     assert resp.status_code == 200
     assert resp.json()["results"] == [{"title": "legacy"}]
+
+
+# ── /v1/audio/speech: X-Opex-Voice header vs body.voice ───────────────────────
+
+def _build_tts_registry_with_fake_provider() -> tuple[ProviderRegistry, _FakeTTSProvider]:
+    """A registry with one enabled tts provider whose instance is our fake,
+    so aget_active('tts') resolves to it without any network refresh."""
+    reg = ProviderRegistry()
+    _skip_network(reg)
+    reg.config.providers["tts-fake"] = ProviderConfig(type="tts", driver="minimax", enabled=True)
+    fake = _FakeTTSProvider("tts-fake")
+    reg._instances["tts-fake"] = fake
+    return reg, fake
+
+
+def test_speech_uses_header_voice_when_body_voice_absent():
+    """body.voice is absent → the handler must fall through to X-Opex-Voice."""
+    reg, fake = _build_tts_registry_with_fake_provider()
+    app = _build_tts_app(reg)
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/audio/speech",
+            json={"input": "hello"},
+            headers={"X-Opex-Voice": "TestVoice"},
+        )
+    assert resp.status_code == 200
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["voice"] == "TestVoice"
+
+
+def test_speech_body_voice_overrides_header_voice():
+    """body.voice is non-empty → it wins over X-Opex-Voice (body wins)."""
+    reg, fake = _build_tts_registry_with_fake_provider()
+    app = _build_tts_app(reg)
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/audio/speech",
+            json={"input": "hello", "voice": "BodyVoice"},
+            headers={"X-Opex-Voice": "HeaderVoice"},
+        )
+    assert resp.status_code == 200
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["voice"] == "BodyVoice"
+
+
+def test_speech_no_header_no_body_voice_falls_back_to_empty_string():
+    """Neither body.voice nor the header is set → provider gets "" (its own
+    default-voice logic takes over), matching `body.voice or header or ""`."""
+    reg, fake = _build_tts_registry_with_fake_provider()
+    app = _build_tts_app(reg)
+    with TestClient(app) as client:
+        resp = client.post("/v1/audio/speech", json={"input": "hello"})
+    assert resp.status_code == 200
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["voice"] == ""
+
+
+# ── registry.aget_active: uninstantiated (disabled) active-id falls through ──
+
+@pytest.mark.asyncio
+async def test_aget_active_falls_back_when_active_id_is_disabled_provider():
+    """`active={"tts": "tts-off"}` names a DISABLED provider — it never gets
+    an entry in `_instances`, so aget_active must fall through to the
+    category-matched enabled provider rather than returning None."""
+    reg = _make_registry(
+        providers={
+            "tts-off": {"type": "tts", "driver": "minimax", "enabled": False},
+            "tts-a": {"type": "tts", "driver": "minimax", "enabled": True},
+        },
+        active={"tts": "tts-off"},
+    )
+    p = await reg.aget_active("tts")
+    assert p is not None
+    assert p is reg._instances["tts-a"]
