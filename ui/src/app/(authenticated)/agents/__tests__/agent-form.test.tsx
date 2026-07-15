@@ -48,6 +48,10 @@ vi.mock("@/lib/queries", () => ({
   useProviderModelsDetailed: () => ({ data: [], isLoading: false, refetch: vi.fn() }),
 }));
 
+vi.mock("@/hooks/use-profiles", () => ({
+  useProfiles: () => ({ data: { profiles: [{ id: "1", name: "Default", slots: {}, created_at: "", updated_at: "", agents: [] }] } }),
+}));
+
 vi.mock("./RoutingRulesEditor", () => ({
   PROVIDERS: [],
   FALLBACK_MODELS: {},
@@ -62,10 +66,8 @@ function makeDetail(overrides: Record<string, unknown> = {}) {
   return {
     name: "TestAgent",
     language: "ru",
-    provider: "openai",
-    model: "gpt-4",
-    provider_connection: null,
-    fallback_provider: null,
+    profile: "Default",
+    capabilities: { text: true, stt: false, tts: false, vision: false, imagegen: false, websearch: false },
     temperature: 1.0,
     max_tokens: null,
     access: null,
@@ -104,24 +106,19 @@ describe("formToPayload", () => {
     expect(payload.max_tokens).toBe(512);
   });
 
-  it('empty providerConnection → provider_connection: null', () => {
-    const payload = formToPayload({ ...base, providerConnection: "" });
-    expect(payload.provider_connection).toBeNull();
+  it('profile: "Default" → payload.profile: "Default"', () => {
+    const payload = formToPayload({ ...base, profile: "Default" });
+    expect(payload.profile).toBe("Default");
   });
 
-  it('providerConnection: "openai" → provider_connection: "openai"', () => {
-    const payload = formToPayload({ ...base, providerConnection: "openai" });
-    expect(payload.provider_connection).toBe("openai");
+  it('profile: "Voice" → payload.profile: "Voice"', () => {
+    const payload = formToPayload({ ...base, profile: "Voice" });
+    expect(payload.profile).toBe("Voice");
   });
 
-  it('fallbackProvider: "" → fallback_provider: "" (empty string, not null)', () => {
-    const payload = formToPayload({ ...base, fallbackProvider: "" });
-    expect(payload.fallback_provider).toBe("");
-  });
-
-  it('fallbackProvider: "anthropic" → fallback_provider: "anthropic"', () => {
-    const payload = formToPayload({ ...base, fallbackProvider: "anthropic" });
-    expect(payload.fallback_provider).toBe("anthropic");
+  it('profile: "" → payload.profile falls back to "Default"', () => {
+    const payload = formToPayload({ ...base, profile: "" });
+    expect(payload.profile).toBe("Default");
   });
 
   it("toolsEnabled: false → tools: null", () => {
@@ -225,14 +222,19 @@ describe("formToPayload", () => {
 // ── detailToForm tests ──────────────────────────────────────────────────────
 
 describe("detailToForm", () => {
-  it("provider_connection: null → providerConnection: ''", () => {
-    const form = detailToForm(makeDetail({ provider_connection: null }) as any);
-    expect(form.providerConnection).toBe("");
+  it("profile: 'Default' → form.profile: 'Default'", () => {
+    const form = detailToForm(makeDetail({ profile: "Default" }) as any);
+    expect(form.profile).toBe("Default");
   });
 
-  it('provider_connection: "openai" → providerConnection: "openai"', () => {
-    const form = detailToForm(makeDetail({ provider_connection: "openai" }) as any);
-    expect(form.providerConnection).toBe("openai");
+  it('profile: "Voice" → form.profile: "Voice"', () => {
+    const form = detailToForm(makeDetail({ profile: "Voice" }) as any);
+    expect(form.profile).toBe("Voice");
+  });
+
+  it('profile: "" → form.profile falls back to "Default"', () => {
+    const form = detailToForm(makeDetail({ profile: "" }) as any);
+    expect(form.profile).toBe("Default");
   });
 
   it("max_tokens: null → maxTokens: ''", () => {
@@ -243,21 +245,6 @@ describe("detailToForm", () => {
   it("max_tokens: 1024 → maxTokens: '1024'", () => {
     const form = detailToForm(makeDetail({ max_tokens: 1024 }) as any);
     expect(form.maxTokens).toBe("1024");
-  });
-
-  it("fallback_provider: undefined → fallbackProvider: ''", () => {
-    const form = detailToForm(makeDetail({ fallback_provider: undefined }) as any);
-    expect(form.fallbackProvider).toBe("");
-  });
-
-  it('maps fallback_provider empty string to fallbackProvider empty string', () => {
-    const form = detailToForm(makeDetail({ fallback_provider: "" }) as any);
-    expect(form.fallbackProvider).toBe("");
-  });
-
-  it('fallback_provider: "anthropic" → fallbackProvider: "anthropic"', () => {
-    const form = detailToForm(makeDetail({ fallback_provider: "anthropic" }) as any);
-    expect(form.fallbackProvider).toBe("anthropic");
   });
 
   it("tools: null → toolsEnabled: false", () => {
@@ -338,7 +325,6 @@ describe("AgentEditDialog UI", () => {
       fetchModels: vi.fn(),
       toolNames: [],
       secretNames: [],
-      voices: [],
       channels: [],
       channelSaving: false,
       onOpenChannelDialog: vi.fn(),
@@ -387,5 +373,15 @@ describe("AgentEditDialog UI", () => {
     expect(
       screen.getByText(/agents\.name_invalid/i)
     ).toBeInTheDocument();
+  });
+
+  it("renders the profile select and a Manage profiles link", () => {
+    const props = makeProps({ form: { ...emptyForm, profile: "Default" } });
+    render(<AgentEditDialog {...props} />);
+
+    // The profile <Select> combobox trigger is present (general tab, default view).
+    expect(screen.getAllByRole("combobox").length).toBeGreaterThan(0);
+    const manageLink = screen.getByText(/agents\.manage_profiles/i).closest("a");
+    expect(manageLink).toHaveAttribute("href", "/profiles/");
   });
 });

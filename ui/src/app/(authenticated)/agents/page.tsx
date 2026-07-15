@@ -29,7 +29,7 @@ import { Settings, LogOut, Bot, Plus, Search } from "lucide-react";
 import { Loader } from "@/components/ui/loader";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
-import { PROVIDERS, FALLBACK_MODELS } from "./RoutingRulesEditor";
+import { FALLBACK_MODELS } from "./RoutingRulesEditor";
 import {
   AgentEditDialog,
   ChannelDialog,
@@ -56,9 +56,7 @@ const LANGUAGES: { value: string; labelKey?: TranslationKey; label?: string }[] 
 export const emptyForm: FormState = {
   name: "",
   language: "ru",
-  provider: "minimax",
-  model: "MiniMax-M2.5",
-  providerConnection: "",
+  profile: "Default",
   temperature: "1.0",
   maxTokens: "",
   hbEnabled: false,
@@ -109,8 +107,6 @@ export const emptyForm: FormState = {
   accessEnabled: true,
   accessMode: "restricted",
   accessOwnerId: "",
-  fallbackProvider: "",
-  ttsProvider: "",
   toolDispatcherEnabled: false,
   toolDispatcherCoreExtra: [],
   toolDispatcherPromotionMax: "8",
@@ -120,9 +116,7 @@ export function detailToForm(d: AgentDetail): FormState {
   return {
     name: d.name,
     language: d.language || "ru",
-    provider: d.provider,
-    model: d.model,
-    providerConnection: d.provider_connection ?? "",
+    profile: d.profile || "Default",
     temperature: String(d.temperature),
     maxTokens: d.max_tokens != null ? String(d.max_tokens) : "",
     hbEnabled: !!d.heartbeat,
@@ -179,8 +173,6 @@ export function detailToForm(d: AgentDetail): FormState {
     accessEnabled: !!d.access,
     accessMode: d.access?.mode ?? "restricted",
     accessOwnerId: d.access?.owner_id ?? "",
-    fallbackProvider: d.fallback_provider ?? "",
-    ttsProvider: d.tts_provider ?? "",
     srEnabled: !!d.skill_review && d.skill_review.enabled,
     srMinToolCalls: String(d.skill_review?.min_tool_calls ?? 3),
     toolDispatcherEnabled: d.tool_dispatcher?.enabled ?? false,
@@ -196,9 +188,7 @@ export function formToPayload(f: FormState) {
   return {
     name: f.name,
     language: f.language,
-    provider: f.provider,
-    model: f.model,
-    provider_connection: f.providerConnection || null,
+    profile: f.profile || "Default",
     temperature: Number.isFinite(parseFloat(f.temperature)) ? parseFloat(f.temperature) : 1.0,
     max_tokens: f.maxTokens ? parseInt(f.maxTokens) : null,
     access: f.accessEnabled
@@ -280,8 +270,6 @@ export function formToPayload(f: FormState) {
       : null,
     max_history_messages: f.maxHistoryMessages ? parseInt(f.maxHistoryMessages) : null,
     daily_budget_tokens: parseInt(f.dailyBudgetTokens) || 0,
-    fallback_provider: f.fallbackProvider,
-    tts_provider: f.ttsProvider || null,
     tool_dispatcher: {
       enabled: f.toolDispatcherEnabled,
       core_extra: f.toolDispatcherCoreExtra,
@@ -311,17 +299,6 @@ export default function AgentsPage() {
   const [channelDialogId, setChannelDialogId] = useState<string | null>(null);
   const [channelForm, setChannelForm] = useState({ channel_type: "telegram", display_name: "", bot_token: "", api_url: "" });
   const [deleteChannelId, setDeleteChannelId] = useState<string | null>(null);
-
-  // TTS voices
-  const [voices, setVoices] = useState<{ id: string; name: string; description?: string }[]>([]);
-  const loadVoices = useCallback(async () => {
-    try {
-      const data = await apiGet<{ voices: { id: string; name: string; description?: string }[] }>("/api/tts/voices");
-      setVoices(data.voices || []);
-    } catch {
-      setVoices([]);
-    }
-  }, []);
 
   // Tools list
   const [toolNames, setToolNames] = useState<string[]>([]);
@@ -411,11 +388,9 @@ export default function AgentsPage() {
     setEditName(null);
     setForm({ ...emptyForm });
     setFormOpen(true);
-    loadVoices();
     loadTools();
     loadSecrets();
-    fetchModels(emptyForm.provider || "minimax", emptyForm.providerConnection || undefined);
-  }, [loadVoices, loadTools, loadSecrets, fetchModels]);
+  }, [loadTools, loadSecrets]);
 
   const openEdit = useCallback(async (name: string) => {
     try {
@@ -424,15 +399,13 @@ export default function AgentsPage() {
       setForm(detailToForm(detail));
       setChannels([]);
       setFormOpen(true);
-      fetchModels(detail.provider || "minimax", detail.provider_connection || undefined);
       loadChannels(name);
-      loadVoices();
       loadTools();
       loadSecrets();
     } catch (e) {
       setError(`${e}`);
     }
-  }, [fetchModels, loadChannels, loadVoices, loadTools, loadSecrets]);
+  }, [loadChannels, loadTools, loadSecrets]);
 
   const restartChannel = useCallback(async (channelId: string) => {
     if (!editName) return;
@@ -540,8 +513,6 @@ export default function AgentsPage() {
   const isValidName = /^[a-zA-Z0-9_-]+$/.test(form.name.trim());
   const canSave =
     isValidName &&
-    form.provider.trim().length > 0 &&
-    form.model.trim().length > 0 &&
     (!form.hbEnabled || form.hbCron.trim().length > 0);
 
   const upd = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
@@ -623,12 +594,12 @@ export default function AgentsPage() {
                       {a.is_running ? t("agents.active") : t("agents.inactive")}
                     </StatusBadge>
                   </div>
-                  <span className="text-xs text-muted-foreground truncate">{a.model}</span>
+                  <span className="text-xs text-muted-foreground truncate">{a.profile}</span>
                 </div>
               </div>
 
               <div className="space-y-3 mb-4 flex-1">
-                <InfoRow label={t("agents.provider")} value={a.provider_connection || (PROVIDERS.find((p) => p.value === a.provider)?.label ?? a.provider)} />
+                <InfoRow label={t("agents.profile")} value={a.profile} />
                 {a.routing_count > 0 && (
                   <InfoRow label={t("agents.routing")} value={t("agents.routing_rules_count", { count: a.routing_count })} />
                 )}
@@ -685,7 +656,6 @@ export default function AgentsPage() {
         fetchModels={fetchModels}
         toolNames={toolNames}
         secretNames={secretNames}
-        voices={voices}
         channels={channels}
         channelSaving={channelSaving}
         onOpenChannelDialog={openChannelDialog}

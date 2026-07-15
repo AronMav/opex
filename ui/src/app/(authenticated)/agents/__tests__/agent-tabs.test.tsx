@@ -49,6 +49,10 @@ vi.mock("@/lib/queries", () => ({
   useProviderModelsDetailed: () => ({ data: [], isLoading: false, refetch: vi.fn() }),
 }));
 
+vi.mock("@/hooks/use-profiles", () => ({
+  useProfiles: () => ({ data: { profiles: [{ id: "1", name: "Default", slots: {}, created_at: "", updated_at: "", agents: [] }] } }),
+}));
+
 vi.mock("@/components/ui/cron-schedule-picker", () => ({
   CronSchedulePicker: () => null,
 }));
@@ -75,7 +79,6 @@ function makeProps(formOverride: Partial<FormState> = {}, updFn = vi.fn()): Agen
     fetchModels: vi.fn(),
     toolNames: [],
     secretNames: [],
-    voices: [],
     channels: [],
     channelSaving: false,
     onOpenChannelDialog: vi.fn(),

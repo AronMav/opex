@@ -56,10 +56,8 @@ function makeAgent(overrides: Partial<AgentInfo> = {}): AgentInfo {
   return {
     name: "main",
     language: "en",
-    model: "MiniMax-M2.5",
-    provider: "minimax",
-    provider_connection: null,
-    fallback_provider: null,
+    profile: "Default",
+    capabilities: { text: true, stt: false, tts: false, vision: false, imagegen: false, websearch: false },
     icon_url: null,
     temperature: 1,
     has_access: false,

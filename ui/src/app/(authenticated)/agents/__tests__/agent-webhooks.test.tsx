@@ -192,9 +192,9 @@ describe("detailToForm — webhooks init", () => {
   it("hooks: null → hooksWebhooks: []", async () => {
     const { detailToForm } = await import("../page");
     const form = detailToForm({
-      name: "A", language: "ru", provider: "openai", model: "gpt-4",
-      provider_connection: null, fallback_provider: null, tts_provider: null,
-      imagegen_provider: null, temperature: 1, max_tokens: null,
+      name: "A", language: "ru", profile: "Default",
+      capabilities: { text: true, stt: false, tts: false, vision: false, imagegen: false, websearch: false },
+      temperature: 1, max_tokens: null,
       access: null, heartbeat: null, tools: null, compaction: null,
       skill_review: null, session: null, icon_url: null,
       max_tools_in_context: null, tool_loop: null, tool_dispatcher: null,
@@ -209,9 +209,9 @@ describe("detailToForm — webhooks init", () => {
     const { detailToForm } = await import("../page");
     const wh = makeWebhook({ url: "https://h.com" });
     const form = detailToForm({
-      name: "A", language: "ru", provider: "openai", model: "gpt-4",
-      provider_connection: null, fallback_provider: null, tts_provider: null,
-      imagegen_provider: null, temperature: 1, max_tokens: null,
+      name: "A", language: "ru", profile: "Default",
+      capabilities: { text: true, stt: false, tts: false, vision: false, imagegen: false, websearch: false },
+      temperature: 1, max_tokens: null,
       access: null, heartbeat: null, tools: null, compaction: null,
       skill_review: null, session: null, icon_url: null,
       max_tools_in_context: null, tool_loop: null, tool_dispatcher: null,

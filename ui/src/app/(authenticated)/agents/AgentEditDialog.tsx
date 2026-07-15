@@ -38,10 +38,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { ChannelRow, RoutingRule } from "@/types/api";
 import type { WebhookDto } from "@/types/api.generated";
-import { ChevronDown, Bot, ExternalLink, Link2, Camera, RefreshCw, Settings, Wrench, Zap, Archive, Clock, Radio } from "lucide-react";
+import { ChevronDown, Bot, ExternalLink, Camera, Settings, Wrench, Zap, Archive, Clock, Radio } from "lucide-react";
 import { RoutingRulesEditor } from "./RoutingRulesEditor";
-import { useProviders, useProviderModelsDetailed } from "@/lib/queries";
-import { ModelBadges } from "@/components/model-badges";
+import { useProviders } from "@/lib/queries";
+import { useProfiles } from "@/hooks/use-profiles";
 
 const LANGUAGES: { value: string; labelKey?: TranslationKey; label?: string }[] = [
   { value: "ru", labelKey: "agents.lang_ru" },
@@ -61,9 +61,10 @@ const LANGUAGES: { value: string; labelKey?: TranslationKey; label?: string }[] 
 export interface FormState {
   name: string;
   language: string;
-  provider: string;
-  model: string;
-  providerConnection: string;
+  /** Name of the row in the `profiles` table this agent resolves providers
+   *  from (replaces the removed provider/model/provider_connection/
+   *  fallback_provider/tts_provider fields). */
+  profile: string;
   temperature: string;
   maxTokens: string;
   hbEnabled: boolean;
@@ -122,10 +123,6 @@ export interface FormState {
   accessEnabled: boolean;
   accessMode: string;
   accessOwnerId: string;
-  // Fallback provider
-  fallbackProvider: string;
-  // TTS provider (per-agent voice routing — provider's options.voice picks the voice)
-  ttsProvider: string;
   // Skill Review
   srEnabled: boolean;
   srMinToolCalls: string;
@@ -152,8 +149,6 @@ export interface AgentEditDialogProps {
   toolNames: string[];
   // Secrets
   secretNames: string[];
-  // Voices
-  voices: { id: string; name: string; description?: string }[];
   // Channels
   channels: ChannelRow[];
   channelSaving: boolean;
@@ -187,7 +182,7 @@ export function AgentEditDialog({
   discoveredModels,
   fetchModels,
   toolNames,
-  // secretNames, voices, channelSaving, onOpenChannelDialog, onRestartChannel,
+  // secretNames, channelSaving, onOpenChannelDialog, onRestartChannel,
   // onDeleteChannelRequest — accepted but no longer consumed here after the
   // channels tab refactor; kept in the interface for caller-side stability.
   channels,
@@ -198,10 +193,8 @@ export function AgentEditDialog({
   const isValidAgentName = form.name.trim().length === 0 || /^[a-zA-Z0-9_-]+$/.test(form.name.trim());
   const { data: allProviders = [] } = useProviders();
   const llmProviders = allProviders.filter((p) => p.type === "text");
-  const ttsProviders = allProviders.filter((p) => p.type === "tts");
-  const selectedProvider = llmProviders.find((p) => p.name === form.providerConnection);
-  const { data: providerModelsDetailed = [], isLoading: providerModelsLoading, refetch: refetchModels } = useProviderModelsDetailed(selectedProvider?.id ?? null);
-  const providerModels = providerModelsDetailed.map((m) => m.id);
+  const { data: profilesData } = useProfiles();
+  const profileNames = (profilesData?.profiles ?? []).map((p) => p.name);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -309,139 +302,35 @@ export function AgentEditDialog({
                   </Field>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <Field label={t("agents.field_provider")} labelClassName="text-xs">
-                    <Select
-                      value={form.providerConnection || "__none__"}
-                      onValueChange={(v) => {
-                        if (v === "__none__") {
-                          upd({ providerConnection: "", provider: "", model: "" });
-                        } else {
-                          const sp = llmProviders.find((p) => p.name === v);
-                          upd({ providerConnection: v, provider: sp?.provider_type ?? "", model: sp?.default_model ?? "" });
-                        }
-                      }}
-                    >
-                      <SelectTrigger className="w-full bg-background border-border text-sm h-9">
-                        <SelectValue placeholder={t("agents.field_provider")} />
-                      </SelectTrigger>
-                      <SelectContent className="border-border">
-                        <SelectItem value="__none__" className="text-sm text-muted-foreground">
-                          <span className="text-muted-foreground">&mdash;</span>
-                        </SelectItem>
-                        {llmProviders.map((conn) => (
-                          <SelectItem key={conn.id} value={conn.name} className="text-sm font-mono">
-                            <span className="flex items-center gap-2">
-                              <Link2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                              <span>{conn.name}</span>
-                              <span className="text-muted-foreground-subtle text-2xs">{conn.default_model}</span>
-                            </span>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  <div className="space-y-2">
-                    <label htmlFor="agent-edit-model" className="text-xs font-medium text-muted-foreground ml-1">{t("agents.field_model")}</label>
-                    {providerModelsLoading && (
-                      <span className="text-xs text-muted-foreground animate-pulse mb-1 block">{t("agents.loading_models")}</span>
-                    )}
-                    {(() => {
-                      const models = providerModels;
-                      const isCustom = !models.includes(form.model);
-                      if (models.length > 0) {
-                        return (
-                          <div className="space-y-1.5">
-                            <div className="flex gap-2">
-                              <Select
-                                value={isCustom ? "__custom__" : form.model}
-                                onValueChange={(v) => { upd({ model: v === "__custom__" ? "" : v }); }}
-                              >
-                                <SelectTrigger id="agent-edit-model" className="bg-background border-border font-mono text-sm h-9">
-                                  <SelectValue placeholder={t("agents.model_placeholder")} />
-                                </SelectTrigger>
-                                <SelectContent className="border-border max-h-60">
-                                  {providerModelsDetailed.map((pm) => (
-                                    <SelectItem key={pm.id} value={pm.id} className="font-mono text-sm">
-                                      <span className="flex items-center justify-between gap-3 w-full min-w-0">
-                                        <span className="truncate">{pm.id}</span>
-                                        <ModelBadges m={pm} className="shrink-0" />
-                                      </span>
-                                    </SelectItem>
-                                  ))}
-                                  <SelectItem value="__custom__" className="font-mono text-sm italic text-muted-foreground">{t("agents.model_custom")}</SelectItem>
-                                </SelectContent>
-                              </Select>
-                              <Button variant="outline" size="icon" className="shrink-0" onClick={() => refetchModels()} disabled={providerModelsLoading}>
-                                <RefreshCw className={`h-3.5 w-3.5 ${providerModelsLoading ? "animate-spin" : ""}`} />
-                              </Button>
-                            </div>
-                            {isCustom && (
-                              <Input value={form.model} placeholder="custom-model-name" className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ model: e.target.value })} />
-                            )}
-                          </div>
-                        );
-                      }
-                      return (
-                        <div className="flex gap-2">
-                          <Input id="agent-edit-model" value={form.model} placeholder="model-name" className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ model: e.target.value })} />
-                          {selectedProvider && (
-                            <Button variant="outline" size="sm" className="shrink-0 h-8 text-xs" onClick={() => refetchModels()} disabled={providerModelsLoading}>
-                              <RefreshCw className={`h-3.5 w-3.5 ${providerModelsLoading ? "animate-spin" : ""}`} />
-                              <span className="ml-1">Discover</span>
-                            </Button>
+                  <Field label={t("agents.field_profile")} labelClassName="text-xs">
+                    <div className="space-y-1.5">
+                      <Select value={form.profile || "Default"} onValueChange={(v) => upd({ profile: v })}>
+                        <SelectTrigger className="w-full bg-background border-border text-sm h-9">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="border-border">
+                          {profileNames.length > 0 ? (
+                            profileNames.map((name) => (
+                              <SelectItem key={name} value={name} className="text-sm font-mono">
+                                {name}
+                              </SelectItem>
+                            ))
+                          ) : (
+                            <SelectItem value="Default" className="text-sm font-mono">Default</SelectItem>
                           )}
-                        </div>
-                      );
-                    })()}
-                  </div>
+                        </SelectContent>
+                      </Select>
+                      <a href="/profiles/" className="inline-flex items-center gap-1 text-2xs text-primary hover:text-primary/80 transition-colors">
+                        {t("agents.manage_profiles")}
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
+                  </Field>
                   <Field label={t("agents.field_temperature")} labelClassName="text-xs">
                     <Input type="number" step="0.1" min="0" max="2" value={form.temperature} className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ temperature: e.target.value })} />
                   </Field>
                   <Field label={t("agents.field_max_tokens")} labelClassName="text-xs">
                     <Input type="number" step="256" min="256" max="65536" value={form.maxTokens} placeholder="Auto" className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ maxTokens: e.target.value })} />
-                  </Field>
-                  <Field label={t("agents.field_fallback_provider")} labelClassName="text-xs">
-                    <Select value={form.fallbackProvider || "__none__"} onValueChange={(v) => upd({ fallbackProvider: v === "__none__" ? "" : v })}>
-                      <SelectTrigger className="w-full bg-background border-border text-sm h-9">
-                        <SelectValue placeholder={t("agents.field_fallback_provider")} />
-                      </SelectTrigger>
-                      <SelectContent className="border-border">
-                        <SelectItem value="__none__" className="text-sm text-muted-foreground"><span className="text-muted-foreground">&mdash;</span></SelectItem>
-                        {llmProviders.map((conn) => (
-                          <SelectItem key={conn.id} value={conn.name} className="text-sm font-mono">
-                            <span className="flex items-center gap-2">
-                              <Link2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                              <span>{conn.name}</span>
-                              <span className="text-muted-foreground-subtle text-2xs">{conn.default_model}</span>
-                            </span>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  <Field label={t("agents.field_tts_provider")} labelClassName="text-xs">
-                    <Select value={form.ttsProvider || "__none__"} onValueChange={(v) => upd({ ttsProvider: v === "__none__" ? "" : v })}>
-                      <SelectTrigger className="w-full bg-background border-border text-sm h-9">
-                        <SelectValue placeholder={t("agents.field_tts_provider")} />
-                      </SelectTrigger>
-                      <SelectContent className="border-border">
-                        <SelectItem value="__none__" className="text-sm text-muted-foreground">
-                          <span className="text-muted-foreground">&mdash; {t("agents.tts_provider_global_fallback")}</span>
-                        </SelectItem>
-                        {ttsProviders.map((p) => {
-                          const voice = (p.options as { voice?: string } | null | undefined)?.voice;
-                          return (
-                            <SelectItem key={p.id} value={p.name} className="text-sm font-mono">
-                              <span className="flex items-center gap-2">
-                                <Link2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                                <span>{p.name}</span>
-                                {voice && <span className="text-muted-foreground-subtle text-2xs">voice: {voice}</span>}
-                              </span>
-                            </SelectItem>
-                          );
-                        })}
-                      </SelectContent>
-                    </Select>
                   </Field>
                   <Field label={t("agents.field_top_k_tools")} labelClassName="text-xs">
                     <Input type="number" step="1" min="1" max="50" value={form.maxToolsInContext} placeholder={t("agents.placeholder_all")} className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ maxToolsInContext: e.target.value })} />
