@@ -45,8 +45,10 @@ WHERE kind = 'event'
 ```
 
 - `importance` is the extractor's 1–10 rating. Retention scales linearly: trivial events (imp 2) live `2 * K` days; significant (imp 10) live `10 * K` days, capped at `max_age_days`.
-- `K = event_retention_days_per_importance` (SoulConfig, default **7**) → imp 2 ≈ 14 days, imp 5 ≈ 35 days, imp 10 ≈ 70 days.
-- `max_age_days` (SoulConfig, default **180**) → hard ceiling; even the most significant episodic events age out by then (their essence is preserved in reflections written far earlier).
+- `K = EVENT_RETENTION_DAYS_PER_IMPORTANCE` (module const in `scheduler/mod.rs`, **7.0**) → imp 2 ≈ 14 days, imp 5 ≈ 35 days, imp 10 ≈ 70 days.
+- `EVENT_MAX_AGE_DAYS` (module const, **180**) → hard ceiling; even the most significant episodic events age out by then (their essence is preserved in reflections written far earlier).
+
+**Config placement note:** the decay cleanup cron is a SINGLE GLOBAL job over all agents' `memory_chunks`, whereas `SoulConfig` is per-agent — so retention canNOT be a per-agent `SoulConfig` field (it would be ambiguous which agent's value the global sweep uses). Following the existing fact-decay params (inline literals: half-life 30, floor 0.05, 180d), the two retention values are **module consts** in `scheduler/mod.rs`. `add_memory_decay_cleanup`/`run_memory_decay_cleanup` keep their current signatures (the SQL reads the consts directly) — no registration/`main.rs` change.
 - **Reflections are NOT touched** (no `kind='reflection'` in the predicate) — permanent durable biography.
 - Age is `created_at` (matches `soul_retrieve`'s recency basis), NOT `accessed_at`.
 
@@ -82,18 +84,14 @@ soul_retrieve (unchanged): created_at recency × importance × relevance
 ## 5. Config + migration
 
 - **Migration** `085_sessions_last_extracted_at.sql` (next sequential; latest is `084_profiles.sql`): `ALTER TABLE sessions ADD COLUMN last_extracted_at TIMESTAMPTZ` (nullable, no default → NULL = never extracted). History-preserving, additive.
-- **SoulConfig** (new fields, defaults chosen so behaviour is safe out of the box):
-  - `event_retention_days_per_importance: f64` (default `7.0`) — `K` in §3.1.
-  - `event_max_age_days: i64` (default `180`) — cap in §3.1.
-  - Validation: both `> 0`; `event_max_age_days ≤ 3650` (sanity).
+- **Module consts** in `scheduler/mod.rs` (retention is a global storage policy, not per-agent — see §3.1 note): `EVENT_RETENTION_DAYS_PER_IMPORTANCE: f64 = 7.0`, `EVENT_MAX_AGE_DAYS: i64 = 180`.
 - **Const** in `knowledge_extractor.rs`: `MIN_NEW_MESSAGES: usize = 4`.
 - No change to `max_events_per_session` (still the per-run cap; with A it now bounds a single non-overlapping span, which is its honest meaning).
 
 ## 6. Components / boundaries
 
 - `knowledge_extractor.rs` — owns A: reads `last_extracted_at`, applies `MIN_NEW_MESSAGES`, advances the watermark on success. New helper `load_messages_since(db, session_id, after: Option<DateTime>)` in `db/sessions.rs` (or extend `load_messages`), plus `set_last_extracted_at(db, session_id, ts)`.
-- `scheduler/mod.rs` — owns C1: the new event sweep inside `run_memory_decay_cleanup`, reading the two SoulConfig retention values (threaded in, or read from a passed config). Note the cleanup cron currently takes only `db`; it will need the retention params — pass them at registration (`add_memory_decay_cleanup`) from config.
-- `config/mod.rs` — the three SoulConfig fields + validation.
+- `scheduler/mod.rs` — owns C1: the two retention consts + the new event sweep inside `run_memory_decay_cleanup` (reads the consts directly; cron signature unchanged).
 - `db/memory_queries.rs` — if a dedicated `delete_expired_events(db, k, max_age)` query reads cleaner than inline SQL in the cron, put it here (mirrors existing extracted query pattern; keeps the cron thin and unit-testable via the sqlx soul-guard test).
 
 ## 7. Testing
