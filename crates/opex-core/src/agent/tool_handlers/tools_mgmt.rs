@@ -30,7 +30,7 @@ impl SystemToolHandler for ToolTestHandler {
     async fn handle(&self, deps: ToolDeps<'_>, args: &Value) -> String {
         ph::handle_tool_test(
             deps.workspace_dir,
-            deps.db,
+            &deps.cfg.profile_slots,
             deps.http_client,
             deps.ssrf_client,
             deps.secrets,

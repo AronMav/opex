@@ -188,6 +188,11 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     // Database
     fn db(&self) -> sqlx::PgPool;
 
+    /// Agent's resolved profile slots (capability -> ordered provider list).
+    /// Gates capability tools (`capability_tool_defs`) and the dispatcher's
+    /// extension-tool lookup — no `provider_active` DB query needed.
+    fn profile_slots(&self) -> &crate::db::profiles::Slots;
+
     // Tools
     fn internal_tool_definitions(&self) -> Vec<ToolDefinition>;
     async fn capability_tool_defs(&self) -> Vec<crate::tools::yaml_tools::YamlToolDef>;
@@ -471,14 +476,13 @@ impl ContextBuilder for DefaultContextBuilder {
         // ContextBuilderDeps in Tasks 14/15.
         if dispatcher_enabled && !user_text.is_empty() {
             let deny: Vec<String> = deps.cfg_deny_list();
-            let db = deps.db();
 
             let candidates = crate::agent::dispatcher::build_extension_tool_list(
                 deps.agent_base(),
                 &deny,
                 &std::collections::HashSet::new(),
                 deps.workspace_dir(),
-                &db,
+                deps.profile_slots(),
                 deps.mcp_registry(),
             ).await;
 

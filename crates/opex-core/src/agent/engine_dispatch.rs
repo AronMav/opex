@@ -243,7 +243,7 @@ impl AgentEngine {
             // 2. YAML-defined tools (capability-names take priority over files).
             if let Some(yaml_tool) = crate::agent::capability_tools::resolve_tool(
                 &self.cfg().workspace_dir,
-                &self.cfg().db,
+                &self.cfg().profile_slots,
                 name,
             ).await {
                 if yaml_tool.status == crate::tools::yaml_tools::ToolStatus::Draft {

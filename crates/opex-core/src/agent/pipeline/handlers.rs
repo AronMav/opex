@@ -561,7 +561,7 @@ pub async fn handle_tool_list(workspace_dir: &str, args: &serde_json::Value) -> 
 #[allow(clippy::string_slice)]
 pub async fn handle_tool_test(
     workspace_dir: &str,
-    db: &sqlx::PgPool,
+    slots: &crate::db::profiles::Slots,
     http_client: &reqwest::Client,
     ssrf_client: &reqwest::Client,
     secrets: &Arc<SecretsManager>,
@@ -579,7 +579,7 @@ pub async fn handle_tool_test(
     let dry_run = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
 
     let tool = match crate::agent::capability_tools::resolve_tool(
-        workspace_dir, db, tool_name,
+        workspace_dir, slots, tool_name,
     ).await {
         Some(t) => t,
         None => return format!("Tool '{}' not found. Use tool_list() to see available tools.", tool_name),

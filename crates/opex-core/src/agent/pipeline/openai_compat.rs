@@ -33,8 +33,7 @@ pub async fn handle_openai(
             .map(|t| t.to_tool_definition()),
     );
     raw_tools.extend(
-        crate::agent::capability_tools::capability_tool_defs(&cfg.db)
-            .await
+        crate::agent::capability_tools::capability_tool_defs(&cfg.profile_slots)
             .into_iter()
             .map(|t| t.to_tool_definition()),
     );

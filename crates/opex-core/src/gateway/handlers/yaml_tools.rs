@@ -34,7 +34,16 @@ pub(crate) async fn api_yaml_tools_list_global(State(state): State<InfraServices
         "parameters_count": t.parameters.len(),
         "tags": t.tags,
     })).collect();
-    for def in crate::agent::capability_tools::capability_tool_defs(&state.db).await {
+    // Agent-agnostic global listing: capability tools are gated by the
+    // Default profile's slots (per-agent gating happens at chat time via
+    // each agent's own `profile_slots`).
+    let default_slots = crate::db::profiles::get_profile_by_name(&state.db, crate::db::profiles::DEFAULT_PROFILE)
+        .await
+        .ok()
+        .flatten()
+        .map(|p| p.parsed_slots())
+        .unwrap_or_default();
+    for def in crate::agent::capability_tools::capability_tool_defs(&default_slots) {
         list.push(json!({
             "name": def.name,
             "description": def.description,

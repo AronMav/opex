@@ -516,6 +516,10 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         self.cfg().db.clone()
     }
 
+    fn profile_slots(&self) -> &crate::db::profiles::Slots {
+        &self.cfg().profile_slots
+    }
+
     async fn load_workspace_prompt(&self) -> Result<String> {
         workspace::load_workspace_prompt(&self.cfg().workspace_dir, &self.cfg().agent.name, self.cfg().agent.base).await
     }
@@ -574,7 +578,7 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
     }
 
     async fn capability_tool_defs(&self) -> Vec<crate::tools::yaml_tools::YamlToolDef> {
-        crate::agent::capability_tools::capability_tool_defs(&self.cfg().db).await
+        crate::agent::capability_tools::capability_tool_defs(&self.cfg().profile_slots)
     }
 
     async fn load_yaml_tools_cached(&self) -> Vec<crate::tools::yaml_tools::YamlToolDef> {
@@ -627,8 +631,8 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
                 input_schema: serde_json::json!({}),
             });
         }
-        // Add capability tools (active-provider-gated).
-        for def in crate::agent::capability_tools::capability_tool_defs(&self.cfg().db).await {
+        // Add capability tools (profile-slot-gated).
+        for def in crate::agent::capability_tools::capability_tool_defs(&self.cfg().profile_slots) {
             tools.push(opex_types::ToolDefinition {
                 name: def.name.clone(),
                 description: def.description.clone(),

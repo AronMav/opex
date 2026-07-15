@@ -370,7 +370,7 @@ impl AgentEngine {
             return;
         }
         let tool = match crate::agent::capability_tools::resolve_tool(
-            &self.cfg().workspace_dir, &self.cfg().db, "synthesize_speech",
+            &self.cfg().workspace_dir, &self.cfg().profile_slots, "synthesize_speech",
         ).await {
             Some(t) => t,
             None => {

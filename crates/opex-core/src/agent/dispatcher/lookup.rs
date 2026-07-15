@@ -32,7 +32,7 @@ pub async fn build_extension_tool_list(
     deny: &[String],
     promoted: &std::collections::HashSet<String>,
     workspace_dir: &str,
-    db: &sqlx::PgPool,
+    slots: &crate::db::profiles::Slots,
     mcp: Option<&crate::mcp::McpRegistry>,
 ) -> Vec<ToolDefinition> {
     let core = crate::agent::pipeline::tool_defs::static_core_tool_names();
@@ -70,8 +70,8 @@ pub async fn build_extension_tool_list(
         }
     }
 
-    // Built-in capability tools (backed by active providers in DB).
-    for def in crate::agent::capability_tools::capability_tool_defs(db).await {
+    // Built-in capability tools (gated by the agent's profile slots).
+    for def in crate::agent::capability_tools::capability_tool_defs(slots) {
         if (!def.required_base || is_base_agent)
             && !deny.iter().any(|d| d == &def.name)
             && !promoted.contains(&def.name)
@@ -103,10 +103,10 @@ pub async fn find_extension_tool(
     deny: &[String],
     promoted: &std::collections::HashSet<String>,
     workspace_dir: &str,
-    db: &sqlx::PgPool,
+    slots: &crate::db::profiles::Slots,
     mcp: Option<&crate::mcp::McpRegistry>,
 ) -> Option<ToolDefinition> {
-    build_extension_tool_list(is_base_agent, deny, promoted, workspace_dir, db, mcp)
+    build_extension_tool_list(is_base_agent, deny, promoted, workspace_dir, slots, mcp)
         .await
         .into_iter()
         .find(|t| t.name == name)

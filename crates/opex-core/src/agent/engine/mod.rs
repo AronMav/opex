@@ -328,8 +328,7 @@ impl AgentEngine {
     async fn has_tool(&self, name: &str) -> bool {
         // Capability-инструменты: доступны, если есть активный провайдер.
         if crate::agent::capability_tools::is_capability_tool(name) {
-            return crate::agent::capability_tools::find_capability_tool(&self.cfg().db, name)
-                .await
+            return crate::agent::capability_tools::find_capability_tool(&self.cfg().profile_slots, name)
                 .is_some();
         }
         let dir = std::path::Path::new(&self.cfg().workspace_dir).join("tools");

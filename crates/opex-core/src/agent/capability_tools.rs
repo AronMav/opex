@@ -108,41 +108,37 @@ fn with_provider(mut def: YamlToolDef, provider: &str) -> YamlToolDef {
     def
 }
 
-pub async fn capability_tool_defs(db: &sqlx::PgPool) -> Vec<YamlToolDef> {
+/// Gate capability tools by the agent's profile slots (no DB, synchronous):
+/// a tool is registered only if its capability slot is non-empty, and its
+/// description is annotated with the slot's first (top-priority) provider.
+pub fn capability_tool_defs(slots: &crate::db::profiles::Slots) -> Vec<YamlToolDef> {
     let mut out = Vec::new();
     for spec in capability_specs() {
-        let top = match crate::db::providers::get_active_providers(db, spec.capability).await {
-            Ok(list) => list.into_iter().next().map(|(name, _)| name),
-            Err(e) => {
-                tracing::warn!(capability = spec.capability, error = %e, "active providers query failed");
-                None
-            }
-        };
-        let Some(provider) = top else { continue };
+        let Some(entry) = slots.get(spec.capability).and_then(|v| v.first()) else { continue };
         match parse_spec(spec) {
-            Ok(def) => out.push(with_provider(def, &provider)),
+            Ok(def) => out.push(with_provider(def, &entry.provider)),
             Err(e) => tracing::error!(tool = spec.tool_name, error = %e, "capability spec parse failed"),
         }
     }
     out
 }
 
-pub async fn find_capability_tool(db: &sqlx::PgPool, name: &str) -> Option<YamlToolDef> {
+pub fn find_capability_tool(slots: &crate::db::profiles::Slots, name: &str) -> Option<YamlToolDef> {
     let spec = capability_specs().iter().find(|s| s.tool_name == name)?;
-    let top = crate::db::providers::get_active_providers(db, spec.capability)
-        .await.ok()?.into_iter().next().map(|(n, _)| n)?;
-    parse_spec(spec).ok().map(|d| with_provider(d, &top))
+    let entry = slots.get(spec.capability)?.first()?;
+    parse_spec(spec).ok().map(|d| with_provider(d, &entry.provider))
 }
 
 /// Разрешить имя инструмента в YamlToolDef: capability-имена зарезервированы
-/// (приоритет над YAML-файлом), иначе — обычный YAML-инструмент.
+/// (приоритет над YAML-файлом, гейтятся слотами профиля), иначе — обычный
+/// YAML-инструмент (файловый lookup остаётся async — I/O).
 pub async fn resolve_tool(
     workspace_dir: &str,
-    db: &sqlx::PgPool,
+    slots: &crate::db::profiles::Slots,
     name: &str,
 ) -> Option<YamlToolDef> {
     if is_capability_tool(name) {
-        return find_capability_tool(db, name).await;
+        return find_capability_tool(slots, name);
     }
     crate::tools::yaml_tools::find_yaml_tool(workspace_dir, name).await
 }
@@ -150,6 +146,7 @@ pub async fn resolve_tool(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::profiles::{SlotEntry, Slots};
 
     #[test]
     fn all_specs_parse_with_correct_names() {
@@ -184,63 +181,72 @@ mod tests {
         }
     }
 
-    #[cfg(test)]
-    async fn seed_provider(pool: &sqlx::PgPool, name: &str, capability: &str, driver: &str) {
-        sqlx::query("INSERT INTO providers (name, type, provider_type, enabled) VALUES ($1,$2,$3,true)")
-            .bind(name).bind(capability).bind(driver)
-            .execute(pool).await.unwrap();
+    fn entry(provider: &str) -> SlotEntry {
+        SlotEntry { provider: provider.to_string(), model: None, voice: None }
     }
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn defs_include_active_provider_in_description(pool: sqlx::PgPool) {
-        seed_provider(&pool, "flux-fal", "imagegen", "fal").await;
-        crate::db::providers::set_provider_active_list(&pool, "imagegen", &[("flux-fal".into(), 1)])
-            .await.unwrap();
-        let defs = capability_tool_defs(&pool).await;
+    fn slots_with(capability: &str, providers: &[&str]) -> Slots {
+        let mut slots = Slots::new();
+        slots.insert(capability.to_string(), providers.iter().map(|p| entry(p)).collect());
+        slots
+    }
+
+    #[test]
+    fn defs_include_slot_provider_in_description() {
+        let slots = slots_with("imagegen", &["flux-fal"]);
+        let defs = capability_tool_defs(&slots);
         let gi = defs.iter().find(|d| d.name == "generate_image").expect("generate_image present");
         assert!(gi.description.contains("flux-fal"), "desc must name provider: {}", gi.description);
     }
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn no_def_when_capability_has_no_active_provider(pool: sqlx::PgPool) {
-        let defs = capability_tool_defs(&pool).await;
+    #[test]
+    fn no_def_when_capability_slot_empty() {
+        let slots = Slots::new();
+        let defs = capability_tool_defs(&slots);
         assert!(defs.iter().all(|d| d.name != "generate_image"));
     }
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn find_returns_top_priority_provider(pool: sqlx::PgPool) {
-        seed_provider(&pool, "low", "tts", "edge").await;
-        seed_provider(&pool, "top", "tts", "silero").await;
-        crate::db::providers::set_provider_active_list(
-            &pool, "tts", &[("low".into(), 10), ("top".into(), 1)]).await.unwrap();
-        let def = find_capability_tool(&pool, "synthesize_speech").await.expect("found");
+    #[test]
+    fn no_def_when_capability_slot_present_but_empty_vec() {
+        let slots = slots_with("imagegen", &[]);
+        let defs = capability_tool_defs(&slots);
+        assert!(defs.iter().all(|d| d.name != "generate_image"));
+    }
+
+    #[test]
+    fn find_returns_first_slot_provider() {
+        let slots = slots_with("tts", &["top", "low"]);
+        let def = find_capability_tool(&slots, "synthesize_speech").expect("found");
         assert!(def.description.contains("top"));
         assert!(!def.description.contains("low"));
     }
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn find_is_none_without_provider(pool: sqlx::PgPool) {
-        assert!(find_capability_tool(&pool, "search_web").await.is_none());
-        assert!(find_capability_tool(&pool, "not_a_capability").await.is_none());
+    #[test]
+    fn find_is_none_without_provider() {
+        let slots = Slots::new();
+        assert!(find_capability_tool(&slots, "search_web").is_none());
+        assert!(find_capability_tool(&slots, "not_a_capability").is_none());
     }
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn tool_definition_description_carries_provider(pool: sqlx::PgPool) {
-        seed_provider(&pool, "searxng", "websearch", "searxng").await;
-        crate::db::providers::set_provider_active_list(&pool, "websearch", &[("searxng".into(), 1)])
-            .await.unwrap();
-        let td = find_capability_tool(&pool, "search_web").await.unwrap().to_tool_definition();
+    #[test]
+    fn tool_definition_description_carries_provider() {
+        let slots = slots_with("websearch", &["searxng"]);
+        let td = find_capability_tool(&slots, "search_web").unwrap().to_tool_definition();
         assert_eq!(td.name, "search_web");
         assert!(td.description.contains("searxng"));
     }
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn resolve_prefers_capability(pool: sqlx::PgPool) {
-        seed_provider(&pool, "p", "imagegen", "fal").await;
-        crate::db::providers::set_provider_active_list(&pool, "imagegen", &[("p".into(), 1)])
-            .await.unwrap();
-        let def = resolve_tool("/nonexistent-workspace", &pool, "generate_image").await.unwrap();
+    #[tokio::test]
+    async fn resolve_prefers_capability() {
+        let slots = slots_with("imagegen", &["p"]);
+        let def = resolve_tool("/nonexistent-workspace", &slots, "generate_image").await.unwrap();
         assert_eq!(def.name, "generate_image");
         assert!(def.description.contains("(provider: p)"));
+    }
+
+    #[tokio::test]
+    async fn resolve_is_none_for_capability_name_without_provider() {
+        let slots = Slots::new();
+        assert!(resolve_tool("/nonexistent-workspace", &slots, "generate_image").await.is_none());
     }
 }

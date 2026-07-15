@@ -72,7 +72,7 @@ async fn handle_search(deps: ToolDeps<'_>, query: &str) -> String {
         &deny,
         &std::collections::HashSet::new(),
         deps.workspace_dir,
-        deps.db,
+        &deps.cfg.profile_slots,
         deps.mcp,
     ).await;
 
@@ -148,7 +148,7 @@ async fn handle_describe(deps: ToolDeps<'_>, name: &str) -> String {
         &deny,
         &std::collections::HashSet::new(),
         deps.workspace_dir,
-        deps.db,
+        &deps.cfg.profile_slots,
         deps.mcp,
     ).await;
 
