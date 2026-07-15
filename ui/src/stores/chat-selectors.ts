@@ -119,6 +119,28 @@ export function selectLiveHasContent(state: ChatState, agent: string): boolean {
 }
 
 /**
+ * Concatenates a boundary-sliced history array with the live-turn overlay,
+ * dropping any live message whose id already appears in that history slice.
+ *
+ * This is an id-based dedup at the history/live seam — NOT a reintroduction
+ * of the content-based `mergeLiveOverlay` dedup removed in the T8 boundary
+ * rework. It exists because `historyUpToIncluding` is INCLUSIVE of the
+ * boundary id, and that boundary id is the turn's own user-message id:
+ * `sendMessage` pre-allocates the user message id client-side and sends it
+ * to the server as `user_message_id`, which persists the row under that id
+ * AND reports it back as `boundaryMessageId` on `sync_begin`. The optimistic
+ * user echo placed in the live overlay carries the SAME id. So once history
+ * is refetched mid-turn (session-establish/navigation invalidation, or the
+ * post-finish refetch) the persisted user row and the still-present
+ * optimistic echo briefly coexist under one id — one in the history slice,
+ * one in the live overlay — and without this filter both would render.
+ */
+function concatLiveOntoHistory(visibleHistory: ChatMessage[], live: ChatMessage[]): ChatMessage[] {
+  const histIds = new Set(visibleHistory.map((m) => m.id));
+  return [...visibleHistory, ...live.filter((m) => !histIds.has(m.id))];
+}
+
+/**
  * Returns the array to render for the given agent. Resolves the
  * three-way `messageSource` tag into a single array:
  *  - "new-chat"  → []
@@ -126,12 +148,13 @@ export function selectLiveHasContent(state: ChatState, agent: string): boolean {
  *  - "live" / "finishing" → boundary-filtered history + live turn messages
  *
  * Server-authoritative render (T8): for the live/finishing modes the array is
- *   [...historyUpToIncluding(history, boundaryMessageId), ...liveTurnMessages]
- * with NO content dedup. The boundary (reported by the server on `sync_begin`)
- * marks the last persisted message before the turn, so history contributes
- * everything up to it and the live overlay contributes the turn itself. When
- * the boundary is null/absent the full history is used (safe — see
- * historyUpToIncluding).
+ *   concatLiveOntoHistory(historyUpToIncluding(history, boundaryMessageId), liveTurnMessages)
+ * — i.e. NO content dedup, only an id-based dedup at the seam (see
+ * `concatLiveOntoHistory` for why that's required). The boundary (reported
+ * by the server on `sync_begin`) marks the last persisted message before the
+ * turn, so history contributes everything up to it and the live overlay
+ * contributes the turn itself. When the boundary is null/absent the full
+ * history is used (safe — see historyUpToIncluding).
  *
  * Reads `messageSource`, `selectedBranches`, `boundaryMessageId`, and (for
  * history mode) the React Query cache via getCachedHistoryMessages from the
@@ -148,12 +171,12 @@ export function selectRenderMessages(state: ChatState, agent: string): ChatMessa
   if (src.mode === "finishing") {
     // Frozen live turn stays visible while React Query refetches history.
     const history = getCachedHistoryMessages(src.sessionId, st.selectedBranches);
-    return [...historyUpToIncluding(history, st.boundaryMessageId), ...src.messages];
+    return concatLiveOntoHistory(historyUpToIncluding(history, st.boundaryMessageId), src.messages);
   }
   // live mode
   const histSessionId = st.activeSessionId;
   const history = histSessionId ? getCachedHistoryMessages(histSessionId, st.selectedBranches) : [];
-  return [...historyUpToIncluding(history, st.boundaryMessageId), ...src.messages];
+  return concatLiveOntoHistory(historyUpToIncluding(history, st.boundaryMessageId), src.messages);
 }
 
 const EMPTY_LIVE_TEXT = { id: "", text: "" };
