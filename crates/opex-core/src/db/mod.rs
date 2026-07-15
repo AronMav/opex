@@ -2,6 +2,7 @@
 pub use opex_db::approvals;
 pub use opex_db::infra_decisions;
 pub use opex_db::memory_queries;
+pub use opex_db::notification_prefs;
 pub use opex_db::notifications;
 pub use opex_db::session_failures;
 pub use opex_db::session_timeline;

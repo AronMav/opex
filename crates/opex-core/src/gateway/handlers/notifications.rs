@@ -20,6 +20,10 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/notifications/read-all", post(api_mark_all_notifications_read))
         .route("/api/notifications/clear", delete(api_clear_all_notifications))
         .route("/api/notifications/{id}", patch(api_mark_notification_read))
+        .route(
+            "/api/notification-prefs",
+            get(api_get_notification_prefs).put(api_put_notification_prefs),
+        )
 }
 
 /// Body for `POST /api/notifications`.
@@ -218,6 +222,52 @@ pub(crate) async fn api_clear_all_notifications(
                 .ok();
             Json(serde_json::json!({"ok": true, "deleted": r.rows_affected()})).into_response()
         }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/notification-prefs — all configured per-type prefs (absent = defaults).
+pub(crate) async fn api_get_notification_prefs(
+    State(infra): State<InfraServices>,
+) -> impl IntoResponse {
+    match crate::db::notification_prefs::list_prefs(&infra.db).await {
+        Ok(prefs) => Json(serde_json::json!({ "prefs": prefs })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct UpdatePrefBody {
+    #[serde(rename = "type")]
+    r#type: String,
+    muted: bool,
+    sound: bool,
+}
+
+/// PUT /api/notification-prefs — upsert one type's prefs.
+pub(crate) async fn api_put_notification_prefs(
+    State(infra): State<InfraServices>,
+    Json(body): Json<UpdatePrefBody>,
+) -> impl IntoResponse {
+    if body.r#type.is_empty() || body.r#type.len() > 64 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid notification type"})),
+        )
+            .into_response();
+    }
+    match crate::db::notification_prefs::upsert_pref(&infra.db, &body.r#type, body.muted, body.sound)
+        .await
+    {
+        Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
