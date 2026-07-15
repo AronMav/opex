@@ -146,9 +146,12 @@ export async function processSSEStream(
       const lines = parseSSELines(chunk, lineBuffer);
 
       for (const line of lines) {
-        // Standard SSE `id:` field — the transport no longer tracks a
-        // Last-Event-ID for resume (removed in T8), so buffered event ids are
-        // ignored here and fall through to the non-data skip below.
+        // Standard SSE `id:` field — carries the envelope seq (replay
+        // ordering within the sync_begin/sync_end envelope), not a
+        // Last-Event-ID resumption token. The GET stream always returns the
+        // full envelope regardless of any Last-Event-ID header, so seq is
+        // not tracked client-side here; fall through to the non-data skip
+        // below.
         if (!line.startsWith("data:")) continue;
         const raw = line.slice(5).trim();
         if (raw === "[DONE]") continue;

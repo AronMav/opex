@@ -2,7 +2,7 @@
 // Verifies the SSE protocol contract end-to-end through stream-processor:
 //   • each step-start opens a new live ChatMessage with the event's messageId
 //   • text-deltas inside one iteration accumulate under that id
-//   • Last-Event-ID is tracked across the run
+//   • SSE `id:` lines carry envelope-replay seq, not a Last-Event-ID token
 //   • Finish event closes the stream cleanly
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -128,12 +128,14 @@ describe("multi-iteration: one step-start opens one ChatMessage per iteration", 
   });
 });
 
-// T8: Last-Event-ID tracking was removed with the transport reconnect
-// machinery — `id:` SSE lines are ignored and no seq offset is persisted. The
+// Under the server-authoritative sync-envelope protocol, the GET stream
+// always returns the full envelope (sync_begin → replay → sync_end → live)
+// regardless of any Last-Event-ID header — there is no resumption offset to
+// track client-side. `id:` SSE lines are envelope-replay seq only. The
 // former "Last-Event-ID tracking" describe block was deleted.
 
 describe("Finish event guarantee — closes connectionPhase cleanly", () => {
-  it("normal finish closes connectionPhase to non-error (complete or idle)", async () => {
+  it("normal finish closes connectionPhase to idle (non-error)", async () => {
     const session = streamSessionManager.start("Arty");
     const frames = [
       `data: ${JSON.stringify({ type: "data-session-id", data: { sessionId: "s1" } })}\n\n`,
@@ -148,9 +150,10 @@ describe("Finish event guarantee — closes connectionPhase cleanly", () => {
       sessionId: null,
       callbacks: makeCallbacks(),
     });
-    // Phase passes through "complete" during the post-finally refetch window
-    // and lands on "idle" once the (mocked / no-op) refetch resolves. Either
-    // is correct — both exit the loader; "streaming"/"reconnecting" are not.
+    // Phase lands on "idle" once the (mocked / no-op) post-finish refetch
+    // resolves. The historical "complete" phase no longer exists in
+    // ConnectionPhase; the array form is kept only as a tolerant assertion —
+    // what matters is that it is NOT "streaming"/"error".
     const phase = useChatStore.getState().agents.Arty.connectionPhase;
     expect(["complete", "idle"]).toContain(phase);
   });

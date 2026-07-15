@@ -1,6 +1,7 @@
 // ── streaming-renderer.ts ──────────────────────────────────────────────────
-// Factory module encapsulating SSE stream processing, rAF throttling,
-// reconnection logic, and per-agent cleanup (MEM-01, PERF-02).
+// Factory module encapsulating SSE stream processing, rAF throttling, the
+// single connect path (POST 202 then GET envelope) + envelope streaming, and
+// per-agent cleanup (MEM-01, PERF-02).
 
 import { startTurn, openTurnStream } from "./stream/chat-stream";
 import { apiPatch, apiPost } from "@/lib/api";
