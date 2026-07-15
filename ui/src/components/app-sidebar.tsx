@@ -26,7 +26,7 @@ import {
   MessageSquare, Bot, FileText, Clock, Brain,
   Wrench, Folder, Key, Shield, Settings, LogOut, BookOpen,
   Radio, Zap, Webhook, Link2,
-  Archive, Monitor,
+  Archive, Monitor, Layers,
   type LucideProps,
 } from "lucide-react";
 import { WalnutMark } from "@/components/ui/walnut-mark";
@@ -74,6 +74,7 @@ const NAV: NavGroup[] = [
   {
     labelKey: "nav.system",
     items: [
+      { labelKey: "nav.profiles", href: "/profiles/", icon: Layers },
       { labelKey: "nav.providers", href: "/providers/", icon: Zap },
       { labelKey: "nav.secrets", href: "/secrets/", icon: Key },
       { labelKey: "nav.config", href: "/config/", icon: Settings },

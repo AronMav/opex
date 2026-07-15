@@ -1,0 +1,123 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+import "@testing-library/jest-dom/vitest";
+
+import type { ProfileBase } from "@/hooks/use-profiles";
+
+// ── Mocks ────────────────────────────────────────────────────────────────────
+
+vi.mock("@/hooks/use-translation", () => ({
+  useTranslation: () => ({ t: (key: string) => key, locale: "en" }),
+}));
+
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
+}));
+
+const { apiGet } = vi.hoisted(() => ({ apiGet: vi.fn() }));
+vi.mock("@/lib/api", () => ({ apiGet }));
+
+vi.mock("@/lib/queries", () => ({
+  useProviders: () => ({
+    data: [
+      { id: "p1", name: "openai", type: "text", provider_type: "openai_compat", enabled: true },
+      { id: "p2", name: "minimax", type: "tts", provider_type: "minimax", enabled: true },
+    ],
+  }),
+}));
+
+const { mockMutate } = vi.hoisted(() => ({ mockMutate: vi.fn() }));
+vi.mock("@/hooks/use-profiles", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/hooks/use-profiles")>();
+  return {
+    ...actual,
+    useUpdateProfile: () => ({ mutate: mockMutate }),
+  };
+});
+
+// ── Fixture ──────────────────────────────────────────────────────────────────
+
+function makeProfile(overrides: Partial<ProfileBase> = {}): ProfileBase {
+  return {
+    id: "profile-1",
+    name: "Voice",
+    slots: {
+      text: [{ provider: "openai", model: "gpt-4" }],
+    },
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+describe("ProfileEditor", () => {
+  let ProfileEditor: React.ComponentType<{
+    profile: ProfileBase;
+    open: boolean;
+    onClose: () => void;
+  }>;
+
+  beforeEach(async () => {
+    mockMutate.mockClear();
+    apiGet.mockClear();
+    const mod = await import("../_parts/ProfileEditor");
+    ProfileEditor = mod.ProfileEditor;
+  });
+
+  it("renders one row for the text slot initially", () => {
+    render(<ProfileEditor profile={makeProfile()} open onClose={vi.fn()} />);
+    expect(screen.getAllByTestId(/^profile-row-text-/)).toHaveLength(1);
+  });
+
+  it("adding a reserve yields a second row for that slot", () => {
+    render(<ProfileEditor profile={makeProfile()} open onClose={vi.fn()} />);
+
+    // The "text" capability is rendered first (PROFILE_CAPABILITIES order),
+    // so its "+ reserve" button is the first one in the document.
+    const addButtons = screen.getAllByRole("button", { name: /profiles\.add_reserve/i });
+    fireEvent.click(addButtons[0]);
+
+    expect(screen.getAllByTestId(/^profile-row-text-/)).toHaveLength(2);
+  });
+
+  it("the up arrow swaps the reordered row with its predecessor", () => {
+    render(<ProfileEditor profile={makeProfile()} open onClose={vi.fn()} />);
+
+    // Add a second row and give it a distinct model value.
+    fireEvent.click(screen.getAllByRole("button", { name: /profiles\.add_reserve/i })[0]);
+    const modelInputs = () => screen.getAllByTestId(/^profile-model-text-/) as HTMLInputElement[];
+    fireEvent.change(modelInputs()[1], { target: { value: "gpt-4o-mini" } });
+
+    expect(modelInputs()[0]).toHaveValue("gpt-4");
+    expect(modelInputs()[1]).toHaveValue("gpt-4o-mini");
+
+    // Move the second row up — it should swap with the first.
+    const upButtons = screen.getAllByRole("button", { name: /profiles\.move_up/i });
+    fireEvent.click(upButtons[1]);
+
+    expect(modelInputs()[0]).toHaveValue("gpt-4o-mini");
+    expect(modelInputs()[1]).toHaveValue("gpt-4");
+  });
+
+  it("Save calls useUpdateProfile().mutate with the expected slots", () => {
+    render(<ProfileEditor profile={makeProfile()} open onClose={vi.fn()} />);
+
+    fireEvent.click(screen.getAllByRole("button", { name: /profiles\.add_reserve/i })[0]);
+    const modelInputs = () => screen.getAllByTestId(/^profile-model-text-/) as HTMLInputElement[];
+    fireEvent.change(modelInputs()[1], { target: { value: "gpt-4o-mini" } });
+    fireEvent.click(screen.getAllByRole("button", { name: /profiles\.move_up/i })[1]);
+
+    fireEvent.click(screen.getByRole("button", { name: /^common\.save$/i }));
+
+    expect(mockMutate).toHaveBeenCalledTimes(1);
+    const [payload] = mockMutate.mock.calls[0];
+    expect(payload.id).toBe("profile-1");
+    expect(payload.name).toBe("Voice");
+    expect(payload.slots.text).toEqual([
+      { provider: "", model: "gpt-4o-mini" },
+      { provider: "openai", model: "gpt-4" },
+    ]);
+  });
+});
