@@ -95,6 +95,16 @@ pub async fn copy_profile(db: &PgPool, id: Uuid) -> sqlx::Result<Option<ProfileR
     }
 }
 
+/// Имена профилей, в чьих слотах встречается провайдер `name` (любая capability).
+pub async fn profiles_referencing_provider(db: &PgPool, name: &str) -> sqlx::Result<Vec<String>> {
+    let rows: Vec<(String, serde_json::Value)> =
+        sqlx::query_as("SELECT name, slots FROM profiles").fetch_all(db).await?;
+    Ok(rows.into_iter().filter(|(_, slots)| {
+        serde_json::from_value::<Slots>(slots.clone()).unwrap_or_default()
+            .values().flatten().any(|e| e.provider == name)
+    }).map(|(n, _)| n).collect())
+}
+
 /// Валидация слотов: известные capability, непустые имена, существование
 /// записи providers подходящей категории. `text`/`compaction` принимают
 /// категории text|llm; остальные — одноимённую категорию.
@@ -173,6 +183,19 @@ mod tests {
         let mut bad3 = Slots::new();
         bad3.insert("tts".into(), vec![slot("ghost")]);
         assert!(validate_slots(&pool, &bad3).await.is_err());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn profiles_referencing_provider_finds_match(pool: sqlx::PgPool) {
+        sqlx::query("INSERT INTO providers (name, type, provider_type) VALUES ('mm','tts','minimax')")
+            .execute(&pool).await.unwrap();
+        let mut slots = Slots::new();
+        slots.insert("tts".into(), vec![SlotEntry { provider: "mm".into(), model: None, voice: None }]);
+        create_profile(&pool, "P", &slots).await.unwrap();
+        let found = profiles_referencing_provider(&pool, "mm").await.unwrap();
+        assert_eq!(found, vec!["P".to_string()]);
+        let none_found = profiles_referencing_provider(&pool, "nonexistent").await.unwrap();
+        assert!(none_found.is_empty());
     }
 
     #[sqlx::test(migrations = "../../migrations")]

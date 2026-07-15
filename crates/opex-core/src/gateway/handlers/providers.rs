@@ -432,6 +432,25 @@ pub(crate) async fn api_delete_provider(
         false
     };
 
+    // Guard: block deletion if any profile's slots still reference this
+    // provider by name (any capability). Profiles now own agent-facing
+    // capability routing, so a dangling reference would silently break
+    // whichever profile+capability pointed at the deleted provider.
+    if let Some(ref name) = provider_name {
+        match crate::db::profiles::profiles_referencing_provider(&infra.db, name).await {
+            Ok(profile_names) if !profile_names.is_empty() => {
+                return (StatusCode::CONFLICT, Json(json!({
+                    "error": "provider_in_profiles",
+                    "profiles": profile_names,
+                }))).into_response();
+            }
+            Ok(_) => {}
+            Err(e) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
+            }
+        }
+    }
+
     match providers::delete_provider(&infra.db, id).await {
         Ok(true) => {
             if let Err(e) = auth.secrets.delete_scoped(PROVIDER_CREDENTIALS, &id.to_string()).await {
@@ -546,9 +565,16 @@ pub(crate) async fn api_provider_resolve(
 
 // ── Active handlers ─────────────────────────────────────────────────────────
 
+/// Since profiles now own all agent-facing capability routing, the global
+/// `provider_active` table is restricted to `embedding` only (the one
+/// capability profiles don't cover — embedding is shared infra, not a
+/// per-profile slot). Filter out any stale non-embedding rows on read.
 pub(crate) async fn api_list_provider_active(State(infra): State<InfraServices>) -> impl IntoResponse {
     match providers::list_provider_active(&infra.db).await {
-        Ok(active) => (StatusCode::OK, Json(json!({ "active": active }))).into_response(),
+        Ok(active) => {
+            let active: Vec<_> = active.into_iter().filter(|a| a.capability == "embedding").collect();
+            (StatusCode::OK, Json(json!({ "active": active }))).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
     }
 }
@@ -572,6 +598,16 @@ pub(crate) async fn api_set_provider_active(
     State(infra): State<InfraServices>,
     Json(input): Json<SetProviderActiveInput>,
 ) -> impl IntoResponse {
+    // Profiles now own all agent-facing capability routing (stt/tts/vision/
+    // imagegen/websearch/text/compaction slots). `provider_active` is
+    // restricted to `embedding`, the one shared-infra capability profiles
+    // don't cover.
+    if input.capability != "embedding" {
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "error": "capability managed by profiles",
+            "hint": "only 'embedding' is set via provider-active; all other capabilities are configured per-profile"
+        }))).into_response();
+    }
     if !VALID_CAPABILITIES.contains(&input.capability.as_str()) {
         return (StatusCode::BAD_REQUEST, Json(json!({
             "error": format!("invalid capability '{}', must be one of: {}", input.capability, VALID_CAPABILITIES.join(", "))
