@@ -95,9 +95,32 @@ pub(crate) async fn api_tts_voices(
     }
 }
 
-/// POST /api/tts/synthesize — synthesize speech via Toolgate
+/// Voice priority: manual `body.voice` override beats the profile slot's
+/// configured voice, which beats the provider's own default (empty string —
+/// toolgate/the provider picks it).
+fn effective_voice(body_voice: Option<&str>, slot_voice: Option<&str>) -> String {
+    body_voice
+        .filter(|v| !v.is_empty())
+        .or(slot_voice.filter(|v| !v.is_empty()))
+        .unwrap_or("")
+        .to_string()
+}
+
+/// POST /api/tts/synthesize — synthesize speech via Toolgate.
+///
+/// When `?agent=<name>` is present, resolves the tts capability chain from
+/// the agent's profile (`profile_resolver::resolve_slots_for_agent` +
+/// `effective_chain`) and retries down the chain on retryable failures
+/// (5xx / 429), sending `X-Opex-Provider: <entry.provider>` per attempt so
+/// toolgate uses that specific provider instead of the globally active one.
+/// An agent whose profile has no `tts` slot gets a `409 tts_disabled` instead
+/// of silently falling back to the active provider (contract for spec #2).
+/// Without `?agent=`, behavior is legacy: a single request, no provider
+/// header, toolgate decides.
 pub(crate) async fn api_tts_synthesize(
     State(agents): State<AgentCore>,
+    State(infra): State<InfraServices>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
     Json(body): Json<TtsSynthesizeRequest>,
 ) -> impl IntoResponse {
     let toolgate_url = {
@@ -108,47 +131,102 @@ pub(crate) async fn api_tts_synthesize(
         return (StatusCode::SERVICE_UNAVAILABLE, "Toolgate URL not configured").into_response();
     };
 
-    let client = TOOLGATE_CLIENT.get_or_init(reqwest::Client::new);
-    // Build the body, deferring `model`/`voice` to the active provider's
-    // configured defaults when the caller omits them. Hardcoding "tts-1" here
-    // forced the piper tier on OpenAI-style servers (e.g. openedai-speech),
-    // where an XTTS voice clone is only reachable via the provider's
-    // `default_model` ("tts-1-hd") — so the preview returned empty audio.
-    // Omitting the field lets toolgate fall back to that default_model.
-    let mut payload = serde_json::json!({
-        "input": body.text,
-        "voice": body.voice.unwrap_or_default(),
-    });
-    if let Some(model) = body.model.filter(|m| !m.is_empty()) {
-        payload["model"] = serde_json::Value::String(model);
-    }
-    let resp = client
-        .post(format!("{}/v1/audio/speech", base.trim_end_matches('/')))
-        .json(&payload)
-        .send()
-        .await;
+    // Chain from the agent's profile (?agent=); no param — legacy behavior
+    // (empty chain → single request, no X-Opex-Provider, toolgate decides).
+    let chain: Vec<crate::db::profiles::SlotEntry> = match params.get("agent") {
+        Some(agent_name) => {
+            let profile_name = agents
+                .get_engine(agent_name)
+                .await
+                .map(|e| e.cfg().agent.profile.clone())
+                .unwrap_or_else(|| crate::db::profiles::DEFAULT_PROFILE.to_string());
+            let slots = crate::agent::profile_resolver::resolve_slots_for_agent(
+                &infra.db,
+                &profile_name,
+                agent_name,
+            ).await;
+            let chain = crate::agent::profile_resolver::effective_chain(&infra.db, &slots, "tts").await;
+            if chain.is_empty() {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({"error": "tts_disabled", "hint": "profile has no tts slot"})),
+                ).into_response();
+            }
+            chain
+        }
+        None => Vec::new(),
+    };
 
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let content_type = r.headers()
-                .get("content-type")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("audio/mpeg")
-                .to_string();
-            let bytes = r.bytes().await.unwrap_or_default();
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, content_type)],
-                bytes,
-            ).into_response()
+    let client = TOOLGATE_CLIENT.get_or_init(reqwest::Client::new);
+    let attempts: Vec<Option<&crate::db::profiles::SlotEntry>> = if chain.is_empty() {
+        vec![None]
+    } else {
+        chain.iter().map(Some).collect()
+    };
+
+    let last = attempts.len() - 1;
+    for (i, entry) in attempts.into_iter().enumerate() {
+        // Build the body, deferring `model` to the active provider's
+        // configured defaults when the caller omits it. Hardcoding "tts-1"
+        // here forced the piper tier on OpenAI-style servers (e.g.
+        // openedai-speech), where an XTTS voice clone is only reachable via
+        // the provider's `default_model` ("tts-1-hd") — so the preview
+        // returned empty audio. Omitting the field lets toolgate fall back
+        // to that default_model.
+        let voice = effective_voice(
+            body.voice.as_deref(),
+            entry.and_then(|e| e.voice.as_deref()),
+        );
+        let mut payload = serde_json::json!({ "input": body.text, "voice": voice });
+        if let Some(ref model) = body.model {
+            if !model.is_empty() {
+                payload["model"] = serde_json::Value::String(model.clone());
+            }
         }
-        Ok(r) => {
-            let status = r.status();
-            let text = r.text().await.unwrap_or_default();
-            (StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY), text).into_response()
+        let mut req = client
+            .post(format!("{}/v1/audio/speech", base.trim_end_matches('/')))
+            .json(&payload);
+        if let Some(e) = entry {
+            req = req.header("X-Opex-Provider", &e.provider);
         }
-        Err(e) => (StatusCode::BAD_GATEWAY, format!("Toolgate error: {e}")).into_response(),
+
+        match req.send().await {
+            Ok(r) if r.status().is_success() => {
+                let content_type = r.headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("audio/mpeg")
+                    .to_string();
+                let bytes = r.bytes().await.unwrap_or_default();
+                return (
+                    StatusCode::OK,
+                    [(axum::http::header::CONTENT_TYPE, content_type)],
+                    bytes,
+                ).into_response();
+            }
+            Ok(r) => {
+                let status = r.status();
+                let retryable = status.is_server_error() || status.as_u16() == 429;
+                if retryable && i < last {
+                    continue;
+                }
+                let text = r.text().await.unwrap_or_default();
+                return (
+                    StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
+                    text,
+                ).into_response();
+            }
+            Err(e) => {
+                if i < last {
+                    continue;
+                }
+                return (StatusCode::BAD_GATEWAY, format!("Toolgate error: {e}")).into_response();
+            }
+        }
     }
+    // Unreachable: `attempts` always has >=1 entry, and the loop above
+    // returns on the final attempt regardless of outcome.
+    (StatusCode::BAD_GATEWAY, "no tts attempts made").into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -156,6 +234,18 @@ pub(crate) struct TtsSynthesizeRequest {
     text: String,
     voice: Option<String>,
     model: Option<String>,
+}
+
+#[cfg(test)]
+mod tts_tests {
+    use super::effective_voice;
+
+    #[test]
+    fn voice_priority_body_over_slot_over_default() {
+        assert_eq!(effective_voice(Some("manual"), Some("prof")), "manual");
+        assert_eq!(effective_voice(None, Some("prof")), "prof");
+        assert_eq!(effective_voice(Some(""), None), "");
+    }
 }
 
 // ── Config API ──
