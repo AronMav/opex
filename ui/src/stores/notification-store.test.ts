@@ -105,4 +105,37 @@ describe("notification-store", () => {
     expect(s.notifications[0].read).toBe(true);
     expect(s.unread_count).toBe(0);
   });
+
+  it("syncFirstPage merges: refreshes known, prepends new, preserves older, sets count, no beep", () => {
+    // Seed: 3 rows loaded (b newest ... but list order is [new..old]); pretend
+    // "old1"/"old2" are older pages already appended.
+    useNotificationStore.setState({
+      notifications: [row("n2", { read: false }), row("old1"), row("old2")],
+      unread_count: 3,
+      newArrivalSeq: 5,
+    });
+    // Server first page: a brand-new "n3", n2 now read, (old rows not in page).
+    useNotificationStore
+      .getState()
+      .syncFirstPage([row("n3"), row("n2", { read: true })], 1);
+    const s = useNotificationStore.getState();
+    expect(s.notifications.map((n) => n.id)).toEqual(["n3", "n2", "old1", "old2"]);
+    expect(s.notifications.find((n) => n.id === "n2")?.read).toBe(true); // refreshed
+    expect(s.unread_count).toBe(1); // server value
+    expect(s.newArrivalSeq).toBe(5); // unchanged — refetch never beeps
+  });
+
+  it("appendOlder dedup-appends to the tail without touching count or seq", () => {
+    useNotificationStore.setState({
+      notifications: [row("a"), row("b")],
+      unread_count: 2,
+      newArrivalSeq: 4,
+    });
+    // "b" is a duplicate (boundary overlap); "c","d" are genuinely older.
+    useNotificationStore.getState().appendOlder([row("b"), row("c"), row("d")]);
+    const s = useNotificationStore.getState();
+    expect(s.notifications.map((n) => n.id)).toEqual(["a", "b", "c", "d"]);
+    expect(s.unread_count).toBe(2);
+    expect(s.newArrivalSeq).toBe(4);
+  });
 });

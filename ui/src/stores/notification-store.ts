@@ -8,7 +8,8 @@ interface NotificationState {
   /** Bumped only on a genuine (non-duplicate) live arrival. Drives sound/flash
    *  so refetch-on-reconnect and cold load never trigger the beep. */
   newArrivalSeq: number;
-  setNotifications: (rows: NotificationRow[], count: number) => void;
+  syncFirstPage: (rows: NotificationRow[], unread_count: number) => void;
+  appendOlder: (rows: NotificationRow[]) => void;
   prependNotification: (row: NotificationRow) => void;
   markRead: (id: string) => void;
   markAllRead: () => void;
@@ -27,8 +28,38 @@ export const useNotificationStore = create<NotificationState>()(
       unread_count: 0,
       newArrivalSeq: 0,
 
-      setNotifications: (rows, count) =>
-        set({ notifications: rows, unread_count: count }, false, "setNotifications"),
+      // First-page (newest) refetch — MERGE, not replace, so history pages
+      // loaded via appendOlder survive the Phase 1 periodic/focus/reconnect
+      // refetch. Refreshes read-state of known rows, prepends genuinely-new
+      // rows (server order = newest-first), adopts the server unread_count, and
+      // never bumps newArrivalSeq (refetch must stay silent — only live WS
+      // arrivals beep).
+      syncFirstPage: (rows, unread_count) =>
+        set(
+          (s) => {
+            const existing = new Set(s.notifications.map((n) => n.id));
+            const fresh = rows.filter((r) => !existing.has(r.id));
+            const byId = new Map(rows.map((r) => [r.id, r]));
+            const merged = s.notifications.map((n) => byId.get(n.id) ?? n);
+            return { notifications: [...fresh, ...merged], unread_count };
+          },
+          false,
+          "syncFirstPage",
+        ),
+
+      // Append an older history page. Dedup by id (boundary rows can overlap
+      // the live head), preserve order. Never touches unread_count/newArrivalSeq.
+      appendOlder: (rows) =>
+        set(
+          (s) => {
+            const existing = new Set(s.notifications.map((n) => n.id));
+            const older = rows.filter((r) => !existing.has(r.id));
+            if (older.length === 0) return s;
+            return { notifications: [...s.notifications, ...older] };
+          },
+          false,
+          "appendOlder",
+        ),
 
       prependNotification: (row) =>
         set(
