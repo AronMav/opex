@@ -55,12 +55,51 @@ export interface StreamProcessorCallbacks {
    * for stale-detection telemetry.
    */
   onEventActivity?: () => void;
+
+  // ── T6: batch-apply transport (chat-stream.ts / TurnStreamCallbacks) ────
+  // Optional — only populated (and only ever invoked) when `batchMode` is
+  // set in StreamProcessorOpts. Old callers (startStream/resumeStream) never
+  // set batchMode, so these fields stay undefined and the code paths below
+  // that reference them are dead for the legacy transport — zero behavior
+  // change for the existing SSE renderer.
+
+  /**
+   * Fired on `sync_begin`. Reports the resume boundary metadata. `runStatus`
+   * is NOT authoritative for terminal error/interrupted UI state — the
+   * server collapses an in-memory stream that ended in ERROR to
+   * "running"/"finished" in the active-stream branch, and the real terminal
+   * signal is still the replayed `error`/`sync` event (handled elsewhere in
+   * this file, unaffected by batchMode). This callback is purely informational.
+   */
+  onBoundary?: (boundaryMessageId: string | null, runStatus: string, truncated: boolean) => void;
+  /** Fired after `sync_end` — the replayed envelope has been committed to the store as a single batch. */
+  onEnvelopeApplied?: () => void;
+  /** Fired when the turn is authoritatively over: an explicit `finish` event, or
+   *  a `sync_begin` whose `runStatus` was already terminal (finished/error/
+   *  interrupted) with no further live events before the stream closed. */
+  onFinished?: () => void;
+  /**
+   * Fired when the connection drops WITHOUT a terminal signal (batchMode
+   * only) — this module does not retry; the caller decides whether/how to
+   * re-open. Distinct from the legacy `onReconnectNeeded`, which owns its
+   * own reconnect-scheduling policy and is unaffected.
+   */
+  onConnectionLost?: () => void;
 }
 
 export interface StreamProcessorOpts {
   sessionId: string | null;
   reconnectAttempt: number;
   callbacks: StreamProcessorCallbacks;
+  /**
+   * T6: opt-in batch-apply mode. When true, `sync_begin`/`sync_end` gate the
+   * throttled `scheduleCommit()` calls so a whole replayed envelope lands as
+   * a single store commit at `sync_end`, and the new `onBoundary` /
+   * `onEnvelopeApplied` / `onFinished` / `onConnectionLost` callbacks are
+   * dispatched. Defaults to false/undefined — the legacy per-event-throttled
+   * path (startStream/resumeStream) is unchanged when this is omitted.
+   */
+  batchMode?: boolean;
 }
 
 // ── Core processor ─────────────────────────────────────────────────────────────
@@ -70,7 +109,7 @@ export async function processSSEStream(
   body: ReadableStream<Uint8Array>,
   opts: StreamProcessorOpts,
 ): Promise<void> {
-  const { sessionId: knownSessionId, reconnectAttempt, callbacks } = opts;
+  const { sessionId: knownSessionId, reconnectAttempt, callbacks, batchMode } = opts;
   const agent = session.agent;
 
   const reader = body.getReader();
@@ -82,6 +121,25 @@ export async function processSSEStream(
 
   let receivedSessionId: string | null = knownSessionId ?? null;
   let receivedFinishEvent = false;
+
+  // T6: batch-apply state (inert unless batchMode is set — see
+  // StreamProcessorOpts.batchMode doc comment).
+  let batching = false;
+  let lastRunStatus: string | null = null;
+
+  /**
+   * Gate for the throttled per-event commit. While replaying inside a
+   * sync_begin..sync_end envelope in batchMode, defer to the single
+   * `session.commit()` that `sync_end` performs — this is the "batch"
+   * behavior. Does NOT gate `session.commit()` call sites (step-start,
+   * finish) — those commit per-LLM-iteration/on-finish regardless, which is
+   * correct: a multi-step replay still commits once per step, and the final
+   * commit() at sync_end flushes whatever remains after the last step.
+   */
+  function maybeScheduleCommit(): void {
+    if (batching) return;
+    session.scheduleCommit();
+  }
 
   try {
     while (true) {
@@ -192,7 +250,7 @@ export async function processSSEStream(
 
           case "text-delta": {
             session.buffer.parser.processDelta(event.delta);
-            session.scheduleCommit();
+            maybeScheduleCommit();
             break;
           }
 
@@ -205,7 +263,7 @@ export async function processSSEStream(
             // place inside the merged text.
             session.buffer.endTextBlock();
             sseLog(agent, "post-text-end-buffer", partsBrief(session.buffer.parts));
-            session.scheduleCommit();
+            maybeScheduleCommit();
             break;
           }
 
@@ -222,7 +280,7 @@ export async function processSSEStream(
             };
             session.buffer.parts.push(toolPart);
             sseLog(agent, "post-tool-input-start-buffer", partsBrief(session.buffer.parts));
-            session.scheduleCommit();
+            maybeScheduleCommit();
             break;
           }
 
@@ -245,7 +303,7 @@ export async function processSSEStream(
                 input: (input as Record<string, unknown>) ?? {},
               };
             }
-            session.scheduleCommit();
+            maybeScheduleCommit();
             break;
           }
 
@@ -261,7 +319,7 @@ export async function processSSEStream(
                 output,
               };
             }
-            session.scheduleCommit();
+            maybeScheduleCommit();
             break;
           }
 
@@ -277,7 +335,7 @@ export async function processSSEStream(
               status: "pending",
             };
             session.buffer.parts.push(approval);
-            session.scheduleCommit();
+            maybeScheduleCommit();
             break;
           }
 
@@ -295,7 +353,7 @@ export async function processSSEStream(
                 modifiedInput: (event.modifiedInput ?? undefined) as Record<string, unknown> | undefined,
               };
             }
-            session.scheduleCommit();
+            maybeScheduleCommit();
             break;
           }
 
@@ -311,7 +369,7 @@ export async function processSSEStream(
               response: null,
             };
             session.buffer.parts.push(clarify);
-            session.scheduleCommit();
+            maybeScheduleCommit();
             break;
           }
 
@@ -354,7 +412,7 @@ export async function processSSEStream(
               url: event.url,
               mediaType: event.mediaType || "application/octet-stream",
             });
-            session.scheduleCommit();
+            maybeScheduleCommit();
             break;
           }
 
@@ -377,7 +435,7 @@ export async function processSSEStream(
               cardType,
               data,
             });
-            session.scheduleCommit();
+            maybeScheduleCommit();
             break;
           }
 
@@ -466,6 +524,27 @@ export async function processSSEStream(
                 agentDraft.connectionError = errorText;
               }
             });
+            break;
+          }
+
+          // T6: envelope boundary markers (sync_begin..sync_end wrap the
+          // replay of a resumed/new stream — see gateway/handlers/chat/stream.rs).
+          // Inert unless batchMode is set (see StreamProcessorOpts doc) — old
+          // callers never observe any behavior change from these two cases.
+          case "sync_begin": {
+            if (!batchMode) break;
+            lastRunStatus = event.runStatus;
+            session.buffer.reset();
+            batching = true;
+            callbacks.onBoundary?.(event.boundaryMessageId, event.runStatus, event.truncated);
+            break;
+          }
+
+          case "sync_end": {
+            if (!batchMode) break;
+            batching = false;
+            session.commit();
+            callbacks.onEnvelopeApplied?.();
             break;
           }
 
@@ -563,7 +642,23 @@ export async function processSSEStream(
       const isIdle = agentState?.connectionPhase === "idle";
       const effectiveSessionId = receivedSessionId ?? agentState?.activeSessionId;
 
-      if (!isError && !isIdle && !receivedFinishEvent && effectiveSessionId) {
+      if (batchMode) {
+        // T6: the batch-apply transport has no reconnect loop inside this
+        // module — the caller (chat-stream.ts's openTurnStream, wired by T7)
+        // owns re-open policy. Decide only whether the turn is
+        // authoritatively over (explicit `finish`, or a `sync_begin` whose
+        // runStatus was already terminal) vs. a connection drop mid-turn.
+        // This is a lifecycle signal only — NOT a substitute for the
+        // error/interrupted UI state, which is derived from the replayed
+        // `error`/`sync` events above regardless of batchMode.
+        const isTerminalRunStatus =
+          lastRunStatus === "finished" || lastRunStatus === "error" || lastRunStatus === "interrupted";
+        if (!receivedFinishEvent && !isTerminalRunStatus) {
+          callbacks.onConnectionLost?.();
+          return;
+        }
+        callbacks.onFinished?.();
+      } else if (!isError && !isIdle && !receivedFinishEvent && effectiveSessionId) {
         // SSE connection dropped before finish — LLM retry may have been in progress.
         // Reset the flag now; scheduleReconnect will re-set it only if a __reconnecting__
         // chunk arrives on the next SSE connection.
