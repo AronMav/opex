@@ -290,18 +290,22 @@ pub async fn notify(
     body: &str,
     data: serde_json::Value,
 ) -> anyhow::Result<()> {
-    let notification = crate::db::notifications::create_notification(
-        db,
-        notification_type,
-        title,
-        body,
-        data,
-    ).await?;
+    let notification =
+        crate::db::notifications::create_notification(db, notification_type, title, body, data)
+            .await?;
 
-    // Broadcast to all connected WebSocket clients (fire-and-forget; drop errors)
-    ui_event_tx.send(
-        serde_json::json!({"type": "notification", "data": notification}).to_string()
-    ).ok();
+    // Muted types are still PERSISTED (history/audit, counted in unread on the
+    // next refetch) but not broadcast live — no cross-tab badge bump, no sound,
+    // no toast at arrival. Fail-open: if the prefs read errors, broadcast anyway
+    // (over-notifying beats silently dropping an alert).
+    let muted = crate::db::notification_prefs::is_muted(db, notification_type)
+        .await
+        .unwrap_or(false);
+    if !muted {
+        ui_event_tx
+            .send(serde_json::json!({"type": "notification", "data": notification}).to_string())
+            .ok();
+    }
 
     Ok(())
 }
