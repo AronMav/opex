@@ -298,6 +298,12 @@ mod tests {
     async fn subscribe_carries_boundary_and_truncated(pool: sqlx::PgPool) {
         let registry = StreamRegistry::new(pool);
         let sid = Uuid::new_v4();
+        // stream_jobs.session_id has an FK to sessions(id); seed a row first.
+        sqlx::query("INSERT INTO sessions (id, agent_id, user_id, channel) VALUES ($1, 'A', 'u', 'ui')")
+            .bind(sid)
+            .execute(registry.db())
+            .await
+            .expect("seed session");
         let boundary = Uuid::new_v4();
         let token = CancellationToken::new();
         registry
@@ -314,6 +320,12 @@ mod tests {
     async fn overflow_sets_truncated(pool: sqlx::PgPool) {
         let registry = StreamRegistry::new(pool);
         let sid = Uuid::new_v4();
+        // stream_jobs.session_id has an FK to sessions(id); seed a row first.
+        sqlx::query("INSERT INTO sessions (id, agent_id, user_id, channel) VALUES ($1, 'A', 'u', 'ui')")
+            .bind(sid)
+            .execute(registry.db())
+            .await
+            .expect("seed session");
         registry
             .register_with_token(sid, "A", CancellationToken::new(), Uuid::new_v4())
             .await
