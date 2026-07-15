@@ -712,12 +712,14 @@ export function useLoadOlderNotifications() {
   const appendOlder = useNotificationStore((s) => s.appendOlder);
   const [isLoading, setIsLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  const inFlightRef = useRef(false);
 
   const loadOlder = useCallback(async () => {
-    if (isLoading || !hasMore) return;
+    if (inFlightRef.current || !hasMore) return;
     const list = useNotificationStore.getState().notifications;
     const oldest = list[list.length - 1];
     if (!oldest) return;
+    inFlightRef.current = true;
     setIsLoading(true);
     try {
       const page = await apiGet<NotificationsResponse>(
@@ -728,9 +730,10 @@ export function useLoadOlderNotifications() {
     } catch {
       // transient network error — allow retry on the next scroll
     } finally {
+      inFlightRef.current = false;
       setIsLoading(false);
     }
-  }, [appendOlder, isLoading, hasMore]);
+  }, [appendOlder, hasMore]);
 
   return { loadOlder, isLoading, hasMore };
 }
