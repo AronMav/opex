@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import type { UIEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Bell } from "lucide-react";
+import { Bell, Loader2 } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,6 +17,7 @@ import {
   useMarkNotificationRead,
   useMarkAllRead,
   useClearAllNotifications,
+  useLoadOlderNotifications,
 } from "@/lib/queries";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/hooks/use-translation";
@@ -133,6 +135,16 @@ export function NotificationBell() {
   const markAllRead = useMarkAllRead();
   const clearAll = useClearAllNotifications();
 
+  const { loadOlder, isLoading: loadingOlder, hasMore } = useLoadOlderNotifications();
+
+  const onListScroll = (e: UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    // within 48px of the bottom → pull the next older page
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 48 && hasMore && !loadingOlder) {
+      void loadOlder();
+    }
+  };
+
   // Flash + sound ONLY on a genuine live arrival (newArrivalSeq bump).
   // Refetch-on-reconnect and the initial cold-load fetch do not bump the seq,
   // so they never beep.
@@ -199,41 +211,51 @@ export function NotificationBell() {
           </div>
         </div>
         {/* List */}
-        <div className="max-h-[min(24rem,calc(100dvh-8rem))] overflow-y-auto overscroll-contain">
+        <div
+          className="max-h-[min(24rem,calc(100dvh-8rem))] overflow-y-auto overscroll-contain"
+          onScroll={onListScroll}
+        >
           {notifications.length === 0 ? (
             <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
               {t("notifications.empty")}
             </div>
           ) : (
-            notifications.map((n) => (
-              <button
-                key={n.id}
-                onClick={() => {
-                  if (!n.read) markRead.mutate(n.id);
-                  const route = getNotificationRoute(n.type, n.data);
-                  if (route) router.push(route);
-                }}
-                className={`flex w-full flex-col gap-1 px-4 py-3 text-left transition-colors hover:bg-accent border-b border-border/50 last:border-0 ${
-                  n.read ? "opacity-60" : ""
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <span
-                    className={`text-sm ${n.read ? "font-normal" : "font-semibold"}`}
-                  >
-                    {n.title}
+            <>
+              {notifications.map((n) => (
+                <button
+                  key={n.id}
+                  onClick={() => {
+                    if (!n.read) markRead.mutate(n.id);
+                    const route = getNotificationRoute(n.type, n.data);
+                    if (route) router.push(route);
+                  }}
+                  className={`flex w-full flex-col gap-1 px-4 py-3 text-left transition-colors hover:bg-accent border-b border-border/50 last:border-0 ${
+                    n.read ? "opacity-60" : ""
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span
+                      className={`text-sm ${n.read ? "font-normal" : "font-semibold"}`}
+                    >
+                      {n.title}
+                    </span>
+                    {!n.read && (
+                      <span className="mt-1 h-3 w-3 shrink-0 rounded-full bg-primary" />
+                    )}
+                  </div>
+                  <MediaNotificationBody notification={n} />
+                  {n.type === "infra_decision" && <NotificationInfraBody n={n} />}
+                  <span className="text-2xs text-muted-foreground-subtle">
+                    {new Date(n.created_at).toLocaleString()}
                   </span>
-                  {!n.read && (
-                    <span className="mt-1 h-3 w-3 shrink-0 rounded-full bg-primary" />
-                  )}
+                </button>
+              ))}
+              {loadingOlder && (
+                <div className="flex items-center justify-center py-3">
+                  <Loader2 size={16} className="animate-spin text-muted-foreground" />
                 </div>
-                <MediaNotificationBody notification={n} />
-                {n.type === "infra_decision" && <NotificationInfraBody n={n} />}
-                <span className="text-2xs text-muted-foreground-subtle">
-                  {new Date(n.created_at).toLocaleString()}
-                </span>
-              </button>
-            ))
+              )}
+            </>
           )}
         </div>
       </DropdownMenuContent>
