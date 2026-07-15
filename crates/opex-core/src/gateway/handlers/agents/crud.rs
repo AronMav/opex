@@ -19,28 +19,6 @@ include!("approvals_dto_structs.rs");
 
 // ── Field merge helpers ─────────────────────────────────────────────────────
 
-/// Merge a clearable optional-string field with the existing config value.
-///
-/// Used by the PUT /api/agents/{name} round-trip for fields where the UI sends
-/// `Some("")` as a "clear this" signal:
-/// - `payload = None`     → preserve the existing value
-/// - `payload = Some("")` → explicit clear (return `None`)
-/// - `payload = Some(v)`  → take the new value
-///
-/// Without this helper, each callsite (fallback_provider, tts_provider,
-/// imagegen_provider, …) duplicates a `match payload.as_deref()` block; one
-/// regression in any of them silently changes UI save semantics.
-pub(super) fn merge_clearable_string(
-    payload: Option<String>,
-    existing: Option<&str>,
-) -> Option<String> {
-    match payload.as_deref() {
-        None => existing.map(String::from),
-        Some("") => None,
-        Some(_) => payload,
-    }
-}
-
 /// Preserve existing webhooks when the PUT payload's hooks block omitted them.
 ///
 /// Mirrors the `base`/`delegation` preserve-from-disk pattern.
@@ -278,6 +256,10 @@ pub(crate) async fn api_agents(
             std::collections::HashMap::new()
         });
 
+    // One round trip for every profile's slots, then resolved per-agent
+    // in-memory below — avoids an N+1 profile lookup for the capabilities field.
+    let profile_slots_map = crate::agent::profile_resolver::load_all_profile_slots(&infra.db).await;
+
     let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut agents: Vec<AgentInfoDto> = Vec::new();
 
@@ -293,6 +275,7 @@ pub(crate) async fn api_agents(
         } else {
             false
         };
+        let slots = crate::agent::profile_resolver::resolve_slots_offline(&profile_slots_map, &cfg.agent.profile);
 
         agents.push(AgentInfoDto::from_config(
             cfg,
@@ -303,6 +286,7 @@ pub(crate) async fn api_agents(
             None,
             &icon_ids,
             Some(&upload_key),
+            &slots,
         ));
     }
 
@@ -312,6 +296,7 @@ pub(crate) async fn api_agents(
             continue;
         }
         let agent_cfg = handle.engine.cfg();
+        let slots = crate::agent::profile_resolver::resolve_slots_offline(&profile_slots_map, &agent_cfg.agent.profile);
         agents.push(AgentInfoDto::from_config(
             &AgentConfig { agent: agent_cfg.agent.clone() },
             agent_cfg.agent.routing.len(),
@@ -321,6 +306,7 @@ pub(crate) async fn api_agents(
             Some(true),
             &icon_ids,
             Some(&upload_key),
+            &slots,
         ));
     }
 
@@ -358,7 +344,8 @@ pub(crate) async fn api_get_agent(
             tracing::warn!(error = %e, agent = %name, "list_agent_icon_ids failed");
             std::collections::HashMap::new()
         });
-    let detail = AgentDetailDto::from_config(&cfg, is_running, config_dirty, voice, &icon_ids, Some(&upload_key));
+    let profile_slots = crate::agent::profile_resolver::resolve_slots_for_agent(&infra.db, &cfg.agent.profile, &name).await;
+    let detail = AgentDetailDto::from_config(&cfg, is_running, config_dirty, voice, &icon_ids, Some(&upload_key), &profile_slots);
     Json(detail).into_response()
 }
 
@@ -470,18 +457,12 @@ pub(crate) async fn api_create_agent(
         });
     }
 
-    // Auto-fill provider/model from provider_connection if not explicitly set
-    if let Some(ref conn_name) = cfg.agent.provider_connection
-        && !conn_name.is_empty()
-            && let Ok(Some(conn)) = crate::db::providers::get_provider_by_name(&infra.db, conn_name).await {
-                if cfg.agent.provider.is_empty() || cfg.agent.provider == *conn_name {
-                    cfg.agent.provider = conn.provider_type.clone();
-                }
-                if cfg.agent.model.is_empty()
-                    && let Some(ref dm) = conn.default_model {
-                        cfg.agent.model = dm.clone();
-                    }
-            }
+    // NOTE: provider/model/provider_connection auto-fill was removed here —
+    // those AgentSettings fields are DEPRECATED (m084/profiles) and no longer
+    // settable via the create payload (see schema.rs::build_agent_config),
+    // so `cfg.agent.provider_connection` is always `None` at this point.
+    // Provider resolution now goes entirely through `cfg.agent.profile` +
+    // the `profiles` table (`profile_resolver::resolve_slots_for_agent`).
 
     let toml_str = match cfg.to_toml() {
         Ok(s) => s,
@@ -607,6 +588,10 @@ pub(crate) async fn api_update_agent(
     {
         let a = &existing_cfg.agent;
         if payload.language.is_none() { payload.language = Some(a.language.clone()); }
+        // profile is not always resent by the UI on every save — preserve the
+        // on-disk value so a PUT that doesn't touch profile assignment doesn't
+        // silently reset the agent back to the Default profile.
+        if payload.profile.is_none() { payload.profile = Some(a.profile.clone()); }
         if payload.temperature.is_none() { payload.temperature = Some(a.temperature); }
         if payload.max_tokens.is_none() { payload.max_tokens = a.max_tokens; }
         // Nullable fields: None = absent (preserve existing), Some(None) = explicit null (clear),
@@ -692,13 +677,6 @@ pub(crate) async fn api_update_agent(
                 promotion_max: Some(a.tool_dispatcher.promotion_max),
             }));
         }
-        if payload.provider_connection.is_none() { payload.provider_connection = a.provider_connection.clone(); }
-        payload.fallback_provider =
-            merge_clearable_string(payload.fallback_provider.take(), a.fallback_provider.as_deref());
-        payload.tts_provider =
-            merge_clearable_string(payload.tts_provider.take(), a.tts_provider.as_deref());
-        payload.imagegen_provider =
-            merge_clearable_string(payload.imagegen_provider.take(), a.imagegen_provider.as_deref());
         if payload.approval.is_none() {
             payload.approval = Some(a.approval.as_ref().map(|ap| ApprovalPayload {
                 enabled: Some(ap.enabled),
@@ -1281,63 +1259,6 @@ pub(crate) async fn api_agent_tasks(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-
-    // ── merge_clearable_string ──────────────────────────────────────────────
-    //
-    // Drives the PUT /api/agents/{name} round-trip semantics for fallback_provider,
-    // tts_provider, and imagegen_provider:
-    //   None       — payload field absent → keep existing value
-    //   Some("")   — explicit clear from UI → set to None
-    //   Some(val)  — update to the new non-empty value
-    //
-    // Without these tests, regressing the match arms (e.g. swapping `None` and
-    // `Some("")` semantics) would silently change existing-field preservation
-    // on UI saves.
-
-    use super::merge_clearable_string;
-
-    #[test]
-    fn merge_clearable_none_payload_preserves_existing_some() {
-        assert_eq!(
-            merge_clearable_string(None, Some("nova-cloud")),
-            Some("nova-cloud".to_string())
-        );
-    }
-
-    #[test]
-    fn merge_clearable_none_payload_preserves_existing_none() {
-        assert_eq!(merge_clearable_string(None, None), None);
-    }
-
-    #[test]
-    fn merge_clearable_empty_payload_clears_even_with_existing() {
-        // `Some("")` is the UI's "clear this field" signal — must not keep existing.
-        assert_eq!(
-            merge_clearable_string(Some(String::new()), Some("nova-cloud")),
-            None
-        );
-    }
-
-    #[test]
-    fn merge_clearable_empty_payload_with_no_existing_returns_none() {
-        assert_eq!(merge_clearable_string(Some(String::new()), None), None);
-    }
-
-    #[test]
-    fn merge_clearable_value_payload_overrides_existing() {
-        assert_eq!(
-            merge_clearable_string(Some("flux-pro".to_string()), Some("nova-cloud")),
-            Some("flux-pro".to_string())
-        );
-    }
-
-    #[test]
-    fn merge_clearable_value_payload_with_no_existing_uses_payload() {
-        assert_eq!(
-            merge_clearable_string(Some("flux-pro".to_string()), None),
-            Some("flux-pro".to_string())
-        );
-    }
 
     // ── preserve_hooks_webhooks ──────────────────────────────────────────────
     //

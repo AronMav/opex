@@ -4,13 +4,21 @@
 
 export type ActiveChannelDto = { agent_name: string, channel_id: string | null, channel_type: string, display_name: string, adapter_version: string, connected_at: string, last_activity: string, };
 
+export type AgentCapabilitiesDto = { text: boolean, stt: boolean, tts: boolean, vision: boolean, imagegen: boolean, websearch: boolean, };
+
 export type AgentDetailAccessDto = { mode: string, owner_id: string | null, };
 
 export type AgentDetailApprovalDto = { enabled: boolean, require_for: Array<string>, require_for_categories: Array<string>, timeout_seconds: number, };
 
 export type AgentDetailCompactionDto = { enabled: boolean, threshold: number, preserve_tool_calls: boolean, preserve_last_n: number, max_context_tokens: number | null, };
 
-export type AgentDetailDto = { name: string, language: string, provider: string, model: string, provider_connection: string | null, fallback_provider: string | null, tts_provider: string | null, imagegen_provider: string | null, temperature: number, max_tokens: number | null, access: AgentDetailAccessDto | null, heartbeat: AgentDetailHeartbeatDto | null, tools: AgentDetailToolsDto | null, compaction: AgentDetailCompactionDto | null, skill_review: AgentDetailSkillReviewDto | null, session: AgentDetailSessionDto | null, 
+export type AgentDetailDto = { name: string, language: string, 
+/**
+ * Name of the row in the `profiles` table this agent resolves providers
+ * from (replaces the removed provider/model/provider_connection/
+ * fallback_provider/tts_provider/imagegen_provider fields).
+ */
+profile: string, capabilities: AgentCapabilitiesDto, temperature: number, max_tokens: number | null, access: AgentDetailAccessDto | null, heartbeat: AgentDetailHeartbeatDto | null, tools: AgentDetailToolsDto | null, compaction: AgentDetailCompactionDto | null, skill_review: AgentDetailSkillReviewDto | null, session: AgentDetailSessionDto | null, 
 /**
  * Pre-signed URL for the icon under `/api/uploads/{id}`. Long-TTL
  * (`HISTORICAL_URL_TTL_SECS`) so a saved agent icon stays viewable across
@@ -43,7 +51,11 @@ export type AgentDetailToolsDto = { allow: Array<string>, deny: Array<string>, a
 
 export type AgentDetailWatchdogDto = { inactivity_secs: number, };
 
-export type AgentInfoDto = { name: string, language: string, model: string, provider: string, provider_connection: string | null, fallback_provider: string | null, 
+export type AgentInfoDto = { name: string, language: string, 
+/**
+ * See `AgentDetailDto::profile`.
+ */
+profile: string, capabilities: AgentCapabilitiesDto, 
 /**
  * Pre-signed URL for the icon (see `AgentDetailDto::icon_url`).
  */

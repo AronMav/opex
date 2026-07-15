@@ -173,6 +173,25 @@ pub struct AgentDetailHooksDto {
 }
 crate::register_ts_dto!(AgentDetailHooksDto);
 
+/// Computed (never stored directly) view of which capability slots an agent's
+/// profile has at least one provider entry for. A capability is `true` when
+/// the resolved `Slots` map has a non-empty vector for that key — see
+/// `dto.rs::capabilities_from_slots`. The UI gates feature affordances
+/// (voice input, TTS playback, image generation, etc.) on this object instead
+/// of guessing from the removed per-agent provider fields.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-gen", ts(export))]
+pub struct AgentCapabilitiesDto {
+    pub text: bool,
+    pub stt: bool,
+    pub tts: bool,
+    pub vision: bool,
+    pub imagegen: bool,
+    pub websearch: bool,
+}
+crate::register_ts_dto!(AgentCapabilitiesDto);
+
 // ── Top-level DTO ───────────────────────────────────────────────────────────
 
 /// Response shape for GET /api/agents/{name}.
@@ -184,12 +203,11 @@ crate::register_ts_dto!(AgentDetailHooksDto);
 pub struct AgentDetailDto {
     pub name: String,
     pub language: String,
-    pub provider: String,
-    pub model: String,
-    pub provider_connection: Option<String>,
-    pub fallback_provider: Option<String>,
-    pub tts_provider: Option<String>,
-    pub imagegen_provider: Option<String>,
+    /// Name of the row in the `profiles` table this agent resolves providers
+    /// from (replaces the removed provider/model/provider_connection/
+    /// fallback_provider/tts_provider/imagegen_provider fields).
+    pub profile: String,
+    pub capabilities: AgentCapabilitiesDto,
     pub temperature: f64,
     pub max_tokens: Option<u32>,
     pub access: Option<AgentDetailAccessDto>,
@@ -242,10 +260,9 @@ crate::register_ts_dto!(AgentInfoToolPolicyDto);
 pub struct AgentInfoDto {
     pub name: String,
     pub language: String,
-    pub model: String,
-    pub provider: String,
-    pub provider_connection: Option<String>,
-    pub fallback_provider: Option<String>,
+    /// See `AgentDetailDto::profile`.
+    pub profile: String,
+    pub capabilities: AgentCapabilitiesDto,
     /// Pre-signed URL for the icon (see `AgentDetailDto::icon_url`).
     pub icon_url: Option<String>,
     pub temperature: f64,

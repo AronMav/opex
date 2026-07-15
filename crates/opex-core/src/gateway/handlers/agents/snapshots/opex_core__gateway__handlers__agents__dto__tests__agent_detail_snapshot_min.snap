@@ -5,12 +5,15 @@ expression: dto
 {
   "name": "SnapshotMin",
   "language": "ru",
-  "provider": "anthropic",
-  "model": "claude-3-5-sonnet-20241022",
-  "provider_connection": null,
-  "fallback_provider": null,
-  "tts_provider": null,
-  "imagegen_provider": null,
+  "profile": "Default",
+  "capabilities": {
+    "text": false,
+    "stt": false,
+    "tts": false,
+    "vision": false,
+    "imagegen": false,
+    "websearch": false
+  },
   "temperature": 1.0,
   "max_tokens": null,
   "access": null,

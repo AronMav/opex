@@ -4,6 +4,7 @@
 
 use crate::db::profiles::{Slots, SlotEntry, DEFAULT_PROFILE};
 use sqlx::PgPool;
+use std::collections::HashMap;
 
 pub async fn resolve_slots_for_agent(db: &PgPool, profile_name: &str, agent_name: &str) -> Slots {
     match crate::db::profiles::get_profile_by_name(db, profile_name).await {
@@ -20,6 +21,32 @@ pub async fn resolve_slots_for_agent(db: &PgPool, profile_name: &str, agent_name
             Slots::new()
         }
     }
+}
+
+/// Fetch every profile's slots in a single round trip, keyed by profile name.
+/// Used by list endpoints (e.g. `GET /api/agents`) that need to resolve
+/// capabilities for N agents without paying an N+1 query cost — pair with
+/// `resolve_slots_offline` to look up each agent's profile in the returned map.
+pub async fn load_all_profile_slots(db: &PgPool) -> HashMap<String, Slots> {
+    match crate::db::profiles::list_profiles(db).await {
+        Ok(rows) => rows.into_iter().map(|p| (p.name.clone(), p.parsed_slots())).collect(),
+        Err(e) => {
+            tracing::error!(error = %e, "list_profiles failed; capabilities will be empty for this request");
+            HashMap::new()
+        }
+    }
+}
+
+/// Same fallback rule as `resolve_slots_for_agent` (profile → Default →
+/// empty) but resolved against an already-fetched map instead of hitting the
+/// DB — the synchronous counterpart used once `load_all_profile_slots` has
+/// populated the map.
+pub fn resolve_slots_offline(profiles: &HashMap<String, Slots>, profile_name: &str) -> Slots {
+    profiles
+        .get(profile_name)
+        .or_else(|| profiles.get(DEFAULT_PROFILE))
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// Цепочка слота, отфильтрованная по `providers.enabled`. Пустой результат =
@@ -42,6 +69,35 @@ pub async fn effective_chain(db: &PgPool, slots: &Slots, capability: &str) -> Ve
 mod tests {
     use super::*;
 
+    // ── resolve_slots_offline (sync, no DB needed) ──────────────────────────
+
+    #[test]
+    fn resolve_slots_offline_uses_matching_profile() {
+        let mut profiles = HashMap::new();
+        let mut slots = Slots::new();
+        slots.insert("stt".into(), vec![SlotEntry { provider: "w".into(), model: None, voice: None }]);
+        profiles.insert("Custom".to_string(), slots);
+        let got = resolve_slots_offline(&profiles, "Custom");
+        assert!(got.contains_key("stt"));
+    }
+
+    #[test]
+    fn resolve_slots_offline_falls_back_to_default() {
+        let mut profiles = HashMap::new();
+        let mut slots = Slots::new();
+        slots.insert("tts".into(), vec![SlotEntry { provider: "v".into(), model: None, voice: None }]);
+        profiles.insert(DEFAULT_PROFILE.to_string(), slots);
+        let got = resolve_slots_offline(&profiles, "Ghost");
+        assert!(got.contains_key("tts"));
+    }
+
+    #[test]
+    fn resolve_slots_offline_empty_when_nothing_matches() {
+        let profiles: HashMap<String, Slots> = HashMap::new();
+        let got = resolve_slots_offline(&profiles, "Ghost");
+        assert!(got.is_empty());
+    }
+
     #[sqlx::test(migrations = "../../migrations")]
     async fn missing_profile_falls_back_to_default(pool: sqlx::PgPool) {
         let mut slots = crate::db::profiles::Slots::new();
@@ -56,6 +112,19 @@ mod tests {
     async fn no_profiles_at_all_gives_empty(pool: sqlx::PgPool) {
         let got = resolve_slots_for_agent(&pool, "Ghost", "Arty").await;
         assert!(got.is_empty());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn load_all_profile_slots_returns_every_profile_by_name(pool: sqlx::PgPool) {
+        let mut slots = crate::db::profiles::Slots::new();
+        slots.insert("stt".into(), vec![crate::db::profiles::SlotEntry {
+            provider: "w".into(), model: None, voice: None }]);
+        crate::db::profiles::create_profile(&pool, "Default", &slots).await.unwrap();
+        crate::db::profiles::create_profile(&pool, "Custom", &Slots::new()).await.unwrap();
+        let map = load_all_profile_slots(&pool).await;
+        assert!(map.contains_key("Default"));
+        assert!(map.contains_key("Custom"));
+        assert!(map["Default"].contains_key("stt"));
     }
 
     #[sqlx::test(migrations = "../../migrations")]

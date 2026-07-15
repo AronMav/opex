@@ -28,9 +28,30 @@ fn signed_icon_url(
     Some(mint_uploads_url("", *id, key, HISTORICAL_URL_TTL_SECS))
 }
 
+// ── capabilities helper ──────────────────────────────────────────────────────
+
+/// A capability is `true` when the resolved profile has at least one provider
+/// entry in that slot. Callers resolve `Slots` via
+/// `agent::profile_resolver::resolve_slots_for_agent` (single agent, has DB)
+/// or `agent::profile_resolver::resolve_slots_offline` (batch list, no
+/// per-agent round trip) before calling this — kept a pure function of
+/// `Slots` so the DTO constructors stay synchronous and unit-testable.
+pub(crate) fn capabilities_from_slots(slots: &crate::db::profiles::Slots) -> AgentCapabilitiesDto {
+    let has = |key: &str| slots.get(key).is_some_and(|v| !v.is_empty());
+    AgentCapabilitiesDto {
+        text: has("text"),
+        stt: has("stt"),
+        tts: has("tts"),
+        vision: has("vision"),
+        imagegen: has("imagegen"),
+        websearch: has("websearch"),
+    }
+}
+
 // ── Constructor impl ─────────────────────────────────────────────────────────
 
 impl AgentDetailDto {
+    #[allow(clippy::too_many_arguments)]
     pub fn from_config(
         cfg: &AgentConfig,
         is_running: bool,
@@ -38,17 +59,14 @@ impl AgentDetailDto {
         voice: Option<String>,
         icon_ids: &HashMap<String, Uuid>,
         upload_key: Option<&[u8; 32]>,
+        profile_slots: &crate::db::profiles::Slots,
     ) -> Self {
         let a = &cfg.agent;
         Self {
             name: a.name.clone(),
             language: a.language.clone(),
-            provider: a.provider.clone(),
-            model: a.model.clone(),
-            provider_connection: a.provider_connection.clone(),
-            fallback_provider: a.fallback_provider.clone(),
-            tts_provider: a.tts_provider.clone(),
-            imagegen_provider: a.imagegen_provider.clone(),
+            profile: a.profile.clone(),
+            capabilities: capabilities_from_slots(profile_slots),
             temperature: a.temperature,
             max_tokens: a.max_tokens,
             access: a.access.as_ref().map(|ac| AgentDetailAccessDto {
@@ -163,15 +181,14 @@ impl AgentInfoDto {
         pending_delete: Option<bool>,
         icon_ids: &HashMap<String, Uuid>,
         upload_key: Option<&[u8; 32]>,
+        profile_slots: &crate::db::profiles::Slots,
     ) -> Self {
         let a = &cfg.agent;
         Self {
             name: a.name.clone(),
             language: a.language.clone(),
-            model: a.model.clone(),
-            provider: a.provider.clone(),
-            provider_connection: a.provider_connection.clone(),
-            fallback_provider: a.fallback_provider.clone(),
+            profile: a.profile.clone(),
+            capabilities: capabilities_from_slots(profile_slots),
             icon_url: signed_icon_url(&a.name, icon_ids, upload_key),
             temperature: a.temperature,
             has_access: a.access.is_some(),
@@ -209,7 +226,8 @@ mod tests {
     fn agent_detail_dto_snapshot_min() {
         let cfg = load_fixture("SnapshotMin");
         let icons: HashMap<String, Uuid> = HashMap::new();
-        let dto = AgentDetailDto::from_config(&cfg, false, false, None, &icons, None);
+        let slots = crate::db::profiles::Slots::new();
+        let dto = AgentDetailDto::from_config(&cfg, false, false, None, &icons, None, &slots);
         insta::assert_json_snapshot!("agent_detail_snapshot_min", dto);
     }
 
@@ -217,7 +235,12 @@ mod tests {
     fn agent_detail_dto_snapshot_full() {
         let cfg = load_fixture("SnapshotFull");
         let icons: HashMap<String, Uuid> = HashMap::new();
-        let dto = AgentDetailDto::from_config(&cfg, false, false, None, &icons, None);
+        let mut slots = crate::db::profiles::Slots::new();
+        slots.insert("text".into(), vec![crate::db::profiles::SlotEntry {
+            provider: "main-claude".into(), model: None, voice: None,
+        }]);
+        slots.insert("tts".into(), vec![]);
+        let dto = AgentDetailDto::from_config(&cfg, false, false, None, &icons, None, &slots);
         insta::assert_json_snapshot!("agent_detail_snapshot_full", dto);
     }
 
@@ -225,8 +248,25 @@ mod tests {
     fn agent_info_dto_snapshot_min() {
         let cfg = load_fixture("SnapshotMin");
         let icons: HashMap<String, Uuid> = HashMap::new();
-        let dto = AgentInfoDto::from_config(&cfg, 0, false, false, Some(false), None, &icons, None);
+        let slots = crate::db::profiles::Slots::new();
+        let dto = AgentInfoDto::from_config(&cfg, 0, false, false, Some(false), None, &icons, None, &slots);
         insta::assert_json_snapshot!("agent_info_snapshot_min", dto);
+    }
+
+    #[test]
+    fn capabilities_from_slots_true_only_for_nonempty_vec() {
+        let mut slots = crate::db::profiles::Slots::new();
+        slots.insert("text".into(), vec![crate::db::profiles::SlotEntry {
+            provider: "p".into(), model: None, voice: None,
+        }]);
+        slots.insert("tts".into(), vec![]); // present but empty → false
+        let caps = capabilities_from_slots(&slots);
+        assert!(caps.text);
+        assert!(!caps.tts);
+        assert!(!caps.stt);
+        assert!(!caps.vision);
+        assert!(!caps.imagegen);
+        assert!(!caps.websearch);
     }
 
     #[test]

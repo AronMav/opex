@@ -5,12 +5,15 @@ expression: dto
 {
   "name": "SnapshotFull",
   "language": "en",
-  "provider": "anthropic",
-  "model": "claude-3-5-sonnet-20241022",
-  "provider_connection": "main-claude",
-  "fallback_provider": "openai-fallback",
-  "tts_provider": null,
-  "imagegen_provider": null,
+  "profile": "Default",
+  "capabilities": {
+    "text": true,
+    "stt": false,
+    "tts": false,
+    "vision": false,
+    "imagegen": false,
+    "websearch": false
+  },
   "temperature": 0.8,
   "max_tokens": 4096,
   "access": {

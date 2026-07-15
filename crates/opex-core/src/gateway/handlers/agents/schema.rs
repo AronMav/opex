@@ -36,20 +36,11 @@ pub(crate) fn validate_agent_name(name: &str) -> Result<(), String> {
 pub(crate) struct AgentCreatePayload {
     pub name: String,
     pub language: Option<String>,
-    pub provider: String,
-    pub model: String,
-    /// Named LLM provider connection (overrides provider/model when set).
-    pub provider_connection: Option<String>,
-    /// Optional fallback provider connection name for consecutive-failure switching.
-    pub fallback_provider: Option<String>,
-    /// Optional TTS provider name to override the global active TTS for this agent.
-    /// Each TTS provider has its own `options.voice` — picking the provider picks the voice.
+    /// Name of the row in the `profiles` table this agent resolves providers
+    /// from. `None`/empty → `crate::db::profiles::DEFAULT_PROFILE` on create;
+    /// preserved from disk on update when absent (see `api_update_agent`).
     #[serde(default)]
-    pub tts_provider: Option<String>,
-    /// Optional image-generation provider name to override the global active imagegen
-    /// for this agent. Each provider may render in its own visual style.
-    #[serde(default)]
-    pub imagegen_provider: Option<String>,
+    pub profile: Option<String>,
     pub temperature: Option<f64>,
     pub max_tokens: Option<u32>,
     /// Nullable fields: absent = preserve existing, explicit null = clear, value = update.
@@ -196,13 +187,18 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
         agent: AgentSettings {
             name,
             language: p.language.unwrap_or_else(|| "ru".to_string()),
-            profile: crate::db::profiles::DEFAULT_PROFILE.to_string(),
-            provider: p.provider,
-            model: p.model,
-            provider_connection: p.provider_connection,
-            fallback_provider: p.fallback_provider.filter(|s| !s.is_empty()),
-            tts_provider: p.tts_provider.filter(|s| !s.is_empty()),
-            imagegen_provider: p.imagegen_provider.filter(|s| !s.is_empty()),
+            profile: p.profile.filter(|s| !s.is_empty())
+                .unwrap_or_else(|| crate::db::profiles::DEFAULT_PROFILE.to_string()),
+            // DEPRECATED (m084/profiles): no longer settable via the API — the
+            // `profiles` table is now the source of truth. Retained as empty/None
+            // on `AgentSettings` only because the startup migration still reads
+            // them from pre-existing TOML on disk (see config/mod.rs).
+            provider: String::new(),
+            model: String::new(),
+            provider_connection: None,
+            fallback_provider: None,
+            tts_provider: None,
+            imagegen_provider: None,
             temperature: p.temperature.unwrap_or(1.0),
             max_tokens: p.max_tokens,
             access: p.access.flatten().map(|a| AgentAccessConfig {
@@ -361,12 +357,7 @@ mod tests {
         AgentCreatePayload {
             name: name.to_string(),
             language: None,
-            provider: "anthropic".to_string(),
-            model: "claude-3".to_string(),
-            provider_connection: None,
-            fallback_provider: None,
-            tts_provider: None,
-            imagegen_provider: None,
+            profile: None,
             temperature: None,
             max_tokens: None,
             access: None,
@@ -396,8 +387,7 @@ mod tests {
         let config = build_agent_config("TestAgent".to_string(), payload);
         assert_eq!(config.agent.name, "TestAgent");
         assert_eq!(config.agent.language, "ru");
-        assert_eq!(config.agent.provider, "anthropic");
-        assert_eq!(config.agent.model, "claude-3");
+        assert_eq!(config.agent.profile, crate::db::profiles::DEFAULT_PROFILE);
         assert!((config.agent.temperature - 1.0).abs() < f64::EPSILON);
         assert_eq!(config.agent.max_failover_attempts, 3);
         assert!(!config.agent.base);
@@ -420,6 +410,22 @@ mod tests {
         payload.language = Some("en".to_string());
         let config = build_agent_config("TestAgent".to_string(), payload);
         assert_eq!(config.agent.language, "en");
+    }
+
+    #[test]
+    fn build_agent_config_uses_explicit_profile() {
+        let mut payload = minimal_payload("TestAgent");
+        payload.profile = Some("Voice".to_string());
+        let config = build_agent_config("TestAgent".to_string(), payload);
+        assert_eq!(config.agent.profile, "Voice");
+    }
+
+    #[test]
+    fn build_agent_config_empty_profile_falls_back_to_default() {
+        let mut payload = minimal_payload("TestAgent");
+        payload.profile = Some(String::new());
+        let config = build_agent_config("TestAgent".to_string(), payload);
+        assert_eq!(config.agent.profile, crate::db::profiles::DEFAULT_PROFILE);
     }
 
     #[test]
