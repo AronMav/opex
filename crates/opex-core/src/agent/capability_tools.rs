@@ -29,7 +29,7 @@ endpoint: "http://localhost:9011/generate-image"
 method: POST
 parameters:
   prompt: { type: string, required: true, location: body, description: "Image description in English" }
-  size: { type: string, required: false, location: body, description: "Size: 1024x1024, 1792x1024, 1024x1792, 512x512", default: "1024x1024" }
+  size: { type: string, required: false, location: body, description: "Image size as WxH in pixels — YOU pick the best size for the content. Each side 512-2048 (2K max), multiples of 64. Examples: 1024x1024 (square), 1344x768 (landscape), 768x1344 (portrait), 1536x1536 / 2048x2048 (high detail). Default 1024x1024.", default: "1024x1024" }
   quality: { type: string, required: false, location: body, description: "standard (fast) or high (slower, better)", default: "standard" }
 channel_action: { action: send_photo, data_field: "_binary" }
 status: verified

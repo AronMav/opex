@@ -48,6 +48,27 @@ def test_parse_size(size, expected):
     assert ComfyUIImageGen._parse_size(size) == expected
 
 
+def test_size_clamped_to_max_dim():
+    drv = ComfyUIImageGen(base_url=BASE)  # default max 2048
+    graph = drv._build_graph("x", "4096x4096", None)
+    assert graph["8"]["inputs"]["width"] == 2048
+    assert graph["8"]["inputs"]["height"] == 2048
+
+
+def test_size_snapped_to_multiple_of_8():
+    drv = ComfyUIImageGen(base_url=BASE)
+    graph = drv._build_graph("x", "1030x1290", None)
+    assert graph["8"]["inputs"]["width"] == 1024   # 1030 -> 1024
+    assert graph["8"]["inputs"]["height"] == 1288  # 1290 -> 1288
+
+
+def test_max_dim_configurable():
+    drv = ComfyUIImageGen(base_url=BASE, options={"comfy_max_dim": 1024})
+    graph = drv._build_graph("x", "2048x2048", None)
+    assert graph["8"]["inputs"]["width"] == 1024
+    assert graph["8"]["inputs"]["height"] == 1024
+
+
 def test_model_override_sets_unet_name():
     drv = ComfyUIImageGen(base_url=BASE)
     graph = drv._build_graph("x", "512x512", "other_checkpoint.safetensors")

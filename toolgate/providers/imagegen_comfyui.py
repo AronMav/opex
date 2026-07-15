@@ -84,6 +84,9 @@ class ComfyUIImageGen:
         self._request_timeout = resolve_request_timeout(opts, default=120.0)
         self._deadline = float(opts.get("comfy_timeout_secs", 300))
         self._poll_interval = float(opts.get("comfy_poll_secs", 1.5))
+        # Hard ceiling per side (guards the GPU against an over-large request —
+        # the model is told 2K max, but a stray 4096 would OOM ComfyUI).
+        self._max_dim = int(opts.get("comfy_max_dim", 2048))
         wf = opts.get("workflow")
         self._workflow = wf if isinstance(wf, dict) and wf else DEFAULT_WORKFLOW
         nodes = opts.get("nodes")
@@ -115,8 +118,8 @@ class ComfyUIImageGen:
             dims = self._parse_size(size)
             if dims is not None:
                 w, h = dims
-                graph[size_node].setdefault("inputs", {})["width"] = w
-                graph[size_node]["inputs"]["height"] = h
+                graph[size_node].setdefault("inputs", {})["width"] = self._clamp_dim(w)
+                graph[size_node]["inputs"]["height"] = self._clamp_dim(h)
 
         # Randomize the seed each call so repeat prompts don't return the same
         # cached latent. (random is fine here — this is toolgate, not a
@@ -138,6 +141,14 @@ class ComfyUIImageGen:
                     break
 
         return graph
+
+    def _clamp_dim(self, v: int) -> int:
+        """Clamp one dimension to [64, max_dim] and snap DOWN to a multiple of
+        8 (SD/Flux latents require /8). Keeps a stray oversized or odd request
+        from erroring or OOM-ing ComfyUI."""
+        v = max(64, min(int(v), self._max_dim))
+        v -= v % 8
+        return max(64, v)
 
     @staticmethod
     def _parse_size(size: str) -> tuple[int, int] | None:
