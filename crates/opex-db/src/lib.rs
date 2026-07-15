@@ -2,6 +2,7 @@ pub mod approvals;
 pub mod handler_jobs;
 pub mod infra_decisions;
 pub mod memory_queries;
+pub mod notification_prefs;
 pub mod notifications;
 pub mod reentry_mode;
 pub mod session_failures;
