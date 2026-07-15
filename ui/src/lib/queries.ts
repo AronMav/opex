@@ -82,6 +82,7 @@ export const qk = {
   mediaDrivers: ["media-drivers"] as const,
   oauthAccounts: ["oauth", "accounts"] as const,
   oauthBindings: (agent: string) => ["oauth", "bindings", agent] as const,
+  notificationPrefs: ["notification-prefs"] as const,
   notifications: ["notifications"] as const,
   agentTasks: (name: string) => ["agents", name, "tasks"] as const,
   sessionFailures: (agent: string | null, limit: number) =>
@@ -795,7 +796,7 @@ interface NotificationPrefsResponse {
 export function useNotificationPrefs() {
   const setPrefs = useNotificationStore((s) => s.setPrefs);
   const query = useQuery({
-    queryKey: ["notification-prefs"] as const,
+    queryKey: qk.notificationPrefs,
     queryFn: () => apiGet<NotificationPrefsResponse>("/api/notification-prefs"),
   });
   useEffect(() => {
@@ -812,7 +813,7 @@ export function useUpdateNotificationPref() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: NotificationPref) => apiPut("/api/notification-prefs", body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["notification-prefs"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.notificationPrefs }),
     onError: (e: Error) => toast.error(e.message),
   });
 }

@@ -1165,7 +1165,6 @@
   "notifications.clear_all": "Clear all",
   "notifications.settings": "Notification settings",
   "notifications.prefs_title": "Preferences",
-  "notifications.back": "Back",
   "notifications.mute": "Mute",
   "notifications.sound": "Sound",
   "notifications.type.agent_error": "Agent errors",

@@ -1165,7 +1165,6 @@
   "notifications.clear_all": "Очистить все",
   "notifications.settings": "Настройки уведомлений",
   "notifications.prefs_title": "Настройки",
-  "notifications.back": "Назад",
   "notifications.mute": "Без уведомлений",
   "notifications.sound": "Звук",
   "notifications.type.agent_error": "Ошибки агента",

@@ -243,6 +243,9 @@ export function NotificationBell() {
         </div>
         {showPrefs ? (
           <div className="max-h-[min(24rem,calc(100dvh-8rem))] overflow-y-auto overscroll-contain p-2">
+            <div className="px-2 pb-1 pt-1 text-2xs font-semibold uppercase text-muted-foreground-subtle">
+              {t("notifications.prefs_title")}
+            </div>
             {PREF_TYPES.map(({ type, labelKey }) => {
               const p = prefs[type] ?? { muted: false, sound: true };
               return (

@@ -278,7 +278,8 @@ pub(crate) async fn api_put_notification_prefs(
 
 // ── Public notify() helper ──────────────────────────────────────
 
-/// Create a notification, persist it to the DB, and broadcast it to all connected WS clients.
+/// Create a notification, persist it to the DB, and broadcast it to connected WS clients
+/// unless the type is muted (muted types are still persisted).
 ///
 /// Called by Phase 6 trigger sites (access.rs, approvals handler, engine.rs, watchdog).
 /// `notification_type` examples: "`access_request`", "`tool_approval`", "`agent_error`", "`watchdog_alert`"
