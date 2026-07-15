@@ -196,6 +196,7 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
         agent: AgentSettings {
             name,
             language: p.language.unwrap_or_else(|| "ru".to_string()),
+            profile: crate::db::profiles::DEFAULT_PROFILE.to_string(),
             provider: p.provider,
             model: p.model,
             provider_connection: p.provider_connection,

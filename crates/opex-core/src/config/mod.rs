@@ -931,7 +931,15 @@ pub struct AgentSettings {
     pub name: String,
     #[serde(default = "default_language")]
     pub language: String,
+    /// Имя профиля (таблица profiles). Источник провайдеров/моделей/голоса.
+    #[serde(default = "default_profile_name")]
+    pub profile: String,
+    // ── DEPRECATED (m084/profiles): читаются только startup-миграцией ────────
+    // После прогона profiles-seed эти поля вычищаются из TOML. Engine и API
+    // их не используют. Удалить поля целиком через один релиз.
+    #[serde(default)]
     pub provider: String,
+    #[serde(default)]
     pub model: String,
     /// Named LLM provider connection (from providers table).
     /// If set, overrides `provider` and `model` for LLM calls (model can still be
@@ -1207,6 +1215,9 @@ fn default_approval_timeout() -> u64 {
 
 fn default_language() -> String {
     "ru".to_string()
+}
+fn default_profile_name() -> String {
+    crate::db::profiles::DEFAULT_PROFILE.to_string()
 }
 fn default_temperature() -> f64 {
     1.0
@@ -2695,6 +2706,7 @@ owner_id = "123"
             agent: AgentSettings {
                 name: "roundtrip-agent".into(),
                 language: "en".into(),
+                profile: default_profile_name(),
                 provider: "openai".into(),
                 model: "gpt-4".into(),
                 tts_provider: None,
@@ -2768,6 +2780,7 @@ owner_id = "123"
             agent: AgentSettings {
                 name: "full-agent".into(),
                 language: "ru".into(),
+                profile: default_profile_name(),
                 provider: "minimax".into(),
                 model: "m2.5".into(),
                 tts_provider: None,
@@ -3320,6 +3333,27 @@ model = "gpt-4"
         );
         assert_eq!(cfg.agent.routing[0].model.as_deref(), Some("gpt-4"));
         assert!(cfg.agent.routing[0].temperature.is_none());
+    }
+
+    // ── AgentSettings.profile (m084/profiles) ──────────────────────────────────
+
+    #[test]
+    fn agent_toml_without_provider_fields_parses_with_default_profile() {
+        let toml = r#"
+[agent]
+name = "X"
+temperature = 1.0
+"#;
+        let cfg: crate::config::AgentConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.agent.profile, "Default");
+        assert_eq!(cfg.agent.provider, "");
+    }
+
+    #[test]
+    fn agent_toml_with_profile_field_parses() {
+        let toml = "[agent]\nname = \"X\"\ntemperature = 1.0\nprofile = \"Custom\"\n";
+        let cfg: crate::config::AgentConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.agent.profile, "Custom");
     }
 
     // ── connection-based route tests ──────────────────────────────────────────
