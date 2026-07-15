@@ -1,6 +1,10 @@
 ---
 name: image-generation
-description: How to generate high-quality images using the generate_image tool. Use this skill whenever the user asks to draw, create, generate, visualize, or show an image — including requests like "draw", "make a picture", "show me what it looks like", "create an illustration", "generate a photo", or any description of a desired visual. Apply even when the user just describes a scene or idea without explicitly using the word "image".
+description: >
+  High-quality image generation via generate_image — includes prompt crafting rules,
+  a curated prompt library (12,000+ professional prompts), and an adaptive workflow.
+  Use whenever the user asks to draw, create, generate, visualize, show an image,
+  find/suggest a prompt, improve a prompt, or emulate a style.
 triggers:
   - нарисуй
   - сгенерируй
@@ -19,9 +23,26 @@ triggers:
   - visualize
   - sketch
   - photo of
+  - найди промпт
+  - подбери стиль
+  - подбери промпт
+  - find a prompt
+  - suggest a style
+  - image style
+  - prompt advisor
+  - prompt library
+  - улучши промпт
+  - improve prompt
+  - professional prompt
+  - best prompt
+  - prompt for image
+  - style like
+  - в стиле
 priority: 10
 state: active
 ---
+
+# Image Generation
 
 ## Tool
 
@@ -32,37 +53,133 @@ generate_image(prompt, size?, quality?, model?)
 | Parameter | Values | Default |
 |-----------|--------|---------|
 | `prompt` | Text description — always in English | required |
-| `size` | `1024x1024` · `1792x1024` · `1024x1792` · `512x512` | `1024x1024` |
-| `quality` | `standard` (fast) · `high` (28 steps, slower, better) | `standard` |
-| `model` | optional: specific provider model override | auto |
+| `size` | Any `WxH` up to **2048×2048** (2K). Each side 512–2048, multiples of 64. **You choose** the best fit for the content. | `1024x1024` |
+| `quality` | **No effect on this instance** — the local model runs fixed fast steps. Leave default. | `standard` |
+| `model` | Leave empty — single local model (see below). | auto |
+
+### Model Parameter
+
+This instance generates through a **single local model** — ComfyUI running a Flux-family checkpoint ("krea2"). There is no cloud model menu, so **leave `model` empty**. (If set, it overrides the ComfyUI checkpoint name — you almost never need this.) There is likewise no separate `quality` mode: every image runs the same fast pipeline, and detail is controlled by `size` and the prompt, not by `quality`.
 
 ---
 
 ## Size Selection
 
-| Content type | Size |
-|---|---|
-| Landscape, interior, wide scene, banner, desktop wallpaper | `1792x1024` |
-| Portrait, poster, book cover, vertical banner | `1024x1792` |
-| Logo, icon, avatar, square art | `1024x1024` |
-| Quick draft / concept check | `512x512` |
+You are free to pick **any** `WxH` (multiples of 64) up to **2048** per side — choose what fits the content. Larger = more detail but slower. Guide:
+
+| Content type | Typical size | For max detail |
+|---|---|---|
+| Logo, icon, avatar, square art | `1024x1024` | `2048x2048` |
+| Landscape, interior, wide scene, wallpaper | `1536x1024`, `1344x768` | `2048x1152` |
+| Portrait, poster, book cover, vertical | `1024x1536`, `768x1344` | `1152x2048` |
+| Quick draft / concept check | `512x512` | — |
 
 ---
 
-## Draft → Final Workflow
+## Prompt Library
 
-For non-trivial requests, check the concept cheaply first:
+A curated library of 12,000+ professional prompts across 11 categories, hosted on GitHub CDN.
 
-1. **Draft** — `size=512x512`, `quality=standard`. Fast. Validates direction.
-2. **Final** — `size=1024x1024` or larger, `quality=high`. Once direction is confirmed.
+**Manifest** (categories index):
+```
+https://raw.githubusercontent.com/YouMind-OpenLab/nano-banana-pro-prompts-recommend-skill/main/references/manifest.json
+```
+
+**Per-category file**:
+```
+https://raw.githubusercontent.com/YouMind-OpenLab/nano-banana-pro-prompts-recommend-skill/main/references/{slug}.json
+```
+
+Each entry: `name`, `prompt`, `negative_prompt`, `tags`, `preview_url` (optional).
+
+### Loading the Manifest
+
+Check if `workspace/refs/image-prompts-manifest.json` exists and was modified within the last 7 days using `workspace_read`. If missing or stale, fetch:
+
+```
+code_exec(language="bash", code="mkdir -p ~/opex/workspace/refs && curl -sL 'https://raw.githubusercontent.com/YouMind-OpenLab/nano-banana-pro-prompts-recommend-skill/main/references/manifest.json' -o ~/opex/workspace/refs/image-prompts-manifest.json")
+```
+
+### Searching Prompts
+
+Pick the most fitting category from the manifest. Fetch **only that category's** JSON and filter by keywords — never load full files into context:
+
+```
+code_exec(language="bash", code="curl -sL 'https://raw.githubusercontent.com/YouMind-OpenLab/nano-banana-pro-prompts-recommend-skill/main/references/{slug}.json' | python3 -c \"import json,sys; data=json.load(sys.stdin); matches=[p for p in data if any(k in json.dumps(p).lower() for k in ['{kw1}','{kw2}'])]; [print(json.dumps(m)) for m in matches[:8]]\"")
+```
+
+If a category is borderline, check at most 2 — don't fetch all 11. Extract 3–5 best-matching prompts.
+
+---
+
+## Workflow
+
+### Step 1 — Understand the Request
+
+If intent is clear enough to pick a category or style, skip clarification and proceed. If ambiguous, ask **one** question max:
+- Subject / theme?
+- Mood / atmosphere?
+- Preferred style?
+
+### Step 2 — Source the Prompt
+
+**Option A — Library match** (when the request maps to a known style/category):
+1. Load manifest (if stale)
+2. Fetch relevant category JSON
+3. Extract 3–5 best-matching prompts
+
+**Option B — Custom prompt** (when the library has nothing relevant):
+Build using the template below — no apology needed.
+
+### Step 3 — Present Options (if multiple)
+
+Show 3–5 prompts as named style options. For each:
+- A short style label
+- The prompt text (truncate to ~80 words if long)
+
+```
+**Option 1 — Cinematic Neon Noir**
+A lone figure walks through rain-slicked streets, neon reflections on wet asphalt, dramatic side lighting, photorealistic, ultra-detailed, shallow depth of field, no text
+```
+
+Offer to preview at draft quality before committing.
+
+### Step 4 — Draft → Final
+
+For non-trivial requests, validate cheaply first:
+
+1. **Draft** — `size=512x512`. Fast. Validates direction.
+2. **Final** — `size=1024x1024` or larger (up to 2048 per side). Once direction is confirmed.
 
 Tell the user you're generating a draft and offer to refine after they see it.
 
+### Step 5 — Generate
+
+1. **Adapt** — if using a library prompt, replace generic subject/elements with the user's specifics. Keep the style skeleton.
+2. **Select size** (see table above) — pick the `WxH` that fits the content, up to 2K.
+3. **Generate**:
+```
+generate_image(prompt="[adapted English prompt]", size="1024x1024")
+```
+
+### Step 6 — Iterate
+
+After showing the result:
+- Point out 1–2 specific things that could be refined (lighting? color? composition? detail level?)
+- Ask what the user wants to change
+- Regenerate immediately on feedback — no permission needed, just confirm what you're changing
+
 ---
 
-## Prompt Structure
+## Prompt Crafting Rules
 
-Output quality depends directly on the prompt. Build it like this:
+- **Always write in English** — the model (a local Flux-family model via ComfyUI) understands English best. Translate the user's request yourself.
+- **Specific > abstract** — "a red sports car parked in front of a modern glass building at dusk" beats "beautiful car".
+- **Always specify style** — without an explicit style the result is unpredictable. If the user didn't specify, pick one (photorealistic for realistic scenes, digital art for game/fantasy content).
+- **50–100 words optimal** — longer prompts get partially ignored by most providers.
+- **End with negatives** — `no text, no watermark, no blur, no extra limbs`.
+
+### Prompt Structure
 
 ```
 [Subject] [Action/Pose], [Setting/Background], [Style], [Lighting], [Color palette], [Camera/Composition], [What to avoid]
@@ -84,24 +201,6 @@ photorealistic, dramatic cinematic lighting, orange-red dust and rocks in foregr
 deep blue Earth in distance, ultra-detailed spacesuit, wide establishing shot,
 volumetric atmosphere, no text, no watermark
 ```
-
----
-
-## Prompt Rules
-
-- **Always write in English** — all providers (FLUX, Stable Diffusion, DALL-E) understand English best. Translate the user's request yourself.
-- **Specific > abstract** — "a red sports car parked in front of a modern glass building at dusk" beats "beautiful car".
-- **Always specify style** — without an explicit style the result is unpredictable. If the user didn't specify, pick one (photorealistic for realistic scenes, digital art for game/fantasy content).
-- **Don't overload** — 50–100 words is optimal. Longer and the provider may ignore parts of the prompt.
-
----
-
-## Iteration
-
-After showing the image to the user:
-- If the result isn't right — ask what to change (style? colors? composition? details?)
-- Regenerate with a refined prompt without asking permission again
-- For style transfer / edits — describe the changes explicitly in the prompt
 
 ---
 
