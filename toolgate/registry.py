@@ -230,7 +230,15 @@ class ProviderRegistry:
         await self._refresh()
         with self._lock:
             active_id = self.config.active.get(capability)
-            return self._instances.get(active_id) if active_id else None
+            if active_id and active_id in self._instances:
+                return self._instances[active_id]
+            # profiles-мир: active-строк больше нет (кроме embedding) —
+            # берём первый enabled-провайдер той же категории (id-порядок).
+            for pid in sorted(self._instances):
+                pcfg = self.config.providers.get(pid)
+                if pcfg is not None and pcfg.type == capability:
+                    return self._instances[pid]
+            return None
 
     async def aget_instance(self, provider_id: str) -> Provider | None:
         await self._refresh()

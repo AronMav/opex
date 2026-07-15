@@ -19,20 +19,30 @@ async def web_search(request: Request):
         return JSONResponse(status_code=400, content={"error": "query is required"})
 
     registry = request.app.state.registry
-    provider = (
-        await registry.aget_instance(provider_name) if provider_name
-        else await registry.aget_active("websearch")
-    )
-    if provider is None:
+    header_chain = [s.strip() for s in
+                    (request.headers.get("x-opex-providers") or "").split(",") if s.strip()]
+    if provider_name:
+        candidates = [await registry.aget_instance(provider_name)]
+    elif header_chain:
+        candidates = [await registry.aget_instance(n) for n in header_chain]
+    else:
+        candidates = [await registry.aget_active("websearch")]
+    candidates = [c for c in candidates if c is not None]
+    if not candidates:
         return JSONResponse(status_code=503, content={
             "error": "no_websearch_provider",
             "hint": "configure/activate a web-search provider in Core UI",
         })
-    try:
-        http = request.app.state.http_client
-        results = await provider.search(http, query, max_results)
-        return {"results": results}
-    except Exception:
-        # Log full detail server-side; return a generic message (no internal detail leak).
-        log.exception("web search failed")
-        return JSONResponse(status_code=502, content={"error": "web search failed"})
+
+    http = request.app.state.http_client
+    last_exc = None
+    for provider in candidates:
+        try:
+            results = await provider.search(http, query, max_results)
+            return {"results": results}
+        except Exception as e:  # noqa: BLE001 — try next provider in the chain
+            log.warning("search provider %s failed: %s", getattr(provider, "name", "?"), e)
+            last_exc = e
+    # Log full detail server-side; return a generic message (no internal detail leak).
+    log.exception("web search failed (all providers)", exc_info=last_exc)
+    return JSONResponse(status_code=502, content={"error": "web search failed"})

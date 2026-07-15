@@ -107,10 +107,11 @@ async def openai_speech(
     http = request.app.state.http_client
     text = body.input
     fmt = body.response_format or "mp3"
+    voice = body.voice or request.headers.get("x-opex-voice") or ""
     try:
         audio_bytes = await provider.synthesize(
             http, text,
-            body.voice or "", body.model, fmt,
+            voice, body.model, fmt,
             registry=request.app.state.registry,
         )
         return Response(content=audio_bytes, media_type=_audio_media_type(fmt))
