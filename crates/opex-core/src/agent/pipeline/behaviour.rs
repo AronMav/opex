@@ -354,9 +354,33 @@ pub struct LayerRuntimeState {
     pub consecutive_failures: usize,
     pub using_fallback: bool,
     pub fallback_provider: Option<Arc<dyn crate::agent::providers::LlmProvider>>,
+    /// Position in the profile's `text` reserve chain reached so far. Starts at
+    /// 0; each failover-worthy swap resolves `text[1 + fallback_chain_idx]` then
+    /// advances. When `create_fallback_provider` returns `None`, the chain is
+    /// exhausted and the turn falls through to the error path. Per-turn state —
+    /// the next run starts fresh at the primary.
+    pub fallback_chain_idx: usize,
     pub did_reset_session: bool,
     pub auto_continue_count: u8,
     pub empty_retry_count: u8,
+}
+
+impl LayerRuntimeState {
+    /// Adopt reserve provider `p` after a failover-worthy error: make it the
+    /// live provider for the rest of the turn, advance the reserve-chain
+    /// cursor so the *next* failover resolves the following `text[…]` entry,
+    /// and reset the failure counter. Encapsulates the multi-hop swap so the
+    /// `execute()` loop body stays a straight-line branch and the advance
+    /// semantics are unit-testable without a live engine.
+    pub(crate) fn adopt_fallback(
+        &mut self,
+        p: Arc<dyn crate::agent::providers::LlmProvider>,
+    ) {
+        self.fallback_provider = Some(p);
+        self.using_fallback = true;
+        self.fallback_chain_idx += 1;
+        self.consecutive_failures = 0;
+    }
 }
 
 #[cfg(test)]
@@ -385,9 +409,94 @@ mod tests {
         assert_eq!(s.consecutive_failures, 0);
         assert!(!s.using_fallback);
         assert!(s.fallback_provider.is_none());
+        assert_eq!(s.fallback_chain_idx, 0);
         assert!(!s.did_reset_session);
         assert_eq!(s.auto_continue_count, 0);
         assert_eq!(s.empty_retry_count, 0);
+    }
+
+    // ── Fallback reserve-chain walk ──
+    //
+    // Models the multi-hop failover `execute()` performs: the profile's `text`
+    // slot chain is `[primary, reserve1, reserve2]`; `chain_idx=k` resolves
+    // `text[1 + k]` (the engine wrapper's indexing). Each failover-worthy error
+    // adopts the next reserve via `LayerRuntimeState::adopt_fallback`, advancing
+    // the cursor. Reuses the fake-provider pattern from the sibling `llm_call`
+    // tests — a trivial `LlmProvider` whose only job is to carry a name — instead
+    // of a live engine (which needs a DB).
+
+    struct FakeReserve(&'static str);
+    #[async_trait::async_trait]
+    impl crate::agent::providers::LlmProvider for FakeReserve {
+        async fn chat(
+            &self,
+            _m: &[opex_types::Message],
+            _t: &[opex_types::ToolDefinition],
+            _o: crate::agent::providers::CallOptions,
+        ) -> anyhow::Result<opex_types::LlmResponse> {
+            anyhow::bail!("fake reserve never called for chat")
+        }
+        async fn chat_stream(
+            &self,
+            _m: &[opex_types::Message],
+            _t: &[opex_types::ToolDefinition],
+            _tx: tokio::sync::mpsc::Sender<String>,
+            _o: crate::agent::providers::CallOptions,
+        ) -> anyhow::Result<opex_types::LlmResponse> {
+            anyhow::bail!("fake reserve never called for chat_stream")
+        }
+        fn name(&self) -> &str { self.0 }
+    }
+
+    /// Primary + reserve #1 both fail with transport errors; the state must
+    /// advance through the `text` chain to reserve #2 (two swaps), landing at
+    /// `fallback_chain_idx == 2`, then report the chain exhausted at index 2.
+    #[test]
+    fn fallback_walks_text_chain_to_second_reserve() {
+        use crate::db::profiles::{SlotEntry, Slots};
+
+        // Profile `text` slot: index 0 is the live primary; 1 and 2 are reserves.
+        let mut slots: Slots = Slots::new();
+        slots.insert(
+            "text".to_string(),
+            vec![
+                SlotEntry { provider: "primary".into(),  model: None, voice: None },
+                SlotEntry { provider: "reserve1".into(), model: None, voice: None },
+                SlotEntry { provider: "reserve2".into(), model: None, voice: None },
+            ],
+        );
+
+        // Mirror the engine wrapper: chain_idx=k → text[1 + k].
+        let resolve = |chain_idx: usize| -> Option<Arc<dyn crate::agent::providers::LlmProvider>> {
+            let entry = slots.get("text")?.get(1 + chain_idx)?;
+            let name: &'static str = match entry.provider.as_str() {
+                "reserve1" => "reserve1",
+                "reserve2" => "reserve2",
+                _ => "other",
+            };
+            Some(Arc::new(FakeReserve(name)))
+        };
+
+        let mut st = LayerRuntimeState::default();
+
+        // Primary (text[0]) failed → resolve reserve #1 (text[1]) and adopt.
+        let r1 = resolve(st.fallback_chain_idx).expect("reserve #1 present");
+        assert_eq!(r1.name(), "reserve1");
+        st.adopt_fallback(r1);
+        assert_eq!(st.fallback_chain_idx, 1);
+        assert!(st.using_fallback);
+        assert_eq!(st.consecutive_failures, 0);
+
+        // Reserve #1 also failed → resolve reserve #2 (text[2]) and adopt.
+        let r2 = resolve(st.fallback_chain_idx).expect("reserve #2 present");
+        assert_eq!(r2.name(), "reserve2");
+        st.adopt_fallback(r2);
+        assert_eq!(st.fallback_chain_idx, 2, "advanced to reserve #2 after second swap");
+        assert_eq!(st.fallback_provider.as_ref().unwrap().name(), "reserve2");
+
+        // Reserve #2 also fails → chain exhausted (text[3] does not exist),
+        // so `execute()` falls through to the error path.
+        assert!(resolve(st.fallback_chain_idx).is_none(), "chain exhausted at index 2");
     }
 
     /// Build a minimal `IncomingMessage` for layer-construction tests.

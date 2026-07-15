@@ -415,42 +415,45 @@ pub async fn execute<S: EventSink>(
                         continue;
                 }
 
-                // Fallback layer (A1 in the divergent feature map). Switch to
-                // the configured fallback provider and `continue` the turn
-                // with it.
+                // Fallback layer (A1 in the divergent feature map). Walk the
+                // profile's `text` reserve chain: on each failover-worthy error
+                // swap the live provider to the next reserve (`text[1]`,
+                // `text[2]`, …) and `continue` the turn with it.
                 //
-                // Trigger: the FIRST failover-worthy error (transport / 5xx /
-                // rate-limit / timeout / bare connection reset). A single
+                // Trigger: any failover-worthy error (transport / 5xx /
+                // rate-limit / timeout / bare connection reset) OR the
+                // `consecutive_failures >= threshold` secondary gate. A single
                 // pipeline-level `Err` already means the provider's internal
                 // transport retries (`max_retries`) were exhausted, so one
-                // failure is sufficient signal to fail over. The legacy
-                // `consecutive_failures >= threshold` gate alone was
-                // unreachable here — this arm returns `Failed` on the first
-                // error, so the counter never accumulated past 1 and the
-                // fallback never engaged for a live session during an egress
-                // blip. It is retained as a secondary trigger for completeness.
+                // failure is sufficient signal to fail over.
+                //
+                // Generalized from the old single-shot swap: the previous
+                // `!using_fallback` guard blocked advancing past the first
+                // reserve, so a reserve that also failed dead-ended. Now each
+                // failover-worthy error advances `fallback_chain_idx`; when the
+                // chain is exhausted (`create_fallback_provider` → `None`), the
+                // turn falls through to the error path below unchanged.
                 if let Some(ref fb_policy) = layers.fallback_provider {
                     layer_state.consecutive_failures += 1;
                     let failover_worthy =
                         crate::agent::error_classify::is_failover_worthy(&err_class);
-                    if !layer_state.using_fallback
-                        && (failover_worthy
-                            || layer_state.consecutive_failures
-                                >= fb_policy.consecutive_failure_threshold)
+                    if failover_worthy
+                        || layer_state.consecutive_failures
+                            >= fb_policy.consecutive_failure_threshold
                     {
-                        if layer_state.fallback_provider.is_none() {
-                            layer_state.fallback_provider =
-                                engine.create_fallback_provider().await;
-                        }
-                        if layer_state.fallback_provider.is_some() {
-                            layer_state.using_fallback = true;
-                            layer_state.consecutive_failures = 0;
+                        // Next reserve in the text chain (first swap → text[1]).
+                        let next = engine
+                            .create_fallback_provider(layer_state.fallback_chain_idx)
+                            .await;
+                        if let Some(p) = next {
+                            layer_state.adopt_fallback(p);
                             tracing::warn!(
                                 agent = %engine.cfg().agent.name,
                                 iteration,
+                                chain_idx = layer_state.fallback_chain_idx,
                                 error_class = ?err_class,
                                 error = %e,
-                                "switching to fallback provider after primary LLM error"
+                                "switching to fallback provider after LLM error"
                             );
                             // Emit StepFinish for the failed step so the
                             // frontend stops the spinner; then `continue`
@@ -464,6 +467,7 @@ pub async fn execute<S: EventSink>(
                                 .await;
                             continue;
                         }
+                        // Chain exhausted — fall through to the error path below.
                     }
                 }
 

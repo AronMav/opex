@@ -36,10 +36,18 @@ pub async fn check_budget(db: &sqlx::PgPool, agent_name: &str, daily_budget_toke
 
 /// Create a fallback LLM provider by looking up `fallback_provider` in the providers table.
 /// Returns `None` if the name is absent, not found, or creation fails.
+///
+/// `model_override` — the per-slot model from the profile's `text` chain entry
+/// (`SlotEntry.model`). `Some(m)` forces the reserve to run model `m`; `None`
+/// keeps the provider row's `default_model` (the historical behaviour). Threaded
+/// into `ProviderOverrides { model }` on the HTTP path and into
+/// `build_cli_provider`'s `model_override` on the CLI path, mirroring how the
+/// primary provider honors its own slot model.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_fallback_provider(
     db: &sqlx::PgPool,
     fallback_provider_name: Option<&str>,
+    model_override: Option<&str>,
     agent_name: &str,
     _temperature: f64,
     _max_tokens: Option<u32>,
@@ -66,7 +74,7 @@ pub async fn create_fallback_provider(
                         base,
                         secrets: secrets.clone(),
                     };
-                    match build_cli_provider(&row, None, ctx).await {
+                    match build_cli_provider(&row, model_override, ctx).await {
                         Ok(p) => p,
                         Err(e) => {
                             tracing::warn!(agent = %agent_name, fallback_provider = %fb_name, error = %e,
@@ -76,15 +84,20 @@ pub async fn create_fallback_provider(
                     }
                 }
                 _ => {
-                    // Fallback provider uses the row's default model/tuning —
+                    // Fallback provider uses the row's default tuning —
                     // per-agent temperature/max_tokens are carried by the
-                    // primary provider (which this falls back from).
+                    // primary provider (which this falls back from). The
+                    // per-slot `model` (if any) IS honored, so a reserve entry
+                    // can pin a specific model on the same provider row.
                     match build_provider(
                         &row,
                         secrets,
                         &timeouts_cfg,
                         cancel,
-                        crate::agent::providers::ProviderOverrides::default(),
+                        crate::agent::providers::ProviderOverrides {
+                            model: model_override.map(str::to_string),
+                            ..Default::default()
+                        },
                     ) {
                         Ok(p) => p,
                         Err(e) => {

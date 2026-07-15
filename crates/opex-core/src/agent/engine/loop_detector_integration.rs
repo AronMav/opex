@@ -19,17 +19,29 @@ impl AgentEngine {
             .unwrap_or_default()
     }
 
-    /// Create fallback LLM provider from agent config.
+    /// Build fallback provider #`chain_idx` from the profile's `text` chain
+    /// (`chain_idx=0` → `text[1]`, `chain_idx=1` → `text[2]`, …).
+    /// `None` = the chain is exhausted (no reserve at that position).
+    ///
+    /// The primary provider is `text[0]`, already live as `cfg().provider`, so
+    /// reserves start at index `1 + chain_idx`. The reserve's per-slot `model`
+    /// (`SlotEntry.model`) is honored when present.
     ///
     /// `pub(crate)` so `pipeline::execute` can engage the fallback layer
     /// (`BehaviourLayers::fallback_provider`) without going through the
     /// engine's private API. The legacy `handle_isolated` caller is in
     /// the same module and used `pub(super)`; widening visibility is
     /// safe — every caller is still inside `opex-core`.
-    pub(crate) async fn create_fallback_provider(&self) -> Option<Arc<dyn crate::agent::providers::LlmProvider>> {
+    pub(crate) async fn create_fallback_provider(
+        &self,
+        chain_idx: usize,
+    ) -> Option<Arc<dyn crate::agent::providers::LlmProvider>> {
+        let chain = self.cfg().profile_slots.get("text")?;
+        let entry = chain.get(1 + chain_idx)?;
         crate::agent::pipeline::llm_call::create_fallback_provider(
             &self.cfg().db,
-            self.cfg().agent.fallback_provider.as_deref(),
+            Some(entry.provider.as_str()),
+            entry.model.as_deref(),
             &self.cfg().agent.name,
             self.cfg().agent.temperature,
             self.cfg().agent.max_tokens,
