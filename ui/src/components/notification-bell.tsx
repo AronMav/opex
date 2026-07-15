@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import type { UIEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Bell, Loader2 } from "lucide-react";
+import { Bell, Loader2, Settings } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,11 +18,15 @@ import {
   useMarkAllRead,
   useClearAllNotifications,
   useLoadOlderNotifications,
+  useNotificationPrefs,
+  useUpdateNotificationPref,
 } from "@/lib/queries";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { useTranslation } from "@/hooks/use-translation";
 import { NotificationInfraBody } from "./notification-infra-body";
 import type { NotificationRow } from "@/types/api";
+import type { TranslationKey } from "@/i18n/types";
 
 // ── Sound helper ─────────────────────────────────────────────────────────────
 
@@ -82,6 +86,17 @@ function isMediaEvent(type: string): boolean {
   return ERROR_EVENTS.has(type);
 }
 
+// The user-facing alerting types exposed in the prefs panel. The backend mute
+// works for ANY type; this is the curated subset worth toggling.
+const PREF_TYPES: { type: string; labelKey: TranslationKey }[] = [
+  { type: "agent_error", labelKey: "notifications.type.agent_error" },
+  { type: "tool_approval", labelKey: "notifications.type.tool_approval" },
+  { type: "watchdog_alert", labelKey: "notifications.type.watchdog_alert" },
+  { type: "access_request", labelKey: "notifications.type.access_request" },
+  { type: "infra_decision", labelKey: "notifications.type.infra_decision" },
+  { type: "initiative_proposal", labelKey: "notifications.type.initiative_proposal" },
+];
+
 // ── Notification type → target route ─────────────────────────────────────────
 
 // Exported so unit tests can verify routing decisions for every notification
@@ -137,6 +152,11 @@ export function NotificationBell() {
 
   const { loadOlder, isLoading: loadingOlder, hasMore } = useLoadOlderNotifications();
 
+  const prefs = useNotificationStore((s) => s.prefs);
+  const [showPrefs, setShowPrefs] = useState(false);
+  useNotificationPrefs();
+  const updatePref = useUpdateNotificationPref();
+
   const onListScroll = (e: UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
     // within 48px of the bottom → pull the next older page
@@ -187,6 +207,17 @@ export function NotificationBell() {
             right (ml-auto keeps clear-all right even when it's the only one). */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-3">
           <span className="text-sm font-semibold">{t("notifications.title")}</span>
+          <button
+            type="button"
+            aria-label={t("notifications.settings")}
+            className="ml-auto flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent"
+            onClick={(e) => {
+              e.preventDefault();
+              setShowPrefs((v) => !v);
+            }}
+          >
+            <Settings size={15} className={showPrefs ? "text-primary" : ""} />
+          </button>
           <div className="flex w-full items-center gap-3">
             {unread_count > 0 && (
               <Button
@@ -210,54 +241,88 @@ export function NotificationBell() {
             )}
           </div>
         </div>
-        {/* List */}
-        <div
-          className="max-h-[min(24rem,calc(100dvh-8rem))] overflow-y-auto overscroll-contain"
-          onScroll={onListScroll}
-        >
-          {notifications.length === 0 ? (
-            <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
-              {t("notifications.empty")}
-            </div>
-          ) : (
-            <>
-              {notifications.map((n) => (
-                <button
-                  key={n.id}
-                  onClick={() => {
-                    if (!n.read) markRead.mutate(n.id);
-                    const route = getNotificationRoute(n.type, n.data);
-                    if (route) router.push(route);
-                  }}
-                  className={`flex w-full flex-col gap-1 px-4 py-3 text-left transition-colors hover:bg-accent border-b border-border/50 last:border-0 ${
-                    n.read ? "opacity-60" : ""
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <span
-                      className={`text-sm ${n.read ? "font-normal" : "font-semibold"}`}
-                    >
-                      {n.title}
-                    </span>
-                    {!n.read && (
-                      <span className="mt-1 h-3 w-3 shrink-0 rounded-full bg-primary" />
-                    )}
-                  </div>
-                  <MediaNotificationBody notification={n} />
-                  {n.type === "infra_decision" && <NotificationInfraBody n={n} />}
-                  <span className="text-2xs text-muted-foreground-subtle">
-                    {new Date(n.created_at).toLocaleString()}
-                  </span>
-                </button>
-              ))}
-              {loadingOlder && (
-                <div className="flex items-center justify-center py-3">
-                  <Loader2 size={16} className="animate-spin text-muted-foreground" />
+        {showPrefs ? (
+          <div className="max-h-[min(24rem,calc(100dvh-8rem))] overflow-y-auto overscroll-contain p-2">
+            {PREF_TYPES.map(({ type, labelKey }) => {
+              const p = prefs[type] ?? { muted: false, sound: true };
+              return (
+                <div key={type} className="flex items-center gap-3 px-2 py-2">
+                  <span className="flex-1 truncate text-sm">{t(labelKey)}</span>
+                  <label className="flex items-center gap-1 text-2xs text-muted-foreground">
+                    {t("notifications.mute")}
+                    <Switch
+                      size="sm"
+                      checked={p.muted}
+                      onCheckedChange={(muted) =>
+                        updatePref.mutate({ type, muted, sound: p.sound })
+                      }
+                    />
+                  </label>
+                  <label className="flex items-center gap-1 text-2xs text-muted-foreground">
+                    {t("notifications.sound")}
+                    <Switch
+                      size="sm"
+                      checked={p.sound}
+                      disabled={p.muted}
+                      onCheckedChange={(sound) =>
+                        updatePref.mutate({ type, muted: p.muted, sound })
+                      }
+                    />
+                  </label>
                 </div>
-              )}
-            </>
-          )}
-        </div>
+              );
+            })}
+          </div>
+        ) : (
+          /* List */
+          <div
+            className="max-h-[min(24rem,calc(100dvh-8rem))] overflow-y-auto overscroll-contain"
+            onScroll={onListScroll}
+          >
+            {notifications.length === 0 ? (
+              <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
+                {t("notifications.empty")}
+              </div>
+            ) : (
+              <>
+                {notifications.map((n) => (
+                  <button
+                    key={n.id}
+                    onClick={() => {
+                      if (!n.read) markRead.mutate(n.id);
+                      const route = getNotificationRoute(n.type, n.data);
+                      if (route) router.push(route);
+                    }}
+                    className={`flex w-full flex-col gap-1 px-4 py-3 text-left transition-colors hover:bg-accent border-b border-border/50 last:border-0 ${
+                      n.read ? "opacity-60" : ""
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <span
+                        className={`text-sm ${n.read ? "font-normal" : "font-semibold"}`}
+                      >
+                        {n.title}
+                      </span>
+                      {!n.read && (
+                        <span className="mt-1 h-3 w-3 shrink-0 rounded-full bg-primary" />
+                      )}
+                    </div>
+                    <MediaNotificationBody notification={n} />
+                    {n.type === "infra_decision" && <NotificationInfraBody n={n} />}
+                    <span className="text-2xs text-muted-foreground-subtle">
+                      {new Date(n.created_at).toLocaleString()}
+                    </span>
+                  </button>
+                ))}
+                {loadingOlder && (
+                  <div className="flex items-center justify-center py-3">
+                    <Loader2 size={16} className="animate-spin text-muted-foreground" />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
