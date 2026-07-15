@@ -306,7 +306,7 @@ export function AgentEditDialog({
                     <div className="space-y-1.5">
                       <Select value={form.profile || "Default"} onValueChange={(v) => upd({ profile: v })}>
                         <SelectTrigger className="w-full bg-background border-border text-sm h-9">
-                          <SelectValue />
+                          <SelectValue placeholder={t("agents.profile_unknown")} />
                         </SelectTrigger>
                         <SelectContent className="border-border">
                           {profileNames.length > 0 ? (

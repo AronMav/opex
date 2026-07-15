@@ -114,7 +114,7 @@ describe("splitProviders", () => {
 
 describe("group_hint predicate — only embedding renders the active-provider group now", () => {
   const hintVisible = (cap: string) =>
-    (ALL_CAPABILITIES as readonly string[]).includes(cap) && cap !== "websearch";
+    (ALL_CAPABILITIES as readonly string[]).includes(cap);
 
   it("returns false for websearch (moved to profile-owned routing)", () => {
     expect(hintVisible("websearch")).toBe(false);

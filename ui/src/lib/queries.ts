@@ -543,7 +543,10 @@ export function useCreateProvider() {
       qc.invalidateQueries({ queryKey: qk.providers })
       qc.invalidateQueries({ queryKey: qk.providerActive })
     },
-    onError: (e: Error) => toast.error(e.message),
+    // No generic onError here: the only caller (providers page `save()`)
+    // awaits mutateAsync in a try/catch and shows its own
+    // "providers.save_error" toast — a hook-level toast here would double-fire
+    // alongside it (TanStack calls both).
   })
 }
 
@@ -556,7 +559,10 @@ export function useUpdateProvider() {
       qc.invalidateQueries({ queryKey: qk.providers })
       qc.invalidateQueries({ queryKey: qk.providerActive })
     },
-    onError: (e: Error) => toast.error(e.message),
+    // No generic onError here: the only caller (providers page `save()`)
+    // awaits mutateAsync in a try/catch and shows its own
+    // "providers.save_error" toast — a hook-level toast here would double-fire
+    // alongside it (TanStack calls both).
   })
 }
 

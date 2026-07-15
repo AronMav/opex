@@ -378,7 +378,7 @@ export default function ProvidersPage() {
                   {/* Capability description + active-routing hint */}
                   <p className="text-xs text-muted-foreground mb-4">
                     {t(CAP_DESC_KEY[cap] as Parameters<typeof t>[0])}
-                    {isCapabilityGroup && cap !== "websearch" && (
+                    {isCapabilityGroup && (
                       <span className="text-muted-foreground-subtle"> · {t("providers.group_hint")}</span>
                     )}
                   </p>

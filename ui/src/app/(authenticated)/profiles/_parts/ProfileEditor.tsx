@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "@/hooks/use-translation";
 import type { TranslationKey } from "@/i18n/types";
 import { apiGet } from "@/lib/api";
@@ -83,6 +83,16 @@ export function ProfileEditor({ profile, open, onClose }: ProfileEditorProps) {
     setVoicesByProvider({});
   }, [profile]);
 
+  // Cancellation guard for fetchVoices below: a per-provider sequence number
+  // so an in-flight (out-of-order) response can't clobber a later one, plus
+  // an unmount flag so no state-set fires after the dialog closes/unmounts.
+  const voiceFetchSeq = useRef<Record<string, number>>({});
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => { unmountedRef.current = true; };
+  }, []);
+
   const rowsFor = useCallback((cap: ProfileCapability): SlotEntry[] => slots[cap] ?? [], [slots]);
 
   const setRows = (cap: ProfileCapability, rows: SlotEntry[]) => {
@@ -114,9 +124,18 @@ export function ProfileEditor({ profile, open, onClose }: ProfileEditorProps) {
 
   const fetchVoices = useCallback((providerName: string) => {
     if (!providerName) return;
+    const seq = (voiceFetchSeq.current[providerName] ?? 0) + 1;
+    voiceFetchSeq.current[providerName] = seq;
+    const isStale = () => unmountedRef.current || voiceFetchSeq.current[providerName] !== seq;
     apiGet<{ voices: TtsVoice[] }>(`/api/tts/voices?provider=${encodeURIComponent(providerName)}`)
-      .then((data) => setVoicesByProvider((prev) => ({ ...prev, [providerName]: data.voices ?? [] })))
-      .catch(() => setVoicesByProvider((prev) => ({ ...prev, [providerName]: [] })));
+      .then((data) => {
+        if (isStale()) return;
+        setVoicesByProvider((prev) => ({ ...prev, [providerName]: data.voices ?? [] }));
+      })
+      .catch(() => {
+        if (isStale()) return;
+        setVoicesByProvider((prev) => ({ ...prev, [providerName]: [] }));
+      });
   }, []);
 
   const providersFor = (cap: ProfileCapability) => {
@@ -183,7 +202,10 @@ export function ProfileEditor({ profile, open, onClose }: ProfileEditorProps) {
                         <Select
                           value={row.provider}
                           onValueChange={(v) => {
-                            updateRow(cap, idx, { provider: v });
+                            // Reset the voice on provider change — a voice id from the
+                            // previous provider may not exist (or mean something else)
+                            // on the new one, so don't carry it over silently.
+                            updateRow(cap, idx, cap === "tts" ? { provider: v, voice: "" } : { provider: v });
                             if (cap === "tts") fetchVoices(v);
                           }}
                         >
