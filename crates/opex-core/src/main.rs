@@ -377,6 +377,16 @@ async fn main() -> Result<()> {
         }
     }
 
+    // One-time migration: seed provider profiles (Default + per-agent), rewrite
+    // agent TOMLs and clear the migrated capabilities from provider_active
+    // (m084). Idempotent via sys_flags['profiles_seed_v1']; re-runs on failure.
+    if let Err(e) =
+        db::profile_migration::run_profiles_seed(&db_pool, std::path::Path::new("config/agents"))
+            .await
+    {
+        tracing::error!(error = %e, "profiles seed failed; will retry on next startup");
+    }
+
     // No hardcoded secrets — user creates all secrets via UI.
     // Channel-specific secrets (bot tokens) are auto-seeded when agents are created.
     // OPEX_AUTH_TOKEN and OPEX_MASTER_KEY stay in .env only (bootstrap).

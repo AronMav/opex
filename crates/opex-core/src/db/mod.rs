@@ -23,6 +23,7 @@ pub mod handler_config;
 pub mod model_overrides;
 pub mod outbound;
 pub mod pending;
+pub mod profile_migration;
 pub mod profiles;
 pub mod providers;
 pub mod session_goals;
