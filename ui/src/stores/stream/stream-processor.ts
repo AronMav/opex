@@ -525,7 +525,13 @@ export async function processSSEStream(
           case "sync_end": {
             if (!batchMode) break;
             batching = false;
-            session.commit();
+            // Only flush if the buffer actually accumulated content during this
+            // envelope. A DB-branch resume never touches the buffer — the `sync`
+            // event above writes resumed content directly into messageSource — so
+            // committing here unconditionally would overwrite that message's parts
+            // with an empty snapshot, blanking the resumed content. Mirrors the
+            // same guard in the `finally` block below.
+            if (session.buffer.snapshot().length > 0) session.commit();
             callbacks.onEnvelopeApplied?.();
             break;
           }

@@ -141,6 +141,35 @@ describe("processSSEStream", () => {
     expect(useChatStore.getState().agents.Arty.streamError).toBe("oops");
   });
 
+  it("REGRESSION (Finding 2): sync_end commit does not blank a DB-branch resume", async () => {
+    // Cold refresh of a just-finished turn: the server takes the DB-only
+    // resume branch and emits sync_begin -> sync{content} -> sync_end with no
+    // text-delta/tool events in between. The `sync` handler writes the
+    // resumed content directly into messageSource (bypassing the buffer),
+    // tagged with session.buffer.assistantId. Before the fix, sync_end's
+    // unconditional commit() found that same message by assistantId and
+    // overwrote its parts with the (empty) buffer snapshot, blanking it.
+    const session = streamSessionManager.start("Arty");
+    const frames = [
+      `data: ${JSON.stringify({ type: "sync_begin", boundaryMessageId: null, runStatus: "finished", truncated: false })}\n\n`,
+      `data: ${JSON.stringify({ type: "sync", content: "resumed text", toolCalls: [], status: "finished", error: null })}\n\n`,
+      `data: ${JSON.stringify({ type: "sync_end", lastSeq: null })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      callbacks: makeCallbacks(),
+      batchMode: true,
+    });
+    const msgs = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
+    const assistantMsg = msgs.find((m) => m.role === "assistant");
+    expect(assistantMsg).toBeDefined();
+    const text = (assistantMsg?.parts ?? [])
+      .filter((p): p is Extract<MessagePart, { type: "text" }> => p.type === "text")
+      .map((p) => p.text)
+      .join("");
+    expect(text).toBe("resumed text");
+  });
+
   it("BUG-C: connectionPhase stays error after finish when sync error preceded it", async () => {
     const session = streamSessionManager.start("Arty");
     const frames = [
