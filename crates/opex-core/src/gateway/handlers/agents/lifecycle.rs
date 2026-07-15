@@ -31,12 +31,22 @@ pub async fn start_agent_from_config(
     let effective_temperature = global_defaults.temperature.unwrap_or(agent_cfg.agent.temperature);
     let effective_max_tokens = agent_cfg.agent.max_tokens.or(global_defaults.max_tokens);
 
-    // Use routing provider if routing rules are configured, otherwise resolve provider
-    // (named connection → legacy provider_type fallback).
+    // Resolve the agent's profile slots once — primary (`text`) and
+    // `compaction` providers are both derived from this. Stored on AgentConfig
+    // so downstream code can read `engine.cfg().profile_slots`.
+    let profile_slots = crate::agent::profile_resolver::resolve_slots_for_agent(
+        &infra.db, &agent_cfg.agent.profile, name).await;
+    let text_chain = crate::agent::profile_resolver::effective_chain(
+        &infra.db, &profile_slots, "text").await;
+
+    // Use routing provider if routing rules are configured, otherwise resolve the
+    // primary provider from the profile's highest-priority `text` slot. Routing
+    // still overrides the profile — a non-empty `agent.routing` wins.
     let provider = if agent_cfg.agent.routing.is_empty() {
         providers::resolve_provider_for_agent(
             &infra.db,
             &agent_cfg.agent,
+            text_chain.first(),
             effective_temperature,
             effective_max_tokens,
             auth.secrets.clone(),
@@ -66,13 +76,18 @@ pub async fn start_agent_from_config(
 
     let default_timezone = crate::agent::workspace::parse_user_timezone(&deps.workspace_dir).await;
 
-    // Load dedicated compaction provider from provider_active (optional — falls back to primary).
+    // Load dedicated compaction provider from the profile's `compaction` slot
+    // (optional — empty slot → None → falls back to primary at call time).
+    let compaction_entry = crate::agent::profile_resolver::effective_chain(
+        &infra.db, &profile_slots, "compaction").await.into_iter().next();
     let compaction_provider: Option<Arc<dyn crate::agent::providers::LlmProvider>> = {
-        match crate::db::providers::get_provider_active(&infra.db, crate::db::providers::CAPABILITY_COMPACTION).await {
-            Ok(Some(provider_name)) => {
+        match compaction_entry {
+            Some(entry) => {
+                let provider_name = entry.provider.clone();
+                let model_override = entry.model.as_deref().filter(|m| !m.is_empty());
                 match crate::db::providers::get_provider_by_name(&infra.db, &provider_name).await {
                     Ok(Some(provider_row)) => {
-                        use crate::agent::providers::{build_provider, build_cli_provider, CliContext, timeouts::ProviderOptions};
+                        use crate::agent::providers::{build_provider, build_cli_provider, CliContext, ProviderOverrides, timeouts::ProviderOptions};
                         let opts: ProviderOptions =
                             serde_json::from_value(provider_row.options.clone()).unwrap_or_default();
                         let timeouts_cfg = opts.timeouts;
@@ -87,7 +102,7 @@ pub async fn start_agent_from_config(
                                         base: agent_cfg.agent.base,
                                         secrets: auth.secrets.clone(),
                                     };
-                                    match build_cli_provider(&provider_row, None, ctx).await {
+                                    match build_cli_provider(&provider_row, model_override, ctx).await {
                                         Ok(p) => Some(p),
                                         Err(e) => {
                                             tracing::warn!(
@@ -105,7 +120,10 @@ pub async fn start_agent_from_config(
                                     auth.secrets.clone(),
                                     &timeouts_cfg,
                                     cancel,
-                                    crate::agent::providers::ProviderOverrides::default(),
+                                    ProviderOverrides {
+                                        model: model_override.map(str::to_string),
+                                        ..Default::default()
+                                    },
                                 ) {
                                     Ok(p) => Some(p),
                                     Err(e) => {
@@ -130,7 +148,7 @@ pub async fn start_agent_from_config(
                     _ => None,
                 }
             }
-            _ => None,
+            None => None,
         }
     };
 
@@ -191,6 +209,7 @@ pub async fn start_agent_from_config(
         app_config: std::sync::Arc::new(cfg.config.clone()),
         provider: provider.clone(),
         compaction_provider: compaction_provider.clone(),
+        profile_slots,
         db: infra.db.clone(),
         memory_store: infra.memory_store.clone() as Arc<dyn crate::agent::memory_service::MemoryService>,
         embedder: infra.embedder.clone(),

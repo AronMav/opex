@@ -32,6 +32,14 @@ pub struct AgentConfig {
     // ── LLM ─────────────────────────────────────────────────────────────
     pub provider: Arc<dyn LlmProvider>,
     pub compaction_provider: Option<Arc<dyn LlmProvider>>,
+    /// Resolved capability slots from the agent's profile (`profiles` table).
+    /// Populated once at engine construction via
+    /// `profile_resolver::resolve_slots_for_agent`; the primary (`text`) and
+    /// `compaction` providers above are derived from it. Available to all
+    /// downstream code as `engine.cfg().profile_slots`.
+    // Downstream tasks read this field (stt/tts/vision/imagegen/websearch slots).
+    #[allow(dead_code)]
+    pub profile_slots: crate::db::profiles::Slots,
 
     // ── Data ────────────────────────────────────────────────────────────
     pub db: PgPool,

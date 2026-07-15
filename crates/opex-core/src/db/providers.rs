@@ -50,6 +50,10 @@ pub struct UpdateProvider {
 // ── Provider Active (capability → provider) ─────────────────────────────────
 
 /// Capability key for dedicated context-compaction LLM (cheap model for session compaction).
+// Compaction provider now resolved from the profile `compaction` slot
+// (profile_resolver); this legacy provider_active key is retained for the
+// migration/back-compat surface.
+#[allow(dead_code)]
 pub const CAPABILITY_COMPACTION: &str = "compaction";
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]

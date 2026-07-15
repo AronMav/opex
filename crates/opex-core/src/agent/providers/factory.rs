@@ -168,16 +168,17 @@ pub fn create_cli_provider_with_options(
     )))
 }
 
-/// Resolve LLM provider for an agent from a named connection in the DB.
-/// The agent MUST have `provider_connection` set.
+/// Resolve the primary LLM provider for an agent from its profile's `text`
+/// slot (highest-priority `SlotEntry`, passed as `text_first`).
 ///
-/// Returns a sentinel "unconfigured" provider if no usable connection is found.
-/// No free-form `provider`-field fallback — agents without a valid
-/// `provider_connection` get an `UnconfiguredProvider` sentinel.
+/// Returns a sentinel "unconfigured" provider if no usable text slot is found.
+/// No free-form `provider`-field fallback — agents whose profile yields no
+/// usable text provider get an `UnconfiguredProvider` sentinel.
 #[allow(clippy::too_many_arguments)]
 pub async fn resolve_provider_for_agent(
     db: &sqlx::PgPool,
     agent: &crate::config::AgentSettings,
+    text_first: Option<&crate::db::profiles::SlotEntry>,
     temperature: f64,
     max_tokens: Option<u32>,
     secrets: Arc<SecretsManager>,
@@ -186,11 +187,11 @@ pub async fn resolve_provider_for_agent(
     workspace_dir: &str,
     base: bool,
 ) -> Arc<dyn LlmProvider> {
-    if let Some(conn_name) = agent.provider_connection.as_deref().filter(|s| !s.is_empty()) {
-        match crate::db::providers::get_provider_by_name(db, conn_name).await {
+    if let Some(entry) = text_first {
+        match crate::db::providers::get_provider_by_name(db, &entry.provider).await {
             Ok(Some(row)) if row.category == "text" || row.category == "llm" => {
-                tracing::debug!(agent = %agent_name, connection = %conn_name, "using named LLM provider");
-                let model_override = if agent.model.is_empty() { None } else { Some(agent.model.as_str()) };
+                tracing::debug!(agent = %agent_name, provider = %entry.provider, "using profile text provider");
+                let model_override = entry.model.as_deref().filter(|m| !m.is_empty());
                 return resolve_provider_from_row(
                     &row,
                     model_override,
@@ -205,16 +206,16 @@ pub async fn resolve_provider_for_agent(
                 ).await;
             }
             Ok(Some(row)) => {
-                tracing::warn!(agent = %agent_name, connection = %conn_name, category = %row.category,
-                    "named provider is not type=text/llm, calls will fail");
+                tracing::warn!(agent = %agent_name, provider = %entry.provider, category = %row.category,
+                    "profile text provider is not text/llm");
             }
             Ok(None) => {
-                tracing::warn!(agent = %agent_name, connection = %conn_name,
-                    "named provider connection not found in DB");
+                tracing::warn!(agent = %agent_name, provider = %entry.provider,
+                    "profile text provider not found");
             }
             Err(e) => {
                 tracing::error!(agent = %agent_name, error = %e,
-                    "DB error resolving provider connection");
+                    "DB error resolving profile text provider");
             }
         }
     }
@@ -297,4 +298,89 @@ async fn resolve_provider_from_row(
         arc.set_model_override(Some(m.to_string()));
     }
     arc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::secrets::SecretsManager;
+
+    /// Minimal AgentSettings for provider-resolution tests. Only `prompt_cache`
+    /// is read on the happy path of `resolve_provider_for_agent`; the rest are
+    /// benign defaults.
+    fn minimal_agent(profile: &str) -> crate::config::AgentSettings {
+        crate::config::AgentSettings {
+            name: "t".into(),
+            language: "en".into(),
+            profile: profile.into(),
+            provider: String::new(),
+            model: String::new(),
+            provider_connection: None,
+            fallback_provider: None,
+            tts_provider: None,
+            imagegen_provider: None,
+            temperature: 0.7,
+            max_tokens: None,
+            access: None,
+            heartbeat: None,
+            tools: None,
+            delegation: Default::default(),
+            soul: Default::default(),
+            drift: Default::default(),
+            initiative: Default::default(),
+            emotion: Default::default(),
+            compaction: None,
+            skill_review: None,
+            session: None,
+            max_tools_in_context: None,
+            routing: vec![],
+            approval: None,
+            tool_loop: None,
+            watchdog: None,
+            base: false,
+            max_history_messages: None,
+            prompt_cache: false,
+            hooks: None,
+            daily_budget_tokens: 0,
+            max_failover_attempts: 3,
+            tool_dispatcher: Default::default(),
+        }
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn profile_text_slot_resolves_named_provider(pool: sqlx::PgPool) {
+        sqlx::query(
+            "INSERT INTO providers (name, type, provider_type, base_url, default_model, enabled) \
+             VALUES ('llm1','llm','openai_compat','http://localhost:1','m-default',true)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let entry = crate::db::profiles::SlotEntry {
+            provider: "llm1".into(),
+            model: Some("m-override".into()),
+            voice: None,
+        };
+        let agent = minimal_agent("Default");
+        let secrets = Arc::new(SecretsManager::new_noop());
+
+        let p = resolve_provider_for_agent(
+            &pool,
+            &agent,
+            Some(&entry),
+            1.0,
+            None,
+            secrets,
+            None,
+            "t",
+            "/tmp",
+            false,
+        )
+        .await;
+
+        // Sentinel name is "unconfigured" (UnconfiguredProvider::name); a
+        // resolved profile text slot must NOT hit that path.
+        assert_ne!(p.name(), "unconfigured");
+    }
 }
