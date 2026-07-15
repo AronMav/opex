@@ -454,7 +454,7 @@ async def fix_terms(
             await ctx.progress("fix_terms", progress_pcts[step])
 
     try:
-        from handlers.builtin.summarize_video import strip_transcript_timecodes  # noqa: PLC0415
+        from transcript import strip_transcript_timecodes  # noqa: PLC0415
         if len(strip_transcript_timecodes(transcript).strip()) < MIN_FIX_CHARS:
             return noop
         if not await ctx.has_capability("websearch"):

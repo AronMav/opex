@@ -12,6 +12,7 @@ import httpx
 from dependencies import require_provider
 from helpers import download_limited, check_upload_size, log_provider
 from audio_trim import trim_silence
+from transcript import strip_transcript_timecodes
 
 log = logging.getLogger("toolgate.stt")
 
@@ -52,6 +53,7 @@ async def transcribe(
             request.app.state.http_client, audio_bytes,
             f"audio.{_out_ext}", language, model,
         )
+        text = strip_transcript_timecodes(text)
         return {"text": text}
     except httpx.HTTPStatusError as e:
         return JSONResponse(status_code=e.response.status_code,

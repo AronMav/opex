@@ -55,6 +55,8 @@ import re
 import tempfile
 from typing import Optional
 
+from transcript import _parse_line_minute, strip_transcript_timecodes  # noqa: F401  (strip_transcript_timecodes re-exported for term_fixer/tests)
+
 # ── constants (ported from video_summary.rs) ──────────────────────────────────
 
 DIGEST_CHUNK_THRESHOLD_MIN: int = 150
@@ -276,24 +278,8 @@ class TranscriptChunk:
 
 
 # ── transcript helpers ────────────────────────────────────────────────────────
-
-def _parse_line_minute(line: str) -> Optional[int]:
-    """Parse `[MM:SS]` or `[MMM:SS]` prefix → whole minutes. None if absent."""
-    stripped = line.lstrip()
-    if not stripped.startswith("["):
-        return None
-    close = stripped.find("]")
-    if close < 0:
-        return None
-    inner = stripped[1:close]
-    if ":" not in inner:
-        return None
-    m_str, s_str = inner.split(":", 1)
-    if not m_str or not m_str.isdigit():
-        return None
-    if len(s_str) != 2 or not s_str.isdigit():
-        return None
-    return int(m_str)
+# `strip_transcript_timecodes` / `_parse_line_minute` live in the shared
+# `transcript` module (also used by term_fixer.py and routers/stt.py).
 
 
 def transcript_minutes(transcript: str) -> int:
@@ -352,22 +338,6 @@ def split_transcript_by_time(
         ))
 
     return chunks
-
-
-def strip_transcript_timecodes(text: str) -> str:
-    """Strip leading `[MM:SS]` markers so the LLM sees clean text (no timecodes)."""
-    result: list[str] = []
-    for line in text.splitlines():
-        stripped = line.lstrip()
-        m = _parse_line_minute(line)
-        if m is not None:
-            # Find the closing ] and take everything after it
-            close = stripped.find("]")
-            after = stripped[close + 1:].lstrip()
-            result.append(after)
-        else:
-            result.append(line)
-    return "\n".join(result)
 
 
 def _strip_image_embeds(body: str) -> str:
