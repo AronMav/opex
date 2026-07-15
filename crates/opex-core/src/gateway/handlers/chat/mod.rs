@@ -14,7 +14,7 @@
 //!   ├── /v1/models                    → models::list_models
 //!   ├── /v1/embeddings                → embeddings::embeddings_proxy
 //!   ├── /api/chat                     → sse::api_chat_sse
-//!   ├── /api/chat/{id}/stream         → resume::api_chat_resume_stream
+//!   ├── /api/chat/{id}/stream         → stream::api_chat_stream
 //!   └── /api/chat/{id}/abort          → misc::api_chat_abort
 //! ```
 
@@ -29,9 +29,9 @@ mod embeddings;
 mod misc;
 mod models;
 mod openai_compat;
-mod resume;
 mod sse;
 mod sse_converter;
+mod stream;
 pub mod sse_writer;
 mod streaming_db;
 
@@ -50,6 +50,6 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/v1/models", get(models::list_models))
         .route("/v1/embeddings", post(embeddings::embeddings_proxy))
         .route("/api/chat", post(sse::api_chat_sse))
-        .route("/api/chat/{id}/stream", get(resume::api_chat_resume_stream))
+        .route("/api/chat/{id}/stream", get(stream::api_chat_stream))
         .route("/api/chat/{id}/abort", post(misc::api_chat_abort))
 }

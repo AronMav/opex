@@ -1375,11 +1375,12 @@ mod tests {
     }
 }
 
-// ── verify_session_agent (shared IDOR gate — resume.rs, misc.rs abort) ──────
+// ── verify_session_agent (shared IDOR gate — stream.rs, misc.rs abort) ──────
 //
-// Covers the ownership check that `api_chat_resume_stream` (chat/resume.rs)
-// and `api_chat_abort` (chat/misc.rs) now depend on (audit 2026-07-04,
-// batch E). Both handlers are thin wrappers around this function plus a
+// Covers the ownership check that `api_chat_stream` (chat/stream.rs, formerly
+// chat/resume.rs's `api_chat_resume_stream`) and `api_chat_abort`
+// (chat/misc.rs) now depend on (audit 2026-07-04, batch E). Both handlers
+// are thin wrappers around this function plus a
 // `?agent=` extraction identical to every other `sessions.rs` handler —
 // exercising it here covers the ownership-check branch for both call sites
 // without needing a full HTTP harness.
