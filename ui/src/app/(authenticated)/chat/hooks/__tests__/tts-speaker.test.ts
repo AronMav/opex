@@ -130,4 +130,79 @@ describe("createSpeakerQueue", () => {
     expect(q.idle).toBe(false);
     await vi.waitFor(() => expect(q.idle).toBe(true));
   });
+
+  it("a rejecting play does not deadlock the pump — later sentences and enqueues still play", async () => {
+    // Regression test for Fix 1: previously `await deps.play(blob)` was
+    // wrapped only in try/finally with no catch, so a rejection propagated
+    // out of the fire-and-forget `pump()`, skipping the `pumping = false`
+    // reset. Every future sentence would silently queue and never play.
+    const played: string[] = [];
+    const synth = vi.fn(async (s: string) => new Blob([s]));
+    const play = vi.fn(async (b: Blob) => {
+      const text = await b.text();
+      if (text === "first.") throw new Error("autoplay blocked");
+      played.push(text);
+    });
+    const q = createSpeakerQueue({ synth, play });
+
+    q.enqueue("first.");
+    q.enqueue("second.");
+    // "first." rejects but must not stop "second." from playing.
+    await vi.waitFor(() => expect(played).toEqual(["second."]));
+    await vi.waitFor(() => expect(q.idle).toBe(true));
+
+    // The queue must still be usable afterward — pump must have been
+    // released, not left permanently "pumping".
+    q.enqueue("third.");
+    await vi.waitFor(() => expect(played).toEqual(["second.", "third."]));
+    expect(q.idle).toBe(true);
+  });
+
+  it("takeoverAudio mid-play: superseded play settling early must not report idle prematurely", async () => {
+    // Regression test for Fix 2: previously the pump loop's `finally {
+    // playing = false }` after `await deps.play(blob)` was unconditional.
+    // In real life, when takeoverAudio interrupts an in-flight play on the
+    // same shared <audio> element, the OLD play's promise commonly settles
+    // (e.g. "interrupted by a new load request") *before* the new
+    // (takeover) play settles. If that stale settlement clobbers `playing`
+    // to false, the queue would wrongly report `idle: true` while the
+    // takeover audio is still actually playing.
+    const played: string[] = [];
+    let releaseOld!: () => void;
+    let releaseNew!: () => void;
+    const oldGate = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    const newGate = new Promise<void>((resolve) => {
+      releaseNew = resolve;
+    });
+
+    const synth = vi.fn(async (s: string) => new Blob([s]));
+    const play = vi.fn(async (b: Blob) => {
+      const text = await b.text();
+      if (text === "slow-sentence.") await oldGate;
+      if (text === "TAKEOVER_AUDIO") await newGate;
+      played.push(text);
+    });
+    const q = createSpeakerQueue({ synth, play });
+
+    q.enqueue("slow-sentence.");
+    await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+
+    // Takeover fires while the first play is still pending.
+    q.takeoverAudio(new Blob(["TAKEOVER_AUDIO"]));
+    await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+
+    // Release the superseded ("slow-sentence.") play FIRST — its stale
+    // completion must not clobber the takeover's still-in-flight state.
+    releaseOld();
+    await vi.waitFor(() => expect(played).toContain("slow-sentence."));
+    expect(q.idle).toBe(false); // takeover audio is still playing
+
+    // Now let the takeover's own play settle — idle should reflect that.
+    releaseNew();
+    await vi.waitFor(() => expect(played).toContain("TAKEOVER_AUDIO"));
+    expect(q.idle).toBe(true);
+    expect(played).toEqual(["slow-sentence.", "TAKEOVER_AUDIO"]);
+  });
 });

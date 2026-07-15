@@ -145,38 +145,62 @@ export function createSpeakerQueue(deps: SpeakerDeps): SpeakerQueue {
     pumping = true;
     setState("speaking");
 
-    let prefetch: Promise<Blob | null> | null = null;
+    try {
+      let prefetch: Promise<Blob | null> | null = null;
 
-    while (myEpoch === epoch) {
-      let blob: Blob | null;
-      if (prefetch) {
-        blob = await prefetch;
-        prefetch = null;
-      } else if (queue.length > 0) {
-        blob = await synthOne(queue.shift()!, myEpoch);
-      } else {
-        break;
-      }
-      if (myEpoch !== epoch) break;
-
-      // Kick off the next sentence's synth in parallel with this playback.
-      if (queue.length > 0) {
-        prefetch = synthOne(queue.shift()!, myEpoch);
-      }
-
-      if (blob) {
-        playing = true;
-        try {
-          await deps.play(blob);
-        } finally {
-          playing = false;
+      while (myEpoch === epoch) {
+        let blob: Blob | null;
+        if (prefetch) {
+          blob = await prefetch;
+          prefetch = null;
+        } else if (queue.length > 0) {
+          blob = await synthOne(queue.shift()!, myEpoch);
+        } else {
+          break;
         }
+        if (myEpoch !== epoch) break;
+
+        // Kick off the next sentence's synth in parallel with this playback.
+        if (queue.length > 0) {
+          prefetch = synthOne(queue.shift()!, myEpoch);
+        }
+
+        if (blob) {
+          playing = true;
+          // Capture the epoch this play started under. `takeoverAudio`/
+          // `cancel` cannot hard-cancel an in-flight `deps.play` — the
+          // module assumes `deps.play` is a single-output sink (the real
+          // consumer plays through one shared `<audio>` element, so a new
+          // play supersedes the old one at the DOM level). If a takeover
+          // bumps `epoch` while this play is still resolving, its eventual
+          // completion must be ignored rather than clobber the newer
+          // play's `playing`/state.
+          const playEpoch = epoch;
+          try {
+            await deps.play(blob);
+          } catch {
+            // A rejecting play (autoplay-policy block, decode error,
+            // blob-URL failure) must not kill the pump — skip this
+            // sentence like a null-synth result and move on to the next one.
+          } finally {
+            if (playEpoch === epoch) {
+              playing = false;
+            }
+          }
+        }
+        if (myEpoch !== epoch) break;
       }
-      if (myEpoch !== epoch) break;
+    } finally {
+      // Always release the pump lock on exit, even if something above
+      // throws unexpectedly — otherwise `pumping` would stay stuck `true`
+      // forever and `enqueue`'s `if (!pumping)` guard would never restart
+      // the pump, silently deadlocking the queue for the rest of the session.
+      if (myEpoch === epoch) {
+        pumping = false;
+      }
     }
 
     if (myEpoch === epoch) {
-      pumping = false;
       setState("idle");
       deps.onDrain?.();
     }
@@ -203,6 +227,13 @@ export function createSpeakerQueue(deps: SpeakerDeps): SpeakerQueue {
   }
 
   function takeoverAudio(blob: Blob) {
+    // `stopInternal` bumps `epoch` and aborts in-flight synths, but it
+    // cannot hard-cancel a `deps.play` the pump loop is already awaiting —
+    // this module assumes `deps.play` is a single-output sink (the real
+    // consumer routes through one shared `<audio>` element), so a new play
+    // simply supersedes the old one at the DOM level. The pump's own
+    // epoch-guarded `finally` (see `pump`) ignores that superseded play's
+    // stale completion instead of trying to cancel it.
     stopInternal();
     const myEpoch = epoch;
     playing = true;
