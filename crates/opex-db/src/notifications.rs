@@ -92,6 +92,38 @@ pub async fn count_unread(db: &PgPool) -> Result<i64> {
     Ok(n)
 }
 
+/// List notifications strictly older than the `(created_at, id)` cursor,
+/// newest-first. Returns (rows, `total_unread_count`). Powers history
+/// pagination in the notification bell. Cursor is composite because `id` is a
+/// UUID (not monotonic) — ties on `created_at` are broken by `id`.
+pub async fn list_notifications_before(
+    db: &PgPool,
+    before: chrono::DateTime<chrono::Utc>,
+    before_id: Uuid,
+    limit: i64,
+) -> Result<(Vec<Notification>, i64)> {
+    let rows = sqlx::query_as::<_, Notification>(
+        r"
+        SELECT id, type AS notification_type, title, body, data, read, created_at
+        FROM notifications
+        WHERE (created_at, id) < ($1, $2)
+        ORDER BY created_at DESC, id DESC
+        LIMIT $3
+        ",
+    )
+    .bind(before)
+    .bind(before_id)
+    .bind(limit)
+    .fetch_all(db)
+    .await?;
+
+    let unread: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notifications WHERE read = FALSE")
+        .fetch_one(db)
+        .await?;
+
+    Ok((rows, unread))
+}
+
 /// Mark the `tool_approval` notification for a given approval id as read.
 /// Returns the notification id if an unread row was updated (so the caller can
 /// broadcast a `notification_read` reconciliation event), else None.
@@ -169,6 +201,32 @@ mod tests {
         assert_eq!(count_unread(&pool).await?, 1); // only "other" remains unread
         // idempotent: second call finds nothing to update
         assert_eq!(mark_tool_approval_read_by_approval_id(&pool, "ap-123").await?, None);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn list_notifications_before_paginates_older(pool: PgPool) -> Result<()> {
+        create_notification(&pool, "agent_error", "a", "", serde_json::json!({})).await?;
+        create_notification(&pool, "agent_error", "b", "", serde_json::json!({})).await?;
+        create_notification(&pool, "agent_error", "c", "", serde_json::json!({})).await?;
+
+        // Full newest-first list (a<b<c by created_at, so order is [c, b, a]).
+        let (all, _) = list_notifications(&pool, 10, 0).await?;
+        assert_eq!(all.len(), 3);
+
+        // Cursor = newest row → expect the rest in the SAME order the full list has.
+        let (older, unread) =
+            list_notifications_before(&pool, all[0].created_at, all[0].id, 10).await?;
+        assert_eq!(
+            older.iter().map(|n| n.id).collect::<Vec<_>>(),
+            all[1..].iter().map(|n| n.id).collect::<Vec<_>>(),
+        );
+        assert_eq!(unread, 3);
+
+        // limit is honored: only the first older row.
+        let (one, _) = list_notifications_before(&pool, all[0].created_at, all[0].id, 1).await?;
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].id, all[1].id);
         Ok(())
     }
 }
