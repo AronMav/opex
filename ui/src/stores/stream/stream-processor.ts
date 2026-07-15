@@ -31,11 +31,6 @@ export interface StreamProcessorCallbacks {
   /** Called when a `data-session-id` event arrives. */
   onSessionId: (sid: string) => void;
   /**
-   * Called when the stream ends without a finish event — the caller decides
-   * the reconnect policy (scheduleReconnect in streaming-renderer.ts).
-   */
-  onReconnectNeeded: (sid: string, attempt: number) => void;
-  /**
    * Read current agent state from the store. Injected to avoid circular import
    * (chat-store → streaming-renderer → stream-processor → chat-store).
    */
@@ -81,8 +76,9 @@ export interface StreamProcessorCallbacks {
   /**
    * Fired when the connection drops WITHOUT a terminal signal (batchMode
    * only) — this module does not retry; the caller decides whether/how to
-   * re-open. Distinct from the legacy `onReconnectNeeded`, which owns its
-   * own reconnect-scheduling policy and is unaffected.
+   * re-open (streaming-renderer's `connect` re-opens the same envelope). NOT
+   * fired when the turn ended in error: an `error`/`sync`-error event leaves
+   * connectionPhase="error" and the finally block settles without re-opening.
    */
   onConnectionLost?: () => void;
 }
@@ -109,7 +105,7 @@ export async function processSSEStream(
   body: ReadableStream<Uint8Array>,
   opts: StreamProcessorOpts,
 ): Promise<void> {
-  const { sessionId: knownSessionId, reconnectAttempt, callbacks, batchMode } = opts;
+  const { sessionId: knownSessionId, callbacks, batchMode } = opts;
   const agent = session.agent;
 
   const reader = body.getReader();
@@ -151,25 +147,9 @@ export async function processSSEStream(
       const lines = parseSSELines(chunk, lineBuffer);
 
       for (const line of lines) {
-        // Standard SSE id field — backend emits it for every buffered event.
-        // Stash on the session AND in agent state so reconnect can pass
-        // Last-Event-ID even after StreamSession disposal (Phase 3 offset
-        // tracking).
-        if (line.startsWith("id:")) {
-          const idStr = line.slice(3).trim();
-          const idNum = Number.parseInt(idStr, 10);
-          if (!Number.isNaN(idNum)) {
-            // F054: the backend attaches an `id:` to EVERY buffered event
-            // (incl. every text-delta). Do NOT write the store here — that was
-            // ~1 immer produce per token, defeating the 50ms commit throttle and
-            // making every subscriber selector re-run per token (O(N^2) on long
-            // replies). Keep it on the session only; it is flushed to agent state
-            // once per stream in the finally block below (the reconnect path reads
-            // the store copy).
-            session.lastEventId = idNum;
-          }
-          continue;
-        }
+        // Standard SSE `id:` field — the transport no longer tracks a
+        // Last-Event-ID for resume (removed in T8), so buffered event ids are
+        // ignored here and fall through to the non-data skip below.
         if (!line.startsWith("data:")) continue;
         const raw = line.slice(5).trim();
         if (raw === "[DONE]") continue;
@@ -625,27 +605,17 @@ export async function processSSEStream(
     session.cancelScheduledCommit();
     session.buffer.flushText();
 
-    // F054: flush the last SSE event id to agent state once per stream (not per
-    // event). The store copy is only read on the reconnect/resume path
-    // (streaming-renderer reads agents[agent].lastEventId for the Last-Event-ID
-    // header). Runs before onReconnectNeeded below so the reconnect sees it.
-    if (session.lastEventId !== null) {
-      session.write({ lastEventId: session.lastEventId });
-    }
-
     if (!session.signal.aborted) {
       // Flush any remaining buffer content
       if (session.buffer.snapshot().length > 0) session.commit();
 
       const agentState = callbacks.getAgentState(agent);
       const isError = agentState?.connectionPhase === "error";
-      const isIdle = agentState?.connectionPhase === "idle";
-      const effectiveSessionId = receivedSessionId ?? agentState?.activeSessionId;
 
       if (batchMode) {
-        // T6: the batch-apply transport has no reconnect loop inside this
-        // module — the caller (chat-stream.ts's openTurnStream, wired by T7)
-        // owns re-open policy. Decide only whether the turn is
+        // The batch-apply transport has no reconnect loop inside this module —
+        // the caller (chat-stream.ts's openTurnStream → streaming-renderer's
+        // `connect`) owns re-open policy. Decide only whether the turn is
         // authoritatively over (explicit `finish`, or a `sync_begin` whose
         // runStatus was already terminal) vs. a connection drop mid-turn.
         // This is a lifecycle signal only — NOT a substitute for the
@@ -653,25 +623,27 @@ export async function processSSEStream(
         // `error`/`sync` events above regardless of batchMode.
         const isTerminalRunStatus =
           lastRunStatus === "finished" || lastRunStatus === "error" || lastRunStatus === "interrupted";
-        if (!receivedFinishEvent && !isTerminalRunStatus) {
+        if (isError) {
+          // Turn ended in error (replayed `error`/`sync`-error event) — this is
+          // NOT a connection drop. Leave connectionPhase="error"; do not
+          // re-open (onConnectionLost) or fire onFinished (which would idle the
+          // phase). Fall through to the finishing→history settle below.
+        } else if (!receivedFinishEvent && !isTerminalRunStatus) {
           callbacks.onConnectionLost?.();
           return;
+        } else {
+          callbacks.onFinished?.();
         }
-        callbacks.onFinished?.();
-      } else if (!isError && !isIdle && !receivedFinishEvent && effectiveSessionId) {
-        // SSE connection dropped before finish — LLM retry may have been in progress.
-        // Reset the flag now; scheduleReconnect will re-set it only if a __reconnecting__
-        // chunk arrives on the next SSE connection.
-        session.write({ isLlmReconnecting: false });
-        callbacks.onReconnectNeeded(effectiveSessionId, reconnectAttempt);
-        return;
       }
+      // Non-batchMode (legacy startStream) drop without finish no longer
+      // reconnects (T8): control falls through to the settle below, which lands
+      // connectionPhase="idle" and the finishing→history handoff.
 
       if (!isError) {
         // T7: "complete" folded into "idle". The finishing→history dance below
         // keeps the assistant visible during the refetch window (frozen live
         // overlay), so no distinct transient phase is needed.
-        session.write({ connectionPhase: "idle", connectionError: null, reconnectAttempt: 0, isLlmReconnecting: false });
+        session.write({ connectionPhase: "idle", connectionError: null, isLlmReconnecting: false });
       }
       callbacks.onStreamDone?.();
     } else {

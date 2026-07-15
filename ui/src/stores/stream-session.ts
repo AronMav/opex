@@ -10,15 +10,6 @@ export class StreamSession {
   readonly generation: number;
   readonly buffer: StreamBuffer;
 
-  /**
-   * Highest SSE event seq number processed so far. Set by stream-processor
-   * from the standard `id:` field of every buffered event. Used as
-   * `Last-Event-ID` header on reconnect/resume so the backend replays only
-   * events the client hasn't seen — eliminates duplicate processing under
-   * the dedup contract (Phase 3 offset tracking).
-   */
-  lastEventId: number | null = null;
-
   #controller: AbortController;
   #disposed = false;
   #updateTimer: ReturnType<typeof setTimeout> | null = null;

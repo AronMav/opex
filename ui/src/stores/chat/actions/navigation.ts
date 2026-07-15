@@ -162,9 +162,6 @@ export function createNavigationActions(deps: ActionDeps) {
         cacheReadTokens: null,
         cacheCreationTokens: null,
         reasoningTokens: null,
-        // Different session = different SSE seq counter on backend. Reset
-        // so the next resume request doesn't send a stale Last-Event-ID.
-        lastEventId: null,
       });
       saveLastSession(agent, sessionId);
     },
@@ -236,6 +233,21 @@ export function createNavigationActions(deps: ActionDeps) {
       if (shouldResume) {
         get().resumeStream(agent, sessionId);
       }
+    },
+
+    finalizeHandoff: (agent: string, sessionId: string) => {
+      const st = get().agents[agent];
+      if (!st) return;
+      // Only act while a finished turn is still shown as a frozen live/finishing
+      // overlay. If the phase is still active, or we already switched to
+      // history, this is a no-op (idempotent — the ChatThread effect may fire
+      // more than once as the query cache settles).
+      if (isActivePhase(st.connectionPhase)) return;
+      if (st.messageSource.mode !== "live" && st.messageSource.mode !== "finishing") return;
+      update(agent, {
+        messageSource: { mode: "history", sessionId },
+        boundaryMessageId: null,
+      });
     },
 
     markSessionInactive: (agent: string, sessionId: string) => {

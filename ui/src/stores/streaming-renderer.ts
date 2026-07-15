@@ -2,10 +2,8 @@
 // Factory module encapsulating SSE stream processing, rAF throttling,
 // reconnection logic, and per-agent cleanup (MEM-01, PERF-02).
 
-import { scheduleReconnect } from "./stream/stream-reconnect";
 import { processSSEStream } from "./stream/stream-processor";
 import { startTurn, openTurnStream } from "./stream/chat-stream";
-import { MAX_RECONNECT_ATTEMPTS } from "./chat-types";
 import { apiPatch, apiPost, assertToken } from "@/lib/api";
 import { queryClient } from "@/lib/query-client";
 import { qk } from "@/lib/queries";
@@ -23,7 +21,6 @@ import type {
 } from "./chat-types";
 import { getCachedRawMessages, resolveActivePath } from "./chat-history";
 import { streamSessionManager } from "./stream-session";
-import type { StreamSession } from "./stream-session";
 
 // ── Store access interface ─────────────────────────────────────────────────
 // Typed against the ChatStore shape (type-only import — erased at runtime, so
@@ -33,37 +30,30 @@ export interface StoreAccess {
   get: () => ChatStore;
   set: (fn: (draft: ChatStore) => void) => void;
 }
-// ── Reconnect constants (SSE-02) ─────────────────────────────────────────────
-const RECONNECT_DELAY_BASE_MS = 1000;
 
 // ── Factory ────────────────────────────────────────────────────────────────
 
 export function createStreamingRenderer(store: StoreAccess) {
   // ── CLN-02: Encapsulated non-serializable state ──────────────────────────
-  // setTimeout handles are not plain objects -- Immer cannot proxy or freeze them.
-  // They live in private Maps inside the factory closure.
-  // AbortController now lives inside StreamSession.signal (Task 3.6).
+  // AbortController lives inside StreamSession.signal (Task 3.6). The transport
+  // reconnect timers were removed in T8 — a dropped stream is re-opened only via
+  // the single `connect` path (staleness-gated on visibility change).
 
-  const _reconnectTimers = new Map<string, ReturnType<typeof setTimeout> | null>();
   // Set by dispose(): stops the visibilitychange handler and blocks any new
   // debounce timers from being scheduled after teardown.
   let _disposed = false;
 
-  function getReconnectTimer(agent: string): ReturnType<typeof setTimeout> | null {
-    return _reconnectTimers.get(agent) ?? null;
-  }
-  function setReconnectTimer(agent: string, timer: ReturnType<typeof setTimeout> | null): void {
-    _reconnectTimers.set(agent, timer);
-  }
-
-  // Fix #6: Track the last time we saw any SSE traffic per agent. Browsers
-  // (especially Chrome) throttle / suspend SSE sockets on hidden tabs;
-  // when the tab returns we may have a half-open connection where the
-  // reader.read() is parked and no events are coming. The visibilitychange
-  // listener below forces a reconnect for any agent whose stream has been
-  // silent for more than VISIBILITY_STALE_MS while in an active phase.
+  // Track the last time we saw any SSE traffic per agent. Browsers (especially
+  // Chrome) throttle / suspend SSE sockets on hidden tabs; when the tab returns
+  // we may have a half-open connection where reader.read() is parked and no
+  // events are coming. The visibilitychange listener below re-opens (via
+  // `connect`) any agent whose stream has been silent for more than
+  // VISIBILITY_STALE_MS while in an active phase.
   const _lastEventTime = new Map<string, number>();
-  const VISIBILITY_STALE_MS = 30_000;
+  // T8: tightened from 30_000 → 15_000. The single connect path returns an
+  // empty envelope cheaply when there is no in-flight turn, so a shorter
+  // staleness window recovers a suspended socket faster with negligible cost.
+  const VISIBILITY_STALE_MS = 15_000;
 
   function recordEventActivity(agent: string): void {
     _lastEventTime.set(agent, Date.now());
@@ -92,175 +82,7 @@ export function createStreamingRenderer(store: StoreAccess) {
     }, 500);
   }
 
-  /**
-   * Returns true when RQ cache says the session is no longer running. The
-   * backend can close SSE without sending a `finish` event on some exit paths
-   * (subagent timeout, dropped tool result, finalize bypass) and still mark
-   * the session row as `done` in DB. The frontend would otherwise loop trying
-   * to resume — checking the cached status short-circuits that loop.
-   */
-  function isSessionFinishedInCache(agent: string, sessionId: string): boolean {
-    const cached = queryClient.getQueryData<{ sessions: { id: string; run_status?: string }[] }>(qk.sessions(agent));
-    const status = cached?.sessions?.find((s) => s.id === sessionId)?.run_status;
-    return !!status && status !== "running";
-  }
-
-  /** Switch to history mode for a session that the backend has finalized. */
-  function settleAsFinished(session: StreamSession, agent: string, sessionId: string) {
-    session.write({
-      connectionPhase: "idle",
-      messageSource: { mode: "history", sessionId },
-      isLlmReconnecting: false,
-      reconnectAttempt: 0,
-      streamError: null,
-    });
-    queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
-    queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sessionId) });
-  }
-
   // ── Stream lifecycle ────────────────────────────────────────────────────
-
-  /**
-   * Resume an active backend stream after page reload.
-   * Connects to GET /api/chat/{sessionId}/stream and processes replay + live events.
-   */
-  function resumeStream(agent: string, sessionId: string, reconnectAttempt = 0) {
-    // Don't resume if already streaming (but allow reconnect path even in "reconnecting" phase)
-    const st = store.get().agents[agent];
-    if (st && st.connectionPhase === "streaming") return;
-
-    // Clear any existing reconnect timer before starting a new stream
-    const existingTimer = getReconnectTimer(agent);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
-      setReconnectTimer(agent, null);
-    }
-    // Local-only cleanup: DO NOT POST /abort here. The previous stream on
-    // the same session id may have already ended, and if we POST /abort
-    // during startup, the backend cancels the stream we are about to start
-    // (same session id → same cancel token).
-
-    // Local-only cleanup of the previous fetch controller. Removed in Task 3.6
-    // together with the legacy _abortControllers / _reconnectTimers maps.
-    abortLocalOnly(agent);
-
-    // Create a new StreamSession after abortLocalOnly's generation bump.
-    // streamSessionManager.start() disposes the previous session (bumping
-    // generation once) and creates a new session whose .generation is the
-    // current store value — used as the authoritative generation reference
-    // inside processSSEStream.
-    const session = streamSessionManager.start(agent);
-
-    // Architecture C: live messages = overlay only (current streaming message).
-    // History comes from React Query. No seed needed.
-    //
-    // Use "submitted" (not "streaming") to mark the request as in-flight
-    // before any SSE bytes have arrived. processSSEStream upgrades the phase
-    // to "streaming" on the first data byte; if the server returns 204 (no
-    // events) we transition submitted → idle directly. Setting "streaming"
-    // here would lie about the wire state and break downstream consumers
-    // (e.g. the bootstrap auto-resume effect in ChatThread) that distinguish
-    // "request sent, waiting for first byte" from "actively streaming".
-    update(agent, {
-      streamError: null,
-      connectionPhase: "submitted",
-      connectionError: null,
-      messageSource: { mode: "live" as const, messages: [] },
-    });
-
-    // Seed _lastEventTime so visibilitychange recovery does not force-reconnect
-    // a freshly-submitted stream during the first-event window.
-    recordEventActivity(agent);
-
-    const token = assertToken();
-
-    // Pass Last-Event-ID so backend replays only events newer than the last
-    // one the client processed (Phase 3 offset tracking). Carries across the
-    // session disposal-and-recreate that resumeStream does, because the
-    // *previous* session's id was preserved into agent state on prior runs;
-    // we read that via store. New stream → no header, full replay.
-    const lastEventHeader: Record<string, string> = {};
-    const prevId = store.get().agents[agent]?.lastEventId;
-    if (typeof prevId === "number" && prevId > 0) {
-      lastEventHeader["Last-Event-ID"] = String(prevId);
-    }
-
-    fetch(`/api/chat/${sessionId}/stream?agent=${encodeURIComponent(agent)}`, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${token}`, ...lastEventHeader },
-      signal: session.signal,
-    })
-      .then((resp) => {
-        if (resp.status === 204) {
-          // No active stream -- engine already finished. Switch to history and refetch.
-          // Guard: if abort fired or a newer stream started during the
-          // fetch, discard this response. Without the guard a late 204
-          // would force messageSource back to the resumed session
-          // after the user had already navigated away.
-          if (!session.isCurrent || session.signal.aborted) {
-            return;
-          }
-          session.write({ connectionPhase: "idle", messageSource: { mode: "history", sessionId } });
-          queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
-          queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sessionId) });
-          return;
-        }
-        if (resp.status === 401) {
-          import("@/lib/api").then(({ handleUnauthorized }) => handleUnauthorized());
-          return;
-        }
-        if (!resp.ok) {
-          return resp.text().then((t) => { throw new Error(t || `HTTP ${resp.status}`); });
-        }
-        return processSSEStream(session, resp.body!, {
-          sessionId,
-          reconnectAttempt,
-          callbacks: {
-            onSessionId: (sid) => { _onSessionId?.(agent, sid); },
-            onReconnectNeeded: (sid, attempt) => {
-              if (isSessionFinishedInCache(agent, sid)) {
-                settleAsFinished(session, agent, sid);
-                return;
-              }
-              scheduleReconnect(session, sid, attempt, {
-                resume: (nextAttempt) => resumeStream(agent, sid, nextAttempt),
-                maxAttempts: MAX_RECONNECT_ATTEMPTS,
-                baseDelayMs: RECONNECT_DELAY_BASE_MS,
-                setTimer: (handle) => setReconnectTimer(agent, handle),
-                onMaxAttemptsReached: () => settleAsFinished(session, agent, sid),
-              });
-            },
-            getAgentState: (a) => store.get().agents[a],
-            updateSessionParticipants: (sid, participants) => store.get().updateSessionParticipants(sid, participants),
-            onStreamDone: () => saveUiState(agent),
-            onEventActivity: () => recordEventActivity(agent),
-          },
-        });
-      })
-      .catch((err) => {
-        if (err.name === "AbortError") return;
-        // Guard: if a newer stream started, don't schedule reconnect for the old one
-        if (!session.isCurrent) return;
-        // Network error during reconnect -- schedule next retry
-        scheduleReconnect(session, sessionId, reconnectAttempt, {
-          resume: (nextAttempt) => resumeStream(agent, sessionId, nextAttempt),
-          maxAttempts: MAX_RECONNECT_ATTEMPTS,
-          baseDelayMs: RECONNECT_DELAY_BASE_MS,
-          setTimer: (handle) => setReconnectTimer(agent, handle),
-          onMaxAttemptsReached: () => {
-            session.write({
-              connectionPhase: "idle",
-              messageSource: { mode: "history", sessionId },
-              isLlmReconnecting: false,
-              reconnectAttempt: 0,
-              streamError: null,
-            });
-            queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
-            queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sessionId) });
-          },
-        });
-      });
-  }
 
   /** Internal: local abort only (no backend notification). Used by
    * startStream to clean up lingering fetch controllers before launching
@@ -268,15 +90,9 @@ export function createStreamingRenderer(store: StoreAccess) {
    * the new stream's registration on the same session id and cancel it
    * prematurely.
    *
-   * Fix #1 / #2: the pending reconnect timer is cleared FIRST so a
-   * setTimeout that just elapsed cannot race the abort and re-enter
-   * resumeStream against the (now-stale) generation. cleanupAgent()
-   * delegates to this same path during agent switch, so per-agent
-   * reconnect timers are also dropped when the user switches agent.
+   * cleanupAgent() delegates to this same path during agent switch.
    */
   function abortLocalOnly(agent: string) {
-    const timer = getReconnectTimer(agent);
-    if (timer) { clearTimeout(timer); setReconnectTimer(agent, null); }
     streamSessionManager.disposeCurrent(agent);
     // `dispose()` lands the final `connectionPhase: "idle"` write and
     // bumps `streamGeneration` atomically. No direct store mutation
@@ -293,7 +109,6 @@ export function createStreamingRenderer(store: StoreAccess) {
         if (!a) return;
         a.connectionPhase = "idle";
         a.connectionError = null;
-        a.reconnectAttempt = 0;
         a.isLlmReconnecting = false;
       });
     }
@@ -332,7 +147,7 @@ export function createStreamingRenderer(store: StoreAccess) {
   // Reconnect policy is in stream/stream-reconnect.ts (SSE-02).
 
   function startStream(agent: string, sessionId: string | null, messages: ChatMessage[], userText: string, attachments?: Array<MessageAttachment>, userMessageId?: string) {
-    // Local-only cleanup for the same reason documented in resumeStream.
+    // Local-only cleanup for the same reason documented in connect.
     abortLocalOnly(agent);
 
     // Create a new StreamSession after abortLocalOnly's generation bump.
@@ -341,12 +156,6 @@ export function createStreamingRenderer(store: StoreAccess) {
     // current store value — used as the authoritative generation reference
     // inside processSSEStream.
     const session = streamSessionManager.start(agent);
-
-    // Reset Last-Event-ID — backend's seq counter is per-session and starts
-    // at 1 for any new session_id. Without this, a leftover id from the
-    // previous session would tell the backend to skip every event of the
-    // new session (seq <= stale_last_id) and the UI would freeze empty.
-    session.write({ lastEventId: null });
 
     const userParts: MessagePart[] = [];
     if (userText) userParts.push({ type: "text", text: userText });
@@ -397,7 +206,6 @@ export function createStreamingRenderer(store: StoreAccess) {
       connectionPhase: "submitted",
       connectionError: null,
       turnLimitMessage: null,
-      reconnectAttempt: 0,
       isLlmReconnecting: false,
     });
     // Seed _lastEventTime so visibilitychange recovery does not force-reconnect
@@ -469,19 +277,6 @@ export function createStreamingRenderer(store: StoreAccess) {
           reconnectAttempt: 0,
           callbacks: {
             onSessionId: (sid) => { _onSessionId?.(agent, sid); },
-            onReconnectNeeded: (sid, attempt) => {
-              if (isSessionFinishedInCache(agent, sid)) {
-                settleAsFinished(session, agent, sid);
-                return;
-              }
-              scheduleReconnect(session, sid, attempt, {
-                resume: (nextAttempt) => resumeStream(agent, sid, nextAttempt),
-                maxAttempts: MAX_RECONNECT_ATTEMPTS,
-                baseDelayMs: RECONNECT_DELAY_BASE_MS,
-                setTimer: (handle) => setReconnectTimer(agent, handle),
-                onMaxAttemptsReached: () => settleAsFinished(session, agent, sid),
-              });
-            },
             getAgentState: (a) => store.get().agents[a],
             updateSessionParticipants: (sid, participants) => store.get().updateSessionParticipants(sid, participants),
             onStreamDone: () => saveUiState(agent),
@@ -512,11 +307,12 @@ export function createStreamingRenderer(store: StoreAccess) {
       });
   }
 
-  // ── Server-authoritative single connect path (T7) ────────────────────────
+  // ── Server-authoritative single connect path (T7/T8) ─────────────────────
   // `connect` is the ONE place the client opens a turn stream — used after a
-  // POST (sendTurn), on mount/refresh (resumeStream action), and after a drop
-  // (onConnectionLost). It wraps the T6 transport (openTurnStream) and maps the
-  // envelope callbacks onto agent-state phase transitions.
+  // POST (sendTurn), on mount/refresh (resumeStream action → connect), on a
+  // stale-tab visibility change, and after a drop (onConnectionLost). It wraps
+  // the T6 transport (openTurnStream) and maps the envelope callbacks onto
+  // agent-state phase transitions.
 
   /**
    * Open the GET envelope stream for an already-started turn. Sets an active
@@ -527,12 +323,10 @@ export function createStreamingRenderer(store: StoreAccess) {
    */
   function connect(agent: string, sessionId: string) {
     // Dispose the previous session (generation bump) before creating a new one,
-    // mirroring startStream/resumeStream. abortLocalOnly is local-only — it
-    // never POSTs /abort, so re-opening the same session id can't cancel it.
+    // mirroring startStream. abortLocalOnly is local-only — it never POSTs
+    // /abort, so re-opening the same session id can't cancel it.
     abortLocalOnly(agent);
     const session = streamSessionManager.start(agent);
-    // New stream → backend seq restarts; drop any stale Last-Event-ID.
-    session.write({ lastEventId: null });
     // Synchronous active phase (before first byte). Does NOT touch messageSource:
     // the send path's optimistic user echo (sendTurn) must survive, and the
     // resume path lets the replayed envelope establish live mode itself.
@@ -540,7 +334,6 @@ export function createStreamingRenderer(store: StoreAccess) {
       connectionPhase: "submitted",
       streamError: null,
       connectionError: null,
-      reconnectAttempt: 0,
       isLlmReconnecting: false,
     });
     recordEventActivity(agent);
@@ -550,18 +343,21 @@ export function createStreamingRenderer(store: StoreAccess) {
       onEnvelopeApplied: () => update(agent, { connectionPhase: "streaming" }),
       onFinished: () => {
         // Turn is authoritatively over. Do NOT clear live messages here — the
-        // id-based live→history handoff lands in T8, and the voice falling-edge
-        // flush (ChatComposer) reads the last assistant on the render where the
-        // phase flips out of an active state. stream-processor's own
-        // finishing→history dance keeps the overlay frozen until RQ refetch.
+        // id-based live→history handoff (T8) is driven by an effect in
+        // ChatThread that watches the refetched sessionMessages and, once the
+        // turn's fresh rows are present, sets boundaryMessageId=null + drops the
+        // live overlay to history. Until then the frozen overlay stays visible,
+        // and the voice falling-edge flush (ChatComposer) reads the last
+        // assistant on the render where the phase flips out of an active state.
         update(agent, { connectionPhase: "idle" });
         queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
         queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sessionId) });
       },
       onConnectionLost: () => {
-        // Stay "submitted" (still an active phase) and re-open immediately. T8
-        // will gate this with staleness / visibility so a permanently dead
-        // stream can't spin.
+        // Stay "submitted" (still an active phase) and re-open immediately. The
+        // visibility/staleness gate below keeps a permanently-dead stream from
+        // spinning while the tab is hidden; a genuine mid-turn network drop is
+        // resumed by re-opening the same session's envelope.
         update(agent, { connectionPhase: "submitted" });
         connect(agent, sessionId);
       },
@@ -618,7 +414,6 @@ export function createStreamingRenderer(store: StoreAccess) {
       connectionPhase: "submitted",
       connectionError: null,
       turnLimitMessage: null,
-      reconnectAttempt: 0,
       isLlmReconnecting: false,
       boundaryMessageId: null,
     });
@@ -683,12 +478,12 @@ export function createStreamingRenderer(store: StoreAccess) {
   // ── Callback for saveLastSession (avoids circular import) ─────────────
   let _onSessionId: ((agent: string, sessionId: string) => void) | null = null;
 
-  // ── Fix #6: visibilitychange recovery ─────────────────────────────────
+  // ── Visibilitychange recovery ─────────────────────────────────────────
   // Browsers may suspend an SSE socket on a hidden tab; when the tab returns
   // we may have a half-open connection where `reader.read()` is parked and
   // no events are flowing. On visibility=visible we walk every agent that
-  // believes it is in an active phase and force a soft reconnect when its
-  // last observed SSE event is older than VISIBILITY_STALE_MS.
+  // believes it is in an active phase and re-open (via the single `connect`
+  // path) when its last observed SSE event is older than VISIBILITY_STALE_MS.
   function handleVisibilityChange() {
     if (_disposed) return;
     if (typeof document === "undefined") return;
@@ -703,18 +498,16 @@ export function createStreamingRenderer(store: StoreAccess) {
       const sid = st.activeSessionId;
       if (!sid) continue;
       const last = _lastEventTime.get(agent) ?? 0;
-      // If we never recorded activity OR the gap exceeds the threshold,
-      // the socket is almost certainly dead — abort and resume.
+      // If we never recorded activity OR the gap exceeds the threshold, the
+      // socket is almost certainly dead — re-open. connect() disposes the prior
+      // session itself (generation bump keeps the stale-write guard), never
+      // POSTs /abort (tab focus must not cancel the backend turn), and replays
+      // the envelope (or an empty finished envelope if the turn already ended).
       if (last !== 0 && now - last < VISIBILITY_STALE_MS) continue;
       try {
-        // Local-only (no /abort POST): tab focus shouldn't tell the
-        // backend to cancel. resumeStream re-attaches to the live stream
-        // (or 204 + history if it has already finished).
-        abortLocalOnly(agent);
-        resumeStream(agent, sid);
+        connect(agent, sid);
       } catch (e) {
         if (process.env.NODE_ENV !== "production") {
-          // eslint-disable-next-line no-console
           console.warn("[streaming-renderer] visibilitychange recovery failed", e);
         }
       }
@@ -735,9 +528,6 @@ export function createStreamingRenderer(store: StoreAccess) {
   function cleanupAgent(agent: string) {
     // H3: dispose StreamSession to free AbortController + rAF handles
     streamSessionManager.disposeCurrent(agent);
-    const timer = _reconnectTimers.get(agent);
-    if (timer) clearTimeout(timer);
-    _reconnectTimers.delete(agent);
     _lastEventTime.delete(agent);
     // Clean up debounce timers
     clearTimeout(uiStateSaveTimers[agent]);
@@ -747,10 +537,10 @@ export function createStreamingRenderer(store: StoreAccess) {
   /**
    * Full teardown of the renderer: removes the document visibilitychange
    * listener (the one process-wide side effect) and clears every pending
-   * debounce/reconnect timer. Idempotent. After dispose, the visibility
-   * handler and the debounced UI-state saver are inert. The live store owns
-   * one renderer for the page lifetime, so this is mainly for HMR / tests /
-   * any future re-instantiation, none of which should leak a stale listener.
+   * debounce timer. Idempotent. After dispose, the visibility handler and the
+   * debounced UI-state saver are inert. The live store owns one renderer for
+   * the page lifetime, so this is mainly for HMR / tests / any future
+   * re-instantiation, none of which should leak a stale listener.
    */
   function dispose() {
     if (_disposed) return;
@@ -761,8 +551,6 @@ export function createStreamingRenderer(store: StoreAccess) {
     _visibilityListenerAttached = false;
     for (const t of Object.values(uiStateSaveTimers)) clearTimeout(t);
     for (const k of Object.keys(uiStateSaveTimers)) delete uiStateSaveTimers[k];
-    for (const t of _reconnectTimers.values()) if (t) clearTimeout(t);
-    _reconnectTimers.clear();
     _lastEventTime.clear();
   }
 
@@ -772,13 +560,10 @@ export function createStreamingRenderer(store: StoreAccess) {
     startStream,
     sendTurn,
     connect,
-    resumeStream,
     abortActiveStream,
     abortLocalOnly,
     cleanupAgent,
     dispose,
-    getReconnectTimer,
-    setReconnectTimer,
     /** Register callback for session ID events (called with agent, sessionId). */
     onSessionId(cb: (agent: string, sessionId: string) => void) {
       _onSessionId = cb;

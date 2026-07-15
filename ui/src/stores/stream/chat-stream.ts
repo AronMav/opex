@@ -89,7 +89,6 @@ export function openTurnStream(
           // of the chat-store → streaming-renderer → stream-processor cycle
           // that forced dependency-injection on the legacy path.
           onSessionId: () => {},
-          onReconnectNeeded: () => {},
           getAgentState: (a: string): AgentState | undefined => useChatStore.getState().agents[a],
           updateSessionParticipants: (sid: string, participants: string[]) =>
             useChatStore.getState().updateSessionParticipants(sid, participants),

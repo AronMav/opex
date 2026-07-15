@@ -24,7 +24,6 @@ function makeStream(frames: string[]): ReadableStream<Uint8Array> {
 function makeCallbacks(overrides: Partial<Parameters<typeof processSSEStream>[2]["callbacks"]> = {}) {
   return {
     onSessionId: vi.fn(),
-    onReconnectNeeded: vi.fn(),
     getAgentState: (agent: string) => useChatStore.getState().agents[agent],
     updateSessionParticipants: vi.fn(),
     onStreamDone: vi.fn(),
@@ -71,7 +70,10 @@ describe("processSSEStream", () => {
     expect(callbacks.onSessionId).toHaveBeenCalledWith("s1");
   });
 
-  it("signals reconnect-needed when stream ends without finish event", async () => {
+  it("settles to idle (no reconnect) when a legacy stream ends without finish (T8)", async () => {
+    // T8 removed the transport reconnect loop. The non-batchMode path now
+    // settles a drop-without-finish to a non-active phase instead of scheduling
+    // a reconnect.
     const session = streamSessionManager.start("Arty");
     const callbacks = makeCallbacks();
     const frames = [
@@ -84,10 +86,12 @@ describe("processSSEStream", () => {
       reconnectAttempt: 0,
       callbacks,
     });
-    expect(callbacks.onReconnectNeeded).toHaveBeenCalled();
+    const phase = useChatStore.getState().agents.Arty.connectionPhase;
+    expect(phase).not.toBe("streaming");
+    expect(phase).not.toBe("submitted");
   });
 
-  it("does not call onReconnectNeeded when stream ends with finish event", async () => {
+  it("settles cleanly when the stream ends with a finish event", async () => {
     const session = streamSessionManager.start("Arty");
     const callbacks = makeCallbacks();
     const frames = [
@@ -102,7 +106,7 @@ describe("processSSEStream", () => {
       reconnectAttempt: 0,
       callbacks,
     });
-    expect(callbacks.onReconnectNeeded).not.toHaveBeenCalled();
+    expect(useChatStore.getState().agents.Arty.connectionPhase).toBe("idle");
   });
 
   it("BUG-A: reasoning parts survive a subsequent tool call", async () => {

@@ -18,7 +18,6 @@ export const SESSIONS_PAGE_SIZE = 40;
 export const MESSAGES_HISTORY_LIMIT = 100;
 export const MAX_INPUT_LENGTH = 32_000;
 export const STREAM_THROTTLE_MS = 50;
-export const MAX_RECONNECT_ATTEMPTS = 6;
 
 // ── Composer attachment (structural — ChatComposer's AttachmentEntry satisfies it) ─
 
@@ -126,9 +125,9 @@ export interface ChatMessage {
   id: string;
   /**
    * IDs of additional DB rows merged into this bubble (intermediate
-   * iterations of the same tool-loop turn). Used by mergeLiveOverlay so that
-   * a live ChatMessage whose id matches any merged id is correctly recognised
-   * as already represented in history. Empty/absent for non-merged messages.
+   * iterations of the same tool-loop turn) — a provenance record of the rows
+   * folded into one visual assistant bubble by convertHistory. Empty/absent
+   * for non-merged messages.
    */
   mergedIds?: string[];
   role: "user" | "assistant";
@@ -229,19 +228,12 @@ export interface AgentState {
   turnLimitMessage: string | null;
   /** Per-agent stream generation counter (CLN-02 HIST-03) — detects stale SSE deltas. */
   streamGeneration: number;
-  /** NET-02: Current reconnect attempt count (0 when not reconnecting). */
-  reconnectAttempt: number;
-  /** NET-02: Max reconnect attempts (exposed for UI indicator). */
-  maxReconnectAttempts: number;
-  /** True while the LLM deadline retry loop is backing off before next attempt. */
-  isLlmReconnecting: boolean;
   /**
-   * Highest SSE event seq number processed for the active stream. Persisted
-   * to agent state so it survives StreamSession disposal during reconnect.
-   * Sent as `Last-Event-ID` header on resume — backend skips events the
-   * client already saw. Null when no stream has run yet for this agent.
+   * True while the LLM deadline retry loop is backing off before the next
+   * attempt. Driven ONLY by the server's `reconnecting` SSE event (LLM-level
+   * provider retry) — NOT the transport layer, which no longer reconnects (T8).
    */
-  lastEventId: number | null;
+  isLlmReconnecting: boolean;
   /** Branch selection state: parentMessageId -> selectedChildId. */
   selectedBranches: Record<string, string>;
   /**
@@ -321,6 +313,13 @@ export interface ChatStore {
   forkAndRegenerate: (messageId: string, newContent: string) => void;
 
   resumeStream: (agent: string, sessionId: string) => void;
+  /**
+   * T8 id-based live→history handoff. Called from ChatThread once the finished
+   * turn's fresh rows land in the refetched sessionMessages cache: drops the
+   * frozen live overlay to history mode and clears boundaryMessageId. No-ops
+   * unless a finished turn is still shown as a live/finishing overlay.
+   */
+  finalizeHandoff: (agent: string, sessionId: string) => void;
   setThinking: (agent: string, sessionId: string | null) => void;
   setThinkingLevel: (level: number) => void;
   markSessionActive: (agent: string, sessionId: string) => void;
@@ -356,10 +355,7 @@ export function emptyAgentState(): AgentState {
     modelOverride: null,
     turnLimitMessage: null,
     streamGeneration: 0,
-    reconnectAttempt: 0,
-    maxReconnectAttempts: MAX_RECONNECT_ATTEMPTS,
     isLlmReconnecting: false,
-    lastEventId: null,
     selectedBranches: {},
     pendingMessage: null,
     voiceTurnPending: false,

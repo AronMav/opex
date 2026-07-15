@@ -5,18 +5,21 @@ import { cn } from "@/lib/utils";
 import { useTranslation } from "@/hooks/use-translation";
 
 interface ReconnectingIndicatorProps {
-  attempt: number;
-  maxAttempts: number;
   className?: string;
 }
 
-export function ReconnectingIndicator({ attempt, maxAttempts, className }: ReconnectingIndicatorProps) {
+/**
+ * LLM-level provider-retry indicator. Shown while `isLlmReconnecting` is set by
+ * the server's `reconnecting` SSE event. T8 removed the transport-level attempt
+ * counters, so this is a plain "Reconnecting…" affordance with no numeric count.
+ */
+export function ReconnectingIndicator({ className }: ReconnectingIndicatorProps) {
   const { t } = useTranslation();
   return (
     <div
       role="status"
       aria-live="polite"
-      aria-label={t("chat.reconnecting_aria", { attempt, max: maxAttempts })}
+      aria-label={t("chat.reconnecting")}
       className={cn(
         "mx-auto flex max-w-fit items-center gap-2 rounded-lg border border-primary/30 bg-muted/30 px-3 py-2",
         className,
@@ -30,9 +33,6 @@ export function ReconnectingIndicator({ attempt, maxAttempts, className }: Recon
           <span className="animate-[loading-dots_1.4s_infinite_0.4s]">.</span>
           <span className="animate-[loading-dots_1.4s_infinite_0.6s]">.</span>
         </span>
-      </span>
-      <span className="text-xs text-muted-foreground">
-        ({t("chat.reconnecting_attempt_word")} <span className="text-foreground">{attempt}</span>/{maxAttempts})
       </span>
     </div>
   );

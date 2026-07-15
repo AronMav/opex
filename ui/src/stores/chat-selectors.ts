@@ -18,9 +18,8 @@ import type {
   ChatState,
   ChatStore,
 } from "./chat-types";
-import { getCachedHistoryMessages } from "./chat-history";
+import { getCachedHistoryMessages, historyUpToIncluding } from "./chat-history";
 import { getLiveMessages } from "./chat-types";
-import { mergeLiveOverlay } from "./chat-overlay-dedup";
 
 // Re-export so consumers don't need a second import site.
 export { useShallow };
@@ -124,11 +123,19 @@ export function selectLiveHasContent(state: ChatState, agent: string): boolean {
  * three-way `messageSource` tag into a single array:
  *  - "new-chat"  → []
  *  - "history"   → cached history messages, resolved against selectedBranches
- *  - "live"      → history merged with live overlay (optimistic + in-flight)
+ *  - "live" / "finishing" → boundary-filtered history + live turn messages
  *
- * Reads `messageSource`, `selectedBranches`, and (for history mode)
- * the React Query cache via getCachedHistoryMessages from the passed
- * state — no separate hook subscription needed in consumers.
+ * Server-authoritative render (T8): for the live/finishing modes the array is
+ *   [...historyUpToIncluding(history, boundaryMessageId), ...liveTurnMessages]
+ * with NO content dedup. The boundary (reported by the server on `sync_begin`)
+ * marks the last persisted message before the turn, so history contributes
+ * everything up to it and the live overlay contributes the turn itself. When
+ * the boundary is null/absent the full history is used (safe — see
+ * historyUpToIncluding).
+ *
+ * Reads `messageSource`, `selectedBranches`, `boundaryMessageId`, and (for
+ * history mode) the React Query cache via getCachedHistoryMessages from the
+ * passed state — no separate hook subscription needed in consumers.
  */
 export function selectRenderMessages(state: ChatState, agent: string): ChatMessage[] {
   const st = state.agents[agent];
@@ -139,15 +146,14 @@ export function selectRenderMessages(state: ChatState, agent: string): ChatMessa
     return getCachedHistoryMessages(src.sessionId, st.selectedBranches);
   }
   if (src.mode === "finishing") {
-    // Frozen live messages remain visible while React Query refetches history.
-    // Merge with whatever history is already cached so existing messages are shown.
+    // Frozen live turn stays visible while React Query refetches history.
     const history = getCachedHistoryMessages(src.sessionId, st.selectedBranches);
-    return mergeLiveOverlay(history, src.messages);
+    return [...historyUpToIncluding(history, st.boundaryMessageId), ...src.messages];
   }
   // live mode
   const histSessionId = st.activeSessionId;
   const history = histSessionId ? getCachedHistoryMessages(histSessionId, st.selectedBranches) : [];
-  return mergeLiveOverlay(history, src.messages);
+  return [...historyUpToIncluding(history, st.boundaryMessageId), ...src.messages];
 }
 
 const EMPTY_LIVE_TEXT = { id: "", text: "" };

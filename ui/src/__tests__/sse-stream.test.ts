@@ -10,13 +10,17 @@ vi.mock("@/lib/query-client", () => ({
   },
 }));
 
-// Mock api helpers (getToken reads localStorage which may not be set in jsdom)
+// Mock api helpers (getToken reads localStorage which may not be set in jsdom).
+// T7/T8: sendMessage POSTs the turn via apiPost (startTurn) → returns a 202 body
+// → connect opens the GET envelope stream (which the fetch spy below serves).
 vi.mock("@/lib/api", () => ({
   apiGet: vi.fn(),
   apiDelete: vi.fn(),
   apiPatch: vi.fn(),
+  apiPost: vi.fn().mockResolvedValue({ session_id: "sess-1", user_message_id: "u1" }),
   getToken: vi.fn(() => "test-token"),
   assertToken: vi.fn(() => "test-token"),
+  handleUnauthorized: vi.fn(),
 }));
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

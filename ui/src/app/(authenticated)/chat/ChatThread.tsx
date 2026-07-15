@@ -8,10 +8,6 @@ import { useTranslation } from "@/hooks/use-translation";
 
 import type { SessionRow } from "@/types/api";
 
-// Stable empty fallback — prevents new array reference on every render (avoids
-// infinite useEffect loop when activeSessionIds is absent during WS reconnect).
-const EMPTY_ACTIVE_IDS: string[] = [];
-
 import { MessageList, MessageSkeleton } from "./MessageList";
 import { StreamingAnnouncer } from "./StreamingAnnouncer";
 import { SearchBar } from "./SearchBar";
@@ -25,7 +21,7 @@ import { ShortcutHelp } from "@/components/chat/ShortcutHelp";
 import { VideoProgressIndicator } from "@/components/chat/VideoProgressIndicator";
 import { useEngineRunning } from "./hooks/use-engine-running";
 import { useRenderMessages } from "./hooks/use-render-messages";
-import { selectIsLive, selectIsReplayingHistory, selectLiveHasContent } from "@/stores/chat-selectors";
+import { selectIsLive, selectIsReplayingHistory, selectLiveHasContent, selectLiveAssistantText } from "@/stores/chat-selectors";
 import { useMessageSearch } from "./hooks/use-message-search";
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -56,10 +52,7 @@ export function ChatThread({
   const currentAgent = agent || storeAgent;
   const activeSessionId = useChatStore((s) => s.agents[currentAgent]?.activeSessionId ?? null);
   const connectionPhase = useChatStore((s) => s.agents[currentAgent]?.connectionPhase ?? "idle");
-  const reconnectAttempt = useChatStore((s) => s.agents[currentAgent]?.reconnectAttempt ?? 0);
-  const maxReconnectAttempts = useChatStore((s) => s.agents[currentAgent]?.maxReconnectAttempts ?? 6);
   const isLlmReconnecting = useChatStore((s) => s.agents[currentAgent]?.isLlmReconnecting ?? false);
-  const activeSessionIds = useChatStore((s) => s.agents[currentAgent]?.activeSessionIds ?? EMPTY_ACTIVE_IDS);
 
   // "Running" = active connection phase OR WS push reports the session active.
   // DB run_status is no longer consulted in the hot path (spec I3).
@@ -84,17 +77,19 @@ export function ChatThread({
   const isHistory = useChatStore((s) => selectIsReplayingHistory(s, currentAgent));
   const liveHasContent = useChatStore((s) => selectLiveHasContent(s, currentAgent));
 
-  // Bootstrap: on session change, if WS already marked this session active
-  // (e.g. WS snapshot arrived before localStorage restored activeSessionId),
-  // kick off auto-resume. Not reactive on activeSessionIds — deliberately
-  // one-shot per session change. resumeStream is idempotent.
+  // Bootstrap (T8): on session change, unconditionally open the single connect
+  // path unless we are already in an active phase. Server-authoritative — the
+  // server replays the in-flight turn's envelope, or an empty (finished)
+  // envelope if there is no turn, so we no longer gate on the WS
+  // activeSessionIds snapshot. resumeStream → renderer.connect is idempotent
+  // (it disposes any prior session first). One-shot per session change.
+  // M8: this costs +1 GET with an empty envelope per session switch —
+  // acceptable for the single-user deployment.
   useEffect(() => {
     if (!activeSessionId || isActivePhase(connectionPhase)) return;
-    if (activeSessionIds.includes(activeSessionId)) {
-      useChatStore.getState().resumeStream(currentAgent, activeSessionId);
-    }
+    useChatStore.getState().resumeStream(currentAgent, activeSessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSessionId, currentAgent]);  // intentionally NOT activeSessionIds
+  }, [activeSessionId, currentAgent]);
 
   // Always fetch session messages — even during streaming.
   // During live streaming, sourceMessages prefers live data, but history data
@@ -103,7 +98,27 @@ export function ChatThread({
     activeSessionId,
     currentAgent,
   );
-  // sessionMessagesData used only for showSkeleton — useRenderMessages reads via the cache
+  // sessionMessagesData used by showSkeleton + the T8 handoff effect below —
+  // useRenderMessages reads message content via the cache.
+
+  // ── T8: id-based live→history handoff ──────────────────────────────────────
+  // The single connect path (renderer) freezes the finished turn as a live/
+  // finishing overlay and invalidates sessionMessages. Once the refetch lands
+  // the turn's fresh rows in the cache (matched by the live turn's last
+  // assistant message id), drop the overlay to history and clear the boundary.
+  // Purely data-driven + idempotent: finalizeHandoff no-ops unless a finished
+  // turn is still shown, and once messageSource is history the live id is empty
+  // so this effect stops firing.
+  const liveAssistantId = useChatStore((s) => selectLiveAssistantText(s, currentAgent).id);
+  useEffect(() => {
+    if (!activeSessionId || isActivePhase(connectionPhase)) return;
+    if (!liveAssistantId) return;
+    const rows = sessionMessagesData?.messages;
+    if (!rows || rows.length === 0) return;
+    if (rows.some((m) => m.id === liveAssistantId)) {
+      useChatStore.getState().finalizeHandoff(currentAgent, activeSessionId);
+    }
+  }, [activeSessionId, currentAgent, connectionPhase, liveAssistantId, sessionMessagesData]);
 
   const renderLimit = useChatStore((s) => s.agents[s.currentAgent]?.renderLimit ?? 100);
 
@@ -112,9 +127,8 @@ export function ChatThread({
   const hasMoreHistory = useChatStore((s) => s.agents[s.currentAgent]?.hasMoreHistory ?? false);
   const isScrollLoadingHistory = useChatStore((s) => s.agents[s.currentAgent]?.isLoadingHistory ?? false);
 
-  // Architecture C: history + SSE overlay. See `chat-overlay-dedup.ts`
-  // for the status-independent user-bubble merge (fixes the 2026-04-17
-  // "sent message disappears" regression).
+  // Server-authoritative render (T8): boundary-filtered history + the live turn
+  // overlay, concatenated with no content dedup (see selectRenderMessages).
   const sourceMessages = useRenderMessages(currentAgent);
 
   // Filter out inter-agent routing messages (internal inter-agent context passed between agents).
@@ -141,8 +155,8 @@ export function ChatThread({
   const hasMessages = msgCount > 0;
 
   const isStreaming = isActivePhase(connectionPhase);
-  // Only true during active text emission — excludes "reconnecting" so the
-  // streaming cursor doesn't linger after session completion while SSE reconnects.
+  // Only true during active text emission ("streaming") — the "submitted"
+  // pre-first-byte window shows the thinking indicator instead of the cursor.
   const isTextStreaming = connectionPhase === "streaming";
 
   // ── Pending message queue drain ────────────────────────────────────────────
@@ -179,18 +193,23 @@ export function ChatThread({
   );
   const lastMsgIsOtherAgent = lastMsg?.role === "assistant" && lastMsg.agentId && lastMsg.agentId !== currentAgent;
   const isLiveOrHistory = isLive || isHistory;
-  // When resumeStream starts, live overlay is empty ([]) so history bleeds through —
-  // the last rendered message is the previous ALMA response (has text), which
-  // incorrectly suppresses showThinking. Bypass lastAssistantHasText when live
-  // mode has no overlay content yet (the stream hasn't sent any events yet).
+  // When a turn opens, the live overlay is empty ([]) so history bleeds
+  // through — the last rendered message is the previous response (has text),
+  // which would otherwise suppress showThinking. Bypass lastAssistantHasText
+  // when live mode has no overlay content yet (no events streamed yet).
   const isLiveEmpty = isLive && !liveHasContent;
-  // T7: "complete" folded into "idle" and "reconnecting" into "submitted" —
-  // the thinking animation is gated purely on the active phases now.
+  // T8 (minor a): the "submitted" pre-first-byte window (e.g. mid-stream F5,
+  // where messageSource is still "history" with a text-bearing tail) must show
+  // the thinking indicator regardless of the history tail — otherwise a
+  // resumed turn looks idle until sync_end. Outside the submit window, gate on
+  // "no fresh live assistant text yet" while streaming / engine-running.
   const showThinking = isLiveOrHistory
-    && (isLiveEmpty || !lastAssistantHasText)
     && !lastMsgIsOtherAgent
-    && (connectionPhase === "submitted" || connectionPhase === "streaming"
-        || engineRunning);
+    && (
+      connectionPhase === "submitted"
+      || ((isLiveEmpty || !lastAssistantHasText)
+          && (connectionPhase === "streaming" || engineRunning))
+    );
 
   // ── Message search (Ctrl+Shift+F) ────────────────────────────────────────
   const search = useMessageSearch(allMessages);
@@ -271,16 +290,10 @@ export function ChatThread({
         searchActive={search.isOpen && !!search.query}
       />
 
-      {/* Reconnecting indicator — LLM-level retry (T7: transport reconnect no
-          longer has a distinct "reconnecting" phase; it presents as "submitted"
-          with reconnectAttempt/isLlmReconnecting carrying the detail). */}
-      {isLlmReconnecting && (
-        <ReconnectingIndicator
-          attempt={reconnectAttempt}
-          maxAttempts={maxReconnectAttempts}
-          className="my-4"
-        />
-      )}
+      {/* Reconnecting indicator — LLM-level provider retry, driven by the
+          server's `reconnecting` SSE event (isLlmReconnecting). Distinct from
+          the transport layer, which no longer reconnects (T8). */}
+      {isLlmReconnecting && <ReconnectingIndicator className="my-4" />}
 
       {/* Error banner — also shown when the engine was interrupted mid-stream
           and the resume endpoint returns a sync event with status="interrupted"

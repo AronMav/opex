@@ -191,9 +191,8 @@ function convertHistoryImpl(rows: MessageRow[], isAgentStreaming?: boolean, sele
       const hasToolCalls = Array.isArray(m.tool_calls) && (m.tool_calls as unknown[]).length > 0;
 
       // Merge intermediate iterations into one visual bubble (same UX as
-      // before). Each merged row's id is tracked in mergedIds so
-      // mergeLiveOverlay can do exact ID-based dedup against the live
-      // overlay without content-matching heuristics.
+      // before). Each merged row's id is tracked in mergedIds (a provenance
+      // record of the DB rows folded into this bubble).
       if (hasToolCalls && lastAssistantMsg && lastAssistantMsg.agentId === assistantAgentId) {
         if (newParts.length > 0) lastAssistantMsg.parts.push(...newParts);
         (lastAssistantMsg.mergedIds = lastAssistantMsg.mergedIds ?? []).push(m.id);
@@ -299,6 +298,32 @@ export function getCachedRawMessages(sessionId: string | null): MessageRow[] {
   const results = queryClient.getQueriesData<{ messages: MessageRow[] }>({ queryKey: qk.sessionMessages(sessionId) });
   const cached = results[0]?.[1];
   return cached?.messages ?? [];
+}
+
+// ── Boundary render filter (T8) ─────────────────────────────────────────────
+
+/**
+ * Positional slice of history up to AND INCLUDING the turn's boundary message.
+ *
+ * Server-authoritative render contract (T8): the live turn's replayed envelope
+ * resumes AFTER `boundaryMessageId` (the last message persisted before the
+ * turn). Rendering `historyUpToIncluding(history, boundaryId)` followed by the
+ * live turn messages reproduces the full conversation with NO content dedup —
+ * history contributes everything up to the boundary, live contributes the turn.
+ *
+ * The boundary is matched against BRANCH-RESOLVED history (callers pass the
+ * output of getCachedHistoryMessages, which already runs resolveActivePath).
+ * If the id is absent (null, or not in this branch), the full history is
+ * returned unchanged — a safe default that never hides messages.
+ */
+export function historyUpToIncluding(
+  history: ChatMessage[],
+  boundaryId: string | null,
+): ChatMessage[] {
+  if (!boundaryId) return history;
+  const idx = history.findIndex((m) => m.id === boundaryId);
+  if (idx < 0) return history;
+  return history.slice(0, idx + 1);
 }
 
 // ── Branch resolution ─────────────────────────────────────────────────────

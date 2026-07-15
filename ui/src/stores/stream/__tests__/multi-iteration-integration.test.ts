@@ -28,7 +28,6 @@ function makeStream(frames: string[]): ReadableStream<Uint8Array> {
 function makeCallbacks(overrides: Partial<Parameters<typeof processSSEStream>[2]["callbacks"]> = {}) {
   return {
     onSessionId: vi.fn(),
-    onReconnectNeeded: vi.fn(),
     getAgentState: (agent: string) => useChatStore.getState().agents[agent],
     updateSessionParticipants: vi.fn(),
     onStreamDone: vi.fn(),
@@ -54,7 +53,6 @@ beforeEach(() => {
         maxReconnectAttempts: 3,
         modelOverride: null,
         forceNewSession: false,
-        lastEventId: null,
       },
     };
   });
@@ -133,48 +131,9 @@ describe("multi-iteration: one step-start opens one ChatMessage per iteration", 
   });
 });
 
-describe("Last-Event-ID tracking", () => {
-  it("session.lastEventId updates from SSE id: lines", async () => {
-    const session = streamSessionManager.start("Arty");
-    // Mix `id:` and `data:` lines like a real SSE response
-    const frames = [
-      "id: 5\n",
-      `data: ${JSON.stringify({ type: "start", messageId: "msg-1" })}\n\n`,
-      "id: 6\n",
-      `data: ${JSON.stringify({ type: "step-start", stepId: "step_0", messageId: "msg-1" })}\n\n`,
-      "id: 12\n",
-      `data: ${JSON.stringify({ type: "text-start", id: "text-1" })}\n\n`,
-      "id: 14\n",
-      `data: ${JSON.stringify({ type: "text-delta", id: "text-1", delta: "hi" })}\n\n`,
-      `data: ${JSON.stringify({ type: "text-end", id: "text-1" })}\n\n`,
-      `data: ${JSON.stringify({ type: "finish" })}\n\n`,
-    ];
-    await processSSEStream(session, makeStream(frames), {
-      sessionId: null,
-      reconnectAttempt: 0,
-      callbacks: makeCallbacks(),
-    });
-    expect(session.lastEventId).toBe(14);
-    // Persisted to agent state for reconnect
-    expect(useChatStore.getState().agents.Arty.lastEventId).toBe(14);
-  });
-
-  it("non-numeric id: line is ignored gracefully", async () => {
-    const session = streamSessionManager.start("Arty");
-    const frames = [
-      "id: not-a-number\n",
-      `data: ${JSON.stringify({ type: "start", messageId: "msg-1" })}\n\n`,
-      "id: 3\n",
-      `data: ${JSON.stringify({ type: "finish" })}\n\n`,
-    ];
-    await processSSEStream(session, makeStream(frames), {
-      sessionId: null,
-      reconnectAttempt: 0,
-      callbacks: makeCallbacks(),
-    });
-    expect(session.lastEventId).toBe(3);
-  });
-});
+// T8: Last-Event-ID tracking was removed with the transport reconnect
+// machinery — `id:` SSE lines are ignored and no seq offset is persisted. The
+// former "Last-Event-ID tracking" describe block was deleted.
 
 describe("Finish event guarantee — closes connectionPhase cleanly", () => {
   it("normal finish closes connectionPhase to non-error (complete or idle)", async () => {
