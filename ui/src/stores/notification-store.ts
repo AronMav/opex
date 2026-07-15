@@ -8,9 +8,11 @@ interface NotificationState {
   /** Bumped only on a genuine (non-duplicate) live arrival. Drives sound/flash
    *  so refetch-on-reconnect and cold load never trigger the beep. */
   newArrivalSeq: number;
+  prefs: Record<string, { muted: boolean; sound: boolean }>;
   syncFirstPage: (rows: NotificationRow[], unread_count: number) => void;
   appendOlder: (rows: NotificationRow[]) => void;
-  prependNotification: (row: NotificationRow) => void;
+  prependNotification: (row: NotificationRow, silent?: boolean) => void;
+  setPrefs: (prefs: Record<string, { muted: boolean; sound: boolean }>) => void;
   markRead: (id: string) => void;
   markAllRead: () => void;
   clearAll: () => void;
@@ -27,6 +29,7 @@ export const useNotificationStore = create<NotificationState>()(
       notifications: [],
       unread_count: 0,
       newArrivalSeq: 0,
+      prefs: {},
 
       // First-page (newest) refetch — MERGE, not replace, so history pages
       // loaded via appendOlder survive the Phase 1 periodic/focus/reconnect
@@ -61,14 +64,16 @@ export const useNotificationStore = create<NotificationState>()(
           "appendOlder",
         ),
 
-      prependNotification: (row) =>
+      prependNotification: (row, silent = false) =>
         set(
           (s) => {
             if (s.notifications.some((n) => n.id === row.id)) return s;
             return {
               notifications: [row, ...s.notifications],
               unread_count: s.unread_count + 1,
-              newArrivalSeq: s.newArrivalSeq + 1,
+              // silent (sound-off pref) → do not bump the sound trigger, but the
+              // row is still added and the badge still increments.
+              newArrivalSeq: silent ? s.newArrivalSeq : s.newArrivalSeq + 1,
             };
           },
           false,
@@ -149,6 +154,8 @@ export const useNotificationStore = create<NotificationState>()(
           false,
           "resolveApproval",
         ),
+
+      setPrefs: (prefs) => set({ prefs }, false, "setPrefs"),
     }),
     { name: "NotificationStore", enabled: process.env.NODE_ENV !== "production" },
   ),

@@ -20,6 +20,7 @@ beforeEach(() => {
     notifications: [],
     unread_count: 0,
     newArrivalSeq: 0,
+    prefs: {},
   });
 });
 
@@ -137,5 +138,19 @@ describe("notification-store", () => {
     expect(s.notifications.map((n) => n.id)).toEqual(["a", "b", "c", "d"]);
     expect(s.unread_count).toBe(2);
     expect(s.newArrivalSeq).toBe(4);
+  });
+
+  it("prependNotification with silent=true adds + bumps unread but NOT newArrivalSeq", () => {
+    useNotificationStore.setState({ notifications: [], unread_count: 0, newArrivalSeq: 3 });
+    useNotificationStore.getState().prependNotification(row("a"), true);
+    const s = useNotificationStore.getState();
+    expect(s.notifications).toHaveLength(1);
+    expect(s.unread_count).toBe(1);
+    expect(s.newArrivalSeq).toBe(3); // silent → no sound trigger
+  });
+
+  it("setPrefs stores the prefs map", () => {
+    useNotificationStore.getState().setPrefs({ agent_error: { muted: true, sound: false } });
+    expect(useNotificationStore.getState().prefs.agent_error).toEqual({ muted: true, sound: false });
   });
 });

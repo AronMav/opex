@@ -783,6 +783,40 @@ export function useResolveInfraDecision() {
   });
 }
 
+export interface NotificationPref {
+  type: string;
+  muted: boolean;
+  sound: boolean;
+}
+interface NotificationPrefsResponse {
+  prefs: NotificationPref[];
+}
+
+export function useNotificationPrefs() {
+  const setPrefs = useNotificationStore((s) => s.setPrefs);
+  const query = useQuery({
+    queryKey: ["notification-prefs"] as const,
+    queryFn: () => apiGet<NotificationPrefsResponse>("/api/notification-prefs"),
+  });
+  useEffect(() => {
+    if (query.data) {
+      const map: Record<string, { muted: boolean; sound: boolean }> = {};
+      for (const p of query.data.prefs) map[p.type] = { muted: p.muted, sound: p.sound };
+      setPrefs(map);
+    }
+  }, [query.data, setPrefs]);
+  return query;
+}
+
+export function useUpdateNotificationPref() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: NotificationPref) => apiPut("/api/notification-prefs", body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["notification-prefs"] }),
+    onError: (e: Error) => toast.error(e.message),
+  });
+}
+
 export function useNotificationWsSync() {
   const prependNotification = useNotificationStore((s) => s.prependNotification);
   const applyRead = useNotificationStore((s) => s.applyRead);
@@ -791,7 +825,10 @@ export function useNotificationWsSync() {
   const resolveApproval = useNotificationStore((s) => s.resolveApproval);
 
   useWsSubscription("notification", (event) => {
-    prependNotification(event.data);
+    // Muted types never reach here (server skips the broadcast). Among the rest,
+    // a sound-off pref means: add + bump badge, but don't trigger the beep.
+    const pref = useNotificationStore.getState().prefs[event.data.type];
+    prependNotification(event.data, pref?.sound === false);
   });
   useWsSubscription("notification_read", (event) => {
     applyRead(event.data.id, event.data.unread_count);
