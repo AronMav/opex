@@ -271,8 +271,9 @@ impl BehaviourLayers {
     }
 
     /// Layers for interactive paths (SSE web chat, channel adapters, plain
-    /// streaming). Enables ONLY the two layers that stop a recoverable
-    /// provider/transport hiccup from killing a live user session:
+    /// streaming). Enables the layers that stop a recoverable
+    /// provider/transport hiccup — or an empty upstream response — from
+    /// killing a live user session:
     ///
     ///   * `fallback_provider` — fail over to the configured fallback after N
     ///     consecutive LLM errors, exactly as cron does. No-op when the agent
@@ -281,8 +282,13 @@ impl BehaviourLayers {
     ///   * `session_recovery` — rebuild the message list once on a
     ///     `SessionCorruption` error ("roles must alternate", orphan tool_use)
     ///     instead of failing the turn (and forking a fresh session).
+    ///   * `auto_continue` — engaged in EMPTY-RETRY-ONLY mode
+    ///     (`max_continues: 0` so the nudge path never fires): an empty LLM
+    ///     response — including a normalized upstream `(Empty response: …)`
+    ///     garbage blob — is retried once instead of ending the turn empty
+    ///     (and, in voice mode, being read aloud).
     ///
-    /// Deliberately leaves `auto_continue`, `forced_final_call`, and
+    /// Deliberately leaves the nudge path, `forced_final_call`, and
     /// `tool_policy_override` OFF — those alter interactive UX (the user is
     /// meant to see the iteration-limit Finish and raw turn boundaries) and
     /// remain cron-only. Before this, interactive callers used
