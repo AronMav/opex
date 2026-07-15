@@ -256,8 +256,10 @@ pub fn is_provider_retryable(status: Option<reqwest::StatusCode>) -> bool {
 
 /// Best-effort extraction of the HTTP status code embedded in the error
 /// message produced by [`crate::tools::yaml_tools::YamlToolDef::execute_binary`]
-/// (`"tool '{name}' returned HTTP {status}: {body}"`, `reqwest::StatusCode`'s
-/// `Display` prints only the numeric code). Transport-level failures (the
+/// (`"tool '{name}' returned HTTP {status}: {body}"`). `reqwest::StatusCode`'s
+/// `Display` prints the code AND its reason phrase (e.g. `503 Service
+/// Unavailable`), so the parser takes ASCII digits until the first non-digit
+/// to survive the reason suffix. Transport-level failures (the
 /// request never got a response) don't carry this substring and correctly
 /// resolve to `None`, which [`is_provider_retryable`] treats as retryable.
 fn extract_status_from_error(e: &anyhow::Error) -> Option<reqwest::StatusCode> {
@@ -445,9 +447,19 @@ impl BackgroundMediaTask {
         let mut generated: Option<Vec<u8>> = None;
         let mut failure: Option<String> = None;
 
+        // Fix 1b: now that a per-provider timeout fails over to the next chain
+        // entry (see the `Err(_)` arm below), an N-provider chain of *hung*
+        // providers would otherwise compound to N × 600s. Divide the 600s
+        // budget across the attempts so the total worst-case stays bounded at
+        // ~600s regardless of chain length (single-attempt kinds keep the full
+        // 600s). Both the timeout constant and the failover arm live in this
+        // same loop, so this cap is fully local.
+        let per_attempt_timeout =
+            std::time::Duration::from_secs(600 / attempts.len().max(1) as u64);
+
         for (i, headers) in attempts.iter().enumerate() {
             match tokio::time::timeout(
-                std::time::Duration::from_secs(600),
+                per_attempt_timeout,
                 self.tool.execute_binary(
                     &self.args,
                     &self.http_client,
@@ -476,8 +488,22 @@ impl BackgroundMediaTask {
                     break;
                 }
                 Err(_) => {
-                    tracing::warn!(tool = %self.tool.name, kind = ?kind, "background media generation timed out after 600s");
-                    failure = Some("media generation timed out after 600s".to_string());
+                    // Fix 1: a hung provider (connection accepted, no response)
+                    // that trips the outer per-attempt timeout is the most
+                    // common real-world dead-provider failure — exactly what a
+                    // reserve chain exists to survive. Fail over to the next
+                    // chain entry instead of recording terminal failure. Only
+                    // the FINAL attempt's timeout is terminal (mirrors the
+                    // retryable-error arm above).
+                    if i + 1 < attempts.len() {
+                        tracing::warn!(
+                            tool = %self.tool.name, kind = ?kind, attempt = i,
+                            "media provider timed out; trying next in profile chain"
+                        );
+                        continue;
+                    }
+                    tracing::warn!(tool = %self.tool.name, kind = ?kind, "background media generation timed out");
+                    failure = Some("media generation timed out".to_string());
                     break;
                 }
             }
@@ -787,7 +813,7 @@ mod tests {
     use tokio_util::task::TaskTracker;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
-        matchers::{method, path},
+        matchers::{header, method, path},
     };
 
     // ── MediaKind unit tests (no I/O) ────────────────────────────────────────
@@ -908,7 +934,12 @@ mod tests {
 
     #[test]
     fn extract_status_parses_execute_binary_error_format() {
-        let e = anyhow::anyhow!("tool 'synthesize_speech' returned HTTP 503: upstream busy");
+        // Mirror the REAL bail! output: `StatusCode`'s Display prints the code
+        // followed by its reason phrase (space-separated), so the parser must
+        // survive the `Service Unavailable` suffix and still yield 503.
+        let e = anyhow::anyhow!(
+            "tool 'synthesize_speech' returned HTTP 503 Service Unavailable: upstream busy"
+        );
         assert_eq!(extract_status_from_error(&e), Some(reqwest::StatusCode::SERVICE_UNAVAILABLE));
     }
 
@@ -1266,6 +1297,68 @@ mod tests {
             "error text must include underlying HTTP failure, got: {text}"
         );
         let _ = action.reply.send(Ok(()));
+    }
+
+    #[tokio::test]
+    async fn provider_fails_over_to_next_in_chain_on_retryable_error() {
+        // Exercises the run() chain-advance machinery that BOTH the retryable-
+        // error arm and the Fix 1 timeout arm share (`i + 1 < attempts.len()`
+        // → continue). The first provider returns a retryable 503; the loop
+        // must advance to the second provider (200) and deliver exactly once.
+        //
+        // A real *timeout* failover can't be unit-tested here — the per-attempt
+        // budget is 600s / attempts.len() (300s for this 2-chain), far too long
+        // to wait on a genuinely hung mock — but the continue-to-next-provider
+        // control flow is identical between the two arms, so this proves it.
+        let server = MockServer::start().await;
+        // First provider (X-Opex-Provider: dead) → 503 (retryable).
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/speech"))
+            .and(header("X-Opex-Provider", "dead"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("busy"))
+            .mount(&server)
+            .await;
+        // Second provider (X-Opex-Provider: live) → 200.
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/speech"))
+            .and(header("X-Opex-Provider", "live"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"fakewav!"))
+            .mount(&server)
+            .await;
+
+        let router = ChannelActionRouter::new();
+        let (_conn_id, mut rx) = router.subscribe("telegram").await;
+        let context = serde_json::json!({ "chat_id": 42, "channel": "telegram" });
+        let mut task = make_task(&server.uri(), "send_voice", Some(router), context);
+        task.provider_attempts = vec![
+            vec![("X-Opex-Provider".into(), "dead".into())],
+            vec![("X-Opex-Provider".into(), "live".into())],
+        ];
+
+        let run_handle = tokio::spawn(task.run());
+        let action = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if let Ok(a) = rx.try_recv() {
+                    return a;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("send_voice from the SECOND provider must arrive after failover");
+
+        assert_eq!(action.name, "send_voice");
+        assert!(
+            action.params.get("audio_base64").is_some(),
+            "failover success must still deliver the voice payload"
+        );
+        // Exactly one action delivered — no double-deliver across the chain.
+        let _ = action.reply.send(Ok(()));
+        run_handle.await.expect("task should complete without panic");
+        assert!(
+            rx.try_recv().is_err(),
+            "chain must deliver exactly once, not once per attempt"
+        );
     }
 
     #[tokio::test]
