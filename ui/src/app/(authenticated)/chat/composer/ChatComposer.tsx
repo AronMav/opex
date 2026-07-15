@@ -4,7 +4,13 @@ import React, { useState, useCallback, useRef, useEffect, useMemo, useId } from 
 import { cn } from "@/lib/utils";
 import { assertToken } from "@/lib/api";
 import { useChatStore, isActivePhase } from "@/stores/chat-store";
-import { uuid, getLiveMessages, type MessageSource } from "@/stores/chat-types";
+import { uuid, getLiveMessages, type MessageSource, type ChatMessage, type FilePart } from "@/stores/chat-types";
+import {
+  createSentenceSplitter,
+  createSpeakerQueue,
+  type SentenceSplitter,
+  type SpeakerQueue,
+} from "../hooks/tts-speaker";
 import { useTranslation } from "@/hooks/use-translation";
 import { useAuthStore } from "@/stores/auth-store";
 import { Button } from "@/components/ui/button";
@@ -82,34 +88,21 @@ function silentWavUrl(): string {
   return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
 }
 
-/** Text of the most recent assistant message — used to speak voice replies. */
-function lastAssistantSpokenText(source: MessageSource): string {
+/** The latest assistant message in the live view (or null). */
+function findLastAssistant(source: MessageSource): ChatMessage | null {
   const msgs = getLiveMessages(source);
   for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i];
-    if (m.role !== "assistant") continue;
-    let txt = "";
-    for (const p of m.parts) if (p.type === "text") txt += (txt ? "\n" : "") + p.text;
-    return txt.trim();
+    if (msgs[i].role === "assistant") return msgs[i];
   }
-  return "";
+  return null;
 }
 
-/** URL of the most recent assistant message's audio file part (e.g. a
- *  synthesize_speech voice reply) — "" when the latest assistant reply has none.
- *  Lets us auto-play the voice the model produced itself instead of re-synthesising
- *  its text. */
-function lastAssistantAudioUrl(source: MessageSource): string {
-  const msgs = getLiveMessages(source);
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i];
-    if (m.role !== "assistant") continue;
-    for (const p of m.parts) {
-      if (p.type === "file" && p.mediaType.startsWith("audio")) return p.url;
-    }
-    return ""; // latest assistant reply carries no audio part
-  }
-  return "";
+/** Concatenated text-part content of an assistant message — thinking / tool
+ *  parts are excluded so only spoken prose reaches the TTS splitter. */
+function assistantText(m: ChatMessage): string {
+  let t = "";
+  for (const p of m.parts) if (p.type === "text") t += (t ? "\n" : "") + p.text;
+  return t;
 }
 
 interface AttachmentEntry {
@@ -182,14 +175,29 @@ export function ChatComposer() {
   // No local ref duplicates this: both the direct-submit and drained-queue
   // paths only ever arm the store flag.
   const voiceTurnPending = useChatStore((s) => s.agents[s.currentAgent]?.voiceTurnPending ?? false);
-  const ttsPlayingRef = useRef(false);
+  // "speaking" indicator — driven by the speaker's onStateChange.
   const [ttsPlaying, setTtsPlaying] = useState(false);
-  // Drives the composer's voice-status indicator: true from a voice submit until
-  // the spoken reply finishes (covers the slow synthesize_speech TTS synthesis,
-  // when the chat is otherwise empty, plus playback).
+  // "preparing" indicator: true from a voice submit until the reply either starts
+  // speaking, finishes with nothing to say, or is superseded/drained.
   const [voiceReplyActive, setVoiceReplyActive] = useState(false);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsUrlRef = useRef<string | null>(null);
+  // Streaming per-sentence TTS pipeline (hooks/tts-speaker). The splitter turns
+  // assistant text deltas into complete sentences; the speaker synthesises and
+  // plays them in order on the single <audio> element. Both are (re)created per
+  // agent in an effect below — never on every render.
+  const speakerRef = useRef<SpeakerQueue | null>(null);
+  const splitterRef = useRef<SentenceSplitter | null>(null);
+  // Delta cursor: which assistant message + how much of its text has already been
+  // fed to the splitter this turn.
+  const feedRef = useRef<{ msgId: string | null; fedLen: number }>({ msgId: null, fedLen: 0 });
+  // URL of the agent-audio part already handed to takeoverAudio this turn (guards
+  // against re-takeover on every re-render once the audio part appears).
+  const takenOverUrlRef = useRef<string | null>(null);
+  // Settles + detaches the listeners of the currently-awaited deps.play promise
+  // so a superseding play (takeover / next sentence) never leaks stale listeners
+  // or hangs the pump on a promise that can no longer resolve.
+  const playCleanupRef = useRef<(() => void) | null>(null);
 
   // Voice input tuning (persisted): sensitivity 0..100 (50 = current default),
   // pause 1000..5000ms before auto-stop on silence.
@@ -277,27 +285,24 @@ export function ChatComposer() {
   // One persistent <audio> element kept "unlocked" via primeTtsAudio() on a user
   // gesture, so the later (async) reply playback isn't blocked by autoplay policy.
   const stopTts = useCallback(() => {
-    ttsAudioRef.current?.pause();
+    const a = ttsAudioRef.current;
+    if (a) {
+      try { a.pause(); } catch { /* ignore */ }
+      a.removeAttribute("src");
+    }
+    playCleanupRef.current?.();
     if (ttsUrlRef.current) {
       URL.revokeObjectURL(ttsUrlRef.current);
       ttsUrlRef.current = null;
     }
-    ttsPlayingRef.current = false;
     setTtsPlaying(false);
     setVoiceReplyActive(false);
   }, []);
 
   const getTtsEl = useCallback(() => {
-    if (!ttsAudioRef.current) {
-      const a = new Audio();
-      a.addEventListener("ended", stopTts);
-      a.addEventListener("error", stopTts);
-      ttsAudioRef.current = a;
-    }
+    if (!ttsAudioRef.current) ttsAudioRef.current = new Audio();
     return ttsAudioRef.current;
-  }, [stopTts]);
-
-  useEffect(() => () => stopTts(), [stopTts]);
+  }, []);
 
   // Unlock audio during a user gesture (mic tap / continuous toggle) by playing
   // a brief silent clip — later programmatic TTS plays on the same element pass.
@@ -322,76 +327,187 @@ export function ChatComposer() {
     }
   }, [getTtsEl]);
 
-  const playReply = useCallback(
-    async (text: string) => {
-      try {
-        const resp = await fetch("/api/tts/synthesize", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${assertToken()}` },
-          body: JSON.stringify({ text }),
-        });
-        if (!resp.ok) throw new Error(`TTS ${resp.status}`);
-        const blob = await resp.blob();
+  // Single-output play sink for the speaker: routes every blob (per-sentence TTS
+  // OR agent-audio takeover) through the one pre-unlocked <audio> element, so a
+  // new play supersedes the old at the DOM level — that is how takeover stops
+  // in-flight audio. Resolves on `ended`/`error`, on a rejected `play()`, or when
+  // superseded (via playCleanupRef), so the module's pump never hangs.
+  const playBlob = useCallback(
+    (blob: Blob): Promise<void> => {
+      const a = getTtsEl();
+      playCleanupRef.current?.(); // settle any superseded play + detach its listeners
+      return new Promise<void>((resolve) => {
         if (ttsUrlRef.current) URL.revokeObjectURL(ttsUrlRef.current);
         const url = URL.createObjectURL(blob);
         ttsUrlRef.current = url;
-        const a = getTtsEl();
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          a.removeEventListener("ended", finish);
+          a.removeEventListener("error", finish);
+          if (playCleanupRef.current === finish) playCleanupRef.current = null;
+          resolve();
+        };
+        a.addEventListener("ended", finish);
+        a.addEventListener("error", finish);
+        playCleanupRef.current = finish;
         a.src = url;
-        await a.play();
-      } catch {
-        stopTts();
-        const { toast } = await import("sonner");
-        toast.error(t("chat.tts_error"));
-      }
+        void a.play().catch(() => finish());
+      });
     },
-    [getTtsEl, stopTts, t],
+    [getTtsEl],
   );
 
-  // Play an already-synthesised audio URL (the model's synthesize_speech reply)
-  // on the SAME pre-unlocked element playReply uses — a fresh `new Audio()` would
-  // be blocked by the browser autoplay policy on the first hands-free reply.
-  const playAudioUrl = useCallback(
-    async (url: string) => {
-      try {
-        if (ttsUrlRef.current) {
-          URL.revokeObjectURL(ttsUrlRef.current);
-          ttsUrlRef.current = null;
+  // ── Streaming TTS speaker: (re)create per agent ───────────────────────────
+  // deps.synth POSTs one sentence to /api/tts/synthesize?agent=… (409 →
+  // tts_disabled → null, any other non-2xx / fetch error → null, never throws);
+  // onStateChange/onDrain drive the "speaking"/"preparing" indicators and the
+  // continuous re-arm gate.
+  useEffect(() => {
+    const agent = currentAgent;
+    const splitter = createSentenceSplitter();
+    const speaker = createSpeakerQueue({
+      async synth(sentence, signal) {
+        try {
+          const resp = await fetch("/api/tts/synthesize?agent=" + encodeURIComponent(agent), {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${assertToken()}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ text: sentence }),
+            signal,
+          });
+          if (resp.status === 409) {
+            console.debug(`[tts] synthesis skipped — disabled for ${agent}`);
+            return null;
+          }
+          if (!resp.ok) return null;
+          return await resp.blob();
+        } catch {
+          return null; // abort / network error → skip this sentence, no throw
         }
-        const a = getTtsEl();
-        a.src = url;
-        await a.play();
-      } catch {
-        stopTts();
-      }
-    },
-    [getTtsEl, stopTts],
-  );
+      },
+      play: (blob) => playBlob(blob),
+      onStateChange: (s) => {
+        setTtsPlaying(s === "speaking");
+        // Any transition to idle also clears the "preparing" indicator — covers
+        // agent-audio takeover, which by design fires no onDrain.
+        if (s !== "speaking") setVoiceReplyActive(false);
+      },
+      onDrain: () => setVoiceReplyActive(false),
+    });
+    speakerRef.current = speaker;
+    splitterRef.current = splitter;
+    feedRef.current = { msgId: null, fedLen: 0 };
+    takenOverUrlRef.current = null;
+    return () => {
+      speaker.cancel();
+      stopTts();
+      speakerRef.current = null;
+      splitterRef.current = null;
+    };
+  }, [currentAgent, playBlob, stopTts]);
 
-  // When a voice-initiated turn finishes streaming, speak the agent's reply.
-  // voiceTurnPending covers BOTH a direct voice submit (armed above, while idle,
-  // right before requestSubmit) AND a drained queued voice message (armed by
-  // ChatThread right before it calls sendMessage for the drained turn).
+  // Feed the latest assistant message's NEW text into the splitter → speaker.
+  // Only text parts (thinking / tool parts are excluded). A change of the last
+  // assistant message id (a new tool-loop step) flushes the prior remainder and
+  // resets the delta cursor.
+  const feedFrom = useCallback((source: MessageSource) => {
+    const speaker = speakerRef.current;
+    const splitter = splitterRef.current;
+    if (!speaker || !splitter) return;
+    const last = findLastAssistant(source);
+    if (!last) return;
+    const text = assistantText(last);
+    const feed = feedRef.current;
+    if (feed.msgId !== last.id) {
+      for (const s of splitter.flush()) speaker.enqueue(s);
+      feed.msgId = last.id;
+      feed.fedLen = 0;
+    }
+    if (text.length > feed.fedLen) {
+      const delta = text.slice(feed.fedLen);
+      feed.fedLen = text.length;
+      for (const s of splitter.push(delta)) speaker.enqueue(s);
+    }
+  }, []);
+
+  // Agent-audio takeover: an audio/* file part on the current voice turn's reply
+  // (e.g. a synthesize_speech voice answer) supersedes per-sentence TTS — fetch
+  // the blob and hand it to takeoverAudio (aborts synths, clears the queue, plays
+  // just this). Uploads URLs are HMAC-signed (auth-exempt), so a plain fetch works.
+  const handleTakeover = useCallback((source: MessageSource) => {
+    if (!speakerRef.current) return;
+    const last = findLastAssistant(source);
+    if (!last) return;
+    const audio = last.parts.find(
+      (p): p is FilePart => p.type === "file" && p.mediaType.startsWith("audio"),
+    );
+    if (!audio || audio.url === takenOverUrlRef.current) return;
+    takenOverUrlRef.current = audio.url;
+    setVoiceReplyActive(true);
+    const url = audio.url;
+    void (async () => {
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) return;
+        const blob = await resp.blob();
+        speakerRef.current?.takeoverAudio(blob);
+      } catch {
+        /* best-effort — a failed takeover leaves any queued sentences intact */
+      }
+    })();
+  }, []);
+
+  // New turn (rising edge of streaming): stop any leftover speech from the prior
+  // reply and reset the per-turn feed/takeover cursors. Cancelling an idle
+  // speaker preserves the just-armed "preparing" indicator (no state transition).
+  // MUST run before the feed effect below so a new turn's freshly-fed sentences
+  // are never cancelled by this reset (effects fire in definition order).
+  const prevStreamingRisingRef = useRef(false);
+  useEffect(() => {
+    const was = prevStreamingRisingRef.current;
+    prevStreamingRisingRef.current = isStreaming;
+    if (!was && isStreaming) {
+      speakerRef.current?.cancel();
+      stopTts();
+      splitterRef.current?.flush();
+      feedRef.current = { msgId: null, fedLen: 0 };
+      takenOverUrlRef.current = null;
+      setVoiceReplyActive(voiceTurnPending);
+    }
+  }, [isStreaming, voiceTurnPending, stopTts]);
+
+  // Drive the speaker from live messages — ONLY for a voice-initiated turn.
+  // Non-voice turns never enqueue, so the speaker stays idle.
+  useEffect(() => {
+    if (!voiceTurnPending) return;
+    if (isStreaming) feedFrom(messageSource);
+    handleTakeover(messageSource);
+  }, [messageSource, voiceTurnPending, isStreaming, feedFrom, handleTakeover]);
+
+  // Turn finished (falling edge): flush the final remainder into the speaker,
+  // clear the voice-turn flag, and — if nothing was queued to speak — drop the
+  // indicator. voiceTurnPending covers both a direct voice submit and a drained
+  // queued voice message.
   const prevStreamingRef = useRef(false);
   useEffect(() => {
     const was = prevStreamingRef.current;
     prevStreamingRef.current = isStreaming;
     if (was && !isStreaming && voiceTurnPending) {
-      useChatStore.getState().setVoiceTurnPending(false, currentAgent);
-      // Prefer the voice the model produced itself (synthesize_speech audio part);
-      // otherwise synthesise the reply TEXT. Mutually exclusive — synthesize_speech
-      // ends the turn with empty text, so this never double-voices.
-      const audioUrl = lastAssistantAudioUrl(messageSource);
-      const text = audioUrl ? "" : lastAssistantSpokenText(messageSource);
-      if (audioUrl || text) {
-        ttsPlayingRef.current = true; // synchronous guard so continuous re-arm waits
-        setTtsPlaying(true);
-        if (audioUrl) void playAudioUrl(audioUrl);
-        else void playReply(text);
-      } else {
-        setVoiceReplyActive(false); // nothing to voice — clear the indicator
+      feedFrom(messageSource); // capture any text that landed alongside `finish`
+      const speaker = speakerRef.current;
+      const splitter = splitterRef.current;
+      if (speaker && splitter) {
+        for (const s of splitter.flush()) speaker.enqueue(s);
       }
+      useChatStore.getState().setVoiceTurnPending(false, currentAgent);
+      feedRef.current = { msgId: null, fedLen: 0 };
+      if (speaker?.idle) setVoiceReplyActive(false);
     }
-  }, [isStreaming, messageSource, playReply, playAudioUrl, voiceTurnPending, currentAgent]);
+  }, [isStreaming, voiceTurnPending, messageSource, currentAgent, feedFrom]);
 
   // Continuous loop: re-arm recording once a turn finishes (idle, not streaming,
   // and not while the spoken reply is still playing — avoids recording the TTS).
@@ -400,7 +516,12 @@ export function ChatComposer() {
     voiceStartRef.current = voice.start;
   });
   useEffect(() => {
-    if (continuous && voice.state === "idle" && !isStreaming && !ttsPlayingRef.current) {
+    // Re-arm only once the speaker queue has fully drained — the mic must not
+    // reopen while a spoken reply is still synthesising or playing (it would
+    // record the TTS). `ttsPlaying` is the reactive trigger; speaker.idle is the
+    // authoritative gate.
+    const speakerIdle = speakerRef.current?.idle ?? true;
+    if (continuous && voice.state === "idle" && !isStreaming && speakerIdle) {
       void voiceStartRef.current();
     }
   }, [continuous, voice.state, isStreaming, ttsPlaying]);
@@ -504,14 +625,14 @@ export function ChatComposer() {
     const spaceIdx = trimmed.indexOf(" ");
     const word = (spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx)).toLowerCase();
     const rest = (spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1)).trim().toLowerCase();
-    if (word === "/stop") { store.stopStream(); return; }
+    if (word === "/stop") { speakerRef.current?.cancel(); stopTts(); store.stopStream(); return; }
     if (word === "/new")  { store.newChat(); return; }
     if (word === "/think") {
       const level = /^[0-5]$/.test(rest) ? Number(rest) : THINK_LEVELS[rest];
       if (level !== undefined) { store.setThinkingLevel(level); return; }
     }
     store.sendMessage(trimmed);
-  }, []);
+  }, [stopTts]);
 
   const handleSlashClose = useCallback(() => {
     setSlashQuery(null);
@@ -1035,7 +1156,7 @@ export function ChatComposer() {
                   size="icon"
                   aria-label={t("chat.stop_and_keep")}
                   title={t("chat.stop_and_keep")}
-                  onClick={() => useChatStore.getState().stopStream()}
+                  onClick={() => { speakerRef.current?.cancel(); stopTts(); useChatStore.getState().stopStream(); }}
                   className="h-11 w-11 md:h-10 md:w-10 rounded-xl border border-destructive/30 bg-destructive/10 text-destructive hover:bg-destructive/30 hover:border-destructive/50 shadow-sm animate-in fade-in zoom-in-90"
                 >
                   <Square className="h-3.5 w-3.5 fill-current" />
