@@ -44,6 +44,10 @@ pub(super) struct ConverterCtx {
     pub(super) registry: Arc<StreamRegistry>,
     pub(super) sse_tx: tokio::sync::mpsc::Sender<Result<Event, std::convert::Infallible>>,
     pub(super) pipeline_cancel: CancellationToken,
+    /// T3: `job_id` is now captured by the POST handler at registration time
+    /// (registration moved out of this converter) and threaded in here so the
+    /// Finish/Error/exit `stream_jobs::set_content` resume-persist still fires.
+    pub(super) job_id: uuid::Uuid,
     pub(super) agent_name: String,
     pub(super) mentioned_for_invite: Option<String>,
     pub(super) user_text_for_title: String,
@@ -63,6 +67,7 @@ pub(super) async fn run_converter(
         registry,
         sse_tx,
         pipeline_cancel,
+        job_id,
         agent_name,
         mentioned_for_invite,
         user_text_for_title,
@@ -116,8 +121,12 @@ pub(super) async fn run_converter(
     }
 
     let mut finished_sent = false;
-    let mut cancel_token: Option<CancellationToken> = None;
-    let mut job_id: Option<uuid::Uuid> = None;
+    // T3: the /abort backstop (30s-grace + force engine_handle.abort()) is driven
+    // by this token. It used to be set only inside the register block that has
+    // since moved to the POST handler; without re-establishing it here the
+    // backstop would silently never arm. Set unconditionally from the same
+    // pipeline_cancel the handler registered, so POST /abort still cascades.
+    let cancel_token: Option<CancellationToken> = Some(pipeline_cancel.clone());
     let chat_db = db.clone();
     let mut accumulated_text = String::new();
     let mut accumulated_tools: Vec<serde_json::Value> = Vec::new();
@@ -228,16 +237,12 @@ pub(super) async fn run_converter(
         match event {
             StreamEvent::SessionId { session_id: sid, context_limit } => {
                 let parsed_uuid = uuid::Uuid::from_str(&sid).ok();
-                // Register stream in registry for resume + abort support (C3).
-                // Use register_with_token so the registry stores the SAME token
-                // that was passed to handle_sse: POST /api/chat/{id}/abort →
-                // registry.cancel() cancels pipeline_cancel → propagates into execute().
-                if let Some(uuid) = parsed_uuid
-                    // T3 moves registration to the POST handler with the real boundary (user_message_id)
-                    && let Some(jid) = registry.register_with_token(uuid, &agent_name, pipeline_cancel.clone(), uuid::Uuid::nil()).await {
-                        cancel_token = Some(pipeline_cancel.clone());
-                        job_id = Some(jid);
-                    }
+                // T3: stream registration + cancel-token/job_id capture moved to
+                // the POST handler (before it responds 202), so a GET /{id}/stream
+                // is guaranteed to find the stream. The converter no longer
+                // registers here — it only wires up the session_id/session_uuid
+                // used below for push_event buffering, auto-invite, and the
+                // initial streaming-message upsert.
                 session_id_str = Some(sid.clone());
                 session_uuid = parsed_uuid;
                 if let Some(sid_uuid) = session_uuid {
@@ -399,10 +404,9 @@ pub(super) async fn run_converter(
                     // Step 2: Read back full aggregated text BEFORE the row is deleted
                     let full_text = read_streaming_content(&chat_db, streaming_msg_id).await;
                     // Step 3: Persist full content to stream_jobs (needs complete text)
-                    if let Some(jid) = job_id
-                        && let Err(e) = crate::gateway::stream_jobs::set_content(&chat_db, jid, &full_text, &accumulated_tools).await {
-                            tracing::warn!(error = %e, "failed to set stream job content on Finish");
-                        }
+                    if let Err(e) = crate::gateway::stream_jobs::set_content(&chat_db, job_id, &full_text, &accumulated_tools).await {
+                        tracing::warn!(error = %e, "failed to set stream job content on Finish");
+                    }
                     // Step 4: NOW safe to finalize (DELETE) the streaming message row
                     if let Err(e) = crate::db::sessions::finalize_streaming_message(&chat_db, streaming_msg_id).await {
                         tracing::warn!(error = %e, "failed to finalize streaming message on Finish");
@@ -464,10 +468,9 @@ pub(super) async fn run_converter(
                     // Step 2: Read back full aggregated text BEFORE the row is deleted
                     let full_text = read_streaming_content(&chat_db, streaming_msg_id).await;
                     // Step 3: Persist full content to stream_jobs
-                    if let Some(jid) = job_id
-                        && let Err(e) = crate::gateway::stream_jobs::set_content(&chat_db, jid, &full_text, &accumulated_tools).await {
-                            tracing::warn!(error = %e, "failed to set stream job content on Error");
-                        }
+                    if let Err(e) = crate::gateway::stream_jobs::set_content(&chat_db, job_id, &full_text, &accumulated_tools).await {
+                        tracing::warn!(error = %e, "failed to set stream job content on Error");
+                    }
                     // Step 4: NOW safe to finalize (DELETE) the streaming message row
                     if let Err(e) = crate::db::sessions::finalize_streaming_message(&chat_db, streaming_msg_id).await {
                         tracing::warn!(error = %e, "failed to finalize streaming message on Error");
@@ -501,10 +504,9 @@ pub(super) async fn run_converter(
             // Step 2: Read back full aggregated text BEFORE the row is deleted
             let full_text = read_streaming_content(&chat_db, streaming_msg_id).await;
             // Step 3: Persist full content to stream_jobs
-            if let Some(jid) = job_id
-                && let Err(e) = crate::gateway::stream_jobs::set_content(&chat_db, jid, &full_text, &accumulated_tools).await {
-                    tracing::warn!(error = %e, "failed to set stream job content on unexpected exit");
-                }
+            if let Err(e) = crate::gateway::stream_jobs::set_content(&chat_db, job_id, &full_text, &accumulated_tools).await {
+                tracing::warn!(error = %e, "failed to set stream job content on unexpected exit");
+            }
             // Step 4: NOW safe to finalize (DELETE) the streaming message row
             if let Err(e) = crate::db::sessions::finalize_streaming_message(&chat_db, streaming_msg_id).await {
                 tracing::warn!(error = %e, "failed to finalize streaming message on unexpected exit");

@@ -1,19 +1,24 @@
-//! `POST /api/chat` — AI SDK SSE chat endpoint (Vercel AI SDK v3 wire
-//! format).
+//! `POST /api/chat` — server-authoritative chat entry (T3). Returns `202
+//! {session_id, user_message_id}` after a SYNCHRONOUS bootstrap + stream
+//! registration; it no longer streams the reply itself.
 //!
 //! Pipeline:
 //!   client JSON → `ChatSseRequest`
 //!     → @-mention routing → `IncomingMessage`
-//!     → engine task spawn (writes `StreamEvent` to a bounded channel)
+//!     → `engine.bootstrap_sse` (synchronous: resolves session_id +
+//!       user_message_id = the stream boundary)
+//!     → `StreamRegistry::register_with_token` (BEFORE responding, so a later
+//!       GET /{id}/stream is guaranteed to find the stream)
+//!     → engine task spawn (`engine.execute_sse`, writes `StreamEvent`s)
 //!     → coalescer task (merges `TextDelta`s on a 16 ms tick)
 //!     → converter task ([`super::sse_converter::run_converter`] —
 //!       `StreamEvent` → SSE JSON, buffers everything in `StreamRegistry`
-//!       for resume support)
-//!     → `Sse<ReceiverStream>` to the client.
+//!       for resume) → `202` returned.
 //!
-//! The engine task is intentionally decoupled from the SSE client lifetime:
-//! the converter buffers events to the registry regardless of client state,
-//! so reconnects via `/api/chat/{id}/stream` see a complete reply.
+//! The engine task is intentionally decoupled from any client lifetime: the
+//! converter buffers events to the registry regardless of client state, and the
+//! reply is streamed by `GET /api/chat/{id}/stream` (T4) which replays the
+//! registry buffer.
 
 use std::str::FromStr;
 
@@ -22,7 +27,7 @@ use axum::{
     http::StatusCode,
     response::{
         IntoResponse,
-        sse::{Event, KeepAlive, Sse},
+        sse::Event,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -173,6 +178,59 @@ pub(crate) async fn api_chat_sse(
         user_message_id: req.user_message_id,
     };
 
+    // ── T3: server-authoritative stream. POST runs bootstrap SYNCHRONOUSLY,
+    // registers the stream, and returns 202 {session_id, user_message_id}; the
+    // engine + converter run detached, buffering into StreamRegistry. A later
+    // GET /api/chat/{id}/stream (T4) replays that buffer. ─────────────────────
+
+    // C3: create the pipeline cancel token here so it is shared between
+    // execute_sse (pipeline execution) and StreamRegistry (abort API). All
+    // clones share cancellation state: POST /abort → registry.cancel() →
+    // pipeline_cancel.cancel() → engine_cancel propagates into execute().
+    let pipeline_cancel = CancellationToken::new();
+
+    // 1. Synchronous bootstrap resolves session_id + user_message_id (= the
+    //    stream boundary). NOTE — honest latency: user_message_id only exists
+    //    AFTER `enrich_message_text` (voice transcription / vision / URL fetch)
+    //    and `compact_messages`, so a POST carrying attachments or URLs can take
+    //    seconds before this returns 202. Accepted by design: the UI's
+    //    optimistic echo covers the pause; reordering bootstrap is out of scope.
+    let boot = match engine.bootstrap_sse(&msg, session_id, force_new_session).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!(error = %e, "SSE bootstrap error (agent: {agent_name})");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    };
+    let resp_session_id = boot.session_id;
+    let resp_user_message_id = boot.user_message_id;
+
+    // 2. Register the stream BEFORE responding — guarantees a subsequent
+    //    GET /{id}/stream finds it. Capture `job_id` HERE (it used to be
+    //    captured inside the converter's now-removed register block); it threads
+    //    into ConverterCtx so the Finish/Error/exit `stream_jobs::set_content`
+    //    persist (the resume content) still fires.
+    let Some(job_id) = bus
+        .stream_registry
+        .register_with_token(
+            resp_session_id,
+            &agent_name,
+            pipeline_cancel.clone(),
+            resp_user_message_id,
+        )
+        .await
+    else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "stream registry at capacity"})),
+        )
+            .into_response();
+    };
+
     // Phase 62 RES-01: bounded engine-side channel + coalescing converter task.
     // Engine writes to raw_tx (bounded 256) via EngineEventSender wrapper which
     // enforces the CONTEXT.md contract (text-delta droppable, others never
@@ -183,8 +241,15 @@ pub(crate) async fn api_chat_sse(
     let (raw_tx, raw_rx) = tokio::sync::mpsc::channel::<StreamEvent>(256);
     let (event_tx, event_rx) =
         tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
+    // No SSE response is built on POST anymore. We still create the sse_tx the
+    // converter writes to, but drop the receiver immediately: `send_and_buffer!`
+    // no-ops the client send once `sse_tx.is_closed()` and keeps buffering into
+    // the registry, and the converter's final `timeout(5s)` sends return
+    // instantly on a closed channel. The reply is streamed by GET /{id}/stream
+    // (T4), which subscribes to the same registry buffer.
     let (sse_tx, sse_rx) =
         tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(1024);
+    drop(sse_rx);
 
     crate::gateway::sse::spawn_coalescing_converter(
         raw_rx,
@@ -205,29 +270,18 @@ pub(crate) async fn api_chat_sse(
     //     shutdown waits for it to complete normally before the runtime exits.
     //   * Writes events to `raw_tx` → coalescer → `event_tx`. The downstream
     //     converter task ALWAYS buffers events into `StreamRegistry`
-    //     (broadcast-backed) regardless of whether the SSE client is still
-    //     connected — see `send_and_buffer!` in sse_converter.rs.
-    //   * If the SSE client disconnects, the converter keeps draining engine
-    //     events to the registry so reconnects via `/api/chat/{id}/stream` see
-    //     a complete reply, and the engine runs to natural completion.
+    //     (broadcast-backed) regardless of whether any SSE client is connected
+    //     — see `send_and_buffer!` in sse_converter.rs.
     //   * The ONLY path that aborts the engine task externally is the 30s grace
     //     window after an explicit user-initiated cancel (POST
-    //     /api/chat/{id}/abort). A client disconnect never aborts the engine —
-    //     a browser drop is a transport event, not a cancel; runaway protection
-    //     is the engine's own (max_iterations, loop-detection, tool timeouts).
-    //   Converter panics, channel hiccups, or client drops do NOT cancel the
-    //   engine.
+    //     /api/chat/{id}/abort). Runaway protection is the engine's own
+    //     (max_iterations, loop-detection, tool timeouts).
     //
     // Inter-agent communication happens via the `agent` tool (polling model),
-    // so no turn loop is needed — a single handle_sse call suffices.
+    // so no turn loop is needed — a single execute_sse call suffices.
     let ui_tx = bus.ui_event_tx.clone();
     let agent_for_broadcast = msg.agent_id.clone();
     let invite_db = infra.db.clone();
-    // C3: create the pipeline cancel token here, before spawning, so it can be
-    // shared between handle_sse (pipeline execution) and StreamRegistry (abort API).
-    // All clones share cancellation state: POST /abort → registry.cancel() →
-    // pipeline_cancel.cancel() → engine_cancel propagates into execute().
-    let pipeline_cancel = CancellationToken::new();
     let engine_cancel = pipeline_cancel.clone();
     // Capture the current tracing span (which includes the OTel parent
     // context extracted by `trace_propagation::extract_trace_context_layer`)
@@ -239,16 +293,19 @@ pub(crate) async fn api_chat_sse(
     use tracing::Instrument as _;
     // Child of the request span (contextual parent), NOT the shared current span
     // itself. Instrumenting this detached engine task with `Span::current()`
-    // directly let the HTTP request span close (handler returns the SSE stream
-    // while the engine task keeps running) with the task still holding it — the
-    // next poll re-entered a freed span id and tracing-subscriber's sharded
-    // registry panicked on a worker thread. A child keeps the parent alive for
-    // the task's lifetime and still inherits the extracted OTel parent context.
+    // directly let the HTTP request span close (handler returns while the engine
+    // task keeps running) with the task still holding it — the next poll
+    // re-entered a freed span id and tracing-subscriber's sharded registry
+    // panicked on a worker thread. A child keeps the parent alive for the task's
+    // lifetime and still inherits the extracted OTel parent context.
     // See `trace_propagation::spawn_traced` for the same fix + rationale.
     let request_span = tracing::info_span!("sse_engine_turn");
     let engine_handle = bus.bg_tasks.spawn(async move {
         let current_agent_name = engine.name().to_string();
-        if let Err(e) = engine.handle_sse(&msg, engine_event_tx.clone(), session_id, force_new_session, engine_cancel).await {
+        // T3: execute the already-bootstrapped turn. The stream is already
+        // registered (above), so every event execute_sse emits lands in the
+        // registry buffer.
+        if let Err(e) = engine.execute_sse(boot, engine_event_tx.clone(), engine_cancel).await {
             tracing::error!(error = %e, "SSE chat error (agent: {})", current_agent_name);
             // Error is a non-text event — use send_async to honor CONTEXT.md
             // "non-text never dropped" contract. send_async awaits a slot on
@@ -277,20 +334,45 @@ pub(crate) async fn api_chat_sse(
         registry: bus.stream_registry.clone(),
         sse_tx,
         pipeline_cancel,
+        job_id,
         agent_name,
         mentioned_for_invite: mentioned_agent,
         user_text_for_title,
     };
     crate::trace_propagation::spawn_traced(run_converter(ctx, event_rx, engine_handle));
 
-    let stream = tokio_stream::wrappers::ReceiverStream::new(sse_rx);
-
     (
-        [(
-            axum::http::header::HeaderName::from_static("x-vercel-ai-ui-message-stream"),
-            "v1",
-        )],
-        Sse::new(stream).keep_alive(KeepAlive::default()),
+        StatusCode::ACCEPTED,
+        Json(accepted_response_body(resp_session_id, resp_user_message_id)),
     )
         .into_response()
+}
+
+/// Build the `202 Accepted` body for `POST /api/chat`. Extracted so the exact
+/// field names the client (T6) keys on are exercised by a unit test — a swapped
+/// or renamed field fails `accepted_body_has_distinct_ids`.
+fn accepted_response_body(session_id: uuid::Uuid, user_message_id: uuid::Uuid) -> serde_json::Value {
+    json!({
+        "session_id": session_id,
+        "user_message_id": user_message_id,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::accepted_response_body;
+
+    /// Exercises the real handler helper with two DISTINCT uuids so a
+    /// swapped/renamed field is caught (asserting on a local literal would
+    /// verify nothing about production).
+    #[test]
+    fn accepted_body_has_distinct_ids() {
+        let session_id = uuid::Uuid::new_v4();
+        let user_message_id = uuid::Uuid::new_v4();
+        assert_ne!(session_id, user_message_id, "test needs distinct uuids");
+
+        let body = accepted_response_body(session_id, user_message_id);
+        assert_eq!(body["session_id"], session_id.to_string());
+        assert_eq!(body["user_message_id"], user_message_id.to_string());
+    }
 }

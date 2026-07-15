@@ -82,7 +82,10 @@ impl AgentEngine {
         .await;
     }
 
-    /// Handle message via SSE: thin adapter over pipeline::{bootstrap, execute, finalize}.
+    /// Handle message via SSE: thin, behaviourally-identical wrapper over the
+    /// T3 split (`bootstrap_sse` + `execute_sse`), retained for
+    /// `api_retry_session` (sessions.rs), which drives a resume turn with a
+    /// throwaway drain channel and does not need the 202/registration split.
     ///
     /// Phase 62 RES-01: `event_tx` is an `EngineEventSender` wrapping a bounded
     /// `mpsc::Sender<StreamEvent>` (capacity 256 in chat.rs).
@@ -97,41 +100,38 @@ impl AgentEngine {
         force_new_session: bool,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Result<Uuid> {
+        let boot = self.bootstrap_sse(msg, resume_session_id, force_new_session).await?;
+        let session_id = boot.session_id;
+        self.execute_sse(boot, event_tx, cancel).await?;
+        Ok(session_id)
+    }
+
+    /// T3 — SYNCHRONOUS bootstrap half of the SSE turn. Fires the
+    /// `BeforeMessage` hook (honouring `HookAction::Block`) and runs
+    /// `pipeline::bootstrap`, returning the `BootstrapOutcome`. `POST /api/chat`
+    /// calls this BEFORE responding `202` so `session_id` + `user_message_id`
+    /// are known and the stream is registered in `StreamRegistry` before the
+    /// client can issue `GET /{id}/stream` (T4).
+    ///
+    /// Bootstrap runs on a `NoopSink` — its ONLY sink emit is `Phase(Thinking)`
+    /// (bootstrap.rs), which never reaches the wire or the registry. So there is
+    /// no "events emitted before registration" hazard: bootstrap is DELIBERATELY
+    /// not connected to the live SSE converter. The live `SseSink` is built later
+    /// in `execute_sse`, after the POST handler has registered the stream.
+    pub async fn bootstrap_sse(
+        &self,
+        msg: &IncomingMessage,
+        resume_session_id: Option<Uuid>,
+        force_new_session: bool,
+    ) -> Result<BootstrapOutcome> {
         let hook_event = crate::agent::hooks::HookEvent::BeforeMessage;
         let action = self.hooks().fire(&hook_event);
         self.hooks().fire_webhooks(&hook_event);
         if let crate::agent::hooks::HookAction::Block(reason) = action {
             anyhow::bail!("blocked by hook: {}", reason);
         }
-        // R-DRAIN: register the REAL pipeline cancel token (not an orphan) and
-        // hold the RAII guard for the whole turn so graceful-shutdown
-        // `cancel_all_requests` propagates into `execute()` and the request is
-        // unregistered on every exit path (fixes the active_requests leak +
-        // always-full drain timeout).
-        let _req_guard = self.state.register_request_guarded(cancel.clone());
 
-        // F036: the per-session SSE sender is now published INSIDE
-        // handle_sse_inner, keyed by session_id (known only after bootstrap),
-        // and removed via an RAII guard on every exit path. This replaces the
-        // single Option slot that concurrent sessions of the same agent used to
-        // clobber (cross-delivering approval/clarify events and wiping each
-        // other's sender on exit).
-        self.handle_sse_inner(msg, event_tx, resume_session_id, force_new_session, cancel).await
-    }
-
-    async fn handle_sse_inner(
-        &self,
-        msg: &IncomingMessage,
-        event_tx: EngineEventSender,
-        resume_session_id: Option<Uuid>,
-        force_new_session: bool,
-        cancel: tokio_util::sync::CancellationToken,
-    ) -> Result<Uuid> {
-        // F036: keep a clone of the sender to publish per-session (below, once
-        // bootstrap resolves the session_id); the original is moved into the sink.
-        let sse_sender = event_tx.clone();
-        let mut s = sink::SseSink::new(event_tx);
-
+        let mut s = sink::NoopSink::new();
         let boot = bootstrap::bootstrap(
             self,
             BootstrapContext {
@@ -142,6 +142,40 @@ impl AgentEngine {
             &mut s,
         )
         .await?;
+        Ok(boot)
+    }
+
+    /// T3 — post-bootstrap execution half of the SSE turn. Owns EVERYTHING after
+    /// `bootstrap`: the request-drain guard, the live `SseSink`, per-session
+    /// sender publish, the `SessionId` emit, the slash-command early branch, and
+    /// the full `execute` → `finalize` pipeline. Consumes `boot` by value so it
+    /// can be moved into the engine task the POST handler spawns AFTER
+    /// registering the stream (hence every event this method emits lands in the
+    /// already-registered `StreamRegistry` buffer).
+    pub async fn execute_sse(
+        &self,
+        boot: BootstrapOutcome,
+        tx: EngineEventSender,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<()> {
+        // R-DRAIN: register the REAL pipeline cancel token (not an orphan) and
+        // hold the RAII guard for the whole turn so graceful-shutdown
+        // `cancel_all_requests` propagates into `execute()` and the request is
+        // unregistered on every exit path (fixes the active_requests leak +
+        // always-full drain timeout). MUST live here, NOT in `bootstrap_sse`:
+        // the guard has to outlive the POST 202 response for the whole engine
+        // turn — placing it in the synchronous bootstrap half would drop it the
+        // instant POST returns.
+        let _req_guard = self.state.register_request_guarded(cancel.clone());
+
+        // F036: keep a clone of the sender to publish per-session (below); the
+        // original is moved into the sink. The per-session SSE sender is
+        // published keyed by session_id and removed via an RAII guard on every
+        // exit path — replaces the single Option slot that concurrent sessions
+        // of the same agent used to clobber (cross-delivering approval/clarify
+        // events and wiping each other's sender on exit).
+        let sse_sender = tx.clone();
+        let mut s = sink::SseSink::new(tx);
 
         let BootstrapOutcome {
             session_id,
@@ -169,6 +203,14 @@ impl AgentEngine {
             map: self.sse_event_tx().clone(),
             session_id,
         };
+
+        // Session-recovery prompt for the interactive behaviour layer. Sourced
+        // from bootstrap's `enriched_text` (post PII-redaction / URL-enrichment)
+        // because `execute_sse` no longer receives the raw `IncomingMessage`
+        // (the split keeps `msg` in `bootstrap_sse`). Only consumed on the rare
+        // session-corruption recovery path; the small divergence from the raw
+        // `msg.text` the pre-split code used is immaterial there.
+        let recovery_text = enriched_text.clone();
 
         // Emit SessionId so the UI can track which session is active and display the context bar.
         let _ = s
@@ -239,7 +281,7 @@ impl AgentEngine {
                         &mut lifecycle_guard,
                     )
                     .await?;
-                    return Ok(session_id);
+                    return Ok(());
                 }
                 CommandOutcome::Text(text) => {
                     let slash_msg_id = opex_types::ids::MessageId::new();
@@ -277,7 +319,7 @@ impl AgentEngine {
                         &mut lifecycle_guard,
                     )
                     .await?;
-                    return Ok(session_id);
+                    return Ok(());
                 }
             }
         }
@@ -298,7 +340,7 @@ impl AgentEngine {
         // (no-op without a configured fallback). Stops a recoverable provider
         // outage / corrupt-context error from failing the live web turn.
         let interactive_layers =
-            BehaviourLayers::for_interactive(&self.tool_loop_config(), msg.text.clone().unwrap_or_default());
+            BehaviourLayers::for_interactive(&self.tool_loop_config(), recovery_text);
         let pipeline_result: anyhow::Result<()> = async {
             let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &interactive_layers).await?;
             let fin_ctx = finalize::finalize_context_from_engine(
@@ -346,7 +388,7 @@ impl AgentEngine {
         // Missed during the pipeline refactor (Tasks 7-10 dropped the tail call).
         self.maybe_trim_session(session_id).await;
 
-        Ok(session_id)
+        Ok(())
     }
 
     /// If the chat has voice mode `on`, dispatch the final assistant text as a
