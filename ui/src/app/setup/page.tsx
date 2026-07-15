@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useId } from "react";
-import { apiPost, apiGet, apiDelete } from "@/lib/api";
+import { apiPost, apiGet, apiPut, apiDelete } from "@/lib/api";
 import { toast } from "sonner";
 import { useTranslation } from "@/hooks/use-translation";
 import type { TranslationKey } from "@/i18n/types";
@@ -318,6 +318,18 @@ export default function SetupPage() {
       }
 
       setTestCallStatus("ok");
+
+      // profiles: seed the Default profile's text slot with the created provider
+      try {
+        const { profiles } = await apiGet<{ profiles: Array<{ id: string; name: string; slots: Record<string, unknown> }> }>("/api/profiles");
+        const def = profiles.find((p) => p.name === "Default");
+        if (def) {
+          await apiPut(`/api/profiles/${def.id}`, {
+            slots: { ...def.slots, text: [{ provider: providerNameRef.current, model: defaultModel.trim() }] },
+          });
+        }
+      } catch { /* seed migration will create/fix Default on next startup; don't block the wizard */ }
+
       setStep("agent");
     } catch (e) {
       setError(`${e}`);
@@ -334,10 +346,8 @@ export default function SetupPage() {
       await apiPost("/api/agents", {
         name: agentName.trim(),
         language: agentLang,
-        provider: providerType,
-        model: defaultModel,
+        profile: "Default",
         temperature: 1.0,
-        provider_connection: providerNameRef.current || undefined,
       });
       setStep("channel");
     } catch (e) {
