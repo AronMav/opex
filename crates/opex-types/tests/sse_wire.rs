@@ -278,17 +278,6 @@ fn sse_sync_running_fixture() {
 }
 
 #[test]
-fn sse_rich_card_metric_trend_up_fixture() {
-    let ev = SseEvent::RichCard(RichCardData::Metric(MetricCard {
-        title: Some("Throughput".to_string()),
-        value: Some("1.2k req/s".to_string()),
-        label: Some("p99".to_string()),
-        trend: Some(MetricTrend::Up),
-    }));
-    write_fixture("rich-card-metric-up", &ev);
-}
-
-#[test]
 fn sse_sync_begin_fixture() {
     let ev = SseEvent::SyncBegin {
         boundary_message_id: Some(Uuid::nil()),
@@ -318,6 +307,17 @@ fn sse_sync_end_fixture() {
 fn sse_sync_end_empty_fixture() {
     let ev = SseEvent::SyncEnd { last_seq: None };
     write_fixture("sync-end-empty", &ev);
+}
+
+#[test]
+fn sse_rich_card_metric_trend_up_fixture() {
+    let ev = SseEvent::RichCard(RichCardData::Metric(MetricCard {
+        title: Some("Throughput".to_string()),
+        value: Some("1.2k req/s".to_string()),
+        label: Some("p99".to_string()),
+        trend: Some(MetricTrend::Up),
+    }));
+    write_fixture("rich-card-metric-up", &ev);
 }
 
 #[test]

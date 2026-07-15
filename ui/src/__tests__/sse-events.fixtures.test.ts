@@ -136,6 +136,41 @@ describe("S6.5 Rust → TS round-trip via SSE fixtures", () => {
     expect(parsed.error).toBe("stream lost: core restarted");
   });
 
+  test("sync-begin has boundaryMessageId + runStatus + truncated", () => {
+    const raw = readFileSync(join(FIXTURES, "sync-begin.json"), "utf-8");
+    const parsed = JSON.parse(raw) as SseEvent;
+    expect(parsed.type).toBe("sync_begin");
+    if (parsed.type !== "sync_begin") throw new Error("unreachable");
+    expect(parsed.boundaryMessageId).toBe(
+      "00000000-0000-0000-0000-000000000000"
+    );
+    expect(parsed.runStatus).toBe("running");
+    expect(parsed.truncated).toBe(false);
+  });
+
+  test("sync-begin (empty) has null boundaryMessageId + finished status", () => {
+    const raw = readFileSync(join(FIXTURES, "sync-begin-empty.json"), "utf-8");
+    const parsed = JSON.parse(raw) as SseEvent;
+    if (parsed.type !== "sync_begin") throw new Error("unreachable");
+    expect(parsed.boundaryMessageId).toBe(null);
+    expect(parsed.runStatus).toBe("finished");
+  });
+
+  test("sync-end has numeric lastSeq", () => {
+    const raw = readFileSync(join(FIXTURES, "sync-end.json"), "utf-8");
+    const parsed = JSON.parse(raw) as SseEvent;
+    expect(parsed.type).toBe("sync_end");
+    if (parsed.type !== "sync_end") throw new Error("unreachable");
+    expect(parsed.lastSeq).toBe(41);
+  });
+
+  test("sync-end (empty) has null lastSeq", () => {
+    const raw = readFileSync(join(FIXTURES, "sync-end-empty.json"), "utf-8");
+    const parsed = JSON.parse(raw) as SseEvent;
+    if (parsed.type !== "sync_end") throw new Error("unreachable");
+    expect(parsed.lastSeq).toBe(null);
+  });
+
   test("start fixture has messageId + agentName", () => {
     const raw = readFileSync(join(FIXTURES, "start.json"), "utf-8");
     const parsed = JSON.parse(raw) as SseEvent;
@@ -197,7 +232,7 @@ describe("S6.5 Rust → TS round-trip via SSE fixtures", () => {
     expect(parsed.errorText).toBe("Provider timeout");
   });
 
-  test("all 26 fixtures present and round-trip cleanly", () => {
+  test("all 30 fixtures present and round-trip cleanly", () => {
     const expected = new Set([
       "data-session-id.json",
       "start.json",
@@ -224,6 +259,10 @@ describe("S6.5 Rust → TS round-trip via SSE fixtures", () => {
       "sync-interrupted.json",
       "sync-error.json",
       "sync-running.json",
+      "sync-begin.json",
+      "sync-begin-empty.json",
+      "sync-end.json",
+      "sync-end-empty.json",
       "usage.json",
     ]);
     const actual = new Set(
