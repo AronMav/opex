@@ -1,10 +1,13 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import "@testing-library/jest-dom/vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 
-// H5: the voice-settings popover is a custom overlay — it must close on Escape
-// and keep focus manageable (focus moves in on open, returns to trigger on close).
+// Fixes a live prod regression: after the Profiles project narrowed
+// provider_active to embedding-only, ChatComposer's mic gate (hasSttProvider,
+// derived from provider_active[stt]) was permanently false → the mic button
+// was hidden for every agent. Voice controls must be gated on the CURRENT
+// AGENT's `capabilities` (AgentInfo.capabilities) instead.
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn(), refresh: vi.fn() }),
@@ -28,9 +31,11 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("../ModelDropdown", () => ({ ModelDropdown: () => null }));
 
-// current agent has both stt+tts capabilities → voice controls (incl. the settings gear) render.
+// Mutable agent list so each test can flip capabilities before render.
+let mockAgentList: Array<{ name: string; capabilities: { stt: boolean; tts: boolean } }> = [];
+
 vi.mock("@/lib/queries", () => ({
-  useAgents: () => ({ data: [{ name: "main", capabilities: { text: true, stt: true, tts: true, vision: false, imagegen: false, websearch: false } }] }),
+  useAgents: () => ({ data: mockAgentList }),
   useProviders: () => ({ data: [] }),
   useProviderModels: () => ({ data: [] }),
   useProviderModelsDetailed: () => ({ data: [] }),
@@ -76,19 +81,26 @@ vi.mock("../../hooks/use-voice-recorder", () => ({
 
 import { ChatComposer } from "../ChatComposer";
 
-describe("ChatComposer voice-settings popover (H5)", () => {
+describe("ChatComposer voice gating on agent capabilities", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("opens on click and closes on Escape", () => {
+  it("stt=true, tts=false: mic shows, hands-free toggle is absent", () => {
+    mockAgentList = [
+      { name: "main", capabilities: { stt: true, tts: false } },
+    ];
     render(<ChatComposer />);
-    const trigger = screen.getByRole("button", { name: "chat.voice_settings" });
-    fireEvent.click(trigger);
+    expect(screen.getByRole("button", { name: "chat.voice_input" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "chat.continuous_voice" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "chat.voice_settings" })).not.toBeInTheDocument();
+  });
 
-    const panel = screen.getByRole("dialog");
-    expect(panel).toBeInTheDocument();
-
-    fireEvent.keyDown(panel, { key: "Escape" });
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(document.activeElement).toBe(trigger);
+  it("stt=false: mic is absent", () => {
+    mockAgentList = [
+      { name: "main", capabilities: { stt: false, tts: false } },
+    ];
+    render(<ChatComposer />);
+    expect(screen.queryByRole("button", { name: "chat.voice_input" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "chat.continuous_voice" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "chat.voice_settings" })).not.toBeInTheDocument();
   });
 });

@@ -13,7 +13,7 @@ import { CommandAutocomplete } from "@/components/chat/command-autocomplete";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { ModelDropdown } from "./ModelDropdown";
 import { useVoiceRecorder } from "../hooks/use-voice-recorder";
-import { useProviderActive } from "@/lib/queries";
+import { useAgents } from "@/lib/queries";
 import { useCommands } from "@/hooks/use-commands";
 import {
   Send,
@@ -138,11 +138,18 @@ export function ChatComposer() {
   const { data: registryCommands } = useCommands(currentAgent);
 
   // ── Voice recorder ───────────────────────────────────────────────────────
-  const { data: activeProviders } = useProviderActive();
-  const hasSttProvider = useMemo(
-    () => activeProviders?.some((p) => p.capability === "stt" && p.provider_name) ?? false,
-    [activeProviders],
+  // Gate voice controls on the CURRENT AGENT's capabilities (not provider_active,
+  // which the Profiles project narrowed to embedding-only — leaving the mic
+  // permanently hidden if left as-is). hasStt gates the mic (transcription works
+  // standalone); hasTts additionally gates hands-free + voice-settings (those
+  // depend on spoken replies).
+  const { data: agentList } = useAgents();
+  const currentAgentInfo = useMemo(
+    () => agentList?.find((a) => a.name === currentAgent),
+    [agentList, currentAgent],
   );
+  const hasStt = currentAgentInfo?.capabilities?.stt ?? false;
+  const hasTts = currentAgentInfo?.capabilities?.tts ?? false;
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
   const [activeCommandId, setActiveCommandId] = useState<string | null>(null);
   const commandListboxId = useId();
@@ -836,7 +843,7 @@ export function ChatComposer() {
               >
                 <Paperclip className="h-4 w-4" />
               </Button>
-              {hasSttProvider && (
+              {hasStt && (
                 <Button
                   type="button"
                   variant="ghost"
@@ -881,7 +888,7 @@ export function ChatComposer() {
                   )}
                 </Button>
               )}
-              {hasSttProvider && (
+              {hasStt && hasTts && (
                 <Button
                   type="button"
                   variant="ghost"
@@ -903,7 +910,7 @@ export function ChatComposer() {
                   <Repeat className="h-4 w-4" />
                 </Button>
               )}
-              {hasSttProvider && (
+              {hasStt && hasTts && (
                 <div className="relative hidden sm:block">
                   <Button
                     ref={voiceSettingsTriggerRef}
