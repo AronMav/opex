@@ -8,12 +8,15 @@
 
 **Tech Stack:** Rust/Axum + sqlx (backend), TypeScript/React + Zustand + React Query + vitest (frontend).
 
+> **Actualization (2026-07-15):** Re-verified against `master` after the Profiles + Channel-WS work shipped (HEAD `af677b8f`). The plan commit `c3a28443` is still an ancestor of HEAD, and 5 of the 6 target files are byte-identical to the Phase 1 end-state (last touched by my Phase 1 commits). Only `ui/src/lib/queries.ts` shifted — the profiles-ui refactor (`af677b8f`) moved the notifications section down ~9 lines (`useNotifications` now ~line 688), but the notification hooks and `setNotifications` usage are unchanged and the `react` import still lacks `useState`/`useCallback`; Task 4 is valid as written (line refs updated). New lesson folded into Global Constraints: `cargo check` does not catch `clippy -D warnings`.
+
 ## Global Constraints
 
 - **No DB migration in Phase 2** — reuses the existing `notifications` table; only a new SELECT and two query params.
 - **`notifications.id` is a UUID (not monotonic)** — the pagination cursor is the composite `(created_at, id)`. "Older than" = Postgres row comparison `(created_at, id) < ($cursor_ts, $cursor_id)`, ordered `created_at DESC, id DESC`.
 - **`#[sqlx::test]` MUST carry `migrations = "../../migrations"`** — a bare `#[sqlx::test]` creates an empty ephemeral DB and every query fails with `relation "notifications" does not exist` (this exact bug shipped in Phase 1 and was fixed post-hoc). Every sqlx test in this plan uses the attribute.
 - **Windows cannot run the Rust test binaries (they crash)** — verify Rust with `make check`; run the sqlx tests via the server (`postgres-test` on `127.0.0.1:5434`, `DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test`, throttled `CARGO_BUILD_JOBS=4 nice -n 19 ionice -c3 cargo test -p opex-db notifications::tests`). Frontend vitest runs locally from `ui/`.
+- **`cargo check` / `make check` does NOT catch `clippy -D warnings`** — the deploy build (`server-deploy.sh`) and CI enforce `-D warnings`, so a change that `make check` passes can still fail the deploy on clippy. After the backend tasks, run `make lint` (`cargo clippy --all-targets -- -D warnings`); if the local toolchain can't, run clippy on the server before deploying. (Learned 2026-07-15 from the Profiles work: `cargo check` was clean but `clippy -D` failed — e.g. `split_once` over manual parse, collapsible `let`-chains.)
 - **No gen-types drift** — the response stays `NotificationsResponseDto { items, unread_count, limit, offset }`; no Rust `ts_rs` DTO change, so no `api.generated.ts` regeneration. The new WS handling reuses Phase 1 store actions.
 - **Commit to `master`; do NOT add any `Co-Authored-By` / Claude attribution.** Frontend from `ui/`.
 
@@ -355,7 +358,7 @@ git commit -m "feat(notifications): store appendOlder + syncFirstPage merge for 
 ## Task 4: Frontend — wire refetch to merge + add older-page loader
 
 **Files:**
-- Modify: `ui/src/lib/queries.ts` (`useNotifications` ~line 679; add `useLoadOlderNotifications`)
+- Modify: `ui/src/lib/queries.ts` (`useNotifications` ~line 688; add `useLoadOlderNotifications`)
 
 **Interfaces:**
 - Consumes: `syncFirstPage`/`appendOlder` (Task 3); the `before`/`before_id` endpoint (Task 2).
@@ -522,7 +525,7 @@ git commit -m "feat(notifications): scroll-to-load older history in the bell dro
 
 - [ ] **Step 1: Full build**
 
-Run: `make check` (Rust clean) and `cd ui && npm run build` (UI clean).
+Run: `make check` (Rust compiles) **and `make lint`** (`cargo clippy --all-targets -- -D warnings` — the deploy gate; `make check` alone does not catch these) and `cd ui && npm run build` (UI clean).
 
 - [ ] **Step 2: Server sqlx run (deploy the branch first, then test)**
 
