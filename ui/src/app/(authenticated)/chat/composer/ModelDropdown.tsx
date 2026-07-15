@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/select";
 import { useChatStore } from "@/stores/chat-store";
 import { useAgents, useProviders, useProviderModelsDetailed } from "@/lib/queries";
+import { useAgentTextModel } from "@/hooks/use-profiles";
 import { ModelBadges } from "@/components/model-badges";
 
 export function ModelDropdown({ agent }: { agent: string }) {
@@ -16,9 +17,8 @@ export function ModelDropdown({ agent }: { agent: string }) {
   const { data: allAgents } = useAgents();
   const { data: allProviders = [] } = useProviders();
   const agentInfo = allAgents?.find(a => a.name === agent);
-  const providerConnection = agentInfo?.provider_connection;
+  const { providerConnection, defaultModel } = useAgentTextModel(agentInfo?.profile);
   const selectedProvider = allProviders.filter(p => p.type === "text").find(p => p.name === providerConnection);
-  const defaultModel = agentInfo?.model ?? "";
   const { data: models } = useProviderModelsDetailed(selectedProvider?.id ?? null);
 
   const currentModel = modelOverride ?? defaultModel;

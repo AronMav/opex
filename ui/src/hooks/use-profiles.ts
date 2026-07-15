@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api";
+import { useProviders } from "@/lib/queries";
 
 /** One provider/model(/voice) binding for a single capability slot. A
  *  capability can have several entries (fallback chain), hence the array. */
@@ -106,4 +107,30 @@ export function useDeleteProfile() {
     onSuccess: () => qc.invalidateQueries({ queryKey: profilesKey }),
     onError: (e: Error) => toast.error(e.message),
   });
+}
+
+/** Resolved text-capability binding for an agent (replaces the removed
+ *  `AgentInfoDto.provider_connection` / `.model` fields). */
+export interface AgentTextModel {
+  /** Text-capability provider name (was `AgentInfoDto.provider_connection`). */
+  providerConnection: string | undefined;
+  /** Default text model (was `AgentInfoDto.model`): the profile's text slot
+   *  model if set, else the resolved provider's own `default_model`. */
+  defaultModel: string;
+}
+
+/** Resolve an agent's default text provider + model from its profile's
+ *  `slots.text[0]` entry. `agentProfileName` is `AgentInfoDto.profile` /
+ *  `AgentDetailDto.profile`. */
+export function useAgentTextModel(agentProfileName: string | undefined): AgentTextModel {
+  const { data: profilesData } = useProfiles();
+  const { data: providersData = [] } = useProviders();
+  const profile = profilesData?.profiles.find((p) => p.name === agentProfileName);
+  const entry = profile?.slots?.text?.[0];
+  const providerConnection = entry?.provider;
+  const defaultModel =
+    (entry?.model && entry.model.length > 0
+      ? entry.model
+      : providersData.find((p) => p.name === providerConnection)?.default_model) ?? "";
+  return { providerConnection, defaultModel };
 }

@@ -60,6 +60,7 @@ import { ParentBadge } from "@/components/chat/ParentBadge";
 import { CompactChainBanner } from "@/components/chat/CompactChainBanner";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { useSessions, useAgents, qk } from "@/lib/queries";
+import { useAgentTextModel } from "@/hooks/use-profiles";
 import { queryClient } from "@/lib/query-client";
 import { assertToken, shareSession } from "@/lib/api";
 import type { SessionRow } from "@/types/api";
@@ -103,10 +104,12 @@ export default function ChatPage() {
   const modelContextLimit = useChatStore((s) => s.agents[s.currentAgent]?.modelContextLimit ?? null);
   const modelOverride = useChatStore((s) => s.agents[s.currentAgent]?.modelOverride ?? null);
   const { data: agentsData } = useAgents();
+  const currentAgentProfile = agentsData?.find((a) => a.name === currentAgent)?.profile;
+  const { defaultModel: currentAgentDefaultModel } = useAgentTextModel(currentAgentProfile);
   const currentAgentModel = useMemo(() => {
     if (modelOverride) return modelOverride;
-    return agentsData?.find((a) => a.name === currentAgent)?.model ?? null;
-  }, [modelOverride, agentsData, currentAgent]);
+    return currentAgentDefaultModel || null;
+  }, [modelOverride, currentAgentDefaultModel]);
 
   // Track which agents have been auto-restored (per-agent, not global boolean)
   // This preserves "new chat" state when switching A → B → A
