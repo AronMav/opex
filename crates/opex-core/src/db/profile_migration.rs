@@ -55,6 +55,11 @@ struct AgentToml {
     text_chain: Vec<SlotEntry>,
     tts_provider: Option<String>,
     imagegen_provider: Option<String>,
+    /// Non-empty `[agent].profile` already present in the TOML — set once the
+    /// file has been migrated. Its presence makes the rewrite step a no-op for
+    /// this agent (see Fix 2 in `run_profiles_seed`), so a late-stage failure
+    /// re-run can't flatten an already-assigned per-agent pointer to `Default`.
+    existing_profile: Option<String>,
     doc: toml_edit::DocumentMut,
 }
 
@@ -89,20 +94,24 @@ fn parse_agent_toml(path: &Path) -> anyhow::Result<AgentToml> {
         .unwrap_or(false);
 
     let provider_connection = read_str(agent, "provider_connection");
-    let bare_provider = read_str(agent, "provider");
     let model = read_str(agent, "model");
     let fallback_provider = read_str(agent, "fallback_provider");
     let tts_provider = read_str(agent, "tts_provider");
     let imagegen_provider = read_str(agent, "imagegen_provider");
+    let existing_profile = read_str(agent, "profile");
 
-    // Text chain: primary = provider_connection (falling back to the bare
-    // `provider` field for pre-connection legacy configs) carrying the agent's
-    // `model`; then the fallback provider (provider only) if set.
+    // Text chain: primary = provider_connection ONLY (carrying the agent's
+    // `model`); then the fallback provider (provider only) if set. The bare
+    // `provider` field is a provider_TYPE (e.g. "ollama"), NOT a `providers.name`
+    // row, so seeding a text SlotEntry from it would create an unresolvable slot
+    // (skipped by `effective_chain` → empty chain → UnconfiguredProvider) and
+    // mint a spurious per-agent profile. An agent without `provider_connection`
+    // gets an empty text chain and correctly folds into `Default`.
     let mut text_chain = Vec::new();
-    if let Some(primary) = provider_connection.or(bare_provider) {
+    if let Some(primary) = provider_connection {
         text_chain.push(SlotEntry {
             provider: primary,
-            model: model.clone(),
+            model,
             voice: None,
         });
     }
@@ -121,6 +130,7 @@ fn parse_agent_toml(path: &Path) -> anyhow::Result<AgentToml> {
         text_chain,
         tts_provider,
         imagegen_provider,
+        existing_profile,
         doc,
     })
 }
@@ -180,9 +190,20 @@ pub async fn run_profiles_seed(db: &PgPool, agents_dir: &Path) -> anyhow::Result
         .collect();
     paths.sort();
 
+    // A single malformed TOML must NOT abort the seed — that would leave
+    // `Default` uncreated → every agent resolves empty slots → all capabilities
+    // disabled fleet-wide. Log + skip the bad file; the skipped agent keeps its
+    // old TOML and folds into the serde-default `profile = "Default"` at load.
     let mut agents: Vec<AgentToml> = Vec::with_capacity(paths.len());
     for path in &paths {
-        agents.push(parse_agent_toml(path)?);
+        match parse_agent_toml(path) {
+            Ok(a) => agents.push(a),
+            Err(e) => tracing::warn!(
+                path = %path.display(),
+                error = %format!("{e:#}"),
+                "skipping unparseable agent TOML during profiles seed"
+            ),
+        }
     }
 
     // 3b. Default text slot: base agent preferred, else first alphabetically.
@@ -243,8 +264,17 @@ pub async fn run_profiles_seed(db: &PgPool, agents_dir: &Path) -> anyhow::Result
     }
 
     // 6. Rewrite each agent TOML: set profile, strip legacy keys.
+    //    Fix 2 (per-TOML idempotency): if the file ALREADY carries a non-empty
+    //    `[agent].profile`, it was migrated on a prior run — leave it untouched.
+    //    Without this, a late-stage failure (provider_active clear or flag-set)
+    //    would re-run with all legacy fields already stripped → every agent
+    //    computes `differs == false` → its `profile = "Arty"` gets clobbered
+    //    back to `profile = "Default"`.
     for (idx, profile_name) in &assignments {
         let a = &mut agents[*idx];
+        if a.existing_profile.is_some() {
+            continue;
+        }
         a.doc["agent"]["profile"] = toml_edit::value(profile_name.as_str());
         if let Some(table) = a.doc["agent"].as_table_mut() {
             for key in LEGACY_KEYS {
@@ -312,5 +342,67 @@ mod tests {
         // идемпотентность
         run_profiles_seed(&pool, dir.path()).await.unwrap();
         assert_eq!(crate::db::profiles::list_profiles(&pool).await.unwrap().len(), 1);
+    }
+
+    /// Fix 2: a late-stage failure (flag never set) must NOT flatten an
+    /// already-migrated per-agent `profile = "Arty"` back to `Default` on re-run.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn rerun_after_flag_loss_preserves_per_agent_profile(pool: sqlx::PgPool) {
+        sqlx::query("INSERT INTO providers (name, type, provider_type, enabled) VALUES \
+            ('mm','tts','minimax',true),('llm1','llm','openai_compat',true)")
+            .execute(&pool).await.unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        // Base agent → source of Default text slot.
+        std::fs::write(dir.path().join("Base.toml"),
+            "[agent]\nname = \"Base\"\nbase = true\nprovider_connection = \"llm1\"\nmodel = \"kimi\"\n").unwrap();
+        // Arty has a tts override → differs from Default → gets its OWN profile.
+        std::fs::write(dir.path().join("Arty.toml"),
+            "[agent]\nname = \"Arty\"\nprovider_connection = \"llm1\"\nmodel = \"kimi\"\ntts_provider = \"mm\"\n").unwrap();
+
+        run_profiles_seed(&pool, dir.path()).await.unwrap();
+
+        // After the first run Arty.toml points to its own profile.
+        let arty1 = std::fs::read_to_string(dir.path().join("Arty.toml")).unwrap();
+        assert!(arty1.contains("profile = \"Arty\""), "first run: {arty1}");
+        assert!(crate::db::profiles::get_profile_by_name(&pool, "Arty").await.unwrap().is_some());
+
+        // Simulate a late-stage failure: the flag was never persisted.
+        opex_db::sys_flags::delete(&pool, FLAG).await.unwrap();
+
+        // Re-run. The already-rewritten TOML has NO legacy fields, so a naive
+        // re-decision would compute differs==false and clobber it to Default.
+        run_profiles_seed(&pool, dir.path()).await.unwrap();
+
+        let arty2 = std::fs::read_to_string(dir.path().join("Arty.toml")).unwrap();
+        assert!(arty2.contains("profile = \"Arty\""),
+            "re-run must preserve per-agent pointer, got: {arty2}");
+        assert!(!arty2.contains("profile = \"Default\""), "must not flatten to Default: {arty2}");
+    }
+
+    /// Fix 3: one malformed TOML alongside a good one still creates `Default`
+    /// and migrates the parseable agent — the seed does not error out.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn malformed_toml_is_skipped_not_fatal(pool: sqlx::PgPool) {
+        sqlx::query("INSERT INTO providers (name, type, provider_type, enabled) VALUES \
+            ('llm1','llm','openai_compat',true)")
+            .execute(&pool).await.unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Good.toml"),
+            "[agent]\nname = \"Good\"\nbase = true\nprovider_connection = \"llm1\"\nmodel = \"kimi\"\n").unwrap();
+        // Unparseable TOML — must be skipped, not abort the whole seed.
+        std::fs::write(dir.path().join("Bad.toml"), "[agent]\nname = \"Bad\nthis = is not : valid ]]}").unwrap();
+
+        run_profiles_seed(&pool, dir.path()).await.unwrap();
+
+        // Default was still created and the good agent's text slot migrated.
+        let d = crate::db::profiles::get_profile_by_name(&pool, "Default").await.unwrap().unwrap();
+        assert_eq!(d.parsed_slots()["text"][0].provider, "llm1");
+        // The good TOML was rewritten; the bad one was left untouched.
+        let good = std::fs::read_to_string(dir.path().join("Good.toml")).unwrap();
+        assert!(good.contains("profile = "));
+        let bad = std::fs::read_to_string(dir.path().join("Bad.toml")).unwrap();
+        assert!(!bad.contains("profile = "));
     }
 }
