@@ -67,7 +67,7 @@ pub async fn list_notifications(
         r"
         SELECT id, type AS notification_type, title, body, data, read, created_at
         FROM notifications
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, id DESC
         LIMIT $1 OFFSET $2
         ",
     )
@@ -227,6 +227,34 @@ mod tests {
         let (one, _) = list_notifications_before(&pool, all[0].created_at, all[0].id, 1).await?;
         assert_eq!(one.len(), 1);
         assert_eq!(one[0].id, all[1].id);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn pagination_does_not_skip_rows_with_equal_created_at(pool: PgPool) -> Result<()> {
+        // Force three rows sharing the SAME created_at so ordering relies entirely
+        // on the id tiebreak — the boundary case the composite cursor must handle.
+        let ts = "2026-07-15T12:00:00Z";
+        for i in 0..3u8 {
+            sqlx::query(
+                "INSERT INTO notifications (type, title, body, data, created_at)
+                 VALUES ('agent_error', $1, '', '{}'::jsonb, $2::timestamptz)",
+            )
+            .bind(format!("row{i}"))
+            .bind(ts)
+            .execute(&pool)
+            .await?;
+        }
+        // Walk the whole history one row at a time via the cursor; every row must
+        // appear exactly once (no skip, no dup) — proves the total order matches.
+        let mut seen = std::collections::HashSet::new();
+        let (mut page, _) = list_notifications(&pool, 1, 0).await?;
+        while let Some(row) = page.first().cloned() {
+            assert!(seen.insert(row.id), "row returned twice: {}", row.id);
+            let next = list_notifications_before(&pool, row.created_at, row.id, 1).await?;
+            page = next.0;
+        }
+        assert_eq!(seen.len(), 3, "pagination skipped a tied row");
         Ok(())
     }
 }
