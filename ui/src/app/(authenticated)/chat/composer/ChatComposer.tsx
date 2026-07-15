@@ -105,6 +105,16 @@ function assistantText(m: ChatMessage): string {
   return t;
 }
 
+// Mirrors the core-side is_upstream_empty_garbage: some upstream proxies
+// serialize a thinking-only/empty LLM response as a literal "(Empty response: …)"
+// text blob. The core blanks it for persistence, but it still streams as
+// text-delta — so guard the voice feed here too, or it gets read aloud.
+// Start-only match (like the server): a normal reply that merely CONTAINS the
+// marker mid-string is NOT suppressed.
+function isUpstreamEmptyGarbage(text: string): boolean {
+  return text.trimStart().startsWith("(Empty response:");
+}
+
 interface AttachmentEntry {
   id: string;
   name: string;
@@ -299,6 +309,22 @@ export function ChatComposer() {
     setVoiceReplyActive(false);
   }, []);
 
+  // Stop / `/stop`: cleanly END the voice turn so NOTHING more is voiced.
+  // `stopStream`→`abortLocalOnly` sets connectionPhase="idle", indistinguishable
+  // from a clean finish — so without this the streaming falling-edge effect would
+  // still fire (voiceTurnPending true), run a final feed+flush and RE-enqueue a
+  // trailing fragment after Stop. Clearing voiceTurnPending gates that effect out,
+  // and resetting the feed cursor + splitter discards any accumulated partial
+  // sentence so it can never be flushed later.
+  const silenceVoiceTurn = useCallback(() => {
+    speakerRef.current?.cancel();
+    stopTts();
+    useChatStore.getState().setVoiceTurnPending(false, currentAgent);
+    feedRef.current = { msgId: null, fedLen: 0 };
+    splitterRef.current = createSentenceSplitter();
+    takenOverUrlRef.current = null;
+  }, [stopTts, currentAgent]);
+
   const getTtsEl = useCallback(() => {
     if (!ttsAudioRef.current) ttsAudioRef.current = new Audio();
     return ttsAudioRef.current;
@@ -421,6 +447,11 @@ export function ChatComposer() {
     const last = findLastAssistant(source);
     if (!last) return;
     const text = assistantText(last);
+    // Upstream "(Empty response: …)" garbage streams as text-delta but must never
+    // be voiced. Checking the FULL accumulated prefix on every feed detects it
+    // before any sentence could emit (the marker is 16 chars; the splitter holds
+    // fragments < 20 chars) — so nothing is ever pushed for that turn.
+    if (isUpstreamEmptyGarbage(text)) return;
     const feed = feedRef.current;
     if (feed.msgId !== last.id) {
       for (const s of splitter.flush()) speaker.enqueue(s);
@@ -449,17 +480,30 @@ export function ChatComposer() {
     takenOverUrlRef.current = audio.url;
     setVoiceReplyActive(true);
     const url = audio.url;
+    const agentAtDispatch = currentAgent;
     void (async () => {
       try {
         const resp = await fetch(url);
         if (!resp.ok) return;
         const blob = await resp.blob();
+        // The fetch above is non-abortable, so a blob can resolve AFTER the user
+        // pressed Stop or switched agents. Only play it if this is still the
+        // active voice turn for the same agent (and not superseded by a later
+        // takeover). Otherwise drop it — no audio after Stop/agent-change.
+        const st = useChatStore.getState();
+        if (
+          st.currentAgent !== agentAtDispatch ||
+          !st.agents[agentAtDispatch]?.voiceTurnPending ||
+          takenOverUrlRef.current !== url
+        ) {
+          return;
+        }
         speakerRef.current?.takeoverAudio(blob);
       } catch {
         /* best-effort — a failed takeover leaves any queued sentences intact */
       }
     })();
-  }, []);
+  }, [currentAgent]);
 
   // New turn (rising edge of streaming): stop any leftover speech from the prior
   // reply and reset the per-turn feed/takeover cursors. Cancelling an idle
@@ -497,10 +541,14 @@ export function ChatComposer() {
     const was = prevStreamingRef.current;
     prevStreamingRef.current = isStreaming;
     if (was && !isStreaming && voiceTurnPending) {
-      feedFrom(messageSource); // capture any text that landed alongside `finish`
+      // Skip the final feed+flush entirely for an upstream-garbage turn so the
+      // "(Empty response: …)" blob is never voiced (mirrors feedFrom's guard).
+      const last = findLastAssistant(messageSource);
+      const garbage = last ? isUpstreamEmptyGarbage(assistantText(last)) : false;
+      if (!garbage) feedFrom(messageSource); // capture text that landed with `finish`
       const speaker = speakerRef.current;
       const splitter = splitterRef.current;
-      if (speaker && splitter) {
+      if (speaker && splitter && !garbage) {
         for (const s of splitter.flush()) speaker.enqueue(s);
       }
       useChatStore.getState().setVoiceTurnPending(false, currentAgent);
@@ -625,14 +673,14 @@ export function ChatComposer() {
     const spaceIdx = trimmed.indexOf(" ");
     const word = (spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx)).toLowerCase();
     const rest = (spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1)).trim().toLowerCase();
-    if (word === "/stop") { speakerRef.current?.cancel(); stopTts(); store.stopStream(); return; }
+    if (word === "/stop") { silenceVoiceTurn(); store.stopStream(); return; }
     if (word === "/new")  { store.newChat(); return; }
     if (word === "/think") {
       const level = /^[0-5]$/.test(rest) ? Number(rest) : THINK_LEVELS[rest];
       if (level !== undefined) { store.setThinkingLevel(level); return; }
     }
     store.sendMessage(trimmed);
-  }, [stopTts]);
+  }, [silenceVoiceTurn]);
 
   const handleSlashClose = useCallback(() => {
     setSlashQuery(null);
@@ -1156,7 +1204,7 @@ export function ChatComposer() {
                   size="icon"
                   aria-label={t("chat.stop_and_keep")}
                   title={t("chat.stop_and_keep")}
-                  onClick={() => { speakerRef.current?.cancel(); stopTts(); useChatStore.getState().stopStream(); }}
+                  onClick={() => { silenceVoiceTurn(); useChatStore.getState().stopStream(); }}
                   className="h-11 w-11 md:h-10 md:w-10 rounded-xl border border-destructive/30 bg-destructive/10 text-destructive hover:bg-destructive/30 hover:border-destructive/50 shadow-sm animate-in fade-in zoom-in-90"
                 >
                   <Square className="h-3.5 w-3.5 fill-current" />

@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import "@testing-library/jest-dom/vitest";
-import { render, waitFor } from "@testing-library/react";
+import { render, waitFor, screen, fireEvent } from "@testing-library/react";
 
 // Task 6: streaming per-sentence TTS via hooks/tts-speaker. For a VOICE turn the
 // composer feeds the assistant's streaming TEXT deltas through the sentence
@@ -232,5 +232,87 @@ describe("ChatComposer streaming TTS speaker (Task 6)", () => {
     );
     expect(synthCalls.length).toBe(0);
     expect(playedSrcs.length).toBe(0);
+  });
+
+  // ── Fix 1: Stop must NOT voice the trailing partial sentence ──────────────
+  it("Stop during a voice turn does not voice the trailing partial sentence", async () => {
+    // One COMPLETE sentence (spoken) + a trailing partial with no boundary (held
+    // in the splitter accumulator, not yet emitted).
+    chatState.agents.main.voiceTurnPending = true;
+    chatState.agents.main.connectionPhase = "streaming";
+    chatState.agents.main.messageSource = liveSource([
+      { type: "text", text: "Первая мысль полностью произнесена вслух. А это незаконченный хвост" },
+    ]);
+
+    const { rerender } = render(<ChatComposer />);
+
+    // The one complete sentence is synthesised; the partial hangs in the splitter.
+    await waitFor(() => {
+      const calls = fetchMock.mock.calls.filter((c) =>
+        String(c[0]).startsWith("/api/tts/synthesize"),
+      );
+      expect(calls.length).toBe(1);
+    });
+    const before = fetchMock.mock.calls.filter((c) =>
+      String(c[0]).startsWith("/api/tts/synthesize"),
+    ).length;
+
+    // Press Stop (the square button rendered while streaming) → silenceVoiceTurn:
+    // cancel speaker, clear voiceTurnPending, reset feed cursor + splitter.
+    fireEvent.click(screen.getByLabelText("chat.stop_and_keep"));
+    // stopStream→abortLocalOnly would set the phase idle — simulate the falling
+    // edge so the effect that (previously) flushed the trailing partial runs.
+    chatState.agents.main.connectionPhase = "idle";
+    rerender(<ChatComposer />);
+
+    // Let effects + microtasks settle: nothing more must be synthesised/played.
+    await new Promise((r) => setTimeout(r, 20));
+
+    const after = fetchMock.mock.calls.filter((c) =>
+      String(c[0]).startsWith("/api/tts/synthesize"),
+    ).length;
+    expect(after).toBe(before); // NO trailing synth after Stop
+    // The voice turn was cleanly ended (falling-edge gate now skips flush).
+    expect(chatState.setVoiceTurnPending).toHaveBeenCalledWith(false, "main");
+  });
+
+  // ── Fix 2: upstream "(Empty response: …)" garbage must NOT be voiced ───────
+  it("does NOT voice an upstream (Empty response: …) garbage turn", async () => {
+    chatState.agents.main.voiceTurnPending = true;
+    chatState.agents.main.connectionPhase = "streaming";
+    chatState.agents.main.messageSource = liveSource([
+      { type: "text", text: "(Empty response: {'content': [...]})" },
+    ]);
+
+    const { rerender } = render(<ChatComposer />);
+    await new Promise((r) => setTimeout(r, 20));
+    // Falling edge (turn end) must not flush the garbage either.
+    chatState.agents.main.connectionPhase = "idle";
+    rerender(<ChatComposer />);
+    await new Promise((r) => setTimeout(r, 20));
+
+    const synthCalls = fetchMock.mock.calls.filter((c) =>
+      String(c[0]).startsWith("/api/tts/synthesize"),
+    );
+    expect(synthCalls.length).toBe(0);
+    expect(playedSrcs.length).toBe(0);
+  });
+
+  it("voices a normal reply that only CONTAINS (Empty response: mid-string", async () => {
+    // Leading real text → start-only match returns false → the reply IS voiced.
+    chatState.agents.main.voiceTurnPending = true;
+    chatState.agents.main.connectionPhase = "streaming";
+    chatState.agents.main.messageSource = liveSource([
+      { type: "text", text: "Смотри, вот пример: см. (Empty response:) в середине строки. " },
+    ]);
+
+    render(<ChatComposer />);
+
+    await waitFor(() => {
+      const synthCalls = fetchMock.mock.calls.filter((c) =>
+        String(c[0]).startsWith("/api/tts/synthesize"),
+      );
+      expect(synthCalls.length).toBeGreaterThanOrEqual(1);
+    });
   });
 });

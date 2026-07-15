@@ -117,6 +117,7 @@ const storeActionMocks = {
   stopStream: vi.fn(),
   newChat: vi.fn(),
   setThinkingLevel: vi.fn(),
+  setVoiceTurnPending: vi.fn(),
 };
 
 vi.mock("@/stores/chat-store", () => ({
