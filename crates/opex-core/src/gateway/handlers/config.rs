@@ -178,10 +178,10 @@ pub(crate) async fn api_tts_synthesize(
             entry.and_then(|e| e.voice.as_deref()),
         );
         let mut payload = serde_json::json!({ "input": body.text, "voice": voice });
-        if let Some(ref model) = body.model {
-            if !model.is_empty() {
-                payload["model"] = serde_json::Value::String(model.clone());
-            }
+        if let Some(ref model) = body.model
+            && !model.is_empty()
+        {
+            payload["model"] = serde_json::Value::String(model.clone());
         }
         let mut req = client
             .post(format!("{}/v1/audio/speech", base.trim_end_matches('/')))

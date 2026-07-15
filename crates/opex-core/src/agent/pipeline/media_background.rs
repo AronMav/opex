@@ -265,8 +265,7 @@ pub fn is_provider_retryable(status: Option<reqwest::StatusCode>) -> bool {
 fn extract_status_from_error(e: &anyhow::Error) -> Option<reqwest::StatusCode> {
     const MARKER: &str = "returned HTTP ";
     let s = e.to_string();
-    let idx = s.find(MARKER)?;
-    let rest = &s[idx + MARKER.len()..];
+    let rest = s.split_once(MARKER)?.1;
     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     digits.parse::<u16>().ok().and_then(|n| reqwest::StatusCode::from_u16(n).ok())
 }
