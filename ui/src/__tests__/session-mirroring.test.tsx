@@ -66,6 +66,7 @@ function seedStore() {
       connectionPhase: "idle",
       connectionError: null,
       forceNewSession: false,
+      boundaryMessageId: null,
       activeSessionIds: [],
       renderLimit: 100,
       modelOverride: null,

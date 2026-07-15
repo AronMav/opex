@@ -51,7 +51,10 @@ export function scheduleReconnect(
   }
 
   session.write({
-    connectionPhase: "reconnecting",
+    // T7: "reconnecting" removed from the phase union — a pending backoff retry
+    // now presents as "submitted" (still an active phase); reconnectAttempt +
+    // isLlmReconnecting carry the retry-in-progress detail for the indicator.
+    connectionPhase: "submitted",
     connectionError: null,
     reconnectAttempt: attempt + 1,
     // maxReconnectAttempts is a constant — only sync it on the first attempt

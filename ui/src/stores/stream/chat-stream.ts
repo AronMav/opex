@@ -71,11 +71,9 @@ export function openTurnStream(
         handleUnauthorized();
         return;
       }
-      if (resp.status === 204) {
-        // No active stream — the turn already concluded server-side.
-        cb.onFinished();
-        return;
-      }
+      // No 204 branch: post-T4 the server always streams a sync_begin/sync_end
+      // envelope (an already-concluded turn replays as an empty finished
+      // envelope → onFinished), never a bare 204.
       if (!resp.ok) {
         return resp.text().then((t) => {
           throw new Error(t || `HTTP ${resp.status}`);

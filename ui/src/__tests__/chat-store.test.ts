@@ -7,13 +7,11 @@ describe("isActivePhase", () => {
   it("returns true for active streaming states", () => {
     expect(isActivePhase("submitted")).toBe(true);
     expect(isActivePhase("streaming")).toBe(true);
-    expect(isActivePhase("reconnecting")).toBe(true);
   });
 
-  it("returns false for idle/error/complete states", () => {
+  it("returns false for idle/error states", () => {
     expect(isActivePhase("idle")).toBe(false);
     expect(isActivePhase("error")).toBe(false);
-    expect(isActivePhase("complete")).toBe(false);
     expect(isActivePhase(undefined)).toBe(false);
   });
 });

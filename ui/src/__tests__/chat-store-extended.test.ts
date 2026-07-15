@@ -266,6 +266,7 @@ describe("STATE-01: history to live transition", () => {
           connectionPhase: "idle",
           connectionError: null,
           forceNewSession: false,
+          boundaryMessageId: null,
           activeSessionIds: [],
           renderLimit: 100,
           modelOverride: null,
@@ -343,10 +344,11 @@ describe("STATE-01: history to live transition", () => {
       sendMsgBrace,
       src.indexOf("stopStream:", sendMsgBrace)
     );
-    // No old-style viewMode update calls
+    // No old-style viewMode update calls. (T7: sendMessage now delegates the
+    // optimistic-echo + body-building to renderer.sendTurn, so the old
+    // `messageSource.mode` seed computation no longer lives in this block — the
+    // meaningful regression guard here is the absence of the viewMode flip.)
     expect(sendMessageBlock).not.toMatch(/update\(agent,\s*\{\s*viewMode:\s*["']live["']\s*\}/);
-    // Uses messageSource.mode checks
-    expect(sendMessageBlock).toMatch(/messageSource\.mode/);
 
     // regenerate block — from "regenerate: () =>" to "regenerateFrom:"
     const regenerateBlock = src.slice(

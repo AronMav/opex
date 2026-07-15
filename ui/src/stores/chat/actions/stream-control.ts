@@ -44,19 +44,9 @@ export function createStreamActions(deps: ActionDeps) {
         return;
       }
 
-      const sessionId = st.activeSessionId;
-      let seedMessages: ChatMessage[] = [];
-
-      if (st.messageSource.mode === "history") {
-        // Continue from history — get messages from React Query cache.
-        // Do NOT flip messageSource here; startStream sets messageSource atomically.
-        seedMessages = getCachedHistoryMessages(sessionId, st.selectedBranches);
-      } else {
-        const liveMsgs = getLiveMessages(st.messageSource);
-        if (liveMsgs.length > 0) seedMessages = liveMsgs;
-      }
-
-      renderer.startStream(agent, sessionId, seedMessages, text, attachments, uuid());
+      // Single send path (T7): sendTurn writes the optimistic echo, POSTs the
+      // turn, and opens the GET envelope stream on the session id from the 202.
+      void renderer.sendTurn(agent, st.activeSessionId, text, attachments, uuid());
     },
 
     interruptAndSend: async (text: string, attachments?: Array<MessageAttachment>) => {
@@ -81,22 +71,14 @@ export function createStreamActions(deps: ActionDeps) {
           if (!phase || phase === "idle") break;
         }
 
-        // Send regardless of whether we reached idle (timeout safety).
+        // Send regardless of whether we reached idle (timeout safety). Same
+        // single send path as sendMessage.
         const currentSt = get().agents[agent] ?? emptyAgentState();
-        const sessionId = currentSt.activeSessionId;
-        let seedMessages: ChatMessage[] = [];
-
-        if (currentSt.messageSource.mode === "history") {
-          seedMessages = getCachedHistoryMessages(sessionId, currentSt.selectedBranches);
-        } else {
-          const liveMsgs = getLiveMessages(currentSt.messageSource);
-          if (liveMsgs.length > 0) seedMessages = liveMsgs;
-        }
-
-        renderer.startStream(agent, sessionId, seedMessages, text, attachments, uuid());
+        void renderer.sendTurn(agent, currentSt.activeSessionId, text, attachments, uuid());
       } finally {
-        // startStream has (synchronously) re-armed the stream; clearing the flag
-        // now lets the queued follow-up drain via ChatThread's idle-phase effect.
+        // sendTurn has (synchronously) written the optimistic echo and flipped
+        // the phase to "submitted" before its first await; clearing the flag now
+        // lets the queued follow-up drain via ChatThread's idle-phase effect.
         interrupting.delete(agent);
       }
     },
@@ -144,7 +126,9 @@ export function createStreamActions(deps: ActionDeps) {
       renderer.abortActiveStream(agent);
     },
 
-    resumeStream: (agent: string, sessionId: string) => renderer.resumeStream(agent, sessionId),
+    // Refresh / mount / drop-recovery all re-enter through the SAME single
+    // connect point as the post-POST path (T7).
+    resumeStream: (agent: string, sessionId: string) => renderer.connect(agent, sessionId),
 
     regenerate: () => {
       const store = get();

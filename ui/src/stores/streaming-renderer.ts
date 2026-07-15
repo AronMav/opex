@@ -4,6 +4,7 @@
 
 import { scheduleReconnect } from "./stream/stream-reconnect";
 import { processSSEStream } from "./stream/stream-processor";
+import { startTurn, openTurnStream } from "./stream/chat-stream";
 import { MAX_RECONNECT_ATTEMPTS } from "./chat-types";
 import { apiPatch, apiPost, assertToken } from "@/lib/api";
 import { queryClient } from "@/lib/query-client";
@@ -281,12 +282,12 @@ export function createStreamingRenderer(store: StoreAccess) {
     // bumps `streamGeneration` atomically. No direct store mutation
     // here — the grep guard (Task 3.8) enforces that stream-state
     // fields are never touched outside StreamSession.
-    // Defensive: if the session was already disposed (no-op above),
-    // the agent state may still carry connectionPhase="reconnecting"
-    // from a setTimer-pending state. Force-reset to idle so the user
-    // never sees a stuck "reconnecting" badge after pressing Stop.
+    // Defensive: if the session was already disposed (no-op above), the agent
+    // state may still carry an active connectionPhase from a setTimer-pending
+    // state. Force-reset to idle so the user never sees a stuck streaming badge
+    // after pressing Stop.
     const st = store.get().agents[agent];
-    if (st && (st.connectionPhase === "reconnecting" || st.connectionPhase === "submitted" || st.connectionPhase === "streaming")) {
+    if (st && (st.connectionPhase === "submitted" || st.connectionPhase === "streaming")) {
       store.set((draft) => {
         const a = draft.agents[agent];
         if (!a) return;
@@ -511,6 +512,174 @@ export function createStreamingRenderer(store: StoreAccess) {
       });
   }
 
+  // ── Server-authoritative single connect path (T7) ────────────────────────
+  // `connect` is the ONE place the client opens a turn stream — used after a
+  // POST (sendTurn), on mount/refresh (resumeStream action), and after a drop
+  // (onConnectionLost). It wraps the T6 transport (openTurnStream) and maps the
+  // envelope callbacks onto agent-state phase transitions.
+
+  /**
+   * Open the GET envelope stream for an already-started turn. Sets an active
+   * phase SYNCHRONOUSLY before the first byte (the voice rising-edge in
+   * ChatComposer depends on an active phase appearing at turn start), disposes
+   * any prior StreamSession (generation bump — preserves the `isCurrent`
+   * stale-write guard), then dispatches the batch-apply envelope.
+   */
+  function connect(agent: string, sessionId: string) {
+    // Dispose the previous session (generation bump) before creating a new one,
+    // mirroring startStream/resumeStream. abortLocalOnly is local-only — it
+    // never POSTs /abort, so re-opening the same session id can't cancel it.
+    abortLocalOnly(agent);
+    const session = streamSessionManager.start(agent);
+    // New stream → backend seq restarts; drop any stale Last-Event-ID.
+    session.write({ lastEventId: null });
+    // Synchronous active phase (before first byte). Does NOT touch messageSource:
+    // the send path's optimistic user echo (sendTurn) must survive, and the
+    // resume path lets the replayed envelope establish live mode itself.
+    update(agent, {
+      connectionPhase: "submitted",
+      streamError: null,
+      connectionError: null,
+      reconnectAttempt: 0,
+      isLlmReconnecting: false,
+    });
+    recordEventActivity(agent);
+
+    openTurnStream(agent, sessionId, session, {
+      onBoundary: (boundaryMessageId) => update(agent, { boundaryMessageId }),
+      onEnvelopeApplied: () => update(agent, { connectionPhase: "streaming" }),
+      onFinished: () => {
+        // Turn is authoritatively over. Do NOT clear live messages here — the
+        // id-based live→history handoff lands in T8, and the voice falling-edge
+        // flush (ChatComposer) reads the last assistant on the render where the
+        // phase flips out of an active state. stream-processor's own
+        // finishing→history dance keeps the overlay frozen until RQ refetch.
+        update(agent, { connectionPhase: "idle" });
+        queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
+        queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sessionId) });
+      },
+      onConnectionLost: () => {
+        // Stay "submitted" (still an active phase) and re-open immediately. T8
+        // will gate this with staleness / visibility so a permanently dead
+        // stream can't spin.
+        update(agent, { connectionPhase: "submitted" });
+        connect(agent, sessionId);
+      },
+    });
+  }
+
+  /**
+   * Start a new turn: write the optimistic user echo, POST /api/chat via the
+   * T6 `startTurn`, then open the GET envelope stream on the session id from the
+   * 202 body. This is the single send path used by sendMessage/interruptAndSend.
+   */
+  async function sendTurn(
+    agent: string,
+    sessionId: string | null,
+    userText: string,
+    attachments?: Array<MessageAttachment>,
+    userMessageId?: string,
+  ) {
+    // ── Optimistic user echo (formerly startStream:350-401) ──
+    const userParts: MessagePart[] = [];
+    if (userText) userParts.push({ type: "text", text: userText });
+
+    const apiAttachments: Array<{
+      url: string;
+      media_type: string;
+      file_name: string;
+      mime_type: string;
+    }> = [];
+    if (attachments && attachments.length > 0) {
+      for (const att of attachments) {
+        for (const content of att.content) {
+          userParts.push({ type: "file", url: content.data, mediaType: content.mimeType });
+          apiAttachments.push({
+            url: content.data,
+            media_type: content.mimeType.startsWith("image/") ? "image" : "document",
+            file_name: content.filename ?? att.name,
+            mime_type: content.mimeType,
+          });
+        }
+      }
+    }
+    if (userParts.length === 0) userParts.push({ type: "text", text: "" });
+
+    const userMsg: ChatMessage = {
+      id: userMessageId ?? uuid(),
+      role: "user",
+      parts: userParts,
+      createdAt: new Date().toISOString(),
+      status: "sending",
+    };
+    update(agent, {
+      messageSource: { mode: "live", messages: [userMsg] },
+      streamError: null,
+      connectionPhase: "submitted",
+      connectionError: null,
+      turnLimitMessage: null,
+      reconnectAttempt: 0,
+      isLlmReconnecting: false,
+      boundaryMessageId: null,
+    });
+    recordEventActivity(agent);
+    saveUiState(agent);
+
+    // ── Build request body (formerly startStream:407-443) ──
+    const agentState = store.get().agents[agent];
+    const forceNew = agentState?.forceNewSession ?? false;
+    const body: Record<string, unknown> = {
+      messages: [{ role: "user", content: userText }],
+    };
+    if (apiAttachments.length > 0) body.attachments = apiAttachments;
+    if (sessionId) {
+      body.session_id = sessionId;
+      // Send leaf_message_id — the tip of the currently viewed branch.
+      const rawMsgs = getCachedRawMessages(sessionId);
+      if (rawMsgs.length > 0) {
+        const branches = store.get().agents[agent]?.selectedBranches ?? {};
+        const hasBranching = rawMsgs.some((m) => m.parent_message_id != null);
+        if (hasBranching) {
+          const activePath = resolveActivePath(rawMsgs, branches);
+          if (activePath.length > 0) {
+            body.leaf_message_id = activePath[activePath.length - 1].id;
+          }
+        } else {
+          body.leaf_message_id = rawMsgs[rawMsgs.length - 1].id;
+        }
+      }
+    }
+    if (userMessageId) body.user_message_id = userMessageId;
+    if (forceNew) {
+      body.force_new_session = true;
+      update(agent, { forceNewSession: false });
+    }
+
+    // ── POST → 202 → connect ──
+    try {
+      const { session_id } = await startTurn(agent, body);
+      // Persist last session (was wired via onSessionId → saveLastSession).
+      _onSessionId?.(agent, session_id);
+      connect(agent, session_id);
+    } catch (err) {
+      const errMsg = (err instanceof Error ? err.message : "") || "Stream failed";
+      // Mark the optimistic user message as failed (SSE-03).
+      store.set((draft) => {
+        const a = draft.agents[agent];
+        if (!a || a.messageSource.mode !== "live") return;
+        const msgs = a.messageSource.messages;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role === "user" && msgs[i].status === "sending") {
+            msgs[i].status = "failed";
+            break;
+          }
+        }
+      });
+      update(agent, { streamError: errMsg, connectionPhase: "error", connectionError: errMsg });
+      saveUiState(agent);
+    }
+  }
+
   // ── Callback for saveLastSession (avoids circular import) ─────────────
   let _onSessionId: ((agent: string, sessionId: string) => void) | null = null;
 
@@ -530,7 +699,7 @@ export function createStreamingRenderer(store: StoreAccess) {
       const st = agentsState[agent];
       if (!st) continue;
       const phase = st.connectionPhase;
-      if (phase !== "streaming" && phase !== "reconnecting") continue;
+      if (phase !== "streaming" && phase !== "submitted") continue;
       const sid = st.activeSessionId;
       if (!sid) continue;
       const last = _lastEventTime.get(agent) ?? 0;
@@ -601,6 +770,8 @@ export function createStreamingRenderer(store: StoreAccess) {
 
   return {
     startStream,
+    sendTurn,
+    connect,
     resumeStream,
     abortActiveStream,
     abortLocalOnly,

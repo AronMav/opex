@@ -100,6 +100,7 @@ describe("MessageItem re-render count (REF-05)", () => {
         connectionPhase: "idle",
         connectionError: null,
         forceNewSession: false,
+        boundaryMessageId: null,
         activeSessionIds: [],
         renderLimit: 100,
         modelOverride: null,

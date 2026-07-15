@@ -162,13 +162,17 @@ export interface ChatMessage {
 /**
  * Single authoritative phase enum for stream lifecycle state.
  * FSM-01: authoritative connection phase enum.
- * "complete" is a transient phase between finish event and finalizeStream.
- * "reconnecting" is set when stream drops mid-run and backoff retry is pending.
+ *
+ * Server-authoritative cutover (T7): the union collapsed to four states.
+ * - "reconnecting" was removed — a dropped connection now stays "submitted"
+ *   while the single connect path re-opens (staleness/visibility gating in T8).
+ * - "complete" was removed — it folded into "idle". The boundary render keeps a
+ *   finished assistant visible, so no distinct post-finish phase is needed.
  */
-export type ConnectionPhase = "idle" | "submitted" | "streaming" | "reconnecting" | "complete" | "error";
+export type ConnectionPhase = "idle" | "submitted" | "streaming" | "error";
 
 export function isActivePhase(phase: ConnectionPhase | undefined): boolean {
-  return phase === "submitted" || phase === "streaming" || phase === "reconnecting";
+  return phase === "submitted" || phase === "streaming";
 }
 
 // ── MessageSource discriminated union (HIST-02) ─────────────────────────────
@@ -206,6 +210,13 @@ export interface AgentState {
   connectionError: string | null;
   /** When true, next sendMessage will force backend to create a new session. */
   forceNewSession: boolean;
+  /**
+   * Resume boundary reported by the server on `sync_begin` (T3/T6). Marks the
+   * last persisted message id the replayed envelope resumes after. Set by the
+   * single connect path's `onBoundary`; consumed by the id-based live→history
+   * handoff (T8). Null when no turn has streamed yet for this agent.
+   */
+  boundaryMessageId: string | null;
   /** Server-driven list of session IDs currently being processed.
    *  Updated ONLY from WS agent_processing events — never optimistically.
    *  Array (not Set) because Immer doesn't support Set without enableMapSet(). */
@@ -339,6 +350,7 @@ export function emptyAgentState(): AgentState {
     connectionPhase: "idle",
     connectionError: null,
     forceNewSession: false,
+    boundaryMessageId: null,
     activeSessionIds: [],
     renderLimit: 100,
     modelOverride: null,

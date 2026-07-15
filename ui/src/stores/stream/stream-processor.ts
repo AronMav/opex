@@ -668,11 +668,10 @@ export async function processSSEStream(
       }
 
       if (!isError) {
-        // Use "complete" (not "idle") when the stream finished normally so the
-        // auto-resume effect in ChatThread cannot fire during the refetch window.
-        // "idle" is restored once we transition to history mode below.
-        const finishedPhase = receivedFinishEvent ? ("complete" as const) : ("idle" as const);
-        session.write({ connectionPhase: finishedPhase, connectionError: null, reconnectAttempt: 0, isLlmReconnecting: false });
+        // T7: "complete" folded into "idle". The finishing→history dance below
+        // keeps the assistant visible during the refetch window (frozen live
+        // overlay), so no distinct transient phase is needed.
+        session.write({ connectionPhase: "idle", connectionError: null, reconnectAttempt: 0, isLlmReconnecting: false });
       }
       callbacks.onStreamDone?.();
     } else {
@@ -720,19 +719,13 @@ export async function processSSEStream(
       });
 
       // Step 4: RQ cache now has the fresh exchange — safe to switch to history.
-      // Restore "idle" only when transitioning from "complete" (clean finish).
-      // Do NOT overwrite "error" — the UI must keep showing the error state.
-      const phaseAfterRefetch = callbacks.getAgentState(agent)?.connectionPhase;
+      // Phase is already "idle" (T7) unless the turn ended in "error", which the
+      // finally block above preserved; switching messageSource never clobbers it.
       session.write({
         messageSource: { mode: "history" as const, sessionId: completedSessionId },
-        ...(phaseAfterRefetch === "complete" ? { connectionPhase: "idle" as const } : {}),
       });
     } else {
       queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
-      // No session to refetch — still clear "complete" so the UI input is re-enabled.
-      if (callbacks.getAgentState(agent)?.connectionPhase === "complete") {
-        session.write({ connectionPhase: "idle" as const });
-      }
     }
   }
 }

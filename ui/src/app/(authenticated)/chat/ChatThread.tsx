@@ -184,16 +184,12 @@ export function ChatThread({
   // incorrectly suppresses showThinking. Bypass lastAssistantHasText when live
   // mode has no overlay content yet (the stream hasn't sent any events yet).
   const isLiveEmpty = isLive && !liveHasContent;
-  // "complete" is the post-stream finishing window: stream ended cleanly, the
-  // post-finally is awaiting RQ refetch. RQ cache is briefly stale (the
-  // session status still reads "running") for ~100-500ms — without this
-  // guard, the thinking animation lingers visibly after the response is
-  // fully rendered.
+  // T7: "complete" folded into "idle" and "reconnecting" into "submitted" —
+  // the thinking animation is gated purely on the active phases now.
   const showThinking = isLiveOrHistory
     && (isLiveEmpty || !lastAssistantHasText)
     && !lastMsgIsOtherAgent
-    && connectionPhase !== "complete"
-    && (connectionPhase === "submitted" || connectionPhase === "streaming" || connectionPhase === "reconnecting"
+    && (connectionPhase === "submitted" || connectionPhase === "streaming"
         || engineRunning);
 
   // ── Message search (Ctrl+Shift+F) ────────────────────────────────────────
@@ -275,8 +271,10 @@ export function ChatThread({
         searchActive={search.isOpen && !!search.query}
       />
 
-      {/* Reconnecting indicator — SSE transport reconnect OR LLM-level retry */}
-      {(connectionPhase === "reconnecting" || isLlmReconnecting) && (
+      {/* Reconnecting indicator — LLM-level retry (T7: transport reconnect no
+          longer has a distinct "reconnecting" phase; it presents as "submitted"
+          with reconnectAttempt/isLlmReconnecting carrying the detail). */}
+      {isLlmReconnecting && (
         <ReconnectingIndicator
           attempt={reconnectAttempt}
           maxAttempts={maxReconnectAttempts}
