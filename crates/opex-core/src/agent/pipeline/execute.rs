@@ -49,6 +49,17 @@ use opex_types::{Message, MessageRole};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+// ── Upstream empty-response garbage detection ────────────────────────────────
+
+/// Some upstream proxies (ollama-cloud / z.ai) serialize a thinking-only
+/// or empty response from the LLM into a literal string
+/// `(Empty response: {...})`. Recognize it as an empty response so we don't
+/// persist/read it aloud as garbage, and so the empty-retry path can fire.
+/// The root fix belongs upstream, outside OPEX.
+fn is_upstream_empty_garbage(text: &str) -> bool {
+    text.trim_start().starts_with("(Empty response:")
+}
+
 // ── Outcome types ────────────────────────────────────────────────────────────
 
 pub struct ExecuteOutcome {
@@ -564,6 +575,21 @@ pub async fn execute<S: EventSink>(
             // text alongside the regular response; we keep the thinking
             // structurally separate via `response.thinking_blocks`.
             let stripped = crate::agent::thinking::strip_thinking(&partial);
+
+            // Some upstream proxies (ollama-cloud / z.ai) serialize a
+            // thinking-only or empty LLM response into a literal
+            // `(Empty response: {...})` text blob. Normalize it to empty so
+            // it is never persisted or read aloud (voice mode), and so the
+            // empty-retry path below gets a chance to fire.
+            let stripped = if is_upstream_empty_garbage(&stripped) {
+                tracing::warn!(
+                    provider = %live_provider.name(),
+                    "upstream serialized empty/thinking-only response as text; treating as empty"
+                );
+                String::new()
+            } else {
+                stripped
+            };
 
             // ── Auto-continue / empty-retry layers ────────────────────────
             //
@@ -1374,6 +1400,18 @@ mod tests {
             iterations: 0,
             thinking_blocks: vec![],
         }
+    }
+
+    #[test]
+    fn detects_upstream_empty_garbage_only_at_start() {
+        assert!(is_upstream_empty_garbage(
+            "(Empty response: {'content': [...]})"
+        ));
+        assert!(is_upstream_empty_garbage("   \n(Empty response: x)"));
+        assert!(!is_upstream_empty_garbage("Обычный ответ."));
+        assert!(!is_upstream_empty_garbage(
+            "см. (Empty response:) в середине"
+        ));
     }
 
     fn text_deltas(sink: &MockSink) -> Vec<String> {

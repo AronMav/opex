@@ -295,7 +295,14 @@ impl BehaviourLayers {
     ) -> Self {
         Self {
             fallback_provider: Some(FallbackPolicy::from_loop_config(loop_config)),
-            auto_continue: None,
+            // Only empty-retry (max_continues=0 disables the nudge path): an
+            // empty LLM response on the web (including normalized upstream
+            // garbage) is retried once, instead of ending the turn with an
+            // empty message.
+            auto_continue: Some(AutoContinuePolicy {
+                max_continues: 0,
+                retry_on_empty: true,
+            }),
             session_recovery: Some(SessionRecoveryPolicy {
                 original_user_text: user_text,
             }),
