@@ -36,7 +36,7 @@
 
 `POST /api/chat` больше **не стримит ответ**. Он валидирует, персистит user-сообщение, спавнит движок (как сейчас) и сразу отвечает `202 {"session_id": …}`. Весь стриминг — только через GET-стрим (§4.2). Это делает путь «отправил ход» и путь «переподключился» **одним и тем же** кодом на клиенте: после POST клиент просто (пере)открывает стрим.
 
-- Первый токен задерживается на один RTT (same-origin — незаметно); события до подключения не теряются — `StreamRegistry` буферизует с seq 0, snapshot их доставит.
+- Задержка 202: boundary (= user_message_id) появляется после bootstrap'а, который включает `enrich_message_text` (голос-транскрипция/vision/URL-fetch) и компакцию — на ходах с вложениями/URL POST может занять секунды. Принято: optimistic echo клиента закрывает паузу визуально; на чисто текстовых ходах — практически один RTT. События до подключения GET не теряются — `StreamRegistry` буферизует с seq 0, snapshot их доставит.
 - `POST /api/chat/{id}/abort` — без изменений (явный Stop).
 
 ### 4.2 Единый стрим: `GET /api/chat/{session_id}/stream`
@@ -103,7 +103,7 @@ finish { … }            ← как сегодня
 - `stream-reconnect.ts`, reconnect/`Last-Event-ID`/connection-management в `streaming-renderer.ts`;
 - `chat-overlay-dedup.ts` целиком; live-merge-логика `chat-history.ts`;
 - `activeSessionIds`, resume-решения, `run_status`-гейтинг в navigation/ChatThread;
-- фазовая машина сжимается до `idle | connected | turn-active`.
+- фазовая машина сжимается до `idle | submitted | streaming | error` (`error` сохраняется — на нём стоят anti-clobber guard коммита и error-discard очереди; `reconnecting` фолдится в `submitted`+staleness-переоткрытие, `complete` — в `idle`).
 
 ### 6.3 Что появляется (маленькое)
 
