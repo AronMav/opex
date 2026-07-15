@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { useEffect, useRef } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import { apiGet, apiPost, apiPut, apiDelete, apiPatch, listCheckpoints, restoreCheckpoint, getAgentPlan, approveProposal, dismissProposal, cancelGoal } from "./api"
 import { useNotificationStore } from "@/stores/notification-store"
@@ -686,7 +686,7 @@ export function useOAuthBindings(agent: string) {
 // ── Notifications ──────────────────────────────────────────────────────────
 
 export function useNotifications() {
-  const setNotifications = useNotificationStore((s) => s.setNotifications);
+  const syncFirstPage = useNotificationStore((s) => s.syncFirstPage);
   const query = useQuery({
     queryKey: qk.notifications,
     queryFn: () => apiGet<NotificationsResponse>("/api/notifications?limit=20&offset=0"),
@@ -696,10 +696,43 @@ export function useNotifications() {
   });
   useEffect(() => {
     if (query.data) {
-      setNotifications(query.data.items, query.data.unread_count);
+      syncFirstPage(query.data.items, query.data.unread_count);
     }
-  }, [query.data, setNotifications]);
+  }, [query.data, syncFirstPage]);
   return query;
+}
+
+/**
+ * History pagination for the notification bell. Not a useQuery/useInfiniteQuery:
+ * the live head of the list is owned by the store (WS prepends + first-page
+ * merge), so we only ever fetch strictly-OLDER pages and append them. Uses the
+ * `(created_at, id)` cursor of the oldest row currently in the store.
+ */
+export function useLoadOlderNotifications() {
+  const appendOlder = useNotificationStore((s) => s.appendOlder);
+  const [isLoading, setIsLoading] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+
+  const loadOlder = useCallback(async () => {
+    if (isLoading || !hasMore) return;
+    const list = useNotificationStore.getState().notifications;
+    const oldest = list[list.length - 1];
+    if (!oldest) return;
+    setIsLoading(true);
+    try {
+      const page = await apiGet<NotificationsResponse>(
+        `/api/notifications?limit=20&before=${encodeURIComponent(oldest.created_at)}&before_id=${oldest.id}`,
+      );
+      appendOlder(page.items);
+      if (page.items.length < 20) setHasMore(false);
+    } catch {
+      // transient network error — allow retry on the next scroll
+    } finally {
+      setIsLoading(false);
+    }
+  }, [appendOlder, isLoading, hasMore]);
+
+  return { loadOlder, isLoading, hasMore };
 }
 
 export function useMarkNotificationRead() {
