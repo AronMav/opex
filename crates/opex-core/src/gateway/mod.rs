@@ -103,6 +103,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(handlers::commands::routes())        // /api/commands (chat command registry)
         .merge(handlers::monitoring::routes(state.clone()))// /api/setup/*, /api/status, /api/stats, /api/usage/*, /api/doctor, /api/audit/*, /api/watchdog/*
         .merge(handlers::providers::routes())       // /api/providers/*, /api/provider-types, /api/media-drivers, /api/media-config, /api/provider-active
+        .merge(handlers::profiles::routes())        // /api/profiles/*
         .merge(handlers::network::routes())         // /api/network/addresses
         .merge(handlers::secrets::routes())         // /api/secrets/*
         .merge(handlers::memory::routes())          // /api/memory/*
