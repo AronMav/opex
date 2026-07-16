@@ -24,8 +24,9 @@ struct ActiveStreamInner {
     events: Vec<(u64, String)>,
     finished_at: Option<Instant>,
     next_event_id: u64,
-    /// Set once the buffer overflows `MAX_BUFFER_SIZE` — signals to late
-    /// subscribers that the replayed snapshot is missing early events.
+    /// Set when the buffer overflowed AND compaction could not shrink it
+    /// (non-delta flood). Late subscribers get an incomplete replay; the
+    /// client shows a banner and relies on the final history refetch.
     truncated: bool,
 }
 
@@ -172,13 +173,21 @@ impl StreamRegistry {
             let id = inner.next_event_id;
             inner.next_event_id += 1;
             let owned = event_json.to_owned();
+            // Buffer full: compact adjacent text-deltas in place (replay stays
+            // semantically complete). `truncated` is the sticky fallback for a
+            // buffer that would not shrink (non-delta flood) — once set we stop
+            // re-attempting compaction on every push.
+            if inner.events.len() >= MAX_BUFFER_SIZE && !inner.truncated {
+                compact_events(&mut inner.events);
+                if inner.events.len() >= MAX_BUFFER_SIZE {
+                    inner.truncated = true;
+                }
+            }
             if inner.events.len() < MAX_BUFFER_SIZE {
-                // Buffer + broadcast
                 inner.events.push((id, owned.clone()));
                 let _ = stream.broadcast_tx.send((id, owned));
             } else {
-                // Buffer full: broadcast only
-                inner.truncated = true;
+                // Pathological (uncompactable) overflow: broadcast only.
                 let _ = stream.broadcast_tx.send((id, owned));
             }
             id
@@ -278,6 +287,45 @@ impl StreamRegistry {
             }
         }
     }
+}
+
+/// Compact the replay buffer in place: adjacent `text-delta` events of the
+/// same block `id` merge into one event with the concatenated delta. The
+/// merged event keeps the seq of its LAST constituent — seq stays monotonic,
+/// so subscriber seq-cutoff (stream.rs) keeps working unchanged.
+fn compact_events(events: &mut Vec<(u64, String)>) {
+    let mut out: Vec<(u64, String)> = Vec::with_capacity(events.len() / 4);
+    for (seq, json) in events.drain(..) {
+        if let Some(last) = out.last_mut()
+            && let Some(merged) = try_merge_text_delta(&last.1, &json)
+        {
+            last.0 = seq;
+            last.1 = merged;
+            continue;
+        }
+        out.push((seq, json));
+    }
+    *events = out;
+}
+
+/// Merge two adjacent SSE JSON strings when both are `text-delta` of the
+/// same block id. Returns the merged JSON, or None when not mergeable.
+fn try_merge_text_delta(prev: &str, next: &str) -> Option<String> {
+    let p: serde_json::Value = serde_json::from_str(prev).ok()?;
+    if p.get("type")?.as_str()? != "text-delta" {
+        return None;
+    }
+    let n: serde_json::Value = serde_json::from_str(next).ok()?;
+    if n.get("type")?.as_str()? != "text-delta" {
+        return None;
+    }
+    if p.get("id") != n.get("id") {
+        return None;
+    }
+    let combined = format!("{}{}", p.get("delta")?.as_str()?, n.get("delta")?.as_str()?);
+    let mut merged = p;
+    merged["delta"] = serde_json::Value::String(combined);
+    serde_json::to_string(&merged).ok()
 }
 
 // Tests require a running PostgreSQL instance (register() creates DB jobs).
