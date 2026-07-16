@@ -16,6 +16,33 @@ use crate::agent::workspace;
 /// Sentinel prefix for subagent cancellation errors -- matched in spawned task.
 const SUBAGENT_CANCELLED: &str = "subagent cancelled";
 
+/// The `always_core` subset to inject natively for a dispatcher-mode subagent:
+/// names that (a) are in `always_core`, (b) are NOT denied for the subagent,
+/// (c) exist in the YAML or MCP tool sources. YAML shadows MCP on name clash
+/// (mirrors the non-dispatcher path's YAML-then-MCP order).
+fn always_core_subagent_defs(
+    always_core: &[String],
+    yaml: &[crate::tools::yaml_tools::YamlToolDef],
+    mcp_defs: &[opex_types::ToolDefinition],
+    denied: &std::collections::HashSet<&str>,
+) -> Vec<opex_types::ToolDefinition> {
+    let mut out: Vec<opex_types::ToolDefinition> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for name in always_core {
+        if denied.contains(name.as_str()) || seen.contains(name) {
+            continue;
+        }
+        if let Some(y) = yaml.iter().find(|t| &t.name == name) {
+            out.push(y.to_tool_definition());
+            seen.insert(name.clone());
+        } else if let Some(m) = mcp_defs.iter().find(|t| &t.name == name) {
+            out.push(m.clone());
+            seen.insert(name.clone());
+        }
+    }
+    out
+}
+
 /// Run an in-process subagent with isolated LLM context.
 #[allow(dead_code, clippy::too_many_arguments)]
 pub async fn run_subagent(
@@ -169,7 +196,7 @@ pub async fn run_subagent_with_session(
         // Capability tools intentionally NOT injected for subagents — all are in SUBAGENT_DENIED_TOOLS.
         available_tools.extend(
             yaml_tools
-                .into_iter()
+                .iter()
                 .filter(|t| !denied_set.contains(t.name.as_str()))
                 .map(|t| t.to_tool_definition()),
         );
@@ -178,6 +205,24 @@ pub async fn run_subagent_with_session(
             available_tools.extend(
                 mcp_defs.into_iter().filter(|t| !denied_set.contains(t.name.as_str())),
             );
+        }
+    }
+    if dispatch_for_subagent {
+        let always_core = &executor.cfg().app_config.tool_dispatcher.always_core;
+        if !always_core.is_empty() {
+            let denied_set: std::collections::HashSet<&str> =
+                denied_for_subagent.iter().map(String::as_str).collect();
+            // MCP discovery only when there is something to promote (one call
+            // per dispatcher-mode subagent spawn; the non-dispatcher path pays
+            // the same cost).
+            let mcp_defs = if let Some(mcp) = &ctx.tex.mcp {
+                mcp.all_tool_definitions().await
+            } else {
+                Vec::new()
+            };
+            available_tools.extend(always_core_subagent_defs(
+                always_core, &yaml_tools, &mcp_defs, &denied_set,
+            ));
         }
     }
     available_tools = executor.filter_tools_by_policy(available_tools);
@@ -345,4 +390,23 @@ pub async fn run_subagent_with_session(
     }
 
     anyhow::bail!("subagent exceeded max iterations")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn always_core_subagent_defs_filters_denied_and_selects_subset() {
+        use std::collections::HashSet;
+        let mcp_defs = vec![
+            opex_types::ToolDefinition { name: "sequentialthinking".into(), description: "x".into(), input_schema: serde_json::json!({}) },
+            opex_types::ToolDefinition { name: "other_mcp".into(), description: "y".into(), input_schema: serde_json::json!({}) },
+        ];
+        let always = vec!["sequentialthinking".to_string(), "denied_tool".to_string()];
+        let denied: HashSet<&str> = ["denied_tool"].into_iter().collect();
+
+        let out = super::always_core_subagent_defs(&always, &[], &mcp_defs, &denied);
+        let names: Vec<&str> = out.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["sequentialthinking"],
+            "only non-denied always_core names present in any source are injected");
+    }
 }
