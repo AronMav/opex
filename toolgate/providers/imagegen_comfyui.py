@@ -40,21 +40,23 @@ from providers.base import resolve_request_timeout
 
 
 # Operator's working krea2-turbo graph, captured from ComfyUI /history.
-# content-capable by design (the operator's installed HMcontent LoRA is node "4").
-# Only nodes 5/8/9 (prompt / size / seed) are overwritten per request; every
-# other node — checkpoint, CLIP, VAE, LoRA, conditioning rebalance — is used
-# verbatim so behaviour matches the operator's ComfyUI exactly.
+# content-capable by design (the operator's installed "Krea 2 content v4.1" LoRA is
+# node "4", strength 1.2). Only nodes 5/8/9 (prompt / size / seed) are
+# overwritten per request; every other node — checkpoint, CLIP, VAE, LoRA,
+# sampler, tiled decode — is used verbatim so behaviour matches the operator's
+# ComfyUI exactly. NB: the Krea2 conditioning-rebalance (node "6") is present
+# but intentionally bypassed — KSampler.positive reads node "5" directly.
 DEFAULT_WORKFLOW: dict = {
     "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "krea2_turbo_int8_convrot.safetensors", "weight_dtype": "default"}},
     "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "Huihui-Qwen3-VL-4B-Instruct-abliterated-fp8_scaled.safetensors", "type": "krea2", "device": "default"}},
     "3": {"class_type": "VAELoader", "inputs": {"vae_name": "krea2RealVae_v10.safetensors"}},
-    "4": {"class_type": "LoraLoaderModelOnly", "inputs": {"lora_name": "krea2_lora.safetensors", "strength_model": 0.8, "model": ["1", 0]}},
+    "4": {"class_type": "LoraLoaderModelOnly", "inputs": {"lora_name": "krea2_lora.safetensors", "strength_model": 1.2, "model": ["1", 0]}},
     "5": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["2", 0]}},
     "6": {"class_type": "ConditioningKrea2Rebalance", "inputs": {"conditioning": ["5", 0], "multiplier": 4.0, "per_layer_weights": "1.0,1.0,1.0,1.0,1.0,1.0,1.0,2.5,5.0,1.1,4.0,1.0"}},
     "7": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["5", 0]}},
     "8": {"class_type": "EmptySD3LatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
-    "9": {"class_type": "KSampler", "inputs": {"model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["8", 0], "seed": 424242, "steps": 8, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
-    "10": {"class_type": "VAEDecode", "inputs": {"samples": ["9", 0], "vae": ["3", 0]}},
+    "9": {"class_type": "KSampler", "inputs": {"model": ["4", 0], "positive": ["5", 0], "negative": ["7", 0], "latent_image": ["8", 0], "seed": 424242, "steps": 8, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+    "10": {"class_type": "VAEDecodeTiled", "inputs": {"samples": ["9", 0], "vae": ["3", 0], "tile_size": 512, "overlap": 64, "temporal_size": 64, "temporal_overlap": 8}},
     "11": {"class_type": "SaveImage", "inputs": {"images": ["10", 0], "filename_prefix": "opex"}},
 }
 
