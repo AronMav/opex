@@ -142,7 +142,7 @@ Show 3–5 prompts as named style options. For each:
 A lone figure walks through rain-slicked streets, neon reflections on wet asphalt, dramatic side lighting, photorealistic, ultra-detailed, shallow depth of field, sharp focus
 ```
 
-Offer to preview at draft quality before committing.
+Offer to preview a quick draft (small size, e.g. 512x512) before committing.
 
 ### Step 4 — Draft → Final
 
