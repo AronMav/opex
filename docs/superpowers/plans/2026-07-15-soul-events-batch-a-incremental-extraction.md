@@ -4,7 +4,7 @@
 
 **Goal:** Make knowledge extraction incremental — each run processes only messages newer than a per-session watermark, gated so it waits for ≥ `MIN_NEW_MESSAGES` new messages, eliminating the re-summarization of the same window every turn.
 
-**Architecture:** Add a nullable `sessions.last_extracted_at` watermark (migration 085) + two `opex-db` accessors. In `extract_and_save_inner`, read the watermark, select only newer user/assistant messages via a pure `select_new_messages` helper (returns `None` when < `MIN_NEW_MESSAGES`), extract on that span, and advance the watermark to the newest included message **only on success**.
+**Architecture:** Add a nullable `sessions.last_extracted_at` watermark (migration 086) + two `opex-db` accessors. In `extract_and_save_inner`, read the watermark, select only newer user/assistant messages via a pure `select_new_messages` helper (returns `None` when < `MIN_NEW_MESSAGES`), extract on that span, and advance the watermark to the newest included message **only on success**.
 
 **Tech Stack:** Rust 2024, sqlx (Postgres), chrono. rustls-tls only — no new deps.
 
