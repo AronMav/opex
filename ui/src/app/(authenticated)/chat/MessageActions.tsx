@@ -19,8 +19,6 @@ import {
   ThumbsDown,
   Pencil,
   Trash2,
-  X,
-  Send,
   MoreHorizontal,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -269,56 +267,15 @@ function FeedbackButtons({ message }: { message: ChatMessage }) {
 
 // ── Edit button (user messages only) ────────────────────────────────────────
 
-function EditButton({ message }: { message: ChatMessage }) {
+function EditButton({ onEdit }: { onEdit: () => void }) {
   const { t } = useTranslation();
-  const [editing, setEditing] = useState(false);
-  const [editText, setEditText] = useState("");
-
-  const handleStartEdit = useCallback(() => {
-    setEditText(extractText(message));
-    setEditing(true);
-  }, [message]);
-
-  const handleCancel = useCallback(() => {
-    setEditing(false);
-    setEditText("");
-  }, []);
-
-  const handleSubmit = useCallback(() => {
-    setEditing(false);
-    setEditText("");
-    useChatStore.getState().forkAndRegenerate(message.id, editText);
-  }, [message.id, editText]);
-
-  if (editing) {
-    return (
-      <div className="flex flex-col gap-2 w-full mt-2">
-        <textarea
-          value={editText}
-          onChange={(e) => setEditText(e.target.value)}
-          className="min-h-20 w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50"
-          autoFocus
-        />
-        <div className="flex items-center gap-2 justify-end">
-          <Button variant="ghost" size="sm" onClick={handleCancel}>
-            <X className="h-4 w-4 mr-1" />
-            {t("common.cancel")}
-          </Button>
-          <Button variant="ghost" size="sm" onClick={handleSubmit} className="text-primary">
-            <Send className="h-4 w-4 mr-1" />
-            {t("common.save")}
-          </Button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <Button
       variant="ghost"
       size="icon-sm"
       data-action="edit"
-      onClick={handleStartEdit}
+      onClick={onEdit}
       className={`rounded-full text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50 ${TOUCH_ICON}`}
       title={t("chat.edit_tooltip")}
       aria-label={t("chat.edit_tooltip")}
@@ -373,9 +330,11 @@ const EMPTY_MESSAGE_SOURCE = { mode: "new-chat" as const };
 export function MessageActions({
   message,
   showReload,
+  onEdit,
 }: {
   message: ChatMessage;
   showReload?: boolean;
+  onEdit?: () => void;
 }) {
   const { t } = useTranslation();
   const messageSource = useChatStore((s) => s.agents[s.currentAgent]?.messageSource ?? EMPTY_MESSAGE_SOURCE);
@@ -415,7 +374,7 @@ export function MessageActions({
           </div>
         </>
       )}
-      {!showReload && <EditButton message={message} />}
+      {!showReload && onEdit && <EditButton onEdit={onEdit} />}
       {!showReload && <ExportMarkdownButton message={message} />}
       {messageSource.mode === "history" && <DeleteMessageButton messageId={message.id} />}
     </div>

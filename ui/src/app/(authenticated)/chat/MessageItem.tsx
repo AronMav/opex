@@ -1,6 +1,6 @@
 "use client";
 
-import React, { memo, type ReactNode } from "react";
+import React, { memo, useState, type ReactNode } from "react";
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { useChatStore } from "@/stores/chat-store";
 import {
@@ -12,7 +12,7 @@ import {
 } from "@/stores/chat-selectors";
 import { useAuthStore } from "@/stores/auth-store";
 import { useTranslation } from "@/hooks/use-translation";
-import type { ChatMessage, MessagePart } from "@/stores/chat-store";
+import type { ChatMessage, MessagePart, TextPart as TextPartType } from "@/stores/chat-store";
 import { findSiblings, getCachedRawMessages } from "@/stores/chat-store";
 import { formatMessageTime } from "@/lib/format";
 import { BranchNavigator } from "./BranchNavigator";
@@ -23,6 +23,7 @@ import { CompressionDivider } from "@/components/chat/CompressionDivider";
 import { CometLoader } from "@/components/ui/loader";
 import { Button } from "@/components/ui/button";
 import { MessageActions } from "./MessageActions";
+import { MessageEditForm } from "./MessageEditForm";
 import { TextPart } from "./parts/TextPart";
 import { ReasoningPart } from "./parts/ReasoningPart";
 import { ToolCallPartView } from "@/components/chat/ToolCallPartView";
@@ -157,6 +158,7 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
 
   const isSending = message.status === "sending";
   const isFailed = message.status === "failed";
+  const [editing, setEditing] = useState(false);
 
   // Swipe right to edit (mobile)
   const swipeHandlers = useSwipeGesture({
@@ -198,21 +200,37 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
               </span>
             )}
           </div>
-          <div className="flex shrink-0 items-center gap-1">
-            {branchInfo && (
-              <BranchNavigator
-                parentMessageId={branchInfo.parentMessageId}
-                siblings={branchInfo.siblings}
-                currentIndex={branchInfo.index}
-                disabled={branchNavDisabled}
-              />
-            )}
-            <MessageActions message={message} showReload={false} />
+          {!editing && (
+            <div className="flex shrink-0 items-center gap-1">
+              {branchInfo && (
+                <BranchNavigator
+                  parentMessageId={branchInfo.parentMessageId}
+                  siblings={branchInfo.siblings}
+                  currentIndex={branchInfo.index}
+                  disabled={branchNavDisabled}
+                />
+              )}
+              <MessageActions message={message} showReload={false} onEdit={() => setEditing(true)} />
+            </div>
+          )}
+        </div>
+        {editing ? (
+          <MessageEditForm
+            initialText={message.parts
+              .filter((p): p is TextPartType => p.type === "text")
+              .map((p) => p.text)
+              .join("\n")}
+            onSubmit={(text) => {
+              setEditing(false);
+              useChatStore.getState().forkAndRegenerate(message.id, text);
+            }}
+            onCancel={() => setEditing(false)}
+          />
+        ) : (
+          <div className={cn("min-w-0 space-y-3", isSending && "opacity-70")}>
+            {message.parts.map((part, i) => renderPart(part, i))}
           </div>
-        </div>
-        <div className={cn("min-w-0 space-y-3", isSending && "opacity-70")}>
-          {message.parts.map((part, i) => renderPart(part, i))}
-        </div>
+        )}
         {isFailed && (
           <div className="flex items-center gap-2 mt-1 text-xs text-destructive">
             <AlertCircle className="h-4 w-4 shrink-0" />
