@@ -1,0 +1,6 @@
+{
+  "type": "approval_requested",
+  "approval_id": "33333333-3333-3333-3333-333333333333",
+  "agent": "Opex",
+  "tool_name": "workspace_write"
+}

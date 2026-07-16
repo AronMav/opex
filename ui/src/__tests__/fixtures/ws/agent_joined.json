@@ -1,0 +1,10 @@
+{
+  "type": "agent_joined",
+  "agent_name": "Helper",
+  "session_id": "44444444-4444-4444-4444-444444444444",
+  "invited_by": "user",
+  "participants": [
+    "Opex",
+    "Helper"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "type": "notification",
+  "data": {
+    "body": "Agent Opex wants to run workspace_write",
+    "created_at": "2026-07-16T12:00:00Z",
+    "data": {},
+    "id": "11111111-1111-1111-1111-111111111111",
+    "read": false,
+    "title": "Tool Approval Required",
+    "type": "tool_approval"
+  }
+}

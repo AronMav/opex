@@ -122,3 +122,8 @@ pub mod channels_ts;
 #[cfg(feature = "ts-gen")]
 pub mod sse_ts;
 
+/// T7: Global UI WebSocket event bus types — registered for dest="ui-ws".
+/// Imports types from opex-types::ws and registers each via register_ts_dto!.
+#[cfg(feature = "ts-gen")]
+pub mod ws_ts;
+

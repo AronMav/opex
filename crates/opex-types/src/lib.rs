@@ -2,6 +2,7 @@ pub mod approvals;
 pub mod channels;
 pub mod ids;
 pub mod sse;
+pub mod ws;
 
 pub use channels::*;
 

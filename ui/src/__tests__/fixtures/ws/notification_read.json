@@ -1,0 +1,7 @@
+{
+  "type": "notification_read",
+  "data": {
+    "id": "11111111-1111-1111-1111-111111111111",
+    "unread_count": 3
+  }
+}

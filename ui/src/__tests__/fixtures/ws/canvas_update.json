@@ -1,0 +1,8 @@
+{
+  "type": "canvas_update",
+  "agent": "Opex",
+  "action": "present",
+  "content_type": "markdown",
+  "content": "# Hello canvas",
+  "title": "Report"
+}

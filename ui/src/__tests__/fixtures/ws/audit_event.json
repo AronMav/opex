@@ -1,0 +1,9 @@
+{
+  "type": "audit_event",
+  "event_type": "approval_requested",
+  "agent": "Opex",
+  "details": {
+    "approval_id": "x",
+    "tool": "workspace_write"
+  }
+}

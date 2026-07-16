@@ -51,6 +51,7 @@ fn main() {
         ("ui",       "ui/src/types/api.generated.ts",         38),
         ("channels", "channels/src/types.generated.ts",        6),
         ("ui-sse",   "ui/src/types/sse.generated.ts",          9),
+        ("ui-ws",    "ui/src/types/ws.generated.ts",           3),
     ];
 
     let header = "// @generated — do not edit by hand.\n\

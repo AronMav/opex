@@ -1,0 +1,6 @@
+{
+  "type": "notifications_read_all",
+  "data": {
+    "unread_count": 0
+  }
+}

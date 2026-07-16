@@ -1,0 +1,7 @@
+{
+  "type": "log",
+  "level": "INFO",
+  "target": "opex_core::agent",
+  "message": "agent started",
+  "timestamp": "2026-07-16T12:00:00+00:00"
+}

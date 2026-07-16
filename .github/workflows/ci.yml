@@ -190,6 +190,7 @@ jobs:
             ui/src/types/api.generated.ts \
             channels/src/types.generated.ts \
             ui/src/types/sse.generated.ts \
+            ui/src/types/ws.generated.ts \
             || (echo "::error::Generated TS types are out of date. Run 'make gen-types' locally and commit the result." && exit 1)
 
   channels-fixtures-drift:

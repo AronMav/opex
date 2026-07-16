@@ -1,0 +1,9 @@
+{
+  "type": "file_job_progress",
+  "job_id": "55555555-5555-5555-5555-555555555555",
+  "handler_id": "summarize_video",
+  "session_id": "66666666-6666-6666-6666-666666666666",
+  "phase": "transcribing",
+  "pct": 42,
+  "status": "processing"
+}
