@@ -16,6 +16,16 @@ use super::stream_jobs;
 // streams. This is a deliberate tradeoff, not an oversight.
 const BROADCAST_CAPACITY: usize = 10_000;
 const MAX_BUFFER_SIZE: usize = 10_000;
+/// Hysteresis threshold for overflow compaction: a compaction pass must shrink
+/// the buffer DECISIVELY (below half capacity) for buffering to continue.
+/// Without it, a marginally-mergeable flood (interleaved block ids where only
+/// a few adjacent pairs merge per pass) would shrink slightly, refill in a few
+/// pushes, and re-trigger a full O(n) JSON-parse compaction under the
+/// per-stream lock indefinitely. With the target, such floods hit the sticky
+/// `truncated` fallback after ONE pass. A genuine single/few-block delta flood
+/// compacts 10k → a handful of events — far below the target — so the normal
+/// case is unaffected.
+const COMPACTION_TARGET: usize = MAX_BUFFER_SIZE / 2;
 /// Max concurrent active streams (prevent memory exhaustion on Pi)
 const MAX_ACTIVE_STREAMS: usize = 50;
 
@@ -24,9 +34,11 @@ struct ActiveStreamInner {
     events: Vec<(u64, String)>,
     finished_at: Option<Instant>,
     next_event_id: u64,
-    /// Set when the buffer overflowed AND compaction could not shrink it
-    /// (non-delta flood). Late subscribers get an incomplete replay; the
-    /// client shows a banner and relies on the final history refetch.
+    /// Set when the buffer overflowed AND compaction could not shrink the
+    /// buffer decisively (below half capacity — `COMPACTION_TARGET`), e.g. a
+    /// non-delta or interleaved-id flood. Late subscribers get an incomplete
+    /// replay; the client shows a banner and relies on the final history
+    /// refetch.
     truncated: bool,
 }
 
@@ -174,16 +186,19 @@ impl StreamRegistry {
             inner.next_event_id += 1;
             let owned = event_json.to_owned();
             // Buffer full: compact adjacent text-deltas in place (replay stays
-            // semantically complete). `truncated` is the sticky fallback for a
-            // buffer that would not shrink (non-delta flood) — once set we stop
+            // semantically complete). Hysteresis: buffering continues only if
+            // the pass shrank the buffer decisively (below COMPACTION_TARGET);
+            // a marginal shrink would refill in a few pushes and re-trigger a
+            // full O(n) compaction under the lock indefinitely. Otherwise
+            // `truncated` becomes the sticky fallback — once set we stop
             // re-attempting compaction on every push.
             if inner.events.len() >= MAX_BUFFER_SIZE && !inner.truncated {
                 compact_events(&mut inner.events);
-                if inner.events.len() >= MAX_BUFFER_SIZE {
+                if inner.events.len() >= COMPACTION_TARGET {
                     inner.truncated = true;
                 }
             }
-            if inner.events.len() < MAX_BUFFER_SIZE {
+            if !inner.truncated && inner.events.len() < MAX_BUFFER_SIZE {
                 inner.events.push((id, owned.clone()));
                 let _ = stream.broadcast_tx.send((id, owned));
             } else {
@@ -310,6 +325,7 @@ fn compact_events(events: &mut Vec<(u64, String)>) {
 
 /// Merge two adjacent SSE JSON strings when both are `text-delta` of the
 /// same block id. Returns the merged JSON, or None when not mergeable.
+/// Both events must carry a string `id` — two id-less deltas never merge.
 fn try_merge_text_delta(prev: &str, next: &str) -> Option<String> {
     let p: serde_json::Value = serde_json::from_str(prev).ok()?;
     if p.get("type")?.as_str()? != "text-delta" {
@@ -319,7 +335,7 @@ fn try_merge_text_delta(prev: &str, next: &str) -> Option<String> {
     if n.get("type")?.as_str()? != "text-delta" {
         return None;
     }
-    if p.get("id") != n.get("id") {
+    if p.get("id")?.as_str()? != n.get("id")?.as_str()? {
         return None;
     }
     let combined = format!("{}{}", p.get("delta")?.as_str()?, n.get("delta")?.as_str()?);
@@ -423,5 +439,33 @@ mod tests {
         }
         let expected: String = (0..total).map(|i| format!("x{i};")).collect();
         assert_eq!(concat, expected);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn overflow_with_alternating_ids_truncates(pool: sqlx::PgPool) {
+        let registry = StreamRegistry::new(pool);
+        let sid = Uuid::new_v4();
+        sqlx::query("INSERT INTO sessions (id, agent_id, user_id, channel) VALUES ($1, 'A', 'u', 'ui')")
+            .bind(sid)
+            .execute(registry.db())
+            .await
+            .expect("seed session");
+        registry
+            .register_with_token(sid, "A", CancellationToken::new(), Uuid::new_v4())
+            .await
+            .unwrap();
+        let key = sid.to_string();
+        // Строго чередующиеся block id — ни одна соседняя пара не сливается,
+        // компакция = no-op → гистерезис переводит в sticky truncated.
+        for i in 0..(10_000u64 + 10) {
+            let id = if i % 2 == 0 { "a" } else { "b" };
+            registry
+                .push_event(&key, &format!("{{\"type\":\"text-delta\",\"id\":\"{id}\",\"delta\":\"x{i};\"}}"))
+                .await;
+        }
+        let sub = registry.subscribe(&key).await.unwrap();
+        assert!(sub.truncated, "uncompactable flood must fall back to truncated");
+        // Буфер цел до потолка, дальше — только broadcast (send-only).
+        assert_eq!(sub.events.len(), 10_000);
     }
 }
