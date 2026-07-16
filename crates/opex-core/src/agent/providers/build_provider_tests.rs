@@ -90,6 +90,27 @@ async fn build_provider_stores_timeouts_on_openai_provider() {
 }
 
 #[tokio::test]
+async fn build_provider_routes_kimi_to_anthropic() {
+    // Kimi Code (kimi.com/code) is an anthropic-compatible gateway. A row with
+    // provider_type "kimi" must dispatch to AnthropicProvider (name() ==
+    // "anthropic"), NOT fall through to the OpenAiCompatibleProvider default.
+    let mut row = make_row(json!({}));
+    row.provider_type = "kimi".into();
+    row.base_url = Some("https://api.moonshot.ai/anthropic".into());
+
+    let provider = build_provider(
+        &row,
+        Arc::new(SecretsManager::new_noop()),
+        &TimeoutsConfig::default(),
+        tokio_util::sync::CancellationToken::new(),
+        ProviderOverrides::default(),
+    )
+    .expect("build_provider succeeds for kimi");
+
+    assert_eq!(provider.name(), "anthropic");
+}
+
+#[tokio::test]
 async fn openai_new_from_row_honors_overrides_and_timeouts() {
     // Issue #4: `ProviderOverrides { temperature, max_tokens, model }` wins over
     // row defaults. Issue #1: the constructor stores the passed-in timeouts.

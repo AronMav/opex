@@ -232,6 +232,22 @@ pub(crate) const PROVIDER_TYPES: &[ProviderTypeMeta] = &[
         models_provider: None,
         default_models: &[],
     },
+    // Kimi Code (kimi.com/code): Moonshot's Anthropic-compatible gateway. Routed
+    // through `AnthropicProvider` (see factory.rs) — `chat_path: ""` so the impl
+    // builds `{base_url}/v1/messages`. Auth is `Authorization: Bearer` (the
+    // gateway rejects `x-api-key`), handled by AnthropicProvider::bearer_auth.
+    // Model listing is off: the /anthropic gateway has no OpenAI `/v1/models`.
+    ProviderTypeMeta {
+        id: "kimi",
+        name: "Kimi Code (Moonshot)",
+        chat_path: "",
+        default_base_url: "https://api.moonshot.ai/anthropic",
+        default_secret_name: "MOONSHOT_API_KEY",
+        requires_api_key: true,
+        supports_model_listing: false,
+        models_provider: None,
+        default_models: &["kimi-k3", "kimi-k2.7-code", "kimi-k2.6"],
+    },
     ProviderTypeMeta {
         id: "nvidia",
         name: "NVIDIA",
@@ -457,6 +473,25 @@ mod chat_url_tests {
             resolve_chat_url("openai", "https://token-plan-sgp.xiaomimimo.com"),
             "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn kimi_preset_is_anthropic_compatible() {
+        // Kimi Code has an empty chat_path → resolve_chat_url returns base as-is
+        // (AnthropicProvider then appends /v1/messages internally).
+        assert_eq!(
+            resolve_chat_url("kimi", "https://api.moonshot.ai/anthropic"),
+            "https://api.moonshot.ai/anthropic"
+        );
+        let kimi = PROVIDER_TYPES
+            .iter()
+            .find(|pt| pt.id == "kimi")
+            .expect("kimi preset registered");
+        assert_eq!(kimi.default_base_url, "https://api.moonshot.ai/anthropic");
+        assert_eq!(kimi.default_secret_name, "MOONSHOT_API_KEY");
+        assert!(!kimi.supports_model_listing);
+        assert_eq!(kimi.chat_path, "");
+        assert!(kimi.default_models.contains(&"kimi-k3"));
     }
 
     #[test]

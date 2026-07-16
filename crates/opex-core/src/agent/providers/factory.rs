@@ -91,7 +91,9 @@ pub fn build_provider(
     }
 
     match row.provider_type.as_str() {
-        "anthropic" => {
+        // `kimi` = Kimi Code (Moonshot) anthropic-compatible gateway; same wire
+        // format as Anthropic, differs only in auth (Bearer, handled inside).
+        "anthropic" | "kimi" => {
             let provider = AnthropicProvider::new_from_row(
                 row, secrets, *timeouts, cancel, opts, overrides,
             )?;

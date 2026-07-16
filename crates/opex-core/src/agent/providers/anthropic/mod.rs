@@ -40,6 +40,29 @@ pub struct AnthropicProvider {
     cancel: tokio_util::sync::CancellationToken,
     /// Max HTTP retry attempts on transient errors (429/5xx). Configurable per-provider via UI.
     max_retries: u32,
+    /// Auth scheme for the Anthropic-compatible endpoint. `false` → native
+    /// Anthropic `x-api-key`; `true` → `Authorization: Bearer` for third-party
+    /// anthropic-compatible vendors (Kimi Code / Moonshot `/anthropic` gateway,
+    /// which documents only Bearer and rejects `x-api-key`).
+    bearer_auth: bool,
+}
+
+impl AnthropicProvider {
+    /// Build the auth + version headers for an Anthropic-compatible request.
+    /// `anthropic-version` is always sent; the credential goes as `x-api-key`
+    /// for native Anthropic or `Authorization: Bearer` for third-party vendors
+    /// (`bearer_auth`).
+    fn auth_headers(&self, api_key: Option<&str>) -> Vec<(String, String)> {
+        let mut headers = vec![("anthropic-version".to_string(), "2023-06-01".to_string())];
+        if let Some(key) = api_key.filter(|k| !k.is_empty()) {
+            if self.bearer_auth {
+                headers.push(("authorization".to_string(), format!("Bearer {key}")));
+            } else {
+                headers.push(("x-api-key".to_string(), key.to_string()));
+            }
+        }
+        headers
+    }
 }
 
 impl AnthropicProvider {
@@ -94,6 +117,9 @@ impl AnthropicProvider {
             timeouts,
             cancel,
             max_retries: opts.max_retries,
+            // Native Anthropic → x-api-key; any third-party anthropic-compatible
+            // vendor (currently `kimi`) → Authorization: Bearer.
+            bearer_auth: row.provider_type != "anthropic",
         };
         Ok(provider)
     }
@@ -145,6 +171,7 @@ impl AnthropicProvider {
             timeouts: super::TimeoutsConfig::default(),
             cancel: tokio_util::sync::CancellationToken::new(),
             max_retries: 3,
+            bearer_auth: false,
         }
     }
 
@@ -180,11 +207,7 @@ impl LlmProvider for AnthropicProvider {
 
         let api_key = self.resolve_api_key().await;
 
-        let mut auth_headers = vec![("anthropic-version".to_string(), "2023-06-01".to_string())];
-        if let Some(ref key) = api_key
-            && !key.is_empty() {
-                auth_headers.push(("x-api-key".to_string(), key.clone()));
-            }
+        let auth_headers = self.auth_headers(api_key.as_deref());
 
         let body_text = self.client
             .post_json(
@@ -247,11 +270,7 @@ impl LlmProvider for AnthropicProvider {
 
         let start = std::time::Instant::now();
         let api_key = self.resolve_api_key().await;
-        let mut auth_headers = vec![("anthropic-version".to_string(), "2023-06-01".to_string())];
-        if let Some(ref key) = api_key
-            && !key.is_empty() {
-                auth_headers.push(("x-api-key".to_string(), key.clone()));
-            }
+        let auth_headers = self.auth_headers(api_key.as_deref());
         let resp = match self.streaming_client
             .post_json_stream(
                 &url,
@@ -427,7 +446,11 @@ impl LlmProvider for AnthropicProvider {
             .timeout(std::time::Duration::from_secs(5))
             .header("anthropic-version", "2023-06-01");
         if let Some(ref key) = api_key {
-            req = req.header("x-api-key", key.as_str());
+            req = if self.bearer_auth {
+                req.header("authorization", format!("Bearer {key}"))
+            } else {
+                req.header("x-api-key", key.as_str())
+            };
         }
         let resp = req.send().await.ok()?
             .error_for_status().ok()?
@@ -444,6 +467,35 @@ impl LlmProvider for AnthropicProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn auth_headers_native_uses_x_api_key() {
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let p = AnthropicProvider::for_tests("m".into(), 0.7, None, secrets);
+        // for_tests defaults bearer_auth = false (native Anthropic).
+        let h = p.auth_headers(Some("secret-key"));
+        assert!(h.contains(&("anthropic-version".to_string(), "2023-06-01".to_string())));
+        assert!(h.contains(&("x-api-key".to_string(), "secret-key".to_string())));
+        assert!(!h.iter().any(|(k, _)| k == "authorization"));
+    }
+
+    #[tokio::test]
+    async fn auth_headers_bearer_for_third_party() {
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let mut p = AnthropicProvider::for_tests("m".into(), 0.7, None, secrets);
+        p.bearer_auth = true; // Kimi Code / Moonshot /anthropic gateway
+        let h = p.auth_headers(Some("secret-key"));
+        assert!(h.contains(&("authorization".to_string(), "Bearer secret-key".to_string())));
+        assert!(!h.iter().any(|(k, _)| k == "x-api-key"));
+    }
+
+    #[tokio::test]
+    async fn auth_headers_omits_credential_when_empty() {
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let p = AnthropicProvider::for_tests("m".into(), 0.7, None, secrets);
+        assert_eq!(p.auth_headers(None).len(), 1); // only anthropic-version
+        assert_eq!(p.auth_headers(Some("")).len(), 1);
+    }
 
     #[test]
     fn parse_thinking_block() {
