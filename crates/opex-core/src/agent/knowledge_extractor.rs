@@ -40,8 +40,13 @@ struct ExtractedKnowledge {
     outcomes: Vec<String>,
     #[serde(default)]
     feedback: Vec<String>,
+    /// Kept as raw `serde_json::Value` (not `EventItem`) so one malformed event
+    /// object (missing `text`, wrong-typed `importance`) can NEVER fail the
+    /// top-level parse of the whole extraction payload — same fail-soft rule as
+    /// `emotion` above (spec §5). The per-item best-effort mapping into
+    /// `EventItem` happens in `map_event_items`, dropping only the bad items.
     #[serde(default)]
-    events: Vec<EventItem>,
+    events: Vec<serde_json::Value>,
     /// Незавершённые треды пользователя из этой сессии (spec §3.1). Персистятся
     /// как decayable kind='fact' чанки в save_open_threads (Task 2a), под гейтом
     /// soul.enabled.
@@ -203,10 +208,11 @@ async fn extract_and_save_inner(
     };
 
     // 7. Soul events (spec §2) — only when [agent.soul] enabled.
-    if soul_deps.cfg.enabled && !extracted.events.is_empty() {
+    let events = map_event_items(std::mem::take(&mut extracted.events));
+    if soul_deps.cfg.enabled && !events.is_empty() {
         let intensity = appraised.as_ref().map(|a| a.intensity);
         let n = save_events(
-            session_id, agent_name, memory_store, &soul_deps.cfg, extracted.events,
+            session_id, agent_name, memory_store, &soul_deps.cfg, events,
             intensity, soul_deps.emotion.intensity_importance_k,
         ).await;
         tracing::info!(agent = agent_name, saved = n, "soul events indexed");
@@ -350,6 +356,21 @@ fn extraction_prompt(conversation: &str, soul_enabled: bool, emotion_enabled: bo
          - Return empty arrays if nothing qualifies.\n\n\
          <<<CONVERSATION_DATA>>>\n{}\n<<<END_CONVERSATION_DATA>>>", conversation
     )
+}
+
+/// Best-effort map raw event JSON values into `EventItem`, dropping any item
+/// that fails to deserialize (fail-soft: a single bad event must not lose the
+/// others). A dropped item is logged at debug.
+pub(crate) fn map_event_items(raw: Vec<serde_json::Value>) -> Vec<EventItem> {
+    raw.into_iter()
+        .filter_map(|v| match serde_json::from_value::<EventItem>(v) {
+            Ok(item) => Some(item),
+            Err(e) => {
+                tracing::debug!(error = %e, "dropping malformed extracted event item");
+                None
+            }
+        })
+        .collect()
 }
 
 /// Cap + clamp + sort events by importance desc (spec §2).
@@ -802,13 +823,15 @@ Some trailing explanation here."#;
         let input = r#"{"user_facts":[],"outcomes":[],"feedback":[],"events":[{"text":"Обсудили миграцию","importance":7},{"text":"Юзер был недоволен","importance":9.5}]}"#;
         let r = parse_extraction(input).unwrap();
         assert_eq!(r.events.len(), 2);
-        assert_eq!(r.events[1].importance, 9.5);
+        let events = map_event_items(r.events);
+        assert_eq!(events[1].importance, 9.5);
     }
 
     #[test]
     fn parse_events_default_importance_and_missing_field() {
         let r = parse_extraction(r#"{"events":[{"text":"X"}]}"#).unwrap();
-        assert_eq!(r.events[0].importance, 5.0);
+        let events = map_event_items(r.events);
+        assert_eq!(events[0].importance, 5.0);
         let r2 = parse_extraction(r#"{"user_facts":["a"]}"#).unwrap();
         assert!(r2.events.is_empty());
     }
@@ -818,6 +841,27 @@ Some trailing explanation here."#;
         let input = r#"{"user_facts":[],"outcomes":[],"feedback":[],"events":[{"text":"X","importance":6},]}"#;
         let r = parse_extraction(input).unwrap();
         assert_eq!(r.events.len(), 1);
+    }
+
+    #[test]
+    fn one_malformed_event_item_does_not_drop_the_rest() {
+        // events[] with a good item, a malformed item (missing "text"), and another good item.
+        let json = serde_json::json!({
+            "user_facts": ["fact A"],
+            "events": [
+                {"text": "good 1", "importance": 7},
+                {"importance": 5},                      // malformed: no "text"
+                {"text": "good 2"}                      // importance defaults
+            ]
+        });
+        let extracted: ExtractedKnowledge = serde_json::from_value(json).expect("payload must parse despite a bad event");
+        // Facts survived (the whole parse didn't abort).
+        assert_eq!(extracted.user_facts, vec!["fact A".to_string()]);
+        // The per-item map keeps the 2 valid events, drops the malformed one.
+        let events = map_event_items(extracted.events);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].text, "good 1");
+        assert_eq!(events[1].text, "good 2");
     }
 
     #[test]
