@@ -5,13 +5,18 @@
 // search palette in Task 4, or the scroll-restore machinery in Task 13c) and
 // makes the target message visible:
 //
-//   1. Stream active → refuse (toast), clear target.
+//   1. Stream active → refuse (toast), clear target. Re-checked immediately
+//      before a resolved target's branch picks are applied, too — a turn may
+//      have started during the (possibly multi-page) backfill await below.
 //   2. Target row is loaded → switch to the branch that contains it (walk up
 //      parent_message_id), raise renderLimit so it enters the virtualised
 //      window, scroll to it and flash a highlight.
-//   3. Target row not loaded → page older history (loadPreviousMessages) up to
-//      MAX_BACKFILL_PAGES times, re-checking each time. Exhausted / no more
-//      history → toast (message too far back or deleted).
+//   3. Target row not loaded → page older history directly into the React
+//      Query cache (NOT via the `loadPreviousMessages` store action, which
+//      reads live-mode messages and no-ops in `mode:"history"` — the mode the
+//      palette flow itself enters) up to MAX_BACKFILL_PAGES times, re-checking
+//      each time. Exhausted (short page) / fetch failure → toast (message too
+//      far back or deleted).
 //   4. silent target → no toast, no highlight; any failure is swallowed.
 //
 // Re-entrancy: a fresh target supersedes an in-flight resolution via a
@@ -22,15 +27,17 @@
 import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { useChatStore, isActivePhase } from "@/stores/chat-store";
-import { getCachedRawMessages, resolveActivePath } from "@/stores/chat-history";
+import { getCachedRawMessages, prependOlderRawMessages, resolveActivePath } from "@/stores/chat-history";
 import { usePaletteStore } from "@/stores/palette-store";
 import { useTranslation } from "@/hooks/use-translation";
+import { apiGet } from "@/lib/api";
 import type { ChatMessage } from "@/stores/chat-types";
-import type { MessageRow } from "@/types/api";
+import type { MessageRow, MessagesResponse } from "@/types/api";
 import { scrollToMessageIndex } from "../message-list-handle";
 
 const HIGHLIGHT_MS = 2000;
 const MAX_BACKFILL_PAGES = 20;
+const BACKFILL_PAGE_SIZE = 100;
 
 /**
  * Walk from `id` up to the root, recording the parentId → childId choice at each
@@ -111,10 +118,31 @@ export function useScrollToMessage(
 
     pendingRef.current = { messageId, silent };
 
+    // Tracks whether this resolution reached a final decision (finish() or the
+    // exhaustion branch below) before the effect got torn down. `finish()` and
+    // the exhaustion branch both call `setTarget(null)`, which — since `target`
+    // is a dependency — makes THIS SAME resolution's own cleanup fire on the
+    // next render; that must NOT wipe the pendingRef it just (deliberately)
+    // left set for the `messages`-effect to consume on a later re-render. Only
+    // a cleanup that fires WITHOUT a settled resolution (superseded by a fresh
+    // target, or the session/agent changed) indicates an abandoned resolution
+    // whose pendingRef would otherwise dangle — see the cleanup below.
+    let settled = false;
+
     // Apply branch picks + raise renderLimit for the resolved target, then clear
     // the target and attempt an immediate scroll (covers the already-visible
-    // case where no re-render is triggered).
+    // case where no re-render is triggered). Re-checks the stream phase: up to
+    // MAX_BACKFILL_PAGES awaits happened between the guard above and here, and a
+    // turn may have started in the meantime — blending its branch into a
+    // resolution kicked off before it started would corrupt selectedBranches.
     const finish = (rows: MessageRow[]) => {
+      settled = true;
+      if (isActivePhase(useChatStore.getState().agents[agent]?.connectionPhase)) {
+        if (!silent) toast.error(t("palette.blocked_streaming"));
+        setTarget(null);
+        pendingRef.current = null;
+        return;
+      }
       resolveInPlace(agent, rows, messageId);
       setTarget(null);
       tryScroll();
@@ -128,22 +156,52 @@ export function useScrollToMessage(
     }
 
     // Slow path: page older history until it appears (or we exhaust it).
+    //
+    // Deliberately bypasses the `loadPreviousMessages` store action — that
+    // action reads `getLiveMessages(messageSource)`, which is `[]` in
+    // `mode:"history"` (the mode the palette flow enters via selectSession),
+    // so it early-returns without fetching and `hasMoreHistory` never
+    // advances. Paging the React Query cache directly (same cache
+    // `getCachedRawMessages` reads) works in every mode.
     let cancelled = false;
     const stale = () => cancelled || genRef.current !== gen;
     void (async () => {
+      let current = rows;
       for (let i = 0; i < MAX_BACKFILL_PAGES; i++) {
         if (stale()) return;
-        if (!useChatStore.getState().agents[agent]?.hasMoreHistory) break;
-        await useChatStore.getState().loadPreviousMessages(agent);
-        if (stale()) return;
-        const paged = getCachedRawMessages(activeSessionId, agent);
-        if (paged.some((r) => r.id === messageId)) {
-          finish(paged);
-          return;
+        const beforeId = current[0]?.id;
+        if (!beforeId) break; // nothing cached to anchor an older-page fetch on
+
+        let page: MessageRow[];
+        try {
+          const params = new URLSearchParams({
+            before_id: beforeId,
+            limit: String(BACKFILL_PAGE_SIZE),
+            agent,
+          });
+          const res = await apiGet<MessagesResponse>(
+            `/api/sessions/${activeSessionId}/messages?${params.toString()}`,
+          );
+          page = res.messages ?? [];
+        } catch {
+          break; // fetch failed — treat as exhausted, fall through to the toast
         }
+        if (stale()) return;
+
+        if (page.length > 0) {
+          prependOlderRawMessages(activeSessionId, agent, page);
+          current = [...page, ...current];
+          if (current.some((r) => r.id === messageId)) {
+            finish(current);
+            return;
+          }
+        }
+        // A short page (fewer rows than requested) means history is exhausted.
+        if (page.length < BACKFILL_PAGE_SIZE) break;
       }
       if (stale()) return;
       // Exhausted: too far back, or the message was deleted.
+      settled = true;
       if (!silent) toast.error(t("palette.too_deep"));
       setTarget(null);
       pendingRef.current = null;
@@ -151,6 +209,13 @@ export function useScrollToMessage(
 
     return () => {
       cancelled = true;
+      // Only an UNSETTLED resolution (superseded by a fresh target, or torn
+      // down because the session/agent changed) leaves a stray pendingRef for
+      // the `messages`-effect below to wrongly act on later — clear it in that
+      // case only. A settled resolution (finish()/exhaustion, both of which
+      // already decided pendingRef's final value themselves) must not have its
+      // deliberately-still-pending target erased by its own setTarget(null).
+      if (!settled) pendingRef.current = null;
     };
     // messagesRef/tryScroll are refs/stable; `messages` is intentionally NOT a
     // dep — the scroll effect below owns the post-re-render scroll.

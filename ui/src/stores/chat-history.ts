@@ -327,6 +327,31 @@ export function getCachedRawMessages(sessionId: string | null, agent?: string): 
   return cached?.messages ?? [];
 }
 
+/**
+ * Prepend an older page of history rows directly into the React Query cache
+ * entry for `sessionId`/`agent` — used by the jump-to-message backfill
+ * (use-scroll-to-message.ts), which must page history even in `mode:"history"`
+ * where `loadPreviousMessages` (live-mode only) is a no-op.
+ *
+ * Reuses the SAME cache-entry selection as {@link getCachedRawMessages} (Fix M)
+ * so the write lands on the exact multi-agent slot the read sees; falls back to
+ * the first cache entry (legacy behaviour) when no exact agent match exists.
+ * No-op if there is no existing cache entry to merge into, or `older` is empty.
+ */
+export function prependOlderRawMessages(sessionId: string, agent: string, older: MessageRow[]): void {
+  if (older.length === 0) return;
+  const results = queryClient.getQueriesData<{ messages: MessageRow[] }>({ queryKey: qk.sessionMessages(sessionId) });
+  let key: readonly unknown[] | undefined;
+  for (const [k, data] of results) {
+    if (data && k[k.length - 1] === agent) { key = k; break; }
+  }
+  if (!key) key = results[0]?.[0];
+  if (!key) return;
+  queryClient.setQueryData<{ messages: MessageRow[] }>(key, (old) =>
+    old ? { ...old, messages: [...older, ...old.messages] } : old,
+  );
+}
+
 // ── Branch resolution ─────────────────────────────────────────────────────
 
 /**

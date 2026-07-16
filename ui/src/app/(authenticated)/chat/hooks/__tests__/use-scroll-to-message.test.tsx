@@ -19,16 +19,26 @@ const h = vi.hoisted(() => ({
   scrollSpy: vi.fn(),
   toastError: vi.fn(),
   toastInfo: vi.fn(),
+  apiGet: vi.fn(),
 }));
 
 // ── Controllable raw-message cache ────────────────────────────────────────────
 // getCachedRawMessages(sessionId, agent) reads queryClient.getQueriesData; point
 // it at a mutable fixture so tests can stage which rows are "loaded".
+// setQueryData mimics real QueryClient semantics (applies the updater against
+// the current fixture and writes the result back) so prependOlderRawMessages
+// (Finding 1 fix) is exercised faithfully across backfill loop iterations.
 vi.mock("@/lib/query-client", () => ({
   queryClient: {
     getQueriesData: vi.fn(() => [[["x"], { messages: h.cachedRows }]]),
     getQueryData: vi.fn(() => undefined),
-    setQueryData: vi.fn(),
+    setQueryData: vi.fn((_key: unknown, updater: unknown) => {
+      const prev = { messages: h.cachedRows };
+      const next = typeof updater === "function"
+        ? (updater as (old: typeof prev) => typeof prev | undefined)(prev)
+        : (updater as typeof prev | undefined);
+      if (next) h.cachedRows = next.messages;
+    }),
     invalidateQueries: vi.fn(),
   },
 }));
@@ -47,7 +57,7 @@ vi.mock("@/stores/streaming-renderer", () => ({
 }));
 
 vi.mock("@/lib/api", () => ({
-  apiGet: vi.fn().mockResolvedValue({}),
+  apiGet: h.apiGet,
   apiPost: vi.fn().mockResolvedValue({}),
   apiPut: vi.fn().mockResolvedValue({}),
   apiPatch: vi.fn().mockResolvedValue({}),
@@ -118,6 +128,7 @@ beforeEach(() => {
   h.scrollSpy.mockClear();
   h.toastError.mockClear();
   h.toastInfo.mockClear();
+  h.apiGet.mockReset().mockResolvedValue({});
   usePaletteStore.setState({ target: null, highlightedMessageId: null });
 });
 
@@ -193,5 +204,91 @@ describe("useScrollToMessage", () => {
     expect(h.toastError).toHaveBeenCalledTimes(1);
     expect(h.scrollSpy).not.toHaveBeenCalled();
     expect(usePaletteStore.getState().target).toBeNull();
+  });
+
+  // Finding 1 regression test: the old backfill loop paged via the
+  // `loadPreviousMessages` store action, which reads live-mode messages and
+  // no-ops in `mode:"history"` (the mode `seed()` sets up, matching the real
+  // palette flow) — `hasMoreHistory` never advanced and a FALSE "too deep"
+  // toast fired even though older history existed. The fix pages the React
+  // Query cache directly, so this must succeed in history mode with
+  // `hasMoreHistory: false` staged (proving that field is no longer consulted).
+  it("pages the RQ cache directly to find a target absent from the first page (history mode)", async () => {
+    // Only the recent page is "loaded"; the target (root user message) is one
+    // page further back and must be fetched via a direct older-page request.
+    h.cachedRows = [
+      row({ id: "a1", parent_message_id: "u1", created_at: "2026-04-21T00:00:01Z" }),
+    ];
+    h.apiGet.mockResolvedValueOnce({
+      messages: [
+        row({ id: "u1", role: "user", content: "hi", parent_message_id: null, created_at: "2026-04-21T00:00:00Z" }),
+      ],
+      has_more: false,
+    });
+    seed("idle", /* hasMoreHistory */ false);
+    usePaletteStore.getState().setTarget({ sessionId: SID, messageId: "u1" });
+
+    let rerender!: (props: { msgs: ChatMessage[] }) => void;
+    await act(async () => {
+      const result = renderHook(
+        ({ msgs }: { msgs: ChatMessage[] }) => useScrollToMessage(AGENT, SID, msgs),
+        { initialProps: { msgs: [chatMsg("a1")] } },
+      );
+      rerender = result.rerender;
+    });
+
+    // Fetched exactly one older page anchored on the oldest cached row.
+    expect(h.apiGet).toHaveBeenCalledTimes(1);
+    expect(h.apiGet.mock.calls[0][0]).toContain("before_id=a1");
+    // Prepended into the cache (older row first).
+    expect(h.cachedRows.map((r) => r.id)).toEqual(["u1", "a1"]);
+    expect(usePaletteStore.getState().target).toBeNull();
+    expect(h.toastError).not.toHaveBeenCalled();
+
+    // Re-render as the now-loaded branch (u1 in the window) → hook scrolls.
+    await act(async () => {
+      rerender({ msgs: [chatMsg("u1", "user"), chatMsg("a1")] });
+    });
+    expect(h.scrollSpy).toHaveBeenCalledWith(0);
+    expect(usePaletteStore.getState().highlightedMessageId).toBe("u1");
+  });
+
+  // Finding 2 regression test: branch picks must not be applied if a stream
+  // started during the (possibly multi-await) backfill.
+  it("refuses to apply picks if streaming starts mid-backfill", async () => {
+    h.cachedRows = [
+      row({ id: "a1", parent_message_id: "u1", created_at: "2026-04-21T00:00:01Z" }),
+    ];
+    let resolveFetch!: (v: unknown) => void;
+    h.apiGet.mockReturnValueOnce(new Promise((resolve) => { resolveFetch = resolve; }));
+    seed("idle", false);
+    usePaletteStore.getState().setTarget({ sessionId: SID, messageId: "u1" });
+
+    await act(async () => {
+      renderHook(() => useScrollToMessage(AGENT, SID, [chatMsg("a1")]));
+    });
+
+    // A turn starts while the backfill fetch is still in flight.
+    useChatStore.setState((draft) => {
+      const st = draft.agents[AGENT];
+      if (st) st.connectionPhase = "streaming";
+    });
+
+    await act(async () => {
+      resolveFetch({
+        messages: [
+          row({ id: "u1", role: "user", content: "hi", parent_message_id: null, created_at: "2026-04-21T00:00:00Z" }),
+        ],
+        has_more: false,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(h.toastError).toHaveBeenCalledTimes(1);
+    expect(h.scrollSpy).not.toHaveBeenCalled();
+    expect(usePaletteStore.getState().target).toBeNull();
+    // No branch picks applied — the resolution was refused, not completed.
+    expect(useChatStore.getState().agents[AGENT]?.selectedBranches).toEqual({});
   });
 });
