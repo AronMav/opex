@@ -8,9 +8,71 @@ import { isActivePhase, emptyAgentState, getLiveMessages, uuid } from "../../cha
 import type { ChatMessage, MessageAttachment, TextPart } from "../../chat-types";
 import { getCachedHistoryMessages } from "../../chat-history";
 import { apiPost } from "@/lib/api";
+import { qk } from "@/lib/queries";
 
 export function createStreamActions(deps: ActionDeps) {
-  const { get, set, renderer } = deps;
+  const { get, set, renderer, queryClient } = deps;
+
+  // ── Shared fork-and-stream flow (B/C/F) ──────────────────────────────────
+  // The ONE correct way to replace-via-branch: POST /fork to create a real
+  // sibling user message under branch_from's parent, select that branch, then
+  // stream a fresh turn from it. regenerate / regenerateFrom / forkAndRegenerate
+  // all funnel through here so they inherit the proven branch semantics instead
+  // of appending a forward child (the old CRITICAL bug B: permanent duplicate
+  // turn on a flat trunk).
+  //
+  // - C: abort with abortLocalOnly (NOT abortActiveStream) — POST /abort would
+  //   race the fresh turn's register_with_token on the same session key and can
+  //   cancel it. register_with_token supersedes the old stream server-side, so
+  //   local teardown is sufficient. Guarded by isActivePhase: only aborts when a
+  //   stream is actually running.
+  // - F: invalidate sessionMessages BEFORE sendTurn so the refetched history
+  //   reflects the fork (resolveActivePath auto-selects the newest sibling; the
+  //   selectedBranches entry set below pins it) before the live overlay renders.
+  async function forkAndStream(
+    agent: string,
+    sessionId: string,
+    branchFromMessageId: string,
+    content: string,
+  ) {
+    const st = get().agents[agent];
+    if (st && isActivePhase(st.connectionPhase)) {
+      renderer.abortLocalOnly(agent);
+    }
+
+    try {
+      const resp = await apiPost<{
+        message_id: string;
+        parent_message_id: string;
+        branch_from_message_id: string;
+      }>(`/api/sessions/${sessionId}/fork?agent=${encodeURIComponent(agent)}`, {
+        branch_from_message_id: branchFromMessageId,
+        content,
+      });
+
+      set((draft) => {
+        const s = draft.agents[agent];
+        if (s && resp.parent_message_id) {
+          s.selectedBranches[resp.parent_message_id] = resp.message_id;
+        }
+      });
+
+      // F: history must reflect the fork before the turn streams.
+      queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sessionId) });
+
+      // Pass resp.message_id (userMessageId) so the backend reuses the
+      // already-persisted branch user message instead of minting a duplicate
+      // forward child via /api/chat. sendTurn resolves the branch tip
+      // (leaf_message_id) from the freshly-selected branch itself.
+      void renderer.sendTurn(agent, sessionId, content, undefined, resp.message_id);
+    } catch (e) {
+      // F084: surface the failure — a silent console.error leaves the composer
+      // looking idle so the user can't tell the regenerate/fork failed.
+      console.error("[fork] failed:", e);
+      const { toast } = await import("sonner");
+      toast.error("Не удалось перегенерировать сообщение");
+    }
+  }
 
   // F085: agents with an interruptAndSend in flight. abortLocalOnly flips
   // connectionPhase to 'idle' synchronously, so a rapid second sendMessage would
@@ -130,32 +192,24 @@ export function createStreamActions(deps: ActionDeps) {
     // connect point as the post-POST path (T7).
     resumeStream: (agent: string, sessionId: string) => renderer.connect(agent, sessionId),
 
+    // B/C/F: regenerate replaces the last answer by BRANCHING from the last
+    // user message (real sibling), not by appending a forward child. Routes
+    // through the shared forkAndStream flow — same proven path as
+    // forkAndRegenerate, minus the edit.
     regenerate: () => {
       const store = get();
       const agent = store.currentAgent;
       const st = store.agents[agent] ?? emptyAgentState();
 
-      // Abort any active stream first
-      if (isActivePhase(st.connectionPhase)) {
-        renderer.abortActiveStream(agent);
-      }
-
       const sessionId = st.activeSessionId;
-      let messages: ChatMessage[];
+      if (!sessionId) return;
 
-      if (st.messageSource.mode === "history") {
-        // Do NOT flip messageSource here; sendTurn sets messageSource atomically.
-        messages = getCachedHistoryMessages(sessionId, st.selectedBranches);
-      } else {
-        messages = getLiveMessages(st.messageSource);
-      }
+      const messages: ChatMessage[] =
+        st.messageSource.mode === "history"
+          ? getCachedHistoryMessages(sessionId, st.selectedBranches)
+          : getLiveMessages(st.messageSource);
 
-      // Remove last assistant message
-      if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-        messages = messages.slice(0, -1);
-      }
-
-      // Get last user message text
+      // Last user message anchors the branch.
       const lastUser = [...messages].reverse().find((m) => m.role === "user");
       if (!lastUser) return;
       const userText = lastUser.parts
@@ -163,52 +217,52 @@ export function createStreamActions(deps: ActionDeps) {
         .map((p) => p.text)
         .join("\n");
 
-      // Server-authoritative 202+connect path (T8): sendTurn re-adds the user
-      // message as the optimistic echo; the branch tip (leaf_message_id) is
-      // resolved inside sendTurn, so no seed-message array is needed.
-      void renderer.sendTurn(agent, sessionId, userText);
+      void forkAndStream(agent, sessionId, lastUser.id, userText);
     },
 
+    // B/C/F: branch from the given message. If it's a user message, branch from
+    // it directly; if it's an assistant message, branch from its nearest
+    // PRECEDING user message (its text). Same forkAndStream flow as regenerate.
     regenerateFrom: (messageId: string) => {
       const store = get();
       const agent = store.currentAgent;
       const st = store.agents[agent] ?? emptyAgentState();
 
-      if (isActivePhase(st.connectionPhase)) {
-        renderer.abortActiveStream(agent);
-      }
-
       const sessionId = st.activeSessionId;
-      let messages: ChatMessage[];
+      if (!sessionId) return;
 
-      if (st.messageSource.mode === "history") {
-        // Do NOT flip messageSource here; sendTurn sets messageSource atomically.
-        messages = getCachedHistoryMessages(sessionId, st.selectedBranches);
-      } else {
-        messages = getLiveMessages(st.messageSource);
-      }
+      const messages: ChatMessage[] =
+        st.messageSource.mode === "history"
+          ? getCachedHistoryMessages(sessionId, st.selectedBranches)
+          : getLiveMessages(st.messageSource);
 
-      // Find the target user message (only its text is needed — sendTurn re-adds
-      // it as the optimistic echo and resolves the branch tip itself).
       const targetIdx = messages.findIndex((m) => m.id === messageId);
       if (targetIdx === -1) {
-        // Fallback to normal regenerate if message not found
+        // Fallback to normal regenerate if message not found.
         get().regenerate();
         return;
       }
 
-      const targetMsg = messages[targetIdx];
-      if (targetMsg.role !== "user") {
+      // Resolve the anchoring USER message: the target itself if it's a user
+      // message, else the nearest preceding user message.
+      let userMsg: ChatMessage | undefined;
+      for (let i = targetIdx; i >= 0; i--) {
+        if (messages[i].role === "user") {
+          userMsg = messages[i];
+          break;
+        }
+      }
+      if (!userMsg) {
         get().regenerate();
         return;
       }
 
-      const userText = targetMsg.parts
-        .filter((p) => p.type === "text")
-        .map((p) => (p as { text: string }).text)
+      const userText = userMsg.parts
+        .filter((p): p is TextPart => p.type === "text")
+        .map((p) => p.text)
         .join("\n");
 
-      void renderer.sendTurn(agent, sessionId, userText);
+      void forkAndStream(agent, sessionId, userMsg.id, userText);
     },
 
     forkAndRegenerate: async (messageId: string, newContent: string) => {
@@ -218,35 +272,7 @@ export function createStreamActions(deps: ActionDeps) {
       const sessionId = st.activeSessionId;
       if (!sessionId) return;
 
-      try {
-        const resp = await apiPost<{
-          message_id: string;
-          parent_message_id: string;
-          branch_from_message_id: string;
-        }>(`/api/sessions/${sessionId}/fork?agent=${encodeURIComponent(agent)}`, {
-          branch_from_message_id: messageId,
-          content: newContent,
-        });
-
-        set((draft) => {
-          const s = draft.agents[agent];
-          if (s && resp.parent_message_id) {
-            s.selectedBranches[resp.parent_message_id] = resp.message_id;
-          }
-        });
-
-        // Pass resp.message_id (userMessageId) so the backend reuses the
-        // already-persisted branch user message instead of creating a duplicate
-        // via /api/chat. sendTurn resolves the branch tip (leaf_message_id) from
-        // the freshly-selected branch itself, so no seed-message array is needed.
-        void renderer.sendTurn(agent, sessionId, newContent, undefined, resp.message_id);
-      } catch (e) {
-        // F084: surface the failure — a silent console.error leaves the composer
-        // looking idle so the user can't tell the edit-and-regenerate failed.
-        console.error("[fork] failed:", e);
-        const { toast } = await import("sonner");
-        toast.error("Не удалось изменить и перегенерировать сообщение");
-      }
+      await forkAndStream(agent, sessionId, messageId, newContent);
     },
   };
 }
