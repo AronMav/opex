@@ -400,6 +400,7 @@ mod tests {
         let mcp_defs = vec![
             opex_types::ToolDefinition { name: "sequentialthinking".into(), description: "x".into(), input_schema: serde_json::json!({}) },
             opex_types::ToolDefinition { name: "other_mcp".into(), description: "y".into(), input_schema: serde_json::json!({}) },
+            opex_types::ToolDefinition { name: "denied_tool".into(), description: "z".into(), input_schema: serde_json::json!({}) },
         ];
         let always = vec!["sequentialthinking".to_string(), "denied_tool".to_string()];
         let denied: HashSet<&str> = ["denied_tool"].into_iter().collect();
