@@ -2226,6 +2226,82 @@ pub async fn list_bookmarked(
     .await?)
 }
 
+// ── Session list keyset pagination (wave 2) ─────────────────────────────────
+
+/// List sessions for `agent`, optionally scoped to `channels`, ordered
+/// `last_message_at DESC, id DESC` (the `id` tie-break makes page boundaries
+/// deterministic when several sessions share the same `last_message_at`,
+/// e.g. never-messaged sessions still carrying the `DEFAULT now()` value).
+///
+/// `cursor = Some((last_message_at, id))` — taken from the LAST row of the
+/// previous page — restricts to rows strictly after that point in the same
+/// order via the row-comparison `(last_message_at, id) < (cursor_ts, cursor_id)`.
+/// `cursor = None` returns the first page. Returns `(page, total)` where
+/// `total` ignores the cursor (count of all rows matching the filter).
+pub async fn list_sessions_page(
+    db: &PgPool,
+    agent: &str,
+    channels: Option<&[String]>,
+    limit: i64,
+    cursor: Option<(DateTime<Utc>, Uuid)>,
+) -> Result<(Vec<Session>, i64)> {
+    let (cursor_ts, cursor_id) = match cursor {
+        Some((ts, id)) => (Some(ts), Some(id)),
+        None => (None, None),
+    };
+
+    let rows = match channels {
+        Some(chans) => {
+            sqlx::query_as::<_, Session>(
+                "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants, retry_count, parent_session_id, end_reason \
+                 FROM sessions WHERE agent_id = $1 AND channel = ANY($2) \
+                   AND ($3::timestamptz IS NULL OR (last_message_at, id) < ($3, $4)) \
+                 ORDER BY last_message_at DESC, id DESC LIMIT $5",
+            )
+            .bind(agent)
+            .bind(chans)
+            .bind(cursor_ts)
+            .bind(cursor_id)
+            .bind(limit)
+            .fetch_all(db)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<_, Session>(
+                "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants, retry_count, parent_session_id, end_reason \
+                 FROM sessions WHERE agent_id = $1 \
+                   AND ($2::timestamptz IS NULL OR (last_message_at, id) < ($2, $3)) \
+                 ORDER BY last_message_at DESC, id DESC LIMIT $4",
+            )
+            .bind(agent)
+            .bind(cursor_ts)
+            .bind(cursor_id)
+            .bind(limit)
+            .fetch_all(db)
+            .await?
+        }
+    };
+
+    // Total ignores the cursor — count of all rows matching the filter.
+    // Best-effort like the pre-keyset handler code: defaults to 0 on error
+    // rather than failing the whole page fetch.
+    let total: i64 = match channels {
+        Some(chans) => sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE agent_id = $1 AND channel = ANY($2)")
+            .bind(agent)
+            .bind(chans)
+            .fetch_one(db)
+            .await
+            .unwrap_or(0),
+        None => sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE agent_id = $1")
+            .bind(agent)
+            .fetch_one(db)
+            .await
+            .unwrap_or(0),
+    };
+
+    Ok((rows, total))
+}
+
 /// Extract a short preview from message `content`, which may be either plain
 /// text or a JSON array of multimodal parts (`[{"type":"text","text":"..."}, ...]`).
 ///
@@ -3318,5 +3394,84 @@ mod bookmark_tests {
     fn text_preview_multimodal_image_part_yields_image_placeholder() {
         let content = r#"[{"type":"image","url":"https://x/y.png"}]"#;
         assert_eq!(text_preview(content, 160), "изображение");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn list_sessions_page_keyset_covers_all_rows_no_dups(pool: sqlx::PgPool) {
+        // 3 sessions, two (s1, s2) sharing the SAME last_message_at — the tie
+        // must be broken deterministically by `id DESC` in both the ORDER BY
+        // and the row-comparison cursor, or paging would drop/duplicate rows.
+        let agent = "keyset-agent";
+        let tied_ts = chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let newer_ts = chrono::DateTime::parse_from_rfc3339("2024-01-02T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        let s1 = super::create_new_session(&pool, agent, "u1", "web").await.unwrap();
+        let s2 = super::create_new_session(&pool, agent, "u2", "web").await.unwrap();
+        let s3 = super::create_new_session(&pool, agent, "u3", "web").await.unwrap();
+        sqlx::query("UPDATE sessions SET last_message_at = $2 WHERE id = $1")
+            .bind(s1).bind(tied_ts).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE sessions SET last_message_at = $2 WHERE id = $1")
+            .bind(s2).bind(tied_ts).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE sessions SET last_message_at = $2 WHERE id = $1")
+            .bind(s3).bind(newer_ts).execute(&pool).await.unwrap();
+
+        // Page 1: limit=2, no cursor.
+        let (page1, total) = super::list_sessions_page(&pool, agent, None, 2, None)
+            .await
+            .expect("page 1");
+        assert_eq!(total, 3);
+        assert_eq!(page1.len(), 2);
+        // s3 (newer) must sort first; the tied pair is ordered by id DESC.
+        assert_eq!(page1[0].id, s3);
+        let (tied_first, tied_second) = if s1 > s2 { (s1, s2) } else { (s2, s1) };
+        assert_eq!(page1[1].id, tied_first);
+
+        // Page 2: cursor = last row of page 1.
+        let last = page1.last().unwrap();
+        let cursor = Some((last.last_message_at, last.id));
+        let (page2, total2) = super::list_sessions_page(&pool, agent, None, 2, cursor)
+            .await
+            .expect("page 2");
+        assert_eq!(total2, 3);
+        assert_eq!(page2.len(), 1, "remaining tied session, no dup/loss");
+        assert_eq!(page2[0].id, tied_second);
+
+        // Union of both pages == all 3 sessions, no duplicates.
+        let mut all_ids: Vec<uuid::Uuid> =
+            page1.iter().chain(page2.iter()).map(|s| s.id).collect();
+        all_ids.sort();
+        let mut expected = vec![s1, s2, s3];
+        expected.sort();
+        assert_eq!(all_ids, expected);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn list_sessions_page_filters_by_channel_with_cursor(pool: sqlx::PgPool) {
+        // Cursor path must also work when a channel filter is applied
+        // (separate SQL branch from the no-channel-filter path).
+        let agent = "keyset-agent-2";
+        let sid_web = super::create_new_session(&pool, agent, "u1", "web").await.unwrap();
+        let sid_tg = super::create_new_session(&pool, agent, "u2", "telegram").await.unwrap();
+        sqlx::query("UPDATE sessions SET last_message_at = last_message_at - interval '1 hour' WHERE id = $1")
+            .bind(sid_web).execute(&pool).await.unwrap();
+
+        let channels = vec!["telegram".to_string()];
+        let (page1, total) =
+            super::list_sessions_page(&pool, agent, Some(&channels), 1, None)
+                .await
+                .expect("page 1");
+        assert_eq!(total, 1, "channel filter excludes the web session from the count");
+        assert_eq!(page1.len(), 1);
+        assert_eq!(page1[0].id, sid_tg);
+
+        let cursor = Some((page1[0].last_message_at, page1[0].id));
+        let (page2, _) = super::list_sessions_page(&pool, agent, Some(&channels), 1, cursor)
+            .await
+            .expect("page 2");
+        assert!(page2.is_empty(), "no more telegram sessions after the cursor");
     }
 }

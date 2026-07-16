@@ -40,6 +40,13 @@ pub(crate) struct SessionsQuery {
     pub(crate) agent: Option<String>,
     pub(crate) channel: Option<String>,
     pub(crate) limit: Option<i64>,
+    /// Keyset cursor (paired with `before_id`): last `last_message_at` seen on
+    /// the previous page. Both-or-neither with `before_id` — supplying only
+    /// one is a BadRequest, since a row-comparison cursor is meaningless with
+    /// just one half of the tuple.
+    pub(crate) before_last_message_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Keyset cursor tie-break: `id` of the last row seen on the previous page.
+    pub(crate) before_id: Option<uuid::Uuid>,
 }
 
 pub(crate) async fn api_list_sessions(
@@ -55,6 +62,17 @@ pub(crate) async fn api_list_sessions(
         }
     };
 
+    let cursor = match (q.before_last_message_at, q.before_id) {
+        (Some(ts), Some(id)) => Some((ts, id)),
+        (None, None) => None,
+        _ => {
+            return ApiError::BadRequest(
+                "before_last_message_at and before_id must be supplied together".into(),
+            )
+            .into_response();
+        }
+    };
+
     // Filter by ownership (agent_id), not participation. Previously this
     // included `OR $1 = ANY(participants)` which surfaced sessions where
     // the agent was merely invited or @-mentioned. Those sessions are owned
@@ -62,52 +80,17 @@ pub(crate) async fn api_list_sessions(
     // session list (the DELETE path checks agent_id = owner), so showing
     // them created a broken UX: "I see the session but can't delete it."
     // Ownership is the only predicate that matches the delete permission.
-    let (query, total) = match q.channel.as_deref() {
-        Some(channel) => {
-            let channels: Vec<&str> = channel.split(',').collect();
-            let rows = sqlx::query_as::<_, sessions::Session>(
-                "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants, retry_count, parent_session_id, end_reason \
-                 FROM sessions WHERE agent_id = $1 AND channel = ANY($2) \
-                 ORDER BY last_message_at DESC LIMIT $3",
-            )
-            .bind(agent)
-            .bind(&channels)
-            .bind(limit)
-            .fetch_all(&infra.db)
-            .await;
-            let total: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM sessions WHERE agent_id = $1 AND channel = ANY($2)",
-            )
-            .bind(agent)
-            .bind(&channels)
-            .fetch_one(&infra.db)
-            .await
-            .unwrap_or(0);
-            (rows, total)
-        }
-        None => {
-            let rows = sqlx::query_as::<_, sessions::Session>(
-                "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants, retry_count, parent_session_id, end_reason \
-                 FROM sessions WHERE agent_id = $1 \
-                 ORDER BY last_message_at DESC LIMIT $2",
-            )
-            .bind(agent)
-            .bind(limit)
-            .fetch_all(&infra.db)
-            .await;
-            let total: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM sessions WHERE agent_id = $1",
-            )
-            .bind(agent)
-            .fetch_one(&infra.db)
-            .await
-            .unwrap_or(0);
-            (rows, total)
-        }
-    };
+    let channels: Option<Vec<String>> = q
+        .channel
+        .as_deref()
+        .map(|channel| channel.split(',').map(str::to_string).collect());
 
-    match query {
-        Ok(rows) => {
+    let page = sessions::list_sessions_page(&infra.db, agent, channels.as_deref(), limit, cursor)
+        .await
+        .map_err(|e| e.to_string());
+
+    match page {
+        Ok((rows, total)) => {
             // Batch-fetch last input_tokens per session from usage_log (single query, not N+1).
             let session_ids: Vec<uuid::Uuid> = rows.iter().map(|s| s.id).collect();
             let token_map: HashMap<uuid::Uuid, i64> = if session_ids.is_empty() {
