@@ -1,24 +1,18 @@
 // ── stream/chat-stream.ts ────────────────────────────────────────────────────
-// T6: standalone client transport for the server-authoritative chat stream
-// (T1-T5, deployed). NOT wired into the app yet — the cutover happens in T7.
-//
-// Two calls:
-//   startTurn(agent, body)              → POST /api/chat, returns the 202 body
-//   openTurnStream(agent, sid, session, cb) → GET /api/chat/{sid}/stream,
-//     processes the sync_begin/replay/sync_end/live/finish envelope via the
-//     existing processSSEStream in batch-apply mode (stream-processor.ts).
-//
-// No reconnect loop lives here: a drop without a terminal signal calls
-// cb.onConnectionLost() and the caller (T7) decides whether to re-open.
+// Client transport for the server-authoritative chat stream: startTurn =
+// POST /api/chat (202), openTurnStream = GET /api/chat/{sid}/stream, which
+// processes the sync_begin/replay/sync_end/live/finish envelope via
+// processSSEStream (stream-processor.ts). Reconnect policy lives with the
+// caller — this module never retries.
 //
 // Carry-forward from T4: `sync_begin.runStatus` can collapse an in-memory
 // stream that actually ended in ERROR to "running"/"finished" in the
 // active-stream branch — the real terminal `error` event is still in the
 // replay buffer and is handled by the existing `error`/`sync` cases in
-// stream-processor.ts, unconditionally (not gated by batchMode). This module
-// never treats `runStatus` as authoritative for error/interrupted UI state;
-// it only uses it (inside stream-processor.ts) to decide onFinished vs.
-// onConnectionLost when the connection closes without an explicit `finish`.
+// stream-processor.ts. This module never treats `runStatus` as authoritative
+// for error/interrupted UI state; it only uses it (inside stream-processor.ts)
+// to decide onFinished vs. onConnectionLost when the connection closes
+// without an explicit `finish`.
 
 import { apiPost, assertToken, handleUnauthorized } from "@/lib/api";
 import { useChatStore } from "../chat-store";
@@ -81,12 +75,11 @@ export function openTurnStream(
       }
       return processSSEStream(session, resp.body!, {
         sessionId,
-        batchMode: true,
         callbacks: {
-          // Required legacy fields — no-ops / direct store reads. Safe to
+          // Required interface fields — no-ops / direct store reads. Safe to
           // wire directly to useChatStore here: chat-stream.ts is not part
           // of the chat-store → streaming-renderer → stream-processor cycle
-          // that forced dependency-injection on the legacy path.
+          // that forced dependency-injection elsewhere.
           onSessionId: () => {},
           getAgentState: (a: string): AgentState | undefined => useChatStore.getState().agents[a],
           updateSessionParticipants: (sid: string, participants: string[]) =>

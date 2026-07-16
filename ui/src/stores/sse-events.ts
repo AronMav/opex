@@ -59,18 +59,6 @@ export function parseSSELines(chunk: string, buffer: { current: string }): strin
   return lines;
 }
 
-/**
- * Extract the event ID from an SSE "id:" line.
- * Returns null if not an id line or if the value is empty/whitespace.
- */
-export function extractSseEventId(line: string): string | null {
-  if (line.startsWith("id:")) {
-    const val = line.slice(3).trim();
-    return val || null;
-  }
-  return null;
-}
-
 import { parseContentParts as parseParts, type ParsedContentPart } from "@/lib/message-parser";
 
 /** Extract <think> blocks into reasoning parts and clean text parts from raw content */

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseContentParts, extractSseEventId } from "@/stores/sse-events";
+import { parseContentParts } from "@/stores/sse-events";
 
 // ── parseContentParts unit tests ─────────────────────────────────────────────
 
@@ -179,37 +179,5 @@ describe("SSE-01: flushText() live state machine", () => {
       { type: "reasoning", text: "r2" },
       { type: "text", text: " end" },
     ]);
-  });
-});
-
-// ── extractSseEventId unit tests ────────────────────────────────────────────
-
-describe("extractSseEventId", () => {
-  it("extracts id from 'id: 42' line", () => {
-    expect(extractSseEventId("id: 42")).toBe("42");
-  });
-
-  it("extracts id from 'id:42' line (no space)", () => {
-    expect(extractSseEventId("id:42")).toBe("42");
-  });
-
-  it("returns null for empty id value 'id:'", () => {
-    expect(extractSseEventId("id:")).toBeNull();
-  });
-
-  it("returns null for 'id: ' (whitespace only)", () => {
-    expect(extractSseEventId("id: ")).toBeNull();
-  });
-
-  it("returns null for data: lines", () => {
-    expect(extractSseEventId("data: foo")).toBeNull();
-  });
-
-  it("returns null for comment lines", () => {
-    expect(extractSseEventId(": heartbeat")).toBeNull();
-  });
-
-  it("returns null for empty string", () => {
-    expect(extractSseEventId("")).toBeNull();
   });
 });

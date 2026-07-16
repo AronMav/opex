@@ -26,7 +26,6 @@ function makeCallbacks(overrides: Partial<Parameters<typeof processSSEStream>[2]
     onSessionId: vi.fn(),
     getAgentState: (agent: string) => useChatStore.getState().agents[agent],
     updateSessionParticipants: vi.fn(),
-    onStreamDone: vi.fn(),
     ...overrides,
   };
 }
@@ -68,24 +67,29 @@ describe("processSSEStream", () => {
     expect(callbacks.onSessionId).toHaveBeenCalledWith("s1");
   });
 
-  it("settles to idle (no reconnect) when a legacy stream ends without finish (T8)", async () => {
-    // T8 removed the transport reconnect loop. The non-batchMode path now
-    // settles a drop-without-finish to a non-active phase instead of scheduling
-    // a reconnect.
+  it("fires onConnectionLost (no settle) when a stream drops mid-turn without finish (T8)", async () => {
+    // T8 removed the transport reconnect loop: a drop without a terminal
+    // signal (no `finish`, no terminal `sync_begin.runStatus`) fires
+    // onConnectionLost and returns early — the caller (streaming-renderer)
+    // owns re-open policy, so the module must NOT perform the
+    // finishing->history settle that a genuinely-finished turn gets.
     const session = streamSessionManager.start("Arty");
-    const callbacks = makeCallbacks();
+    const onConnectionLost = vi.fn();
+    const callbacks = makeCallbacks({ onConnectionLost });
     const frames = [
+      `data: ${JSON.stringify({ type: "sync_begin", runStatus: "running", truncated: false })}\n\n`,
       `data: ${JSON.stringify({ type: "data-session-id", data: { sessionId: "s1" } })}\n\n`,
       `data: ${JSON.stringify({ type: "text-delta", delta: "hi", id: "t1" })}\n\n`,
-      // no finish event — stream closes
+      // no sync_end / finish — connection drops mid-turn
     ];
     await processSSEStream(session, makeStream(frames), {
       sessionId: null,
       callbacks,
     });
-    const phase = useChatStore.getState().agents.Arty.connectionPhase;
-    expect(phase).not.toBe("streaming");
-    expect(phase).not.toBe("submitted");
+    expect(onConnectionLost).toHaveBeenCalledTimes(1);
+    // Early return on connection-loss skips the finishing->history handoff —
+    // messageSource must still be "live", never "history".
+    expect(useChatStore.getState().agents.Arty.messageSource.mode).toBe("live");
   });
 
   it("settles cleanly when the stream ends with a finish event", async () => {
@@ -158,7 +162,6 @@ describe("processSSEStream", () => {
     await processSSEStream(session, makeStream(frames), {
       sessionId: null,
       callbacks: makeCallbacks(),
-      batchMode: true,
     });
     const msgs = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
     const assistantMsg = msgs.find((m) => m.role === "assistant");

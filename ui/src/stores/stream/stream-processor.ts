@@ -41,23 +41,13 @@ export interface StreamProcessorCallbacks {
    */
   updateSessionParticipants: (sessionId: string, participants: string[]) => void;
   /**
-   * Called when the stream ends cleanly (not aborted, not reconnect). Used by
-   * the renderer to persist UI state (debounced PATCH to backend).
-   */
-  onStreamDone?: () => void;
-  /**
    * Fix #6: invoked on every SSE event so the renderer can detect a stalled
    * (tab-throttled) socket via a visibilitychange listener. Optional — purely
    * for stale-detection telemetry.
    */
   onEventActivity?: () => void;
 
-  // ── T6: batch-apply transport (chat-stream.ts / TurnStreamCallbacks) ────
-  // Optional — only populated (and only ever invoked) when `batchMode` is
-  // set in StreamProcessorOpts. A non-batch caller never sets batchMode, so
-  // these fields stay undefined and the code paths below that reference them
-  // are dead for the legacy transport — zero behavior change for the existing
-  // SSE renderer.
+  // ── Batch-apply transport (chat-stream.ts / TurnStreamCallbacks) ────
 
   /** Fired after `sync_end` — the replayed envelope has been committed to the store as a single batch. */
   onEnvelopeApplied?: () => void;
@@ -66,10 +56,10 @@ export interface StreamProcessorCallbacks {
    *  interrupted) with no further live events before the stream closed. */
   onFinished?: () => void;
   /**
-   * Fired when the connection drops WITHOUT a terminal signal (batchMode
-   * only) — this module does not retry; the caller decides whether/how to
-   * re-open (streaming-renderer's `connect` re-opens the same envelope). NOT
-   * fired when the turn ended in error: an `error`/`sync`-error event leaves
+   * Fired when the connection drops WITHOUT a terminal signal — this module
+   * does not retry; the caller decides whether/how to re-open
+   * (streaming-renderer's `connect` re-opens the same envelope). NOT fired
+   * when the turn ended in error: an `error`/`sync`-error event leaves
    * connectionPhase="error" and the finally block settles without re-opening.
    */
   onConnectionLost?: () => void;
@@ -78,15 +68,6 @@ export interface StreamProcessorCallbacks {
 export interface StreamProcessorOpts {
   sessionId: string | null;
   callbacks: StreamProcessorCallbacks;
-  /**
-   * T6: opt-in batch-apply mode. When true, `sync_begin`/`sync_end` gate the
-   * throttled `scheduleCommit()` calls so a whole replayed envelope lands as
-   * a single store commit at `sync_end`, and the
-   * `onEnvelopeApplied` / `onFinished` / `onConnectionLost` callbacks are
-   * dispatched. Defaults to false/undefined — the legacy per-event-throttled
-   * path (legacy non-batch transport) is unchanged when this is omitted.
-   */
-  batchMode?: boolean;
 }
 
 // ── Core processor ─────────────────────────────────────────────────────────────
@@ -96,7 +77,7 @@ export async function processSSEStream(
   body: ReadableStream<Uint8Array>,
   opts: StreamProcessorOpts,
 ): Promise<void> {
-  const { sessionId: knownSessionId, callbacks, batchMode } = opts;
+  const { sessionId: knownSessionId, callbacks } = opts;
   const agent = session.agent;
 
   const reader = body.getReader();
@@ -109,19 +90,20 @@ export async function processSSEStream(
   let receivedSessionId: string | null = knownSessionId ?? null;
   let receivedFinishEvent = false;
 
-  // T6: batch-apply state (inert unless batchMode is set — see
-  // StreamProcessorOpts.batchMode doc comment).
+  // Batch-apply state: sync_begin..sync_end gates the throttled per-event
+  // commit so a whole replayed envelope lands as a single store commit at
+  // sync_end.
   let batching = false;
   let lastRunStatus: string | null = null;
 
   /**
    * Gate for the throttled per-event commit. While replaying inside a
-   * sync_begin..sync_end envelope in batchMode, defer to the single
-   * `session.commit()` that `sync_end` performs — this is the "batch"
-   * behavior. Does NOT gate `session.commit()` call sites (step-start,
-   * finish) — those commit per-LLM-iteration/on-finish regardless, which is
-   * correct: a multi-step replay still commits once per step, and the final
-   * commit() at sync_end flushes whatever remains after the last step.
+   * sync_begin..sync_end envelope, defer to the single `session.commit()`
+   * that `sync_end` performs — this is the "batch" behavior. Does NOT gate
+   * `session.commit()` call sites (step-start, finish) — those commit per-LLM-
+   * iteration/on-finish regardless, which is correct: a multi-step replay
+   * still commits once per step, and the final commit() at sync_end flushes
+   * whatever remains after the last step.
    */
   function maybeScheduleCommit(): void {
     if (batching) return;
@@ -388,9 +370,7 @@ export async function processSSEStream(
             sseLog(agent, "step-start-new-message", { id: event.messageId });
             break;
           }
-          // Note: `step-finish` was removed from SseEvent in S6.5 — the
-          // server-side StreamEvent::StepFinish is `continue`-skipped and never
-          // reaches the wire, so no client-side handling is needed.
+          // `step-finish` does not exist on the wire (removed in S6.5).
 
           case "file": {
             session.buffer.flushText();
@@ -514,12 +494,9 @@ export async function processSSEStream(
             break;
           }
 
-          // T6: envelope boundary markers (sync_begin..sync_end wrap the
-          // replay of a resumed/new stream — see gateway/handlers/chat/stream.rs).
-          // Inert unless batchMode is set (see StreamProcessorOpts doc) — old
-          // callers never observe any behavior change from these two cases.
+          // Envelope boundary markers (sync_begin..sync_end wrap the replay
+          // of a resumed/new stream — see gateway/handlers/chat/stream.rs).
           case "sync_begin": {
-            if (!batchMode) break;
             // `runStatus` gates the finished-vs-dropped decision in the finally
             // block below. `boundaryMessageId` is intentionally ignored — the
             // client render is id-keyed (see selectRenderMessages/mergeRender),
@@ -531,7 +508,6 @@ export async function processSSEStream(
           }
 
           case "sync_end": {
-            if (!batchMode) break;
             batching = false;
             // Only flush if the buffer actually accumulated content during this
             // envelope. A DB-branch resume never touches the buffer — the `sync`
@@ -628,32 +604,27 @@ export async function processSSEStream(
       const agentState = callbacks.getAgentState(agent);
       const isError = agentState?.connectionPhase === "error";
 
-      if (batchMode) {
-        // The batch-apply transport has no reconnect loop inside this module —
-        // the caller (chat-stream.ts's openTurnStream → streaming-renderer's
-        // `connect`) owns re-open policy. Decide only whether the turn is
-        // authoritatively over (explicit `finish`, or a `sync_begin` whose
-        // runStatus was already terminal) vs. a connection drop mid-turn.
-        // This is a lifecycle signal only — NOT a substitute for the
-        // error/interrupted UI state, which is derived from the replayed
-        // `error`/`sync` events above regardless of batchMode.
-        const isTerminalRunStatus =
-          lastRunStatus === "finished" || lastRunStatus === "error" || lastRunStatus === "interrupted";
-        if (isError) {
-          // Turn ended in error (replayed `error`/`sync`-error event) — this is
-          // NOT a connection drop. Leave connectionPhase="error"; do not
-          // re-open (onConnectionLost) or fire onFinished (which would idle the
-          // phase). Fall through to the finishing→history settle below.
-        } else if (!receivedFinishEvent && !isTerminalRunStatus) {
-          callbacks.onConnectionLost?.();
-          return;
-        } else {
-          callbacks.onFinished?.();
-        }
+      // The batch-apply transport has no reconnect loop inside this module —
+      // the caller (chat-stream.ts's openTurnStream → streaming-renderer's
+      // `connect`) owns re-open policy. Decide only whether the turn is
+      // authoritatively over (explicit `finish`, or a `sync_begin` whose
+      // runStatus was already terminal) vs. a connection drop mid-turn.
+      // This is a lifecycle signal only — NOT a substitute for the
+      // error/interrupted UI state, which is derived from the replayed
+      // `error`/`sync` events above regardless of this decision.
+      const isTerminalRunStatus =
+        lastRunStatus === "finished" || lastRunStatus === "error" || lastRunStatus === "interrupted";
+      if (isError) {
+        // Turn ended in error (replayed `error`/`sync`-error event) — this is
+        // NOT a connection drop. Leave connectionPhase="error"; do not
+        // re-open (onConnectionLost) or fire onFinished (which would idle the
+        // phase). Fall through to the finishing→history settle below.
+      } else if (!receivedFinishEvent && !isTerminalRunStatus) {
+        callbacks.onConnectionLost?.();
+        return;
+      } else {
+        callbacks.onFinished?.();
       }
-      // Non-batchMode (legacy transport) drop without finish no longer
-      // reconnects (T8): control falls through to the settle below, which lands
-      // connectionPhase="idle" and the finishing→history handoff.
 
       if (!isError) {
         // T7: "complete" folded into "idle". The finishing→history dance below
@@ -661,7 +632,6 @@ export async function processSSEStream(
         // overlay), so no distinct transient phase is needed.
         session.write({ connectionPhase: "idle", connectionError: null, isLlmReconnecting: false });
       }
-      callbacks.onStreamDone?.();
     } else {
       // Abort case: commit any partial parts (commit() drops silently if not current)
       session.commit("streaming");

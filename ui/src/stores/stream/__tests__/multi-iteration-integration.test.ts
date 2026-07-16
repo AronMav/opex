@@ -30,7 +30,6 @@ function makeCallbacks(overrides: Partial<Parameters<typeof processSSEStream>[2]
     onSessionId: vi.fn(),
     getAgentState: (agent: string) => useChatStore.getState().agents[agent],
     updateSessionParticipants: vi.fn(),
-    onStreamDone: vi.fn(),
     ...overrides,
   };
 }
