@@ -443,8 +443,10 @@ pub(crate) async fn api_delete_all_sessions(
     }
 }
 
-/// GET /api/sessions/search?q=...&agent=...&limit=50
-/// Full-text search across conversation history (messages).
+/// GET /api/sessions/search?q=...&agent=...&limit=30&all=true
+/// Full-text search across conversation history (messages) plus a
+/// session-title section. `all=true` searches across every agent;
+/// otherwise `agent` is required (contract preserved from 2026-05-08).
 pub(crate) async fn api_search_sessions(
     State(infra): State<InfraServices>,
     Query(q): Query<SessionSearchQuery>,
@@ -453,31 +455,56 @@ pub(crate) async fn api_search_sessions(
     if query_str.is_empty() {
         return ApiError::BadRequest("q parameter required".into()).into_response();
     }
+    let search_all = q.all.unwrap_or(false);
     // Audit 2026-05-08 (5th pass): replaced silent `unwrap_or("main")` with
     // an explicit BadRequest. The previous fallback let a token-holder
     // search agent "main"'s sessions just by omitting `?agent=`, and broke
     // the contract uniformity established by the rest of session API.
-    let agent = match q.agent.as_deref() {
-        Some(a) if !a.is_empty() => a,
-        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
-    };
-    let limit = q.limit.unwrap_or(50).min(200);
-
-    match sessions::search_messages(&infra.db, agent, query_str, limit).await {
-        Ok(results) => {
-            let items: Vec<Value> = results.iter().map(|r| json!({
-                "content": r.content,
-                "session_id": r.session_id.to_string(),
-                "user_id": r.user_id,
-                "channel": r.channel,
-                "role": r.role,
-                "created_at": r.created_at.to_rfc3339(),
-                "rank": r.rank,
-            })).collect();
-            Json(json!({"results": items, "count": items.len()})).into_response()
+    // `all=true` is the one deliberate escape hatch (Ctrl+K all-agents mode).
+    let agent = if search_all {
+        None
+    } else {
+        match q.agent.as_deref() {
+            Some(a) if !a.is_empty() => Some(a),
+            _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
         }
-        Err(e) => ApiError::Internal(e.to_string()).into_response(),
-    }
+    };
+    let limit = q.limit.unwrap_or(30).min(100);
+
+    let messages = match sessions::search_messages(&infra.db, agent, query_str, limit).await {
+        Ok(results) => results,
+        Err(e) => return ApiError::Internal(e.to_string()).into_response(),
+    };
+    let session_hits = match sessions::search_session_titles(&infra.db, agent, query_str, 10).await {
+        Ok(hits) => hits,
+        Err(e) => return ApiError::Internal(e.to_string()).into_response(),
+    };
+
+    let messages_json: Vec<Value> = messages.iter().map(|r| json!({
+        "message_id": r.message_id.to_string(),
+        "content": r.content,
+        "session_id": r.session_id.to_string(),
+        "session_title": r.session_title,
+        "agent_id": r.agent_id,
+        "user_id": r.user_id,
+        "channel": r.channel,
+        "role": r.role,
+        "created_at": r.created_at.to_rfc3339(),
+        "rank": r.rank,
+        "snippet": r.snippet,
+    })).collect();
+    let sessions_json: Vec<Value> = session_hits.iter().map(|h| json!({
+        "session_id": h.session_id.to_string(),
+        "title": h.title,
+        "agent_id": h.agent_id,
+        "last_message_at": h.last_message_at.to_rfc3339(),
+    })).collect();
+
+    Json(json!({
+        "messages": messages_json,
+        "sessions": sessions_json,
+        "count": messages_json.len(),
+    })).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -485,6 +512,7 @@ pub(crate) struct SessionSearchQuery {
     q: Option<String>,
     agent: Option<String>,
     limit: Option<i64>,
+    all: Option<bool>,
 }
 
 // ── Session Invite ──

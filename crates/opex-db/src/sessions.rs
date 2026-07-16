@@ -1592,11 +1592,12 @@ pub async fn count_messages(db: &PgPool, session_id: Uuid) -> Result<i64> {
     Ok(count)
 }
 
-/// Search messages across all agent sessions using `PostgreSQL` FTS.
+/// Search messages across agent sessions using `PostgreSQL` FTS.
+/// `agent_id: None` searches across all agents; `Some(id)` restricts to one.
 /// Falls back to ILIKE if FTS column is not yet available.
 pub async fn search_messages(
     db: &PgPool,
-    agent_id: &str,
+    agent_id: Option<&str>,
     query: &str,
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
@@ -1606,10 +1607,13 @@ pub async fn search_messages(
         // so the query MUST use 'russian' too — 'simple' produces unstemmed lexemes
         // that never match the stemmed/stopword-stripped tsv, silently returning
         // incomplete/empty results for the deploy's primary (Russian) content.
-        "SELECT m.content, s.id as session_id, s.user_id, s.channel, m.role, m.created_at, \
-                ts_rank_cd(m.tsv, plainto_tsquery('russian', $2))::float8 AS rank \
+        "SELECT m.id AS message_id, m.content, s.id AS session_id, s.title AS session_title, \
+                s.agent_id, s.user_id, s.channel, m.role, m.created_at, \
+                ts_rank_cd(m.tsv, plainto_tsquery('russian', $2))::float8 AS rank, \
+                ts_headline('russian', m.content, plainto_tsquery('russian', $2), \
+                            'MaxWords=18, MinWords=8, ShortWord=2') AS snippet \
          FROM messages m JOIN sessions s ON m.session_id = s.id \
-         WHERE s.agent_id = $1 AND m.tsv @@ plainto_tsquery('russian', $2) \
+         WHERE ($1::text IS NULL OR s.agent_id = $1) AND m.tsv @@ plainto_tsquery('russian', $2) \
          ORDER BY rank DESC, m.created_at DESC LIMIT $3",
     )
     .bind(agent_id)
@@ -1641,10 +1645,11 @@ pub async fn search_messages(
             .replace('%', "\\%")
             .replace('_', "\\_");
         let rows = sqlx::query_as::<_, SearchResult>(
-            "SELECT m.content, s.id as session_id, s.user_id, s.channel, m.role, m.created_at, \
-                    0.0::float8 AS rank \
+            "SELECT m.id AS message_id, m.content, s.id AS session_id, s.title AS session_title, \
+                    s.agent_id, s.user_id, s.channel, m.role, m.created_at, \
+                    0.0::float8 AS rank, left(m.content, 160) AS snippet \
              FROM messages m JOIN sessions s ON m.session_id = s.id \
-             WHERE s.agent_id = $1 AND m.content ILIKE '%' || $2 || '%' ESCAPE '\\' \
+             WHERE ($1::text IS NULL OR s.agent_id = $1) AND m.content ILIKE '%' || $2 || '%' ESCAPE '\\' \
              ORDER BY m.created_at DESC LIMIT $3",
         )
         .bind(agent_id)
@@ -1658,13 +1663,49 @@ pub async fn search_messages(
 
 #[derive(Debug, FromRow)]
 pub struct SearchResult {
+    pub message_id: Uuid,
     pub content: String,
     pub session_id: Uuid,
+    pub session_title: Option<String>,
+    pub agent_id: String,
     pub user_id: String,
     pub channel: String,
     pub role: String,
     pub created_at: DateTime<Utc>,
     pub rank: f64,
+    pub snippet: String,
+}
+
+#[derive(Debug, FromRow)]
+pub struct SessionTitleHit {
+    pub session_id: Uuid,
+    pub title: Option<String>,
+    pub agent_id: String,
+    pub last_message_at: DateTime<Utc>,
+}
+
+/// Search session titles (ILIKE) across agent sessions.
+/// `agent_id: None` searches across all agents; `Some(id)` restricts to one.
+pub async fn search_session_titles(
+    db: &PgPool,
+    agent_id: Option<&str>,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<SessionTitleHit>> {
+    let escaped = query
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    Ok(sqlx::query_as::<_, SessionTitleHit>(
+        "SELECT id AS session_id, title, agent_id, last_message_at FROM sessions \
+         WHERE ($1::text IS NULL OR agent_id = $1) AND title ILIKE '%' || $2 || '%' ESCAPE '\\' \
+         ORDER BY last_message_at DESC LIMIT $3",
+    )
+    .bind(agent_id)
+    .bind(&escaped)
+    .bind(limit)
+    .fetch_all(db)
+    .await?)
 }
 
 /// Get session metadata by ID.
@@ -3045,24 +3086,24 @@ mod search_messages_tests {
     async fn search_returns_message_id_snippet_and_all_mode(pool: sqlx::PgPool) {
         // seed: 2 агента, по сессии, по сообщению с уникальным словом
         for (agent, word) in [("A", "квантовый"), ("B", "квантовый")] {
-            let sid = uuid::Uuid::new_v4();
+            let sid = Uuid::new_v4();
             sqlx::query("INSERT INTO sessions (id, agent_id, user_id, channel, title) VALUES ($1,$2,'u','ui','Тестовая сессия')")
                 .bind(sid).bind(agent).execute(&pool).await.unwrap();
             sqlx::query("INSERT INTO messages (session_id, agent_id, role, content) VALUES ($1,$2,'user',$3)")
                 .bind(sid).bind(agent).bind(format!("обсуждаем {word} компьютер")).execute(&pool).await.unwrap();
         }
         // per-agent: только A
-        let r = super::search_messages(&pool, Some("A"), "квантовый", 10).await.unwrap();
+        let r = search_messages(&pool, Some("A"), "квантовый", 10).await.unwrap();
         assert_eq!(r.len(), 1);
-        assert_ne!(r[0].message_id, uuid::Uuid::nil());
+        assert_ne!(r[0].message_id, Uuid::nil());
         assert_eq!(r[0].agent_id, "A");
         assert_eq!(r[0].session_title.as_deref(), Some("Тестовая сессия"));
         assert!(r[0].snippet.contains("<b>"), "ts_headline russian must highlight the stemmed match: {}", r[0].snippet);
         // all-режим: оба
-        let all = super::search_messages(&pool, None, "квантовый", 10).await.unwrap();
+        let all = search_messages(&pool, None, "квантовый", 10).await.unwrap();
         assert_eq!(all.len(), 2);
         // секция сессий по title
-        let hits = super::search_session_titles(&pool, Some("A"), "тестов", 10).await.unwrap();
+        let hits = search_session_titles(&pool, Some("A"), "тестов", 10).await.unwrap();
         assert_eq!(hits.len(), 1);
     }
 }

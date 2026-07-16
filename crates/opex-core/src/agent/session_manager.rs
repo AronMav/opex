@@ -188,7 +188,7 @@ impl SessionManager {
         query: &str,
         limit: i64,
     ) -> Result<Vec<crate::db::sessions::SearchResult>> {
-        crate::db::sessions::search_messages(&self.db, agent_id, query, limit).await
+        crate::db::sessions::search_messages(&self.db, Some(agent_id), query, limit).await
     }
 
     /// Get session metadata by ID.
