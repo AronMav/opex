@@ -3036,3 +3036,33 @@ mod last_extracted_at_tests {
         assert!((got - ts).num_milliseconds().abs() <= 1, "roundtrip ts mismatch: {got} vs {ts}");
     }
 }
+
+#[cfg(test)]
+mod search_messages_tests {
+    use super::*;
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn search_returns_message_id_snippet_and_all_mode(pool: sqlx::PgPool) {
+        // seed: 2 агента, по сессии, по сообщению с уникальным словом
+        for (agent, word) in [("A", "квантовый"), ("B", "квантовый")] {
+            let sid = uuid::Uuid::new_v4();
+            sqlx::query("INSERT INTO sessions (id, agent_id, user_id, channel, title) VALUES ($1,$2,'u','ui','Тестовая сессия')")
+                .bind(sid).bind(agent).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO messages (session_id, agent_id, role, content) VALUES ($1,$2,'user',$3)")
+                .bind(sid).bind(agent).bind(format!("обсуждаем {word} компьютер")).execute(&pool).await.unwrap();
+        }
+        // per-agent: только A
+        let r = super::search_messages(&pool, Some("A"), "квантовый", 10).await.unwrap();
+        assert_eq!(r.len(), 1);
+        assert_ne!(r[0].message_id, uuid::Uuid::nil());
+        assert_eq!(r[0].agent_id, "A");
+        assert_eq!(r[0].session_title.as_deref(), Some("Тестовая сессия"));
+        assert!(r[0].snippet.contains("<b>"), "ts_headline russian must highlight the stemmed match: {}", r[0].snippet);
+        // all-режим: оба
+        let all = super::search_messages(&pool, None, "квантовый", 10).await.unwrap();
+        assert_eq!(all.len(), 2);
+        // секция сессий по title
+        let hits = super::search_session_titles(&pool, Some("A"), "тестов", 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+    }
+}
