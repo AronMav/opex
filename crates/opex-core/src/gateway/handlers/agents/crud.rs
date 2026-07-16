@@ -488,6 +488,11 @@ pub(crate) async fn api_create_agent(
     // Provider resolution now goes entirely through `cfg.agent.profile` +
     // the `profiles` table (`profile_resolver::resolve_slots_for_agent`).
 
+    let section_errors = cfg.validate_sections();
+    if !section_errors.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": section_errors.join("; ")}))).into_response();
+    }
+
     let toml_str = match cfg.to_toml() {
         Ok(s) => s,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
@@ -784,6 +789,11 @@ pub(crate) async fn api_update_agent(
         cfg.agent.max_failover_attempts = existing_cfg.agent.max_failover_attempts;
     }
     // daily_budget_tokens: 0 means "no budget" — always honor explicit value from payload
+    let section_errors = cfg.validate_sections();
+    if !section_errors.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": section_errors.join("; ")}))).into_response();
+    }
+
     let toml_str = match cfg.to_toml() {
         Ok(s) => s,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
@@ -1381,6 +1391,25 @@ mod tests {
         assert!(new_cfg.agent.initiative.daily_plan, "initiative.daily_plan must be preserved");
         assert_eq!(new_cfg.agent.delegation.max_depth, 2, "delegation must be preserved from disk");
         assert!(new_cfg.agent.emotion.enabled, "emotion must be preserved from disk");
+    }
+
+    // ── validate_sections() reachability from the handlers ───────────────────
+    //
+    // Guards that the shared cross-field validator (Task 1) is reachable and
+    // returns errors for an invalid cfg — the handlers now call it right
+    // before `cfg.to_toml()` in both create and update paths (see grep check
+    // in the task brief: two `validate_sections` call sites in this file).
+
+    #[test]
+    fn validate_sections_rejects_emotion_without_soul() {
+        // Exercises the shared validator the handlers now call pre-write.
+        let mut cfg: AgentConfig = toml::from_str(
+            "[agent]\nname = \"T\"\nprovider = \"openai\"\nmodel = \"gpt-4o\"\n\
+             [agent.emotion]\nenabled = true\n",
+        ).unwrap();
+        cfg.agent.soul.enabled = false;
+        let errs = cfg.validate_sections();
+        assert!(!errs.is_empty(), "emotion without soul must be invalid");
     }
 
     /// Per D-09: Simulated failure mid-rename should leave DB in pre-rename state.
