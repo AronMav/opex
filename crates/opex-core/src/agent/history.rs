@@ -65,9 +65,9 @@ pub async fn compact_if_needed(
 /// (a rough heuristic, see [`estimate_tokens`]) may still sit below the
 /// proactive-compaction threshold, so the normal gated path can silently
 /// no-op and the retry fails with the identical error. Forcing bypasses
-/// that gate the same way the existing `/compact` command and
-/// `compact_session` API already do (via `max_tokens=1`), but without
-/// disturbing the threshold semantics for the normal proactive path.
+/// that gate the same way the existing `/compact` command already does
+/// (via `max_tokens=1`), but without disturbing the threshold semantics
+/// for the normal proactive path.
 pub async fn force_compact(
     messages: &mut Vec<Message>,
     provider: &dyn LlmProvider,

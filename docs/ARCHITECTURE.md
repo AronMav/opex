@@ -143,7 +143,7 @@ Entry point: `toolgate/app.py`.
 |------|------|
 | `mod.rs` | `AgentEngine` struct, `Arc<AgentConfig>`, state fields |
 | `run.rs` | Three thin entry-point adapters: `handle_sse`, `handle_with_status`, `handle_isolated` |
-| `context_builder.rs` | `impl ContextBuilderDeps for AgentEngine`: `build_context`, `compact_session`, channel info cache |
+| `context_builder.rs` | `impl ContextBuilderDeps for AgentEngine`: `build_context`, channel info cache |
 | `tool_executor.rs` | `impl ToolExecutor for AgentEngine`: routes single tool call to pipeline |
 | `yaml_tool_runner.rs` | YAML tool HTTP execution logic |
 | `approval_flow.rs` | Approval gate: `check_needs_approval`, `wait_for_approval` |
