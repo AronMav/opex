@@ -250,7 +250,7 @@ export function AgentEditDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent layout="panel" size="2xl">
+      <DialogContent layout="panel" size="3xl">
         <DialogHeader className="px-5 pt-4 pb-0 border-b-0 bg-muted/20">
           <DialogTitle className="text-sm font-bold text-foreground truncate pb-3">
             {editName ? t("agents.editing", { name: editName }) : t("agents.new_agent_dialog")}
@@ -708,8 +708,7 @@ export function AgentEditDialog({
                       </AdvancedSection>
                     </SwitchSection>
 
-                    {g.initiativeDisabled && <p className="text-xs text-warning">{t("agents.initiative_non_base_note")}</p>}
-                    <SwitchSection title={t("agents.section_initiative")} enabled={form.initiativeEnabled} disabled={g.initiativeDisabled} onToggle={(v) => upd({ initiativeEnabled: v })}>
+                    <SwitchSection title={t("agents.section_initiative")} enabled={form.initiativeEnabled} disabled={g.initiativeDisabled} note={g.initiativeDisabled ? t("agents.initiative_non_base_note") : undefined} onToggle={(v) => upd({ initiativeEnabled: v })}>
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-medium text-muted-foreground">{t("agents.initiative_daily_plan")}</span>
                         <Switch checked={form.initiativeDailyPlan} disabled={g.dailyPlanDisabled} onCheckedChange={(v) => upd({ initiativeDailyPlan: v })} className="data-[state=checked]:bg-primary" />
@@ -733,11 +732,11 @@ export function AgentEditDialog({
                       </AdvancedSection>
                     </SwitchSection>
 
-                    {g.emotionDisabled && <p className="text-xs text-warning">{t("agents.emotion_requires_soul_note")}</p>}
                     <SwitchSection
                       title={t("agents.section_emotion")}
                       enabled={form.emotionEnabled}
                       disabled={g.emotionDisabled}
+                      note={g.emotionDisabled ? t("agents.emotion_requires_soul_note") : undefined}
                       onToggle={(v) => upd({ emotionEnabled: v })}
                     >
                       <AdvancedSection label={t("common.advanced")}>
@@ -903,12 +902,17 @@ function SwitchSection({
   enabled,
   onToggle,
   disabled = false,
+  note,
   children,
 }: {
   title: string;
   enabled: boolean;
   onToggle: (v: boolean) => void;
   disabled?: boolean;
+  /** Optional explanatory line shown under the header — visible even when the
+   *  section is off/disabled (e.g. "requires Soul enabled"). Kept inside the
+   *  section so it groups with THIS header, not the previous section. */
+  note?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -924,6 +928,7 @@ function SwitchSection({
           className="data-[state=checked]:bg-primary"
         />
       </div>
+      {note && <p className="text-xs text-warning">{note}</p>}
       {enabled && <div className="animate-in fade-in duration-200">{children}</div>}
     </div>
   );
