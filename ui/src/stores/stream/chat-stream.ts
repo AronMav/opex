@@ -33,6 +33,8 @@ export interface TurnStreamCallbacks {
   onFinished(): void;
   /** Fired when the connection drops WITHOUT a terminal signal — caller decides whether to re-open. */
   onConnectionLost(): void;
+  /** Fired on every parsed SSE event — drives the renderer's visibility-stale detector. */
+  onEventActivity?(): void;
 }
 
 /** POST /api/chat — starts (or continues) a turn. Returns the 202 body. */
@@ -92,6 +94,7 @@ export function openTurnStream(
           onEnvelopeApplied: () => cb.onEnvelopeApplied(),
           onFinished: () => cb.onFinished(),
           onConnectionLost: () => cb.onConnectionLost(),
+          onEventActivity: () => cb.onEventActivity?.(),
         },
       });
     })

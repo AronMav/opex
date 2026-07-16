@@ -49,6 +49,12 @@ export function createStreamingRenderer(store: StoreAccess) {
   // events are coming. The visibilitychange listener below re-opens (via
   // `connect`) any agent whose stream has been silent for more than
   // VISIBILITY_STALE_MS while in an active phase.
+  //
+  // `recordEventActivity` is called once synchronously at `connect()` time AND
+  // on every subsequent parsed SSE event (wired through `onEventActivity` on
+  // the `openTurnStream` callbacks, sourced from `processSSEStream` in
+  // stream-processor.ts). So `_lastEventTime` again means what its name says —
+  // "time of last event" — not merely "time since connect".
   const _lastEventTime = new Map<string, number>();
   // T8: tightened from 30_000 → 15_000. The single connect path returns an
   // empty envelope cheaply when there is no in-flight turn, so a shorter
@@ -226,6 +232,7 @@ export function createStreamingRenderer(store: StoreAccess) {
         queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sessionId) });
       },
       onConnectionLost: () => scheduleReconnect(agent, sessionId),
+      onEventActivity: () => recordEventActivity(agent),
     });
   }
 
