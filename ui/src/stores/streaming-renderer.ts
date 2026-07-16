@@ -5,8 +5,6 @@
 
 import { startTurn, openTurnStream } from "./stream/chat-stream";
 import { apiPatch, apiPost } from "@/lib/api";
-import { queryClient } from "@/lib/query-client";
-import { qk } from "@/lib/queries";
 
 import {
   uuid,
@@ -220,16 +218,10 @@ export function createStreamingRenderer(store: StoreAccess) {
       onFinished: () => {
         _reconnectAttempts.delete(agent);
         clearReconnectTimer(agent);
-        // Turn is authoritatively over. Do NOT clear live messages here — the
-        // id-based live→history handoff is driven by an effect in ChatThread
-        // that watches the refetched sessionMessages and, once the turn's fresh
-        // rows are present (matched by the live assistant id), drops the live
-        // overlay to history. Until then the frozen overlay stays visible, and
-        // the voice falling-edge flush (ChatComposer) reads the last assistant
-        // on the render where the phase flips out of an active state.
+        // Turn is over. Query invalidation + refetch + history settle are
+        // owned EXCLUSIVELY by stream-processor's post-finally; here we only
+        // idle the phase and reset the reconnect budget.
         update(agent, { connectionPhase: "idle" });
-        queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
-        queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sessionId) });
       },
       onConnectionLost: () => scheduleReconnect(agent, sessionId),
       onEventActivity: () => recordEventActivity(agent),

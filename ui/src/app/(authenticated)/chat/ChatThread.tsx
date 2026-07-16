@@ -102,10 +102,10 @@ export function ChatThread({
   // useRenderMessages reads message content via the cache.
 
   // ── T8: id-based live→history handoff ──────────────────────────────────────
-  // The single connect path (renderer) freezes the finished turn as a live/
-  // finishing overlay and invalidates sessionMessages. Once the refetch lands
-  // the turn's fresh rows in the cache (matched by the live turn's last
-  // assistant message id), drop the overlay to history.
+  // Late-persist backstop: post-finally settles to history only when the
+  // assistant row is already in the refetched cache; when the row lands
+  // LATER, this data-driven effect completes the switch. Not a duplicate —
+  // no query traffic here.
   // Purely data-driven + idempotent: finalizeHandoff no-ops unless a finished
   // turn is still shown, and once messageSource is history the live id is empty
   // so this effect stops firing.
