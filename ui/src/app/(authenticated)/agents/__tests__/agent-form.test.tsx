@@ -217,6 +217,33 @@ describe("formToPayload", () => {
     const payload = formToPayload({ ...base, hbEnabled: false });
     expect(payload.heartbeat).toBeNull();
   });
+
+  it("round-trips the soul layer through detailToForm and formToPayload", () => {
+    const detail: any = {
+      name: "T", language: "ru", profile: "default", temperature: 1,
+      capabilities: {}, routing: [], daily_budget_tokens: 0, max_failover_attempts: 3,
+      is_running: false, config_dirty: false,
+      soul: { enabled: true, reflection_threshold: 150, reflection_cooldown_minutes: 60,
+              context_top_k: 6, context_budget_tokens: 800, max_events_per_session: 10 },
+      drift: { enabled: true, threshold: 0.15, min_history: 6, baseline_turns: 3, correct: true, anchor: "You are T." },
+      initiative: { enabled: true, daily_proposal_cap: 1, decompose: false, daily_plan: true,
+                    auto_approve_day_plan: false, daily_token_budget: 0 },
+      emotion: { enabled: true, intensity_importance_k: 3, blend_rate: 0.3, decay_half_life_hours: 12 },
+    };
+    const form = detailToForm(detail);
+    expect(form.soulEnabled).toBe(true);
+    expect(form.driftCorrect).toBe(true);
+    expect(form.driftAnchor).toBe("You are T.");
+    const payload: any = formToPayload(form);
+    expect(payload.soul.enabled).toBe(true);
+    expect(payload.drift.anchor).toBe("You are T.");
+    expect(payload.emotion.enabled).toBe(true);
+  });
+
+  it("sends null-ish soul sections as disabled objects, not omitted", () => {
+    const payload: any = formToPayload({ ...emptyForm });
+    expect(payload.soul).toEqual(expect.objectContaining({ enabled: false }));
+  });
 });
 
 // ── detailToForm tests ──────────────────────────────────────────────────────

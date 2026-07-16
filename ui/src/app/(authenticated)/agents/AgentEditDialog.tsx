@@ -130,6 +130,32 @@ export interface FormState {
   toolDispatcherEnabled: boolean;
   toolDispatcherCoreExtra: string[];
   toolDispatcherPromotionMax: string;
+  // Soul layer
+  soulEnabled: boolean;
+  soulReflectionThreshold: string;
+  soulCooldownMin: string;
+  soulTopK: string;
+  soulBudgetTokens: string;
+  soulMaxEvents: string;
+  // Drift correction
+  driftEnabled: boolean;
+  driftThreshold: string;
+  driftMinHistory: string;
+  driftBaselineTurns: string;
+  driftCorrect: boolean;
+  driftAnchor: string;
+  // Initiative
+  initiativeEnabled: boolean;
+  initiativeProposalCap: string;
+  initiativeDecompose: boolean;
+  initiativeDailyPlan: boolean;
+  initiativeAutoApprove: boolean;
+  initiativeTokenBudget: string;
+  // Emotion
+  emotionEnabled: boolean;
+  emotionK: string;
+  emotionBlendRate: string;
+  emotionHalfLife: string;
 }
 
 export interface AgentEditDialogProps {
