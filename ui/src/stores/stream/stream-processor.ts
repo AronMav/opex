@@ -704,7 +704,7 @@ export async function processSSEStream(
       // switch once the row lands. When there is no assistant to protect
       // (e.g. an error before any assistant text) we settle immediately.
       const assistantId = [...frozenLive].reverse().find((m) => m.role === "assistant")?.id;
-      const rowsAfterRefetch = getCachedRawMessages(completedSessionId);
+      const rowsAfterRefetch = getCachedRawMessages(completedSessionId, agent);
       const assistantPersisted =
         !assistantId || rowsAfterRefetch.some((r) => r.id === assistantId);
       if (assistantPersisted) {

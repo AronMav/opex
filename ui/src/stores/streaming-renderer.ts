@@ -55,6 +55,26 @@ export function createStreamingRenderer(store: StoreAccess) {
   // staleness window recovers a suspended socket faster with negligible cost.
   const VISIBILITY_STALE_MS = 15_000;
 
+  // ── Fix I: bounded reconnect (backoff + cap) ─────────────────────────────
+  // `onConnectionLost` previously re-`connect`ed immediately with no delay,
+  // backoff or cap. Against a persistently failing GET (server down, deleted
+  // session → 404/500) that tight-loops forever, hammering the server and
+  // pinning a "thinking" spinner. We now schedule the retry with exponential
+  // backoff and give up after RECONNECT_MAX_RETRIES, surfacing a visible error.
+  const RECONNECT_BASE_DELAY_MS = 500;
+  const RECONNECT_MAX_DELAY_MS = 15_000;
+  const RECONNECT_MAX_RETRIES = 6;
+  const _reconnectAttempts = new Map<string, number>();
+  const _reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function clearReconnectTimer(agent: string): void {
+    const t = _reconnectTimers.get(agent);
+    if (t !== undefined) {
+      clearTimeout(t);
+      _reconnectTimers.delete(agent);
+    }
+  }
+
   function recordEventActivity(agent: string): void {
     _lastEventTime.set(agent, Date.now());
   }
@@ -93,6 +113,11 @@ export function createStreamingRenderer(store: StoreAccess) {
    * cleanupAgent() delegates to this same path during agent switch.
    */
   function abortLocalOnly(agent: string) {
+    // Fix I: cancel any pending backoff reconnect. (Attempts counter is NOT
+    // reset here — a retry re-enters via connect(), which clears it on the
+    // non-retry path; a user Stop / nav is followed by a fresh non-retry
+    // connect that resets it too.)
+    clearReconnectTimer(agent);
     streamSessionManager.disposeCurrent(agent);
     // `dispose()` lands the final `connectionPhase: "idle"` write and
     // bumps `streamGeneration` atomically. No direct store mutation
@@ -157,11 +182,15 @@ export function createStreamingRenderer(store: StoreAccess) {
    * any prior StreamSession (generation bump — preserves the `isCurrent`
    * stale-write guard), then dispatches the batch-apply envelope.
    */
-  function connect(agent: string, sessionId: string) {
+  function connect(agent: string, sessionId: string, isRetry = false) {
     // Dispose the previous session (generation bump) before creating a new one,
     // mirroring sendTurn. abortLocalOnly is local-only — it never POSTs
     // /abort, so re-opening the same session id can't cancel it.
     abortLocalOnly(agent);
+    // Fix I: a fresh (non-retry) connect — new send, resume, or visibility
+    // recovery — starts with a clean reconnect budget. Retries preserve the
+    // running count so the cap is actually reached under persistent failure.
+    if (!isRetry) _reconnectAttempts.delete(agent);
     const session = streamSessionManager.start(agent);
     // Synchronous active phase (before first byte). Does NOT touch messageSource:
     // the send path's optimistic user echo (sendTurn) must survive, and the
@@ -175,8 +204,16 @@ export function createStreamingRenderer(store: StoreAccess) {
     recordEventActivity(agent);
 
     openTurnStream(agent, sessionId, session, {
-      onEnvelopeApplied: () => update(agent, { connectionPhase: "streaming" }),
+      onEnvelopeApplied: () => {
+        // Fix I: the envelope committed — the connection is healthy, so a
+        // later drop gets a fresh reconnect budget (the cap targets a
+        // stream that NEVER connects, not intermittent mid-turn drops).
+        _reconnectAttempts.delete(agent);
+        update(agent, { connectionPhase: "streaming" });
+      },
       onFinished: () => {
+        _reconnectAttempts.delete(agent);
+        clearReconnectTimer(agent);
         // Turn is authoritatively over. Do NOT clear live messages here — the
         // id-based live→history handoff is driven by an effect in ChatThread
         // that watches the refetched sessionMessages and, once the turn's fresh
@@ -188,15 +225,49 @@ export function createStreamingRenderer(store: StoreAccess) {
         queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
         queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sessionId) });
       },
-      onConnectionLost: () => {
-        // Stay "submitted" (still an active phase) and re-open immediately. The
-        // visibility/staleness gate below keeps a permanently-dead stream from
-        // spinning while the tab is hidden; a genuine mid-turn network drop is
-        // resumed by re-opening the same session's envelope.
-        update(agent, { connectionPhase: "submitted" });
-        connect(agent, sessionId);
-      },
+      onConnectionLost: () => scheduleReconnect(agent, sessionId),
     });
+  }
+
+  /**
+   * Fix I: schedule a bounded, backed-off reconnect after a drop without a
+   * terminal signal. Exponential backoff (`RECONNECT_BASE_DELAY_MS * 2^n`,
+   * clamped to `RECONNECT_MAX_DELAY_MS`) with a `RECONNECT_MAX_RETRIES` cap.
+   * On the cap we STOP retrying and surface a visible error state instead of
+   * tight-looping against a persistently failing GET. Uses `setTimeout` (not
+   * rAF) so tests can drive it with fake timers.
+   */
+  function scheduleReconnect(agent: string, sessionId: string) {
+    const attempts = (_reconnectAttempts.get(agent) ?? 0) + 1;
+    _reconnectAttempts.set(agent, attempts);
+
+    if (attempts > RECONNECT_MAX_RETRIES) {
+      // Give up — the stream is persistently unreachable (server down, deleted
+      // session → 4xx/5xx). Surface a real error rather than spin forever.
+      _reconnectAttempts.delete(agent);
+      clearReconnectTimer(agent);
+      update(agent, {
+        connectionPhase: "error",
+        isLlmReconnecting: false,
+        connectionError: "reconnect-failed",
+        streamError: "Соединение потеряно. Не удалось переподключиться.",
+      });
+      return;
+    }
+
+    // Still within budget — show the reconnecting indicator during the wait.
+    update(agent, { connectionPhase: "submitted", isLlmReconnecting: true });
+    const delay = Math.min(
+      RECONNECT_BASE_DELAY_MS * 2 ** (attempts - 1),
+      RECONNECT_MAX_DELAY_MS,
+    );
+    clearReconnectTimer(agent);
+    const timer = setTimeout(() => {
+      _reconnectTimers.delete(agent);
+      if (_disposed) return;
+      connect(agent, sessionId, true);
+    }, delay);
+    _reconnectTimers.set(agent, timer);
   }
 
   /**
@@ -264,7 +335,7 @@ export function createStreamingRenderer(store: StoreAccess) {
     if (sessionId) {
       body.session_id = sessionId;
       // Send leaf_message_id — the tip of the currently viewed branch.
-      const rawMsgs = getCachedRawMessages(sessionId);
+      const rawMsgs = getCachedRawMessages(sessionId, agent);
       if (rawMsgs.length > 0) {
         const branches = store.get().agents[agent]?.selectedBranches ?? {};
         const hasBranching = rawMsgs.some((m) => m.parent_message_id != null);
@@ -363,6 +434,9 @@ export function createStreamingRenderer(store: StoreAccess) {
     // H3: dispose StreamSession to free AbortController + rAF handles
     streamSessionManager.disposeCurrent(agent);
     _lastEventTime.delete(agent);
+    // Fix I: drop any pending reconnect + its attempt counter for this agent.
+    clearReconnectTimer(agent);
+    _reconnectAttempts.delete(agent);
     // Clean up debounce timers
     clearTimeout(uiStateSaveTimers[agent]);
     delete uiStateSaveTimers[agent];
@@ -385,6 +459,10 @@ export function createStreamingRenderer(store: StoreAccess) {
     _visibilityListenerAttached = false;
     for (const t of Object.values(uiStateSaveTimers)) clearTimeout(t);
     for (const k of Object.keys(uiStateSaveTimers)) delete uiStateSaveTimers[k];
+    // Fix I: cancel every pending reconnect timer and clear attempt counters.
+    for (const t of _reconnectTimers.values()) clearTimeout(t);
+    _reconnectTimers.clear();
+    _reconnectAttempts.clear();
     _lastEventTime.clear();
   }
 

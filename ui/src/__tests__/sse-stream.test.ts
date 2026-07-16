@@ -6,6 +6,15 @@ vi.mock("@/lib/query-client", () => ({
   queryClient: {
     invalidateQueries: vi.fn(),
     getQueryData: vi.fn(() => undefined),
+    // getCachedRawMessages (post-finally history settle) reads getQueriesData;
+    // the real singleton has it — the mock must too, else the settle throws and
+    // openTurnStream's .catch mis-fires onConnectionLost. The seeded row carries
+    // the streamed assistant's id ("msg-1" = the start-event messageId used by
+    // every fixture below) so the id-guarded finishing→history handoff (bug D)
+    // completes, matching the real refetch. Keyed by the 4-element cache key.
+    getQueriesData: vi.fn(() => [
+      [["sessions", "sess", "messages", "TestAgent"], { messages: [{ id: "msg-1" }] }],
+    ]),
     refetchQueries: vi.fn(() => Promise.resolve()),
   },
 }));

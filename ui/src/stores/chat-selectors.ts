@@ -19,7 +19,7 @@ import type {
   ChatStore,
 } from "./chat-types";
 import { getCachedHistoryMessages } from "./chat-history";
-import { getLiveMessages } from "./chat-types";
+import { getLiveMessages, isActivePhase } from "./chat-types";
 
 // Re-export so consumers don't need a second import site.
 export { useShallow };
@@ -48,6 +48,14 @@ export const selectActiveSessionId = (agent: string) =>
 /** Active session id for the CURRENT agent. */
 export const selectCurrentActiveSessionId = (s: ChatStoreState): string | null =>
   s.agents[s.currentAgent]?.activeSessionId ?? null;
+
+/**
+ * True when the CURRENT agent's turn is in an active phase (submitted/streaming).
+ * Fix L: BranchNavigator uses this to disable branch switching mid-turn — a
+ * branch switch during a live turn would blend two branches' lineages.
+ */
+export const selectCurrentPhaseIsActive = (s: ChatStoreState): boolean =>
+  isActivePhase(s.agents[s.currentAgent]?.connectionPhase);
 
 
 /** Branch selection map (stable reference when empty). */
@@ -143,7 +151,12 @@ export function mergeRender(history: ChatMessage[], live: ChatMessage[]): ChatMe
     out.push(liveById.get(h.id) ?? h);
     seen.add(h.id);
   }
-  for (const m of live) if (!seen.has(m.id)) out.push(m);
+  for (const m of live) {
+    if (!seen.has(m.id)) {
+      seen.add(m.id);
+      out.push(m);
+    }
+  }
   return out;
 }
 
@@ -166,15 +179,15 @@ export function selectRenderMessages(state: ChatState, agent: string): ChatMessa
   const src = st.messageSource;
   if (src.mode === "new-chat") return [];
   if (src.mode === "history") {
-    return getCachedHistoryMessages(src.sessionId, st.selectedBranches);
+    return getCachedHistoryMessages(src.sessionId, agent, st.selectedBranches);
   }
   if (src.mode === "finishing") {
     // Frozen live turn stays visible while React Query refetches history.
-    return mergeRender(getCachedHistoryMessages(src.sessionId, st.selectedBranches), src.messages);
+    return mergeRender(getCachedHistoryMessages(src.sessionId, agent, st.selectedBranches), src.messages);
   }
   // live mode
   const histSessionId = st.activeSessionId;
-  const history = histSessionId ? getCachedHistoryMessages(histSessionId, st.selectedBranches) : [];
+  const history = histSessionId ? getCachedHistoryMessages(histSessionId, agent, st.selectedBranches) : [];
   return mergeRender(history, src.messages);
 }
 

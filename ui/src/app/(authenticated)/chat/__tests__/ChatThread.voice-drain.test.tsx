@@ -82,7 +82,13 @@ vi.mock("@/stores/auth-store", () => ({
 
 const AGENT = "Agent1";
 
-type PendingMessage = { content: string; attachments?: unknown; voice?: boolean } | null;
+type PendingMessage = {
+  content: string;
+  attachments?: unknown;
+  voice?: boolean;
+  sessionId?: string | null;
+  agent?: string;
+} | null;
 
 const agentState: {
   activeSessionId: string | null;
@@ -282,6 +288,48 @@ describe("ChatThread — pendingMessage drain effect (real effect, voice arming)
 
     expect(storeActionMocks.sendMessage).not.toHaveBeenCalled();
     expect(storeActionMocks.setVoiceTurnPending).not.toHaveBeenCalled();
+    expect(storeActionMocks.clearPending).toHaveBeenCalledWith(AGENT);
+  });
+});
+
+// ── Fix H: session/turn-scoped pending drain ────────────────────────────────
+// The drain must verify the queued message's stamp (sessionId + agent) still
+// matches the CURRENT context before sending — otherwise it clears it (with a
+// notice) rather than misdelivering into the wrong session.
+describe("ChatThread — Fix H session-scoped pending drain", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    agentState.connectionPhase = "streaming";
+    agentState.pendingMessage = null;
+    agentState.voiceTurnPending = false;
+    agentState.activeSessionId = null;
+  });
+
+  it("DELIVERS when the stamp matches the current agent + session", () => {
+    agentState.activeSessionId = "S1";
+    agentState.connectionPhase = "streaming";
+    agentState.pendingMessage = { content: "матч", attachments: undefined, voice: false, sessionId: "S1", agent: AGENT };
+
+    const { rerender } = render(
+      <ChatThread streamError={null} isReadOnly={false} onClearError={vi.fn()} onRetry={vi.fn()} />,
+    );
+    agentState.connectionPhase = "idle";
+    rerender(<ChatThread streamError={null} isReadOnly={false} onClearError={vi.fn()} onRetry={vi.fn()} />);
+
+    expect(storeActionMocks.sendMessage).toHaveBeenCalledWith("матч", undefined);
+    expect(storeActionMocks.clearPending).toHaveBeenCalledWith(AGENT);
+  });
+
+  it("does NOT misdeliver when the current session no longer matches the stamp; clears instead", () => {
+    // Queued for S1, but the user has since switched to S2 (same agent).
+    agentState.activeSessionId = "S2";
+    agentState.connectionPhase = "idle"; // selectSession's abortLocalOnly already forced idle
+    agentState.pendingMessage = { content: "не туда", attachments: undefined, voice: false, sessionId: "S1", agent: AGENT };
+
+    render(<ChatThread streamError={null} isReadOnly={false} onClearError={vi.fn()} onRetry={vi.fn()} />);
+
+    // Cleared without sending — no misdelivery into S2.
+    expect(storeActionMocks.sendMessage).not.toHaveBeenCalled();
     expect(storeActionMocks.clearPending).toHaveBeenCalledWith(AGENT);
   });
 });

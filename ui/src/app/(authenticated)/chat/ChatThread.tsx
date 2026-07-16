@@ -170,7 +170,28 @@ export function ChatThread({
     const prevPhase = prevPhaseRef.current;
     prevPhaseRef.current = connectionPhase;
 
-    if (connectionPhase === "idle" && prevPhase !== "idle" && pendingMessage) {
+    if (!pendingMessage) return;
+
+    // Fix H: the message may have been queued for a DIFFERENT agent/session
+    // (user switched agent or picked another session before the turn ended).
+    // Sending it now would misdeliver into the wrong session; leaving it would
+    // silently strand it. Verify the stamp, and on mismatch clear it with a
+    // visible notice. The stamp is optional so legacy/test fixtures without one
+    // keep the old "always deliver" behaviour.
+    const stamped = pendingMessage.sessionId !== undefined || pendingMessage.agent !== undefined;
+    const targetMismatch =
+      stamped &&
+      ((pendingMessage.agent != null && pendingMessage.agent !== currentAgent) ||
+        (pendingMessage.sessionId ?? null) !== (activeSessionId ?? null));
+    if (targetMismatch) {
+      useChatStore.getState().clearPending(currentAgent);
+      void import("sonner").then(({ toast }) =>
+        toast.info(t("chat.queue_discarded_context_changed")),
+      );
+      return;
+    }
+
+    if (connectionPhase === "idle" && prevPhase !== "idle") {
       // Clean transition to idle — drain queue. If the queued message was a
       // voice submit made while streaming, arm voiceTurnPending BEFORE starting
       // the drained turn so ChatComposer's spoken-reply effect (which reads
@@ -180,11 +201,11 @@ export function ChatThread({
       }
       useChatStore.getState().sendMessage(pendingMessage.content, pendingMessage.attachments);
       useChatStore.getState().clearPending(currentAgent);
-    } else if (connectionPhase === "error" && pendingMessage) {
+    } else if (connectionPhase === "error") {
       // Stream ended in error — discard queue so user sees the error first.
       useChatStore.getState().clearPending(currentAgent);
     }
-  }, [connectionPhase, pendingMessage, currentAgent]);
+  }, [connectionPhase, pendingMessage, currentAgent, activeSessionId, t]);
 
   const lastMsg = sourceMessages[sourceMessages.length - 1];
   // Show thinking when assistant hasn't produced text yet — covers "waiting for

@@ -1188,6 +1188,7 @@
   "chat.voice_pause": "Пауза до авто-стопа",
   "chat.cancel_queue": "Отменить очередь",
   "chat.queue_prefix": "В очереди: «{{content}}»",
+  "chat.queue_discarded_context_changed": "Сообщение из очереди отменено — контекст изменился",
   "chat.search_messages": "Поиск по сообщениям...",
   "chat.search_prev": "Предыдущий результат",
   "chat.search_next": "Следующий результат",

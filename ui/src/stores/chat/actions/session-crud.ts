@@ -136,7 +136,7 @@ export function createSessionCrudActions(deps: ActionDeps) {
       const liveMessages = getLiveMessages(st.messageSource);
       const messages = liveMessages.length > 0
         ? liveMessages
-        : getCachedHistoryMessages(st.activeSessionId, st.selectedBranches);
+        : getCachedHistoryMessages(st.activeSessionId, agent, st.selectedBranches);
       if (messages.length === 0) return;
 
       const session = {

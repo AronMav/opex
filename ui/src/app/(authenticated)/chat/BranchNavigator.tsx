@@ -9,9 +9,12 @@ interface BranchNavigatorProps {
   parentMessageId: string;
   siblings: { id: string }[];  // ordered by created_at
   currentIndex: number;        // 0-based index of current sibling
+  /** Fix L: disable both arrows while a turn is active for the session — a
+   * mid-turn branch switch re-walks the active path and blends two branches. */
+  disabled?: boolean;
 }
 
-export function BranchNavigator({ parentMessageId, siblings, currentIndex }: BranchNavigatorProps) {
+export function BranchNavigator({ parentMessageId, siblings, currentIndex, disabled = false }: BranchNavigatorProps) {
   const switchBranch = useChatStore((s) => s.switchBranch);
   const { t } = useTranslation();
 
@@ -23,7 +26,7 @@ export function BranchNavigator({ parentMessageId, siblings, currentIndex }: Bra
         variant="ghost"
         size="icon-sm"
         onClick={() => switchBranch(parentMessageId, siblings[currentIndex - 1].id)}
-        disabled={currentIndex === 0}
+        disabled={disabled || currentIndex === 0}
         className="h-5 w-5 rounded-full"
         aria-label={t("chat.branch_previous")}
       >
@@ -36,7 +39,7 @@ export function BranchNavigator({ parentMessageId, siblings, currentIndex }: Bra
         variant="ghost"
         size="icon-sm"
         onClick={() => switchBranch(parentMessageId, siblings[currentIndex + 1].id)}
-        disabled={currentIndex === siblings.length - 1}
+        disabled={disabled || currentIndex === siblings.length - 1}
         className="h-5 w-5 rounded-full"
         aria-label={t("chat.branch_next")}
       >

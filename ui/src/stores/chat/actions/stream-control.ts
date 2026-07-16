@@ -158,7 +158,16 @@ export function createStreamActions(deps: ActionDeps) {
         // prior pending voice flag — a typed message supersedes a queued voice
         // one and must not be read aloud once sent.
         const content = prev?.voice && isVoice ? `${prev.content}\n${text}` : text;
-        draft.agents[agent].pendingMessage = { content, attachments, voice: isVoice };
+        // Fix H: stamp the target session + agent so the ChatThread drain can
+        // verify the context still matches before sending (no silent loss / no
+        // misdelivery on agent- or session-switch).
+        draft.agents[agent].pendingMessage = {
+          content,
+          attachments,
+          voice: isVoice,
+          sessionId: draft.agents[agent].activeSessionId ?? null,
+          agent,
+        };
       });
     },
 
@@ -206,7 +215,7 @@ export function createStreamActions(deps: ActionDeps) {
 
       const messages: ChatMessage[] =
         st.messageSource.mode === "history"
-          ? getCachedHistoryMessages(sessionId, st.selectedBranches)
+          ? getCachedHistoryMessages(sessionId, agent, st.selectedBranches)
           : getLiveMessages(st.messageSource);
 
       // Last user message anchors the branch.
@@ -233,7 +242,7 @@ export function createStreamActions(deps: ActionDeps) {
 
       const messages: ChatMessage[] =
         st.messageSource.mode === "history"
-          ? getCachedHistoryMessages(sessionId, st.selectedBranches)
+          ? getCachedHistoryMessages(sessionId, agent, st.selectedBranches)
           : getLiveMessages(st.messageSource);
 
       const targetIdx = messages.findIndex((m) => m.id === messageId);

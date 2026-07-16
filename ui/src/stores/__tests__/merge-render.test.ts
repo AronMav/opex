@@ -60,6 +60,15 @@ describe("mergeRender", () => {
     expect(mergeRender(history, []).map((m) => m.id)).toEqual(["u0", "a0", "u1"]);
   });
 
+  it("does not double-render a duplicate id within the live array (R1 nit — seen.add)", () => {
+    // A (theoretical) duplicate id inside `live` must collapse to one row.
+    const history = [user("u0", "first")];
+    const live = [assistant("dup", "one"), assistant("dup", "two")];
+    const out = mergeRender(history, live);
+    expect(out.filter((m) => m.id === "dup")).toHaveLength(1);
+    expect(out.map((m) => m.id)).toEqual(["u0", "dup"]);
+  });
+
   it("is idempotent on re-apply (merging its own output with live is stable)", () => {
     const history = [user("u0", "first"), assistant("a0", "reply one")];
     const live = [user("b", "second"), assistant("a1", "reply two")];

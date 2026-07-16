@@ -52,6 +52,22 @@ export function createNavigationActions(deps: ActionDeps) {
         return;
       }
 
+      // Fix H (LOST case): if the departing agent has a queued message, it can
+      // never be drained after the switch — setCurrentAgent forces prev's phase
+      // to idle AND remounts ChatThread, so the idle-transition edge the drain
+      // effect watches for is never observed; returning later inits the effect's
+      // ref to an already-idle phase and it never fires → silently stuck forever.
+      // Clear it with a visible notice: no silent loss, no misdelivery.
+      if (get().agents[prev]?.pendingMessage) {
+        set((draft) => {
+          const s = draft.agents[prev];
+          if (s) s.pendingMessage = null;
+        });
+        void import("sonner").then(({ toast }) =>
+          toast.info("Сообщение из очереди отменено — вы сменили агента"),
+        );
+      }
+
       // MEM-01: clean up all Maps for previous agent.
       // Must happen BEFORE multi-agent reuse check to ensure the previous agent's
       // connectionPhase is set to "idle" and its stream is aborted.
@@ -262,6 +278,14 @@ export function createNavigationActions(deps: ActionDeps) {
       const agent = get().currentAgent;
       const st = get().agents[agent];
       if (!st) return;
+
+      // Fix L: never switch branches while a turn is active for this session.
+      // resolveActivePath would re-walk to a different trunk and the live
+      // overlay (old branch's lineage) would render after a different branch's
+      // history — two unrelated branches blended. The BranchNavigator disables
+      // its arrows on the same phase; this is the store-level backstop for any
+      // other caller.
+      if (isActivePhase(st.connectionPhase)) return;
 
       set((draft) => {
         const s = draft.agents[agent];

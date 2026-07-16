@@ -65,7 +65,7 @@ describe("queueMessage — real reducer (stream-control.ts)", () => {
   it("a fresh voice message sets pendingMessage.voice = true", () => {
     useChatStore.getState().queueMessage("привет", undefined, { voice: true });
 
-    expect(useChatStore.getState().agents[AGENT]?.pendingMessage).toEqual({
+    expect(useChatStore.getState().agents[AGENT]?.pendingMessage).toMatchObject({
       content: "привет",
       attachments: undefined,
       voice: true,
@@ -76,7 +76,7 @@ describe("queueMessage — real reducer (stream-control.ts)", () => {
     useChatStore.getState().queueMessage("первая фраза", undefined, { voice: true });
     useChatStore.getState().queueMessage("вторая фраза", undefined, { voice: true });
 
-    expect(useChatStore.getState().agents[AGENT]?.pendingMessage).toEqual({
+    expect(useChatStore.getState().agents[AGENT]?.pendingMessage).toMatchObject({
       content: "первая фраза\nвторая фраза",
       attachments: undefined,
       voice: true,
@@ -91,7 +91,7 @@ describe("queueMessage — real reducer (stream-control.ts)", () => {
     // must NOT append onto it — a typed message supersedes the queued voice one.
     useChatStore.getState().queueMessage("напечатал текст");
 
-    expect(useChatStore.getState().agents[AGENT]?.pendingMessage).toEqual({
+    expect(useChatStore.getState().agents[AGENT]?.pendingMessage).toMatchObject({
       content: "напечатал текст",
       attachments: undefined,
       voice: false,
@@ -102,7 +102,7 @@ describe("queueMessage — real reducer (stream-control.ts)", () => {
     useChatStore.getState().queueMessage("говорю голосом", undefined, { voice: true });
     useChatStore.getState().queueMessage("напечатал текст", undefined, { voice: false });
 
-    expect(useChatStore.getState().agents[AGENT]?.pendingMessage).toEqual({
+    expect(useChatStore.getState().agents[AGENT]?.pendingMessage).toMatchObject({
       content: "напечатал текст",
       attachments: undefined,
       voice: false,
@@ -112,7 +112,7 @@ describe("queueMessage — real reducer (stream-control.ts)", () => {
   it("a fresh non-voice queue call (no prior pending) sets voice: false", () => {
     useChatStore.getState().queueMessage("plain text");
 
-    expect(useChatStore.getState().agents[AGENT]?.pendingMessage).toEqual({
+    expect(useChatStore.getState().agents[AGENT]?.pendingMessage).toMatchObject({
       content: "plain text",
       attachments: undefined,
       voice: false,

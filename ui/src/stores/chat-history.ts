@@ -277,26 +277,53 @@ function convertHistoryImpl(rows: MessageRow[], isAgentStreaming?: boolean, sele
 }
 
 /**
+ * Fix M: pick the cache entry that belongs to `agent`.
+ *
+ * `useSessionMessages` stores at a 4-element key
+ * `[...qk.sessionMessages(id), agent ?? ""]`. A MULTI-AGENT session has more
+ * than one entry under the same 3-element prefix, so blindly taking
+ * `results[0]` (insertion order) can return the OTHER agent's stale snapshot →
+ * stale render + wrong `leaf_message_id` on the next turn. When `agent` is
+ * known we match the full 4-element key exactly; if no exact match exists (or
+ * the caller has no agent) we fall back to the first entry (legacy behaviour).
+ */
+function pickCachedForAgent(
+  results: ReadonlyArray<readonly [readonly unknown[], { messages: MessageRow[] } | undefined]>,
+  agent: string | undefined,
+): { messages: MessageRow[] } | undefined {
+  if (agent != null) {
+    for (const [key, data] of results) {
+      if (key[key.length - 1] === agent) return data;
+    }
+  }
+  return results[0]?.[1];
+}
+
+/**
  * Read-through cache peek — called from Zustand store actions where React hooks
  * are unavailable. Components access this data via useSessionMessages() hook.
  * See ARCH-02 audit (phase 34): queryClient.getQueryData is intentional here and
  * in sendMessage(); no React component calls getQueryData directly.
+ *
+ * `agent` (Fix M) selects the correct entry in a multi-agent shared session.
  */
-export function getCachedHistoryMessages(sessionId: string | null, selectedBranches?: Record<string, string>): ChatMessage[] {
+export function getCachedHistoryMessages(
+  sessionId: string | null,
+  agent?: string,
+  selectedBranches?: Record<string, string>,
+): ChatMessage[] {
   if (!sessionId) return [];
-  // useSessionMessages stores at a 4-element key [...qk.sessionMessages(id), agent].
-  // getQueriesData with the 3-element prefix matches it regardless of the agent suffix.
-  // A session belongs to exactly one agent, so results[0] is the only possible entry.
   const results = queryClient.getQueriesData<{ messages: MessageRow[] }>({ queryKey: qk.sessionMessages(sessionId) });
-  const cached = results[0]?.[1];
+  const cached = pickCachedForAgent(results, agent);
   return cached ? convertHistory(cached.messages, false, selectedBranches) : [];
 }
 
-/** Get all raw MessageRow[] from React Query cache for a session (for sibling discovery). */
-export function getCachedRawMessages(sessionId: string | null): MessageRow[] {
+/** Get all raw MessageRow[] from React Query cache for a session (for sibling discovery).
+ * `agent` (Fix M) selects the correct entry in a multi-agent shared session. */
+export function getCachedRawMessages(sessionId: string | null, agent?: string): MessageRow[] {
   if (!sessionId) return [];
   const results = queryClient.getQueriesData<{ messages: MessageRow[] }>({ queryKey: qk.sessionMessages(sessionId) });
-  const cached = results[0]?.[1];
+  const cached = pickCachedForAgent(results, agent);
   return cached?.messages ?? [];
 }
 

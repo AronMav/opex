@@ -236,8 +236,22 @@ export interface AgentState {
    * `voice: true` marks a message queued from a voice submit made while
    * streaming — ChatThread arms `voiceTurnPending` (below) when draining it so
    * the reply is spoken once the drained turn completes.
+   *
+   * Fix H: `sessionId` + `agent` stamp the target the message was queued FOR.
+   * The drain (ChatThread) verifies the stamp still matches the current
+   * agent/session before sending — otherwise it clears the item with a visible
+   * notice, so a queued message is never silently lost NOR sent into the wrong
+   * session (e.g. after switching agents or picking a different session).
+   * Optional so hand-built test fixtures without a stamp keep the legacy
+   * "always deliver" behaviour; `queueMessage` always writes both.
    */
-  pendingMessage: { content: string; attachments?: Array<MessageAttachment>; voice?: boolean } | null;
+  pendingMessage: {
+    content: string;
+    attachments?: Array<MessageAttachment>;
+    voice?: boolean;
+    sessionId?: string | null;
+    agent?: string;
+  } | null;
   /**
    * Single source of truth for "the turn that is about to start / just started
    * was voice-initiated" — set by a direct voice submit (ChatComposer, while

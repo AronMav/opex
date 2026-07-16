@@ -6,6 +6,7 @@ import { useChatStore } from "@/stores/chat-store";
 import {
   selectCurrentActiveSessionId,
   selectCurrentAgent,
+  selectCurrentPhaseIsActive,
   useChatActions,
   useShallow,
 } from "@/stores/chat-selectors";
@@ -124,19 +125,27 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
   // REF-05: typed selector from chat-selectors (primitive — Zustand's default
   // strict equality is sufficient, no useShallow wrapper needed).
   const activeSessionId = useChatStore(selectCurrentActiveSessionId);
+  const currentAgent = useChatStore(selectCurrentAgent);
+  // Fix L: gate branch navigation while a turn is active for this session.
+  // Switching an earlier branch mid-turn re-walks resolveActivePath to a
+  // different trunk, so the live overlay (old branch's lineage) would render
+  // after a different branch's history — two branches blended.
+  const branchNavDisabled = useChatStore(selectCurrentPhaseIsActive);
   // REF-05: actions come from the store via a useShallow-gated bundle — stable
   // references replace the old `useChatStore.getState()` imperative access.
   const { regenerate } = useChatActions();
 
-  // Compute branch siblings for this user message (only when branching data exists)
+  // Compute branch siblings for this user message (only when branching data exists).
+  // Fix M: thread the current agent so getCachedRawMessages picks THIS agent's
+  // cache entry in a multi-agent shared session (not results[0] = other agent).
   const branchInfo = React.useMemo(() => {
     if (!message.parentMessageId || !activeSessionId) return null;
-    const allRows = getCachedRawMessages(activeSessionId);
+    const allRows = getCachedRawMessages(activeSessionId, currentAgent);
     if (allRows.length === 0) return null;
     const { siblings, index } = findSiblings(allRows, message.id);
     if (siblings.length <= 1) return null;
     return { parentMessageId: message.parentMessageId, siblings, index };
-  }, [message.id, message.parentMessageId, activeSessionId]);
+  }, [message.id, message.parentMessageId, activeSessionId, currentAgent]);
 
   const isReadOnly = sessionChannel === "heartbeat" || sessionChannel === "cron" || sessionChannel === "inter-agent";
 
@@ -195,6 +204,7 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
                 parentMessageId={branchInfo.parentMessageId}
                 siblings={branchInfo.siblings}
                 currentIndex={branchInfo.index}
+                disabled={branchNavDisabled}
               />
             )}
             <MessageActions message={message} showReload={false} />
