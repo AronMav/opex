@@ -21,6 +21,7 @@ import { ShortcutHelp } from "@/components/chat/ShortcutHelp";
 import { VideoProgressIndicator } from "@/components/chat/VideoProgressIndicator";
 import { useEngineRunning } from "./hooks/use-engine-running";
 import { useRenderMessages } from "./hooks/use-render-messages";
+import { useScrollToMessage } from "./hooks/use-scroll-to-message";
 import { selectIsLive, selectIsReplayingHistory, selectLiveHasContent, selectLiveAssistantText } from "@/stores/chat-selectors";
 import { useMessageSearch } from "./hooks/use-message-search";
 
@@ -149,6 +150,10 @@ export function ChatThread({
     () => filteredMessages.length > renderLimit ? filteredMessages.slice(-renderLimit) : filteredMessages,
     [filteredMessages, renderLimit],
   );
+
+  // Branch-aware jump-to-message (search palette / bookmarks / scroll-restore).
+  // Consumes palette-store.target and scrolls the SAME array Virtuoso renders.
+  useScrollToMessage(currentAgent, activeSessionId, allMessages);
 
   const msgCount = sourceMessages.length;
   // hiddenCount is based on filteredMessages (not raw sourceMessages) so inter-agent

@@ -1364,5 +1364,7 @@
   "palette.messages": "Messages",
   "palette.all_agents": "Search all agents",
   "palette.empty": "No results",
-  "palette.loading": "Searching..."
+  "palette.loading": "Searching...",
+  "palette.too_deep": "Couldn't reach that message — it may be too far back or was deleted",
+  "palette.blocked_streaming": "Can't jump to a message while the agent is responding"
 }

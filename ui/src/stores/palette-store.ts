@@ -6,6 +6,12 @@ import { create } from "zustand";
 export interface PaletteTarget {
   sessionId: string;
   messageId?: string;
+  /**
+   * Silent navigation (Task 13c scroll-restore): resolve + scroll to the target
+   * WITHOUT any user-facing toast or highlight. On any failure the consumer just
+   * does nothing (no error surfaced). Defaults to false (interactive jump).
+   */
+  silent?: boolean;
 }
 
 interface PaletteState {

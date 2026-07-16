@@ -9,6 +9,7 @@ import { CometLoader, CircularLoader } from "@/components/ui/loader";
 
 import { MessageItem } from "./MessageItem";
 import { useChatAutoscroll } from "./use-chat-autoscroll";
+import { setVirtuosoHandle } from "./message-list-handle";
 import { AgentTransitionDivider } from "@/components/chat/AgentTransitionDivider";
 import { VirtuosoList, VirtuosoListItem } from "@/components/chat/virtuoso-list-roles";
 import { useSessions } from "@/lib/queries";
@@ -239,6 +240,14 @@ export function MessageList({
       trackNewTokens(last.id, last.parts.length);
     }
   }, [messages, trackNewTokens]);
+
+  // Publish the Virtuoso handle to the module-level registry so the
+  // jump-to-message hook (useScrollToMessage) can scroll imperatively without
+  // prop-drilling. virtuosoRef is a stable ref object; register on mount.
+  useEffect(() => {
+    setVirtuosoHandle(virtuosoRef.current);
+    return () => setVirtuosoHandle(null);
+  }, [virtuosoRef]);
 
   // Hoist session data
   const { data: sessionsData } = useSessions(currentAgent ?? "");

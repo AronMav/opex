@@ -1,0 +1,197 @@
+/**
+ * Task 3: branch-aware jump-to-message.
+ *
+ * The hook consumes palette-store.target: switches to the branch that contains
+ * the target message, backfills older history pages if needed, raises the
+ * render limit so the row enters the virtualised window, scrolls to it and
+ * flashes a highlight. Silent mode (scroll-restore, Task 13c) does none of the
+ * user-facing feedback and fails quietly.
+ */
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { renderHook, act } from "@testing-library/react";
+import type { MessageRow } from "@/types/api";
+
+// ── Hoisted mock state ────────────────────────────────────────────────────────
+// vi.mock factories are hoisted above module-level consts, so any variable a
+// factory references must live in vi.hoisted().
+const h = vi.hoisted(() => ({
+  cachedRows: [] as MessageRow[],
+  scrollSpy: vi.fn(),
+  toastError: vi.fn(),
+  toastInfo: vi.fn(),
+}));
+
+// ── Controllable raw-message cache ────────────────────────────────────────────
+// getCachedRawMessages(sessionId, agent) reads queryClient.getQueriesData; point
+// it at a mutable fixture so tests can stage which rows are "loaded".
+vi.mock("@/lib/query-client", () => ({
+  queryClient: {
+    getQueriesData: vi.fn(() => [[["x"], { messages: h.cachedRows }]]),
+    getQueryData: vi.fn(() => undefined),
+    setQueryData: vi.fn(),
+    invalidateQueries: vi.fn(),
+  },
+}));
+
+// chat-store pulls these in at import time.
+vi.mock("@/stores/streaming-renderer", () => ({
+  createStreamingRenderer: () => ({
+    sendTurn: vi.fn(),
+    connect: vi.fn(),
+    resumeStream: vi.fn(),
+    abortActiveStream: vi.fn(),
+    abortLocalOnly: vi.fn(),
+    cleanupAgent: vi.fn(),
+    onSessionId: vi.fn(),
+  }),
+}));
+
+vi.mock("@/lib/api", () => ({
+  apiGet: vi.fn().mockResolvedValue({}),
+  apiPost: vi.fn().mockResolvedValue({}),
+  apiPut: vi.fn().mockResolvedValue({}),
+  apiPatch: vi.fn().mockResolvedValue({}),
+  apiDelete: vi.fn().mockResolvedValue(undefined),
+  getToken: () => "t",
+  assertToken: () => "t",
+}));
+
+// Imperative scroll registry — spy on the scroll call.
+vi.mock("../../message-list-handle", () => ({
+  setVirtuosoHandle: vi.fn(),
+  scrollToMessageIndex: (i: number) => h.scrollSpy(i),
+}));
+
+// Toasts.
+vi.mock("sonner", () => ({ toast: { error: h.toastError, info: h.toastInfo } }));
+
+import { useChatStore } from "@/stores/chat-store";
+import { emptyAgentState } from "@/stores/chat-types";
+import type { ChatMessage } from "@/stores/chat-types";
+import { usePaletteStore } from "@/stores/palette-store";
+import { useScrollToMessage } from "../use-scroll-to-message";
+
+const AGENT = "main";
+const SID = "S1";
+
+function row(overrides: Partial<MessageRow> & { id: string }): MessageRow {
+  return {
+    role: "assistant",
+    content: "",
+    tool_calls: null,
+    tool_call_id: null,
+    created_at: "2026-04-21T00:00:00Z",
+    agent_id: AGENT,
+    feedback: null,
+    edited_at: null,
+    status: "done",
+    thinking_blocks: null,
+    parent_message_id: null,
+    branch_from_message_id: null,
+    abort_reason: null,
+    ...overrides,
+  } as MessageRow;
+}
+
+function chatMsg(id: string, role: "user" | "assistant" = "assistant"): ChatMessage {
+  return { id, role, parts: [] };
+}
+
+function seed(phase: "idle" | "streaming" = "idle", hasMoreHistory = false) {
+  useChatStore.setState({
+    currentAgent: AGENT,
+    agents: {
+      [AGENT]: {
+        ...emptyAgentState(),
+        activeSessionId: SID,
+        connectionPhase: phase,
+        messageSource: { mode: "history", sessionId: SID },
+        selectedBranches: {},
+        hasMoreHistory,
+      },
+    },
+  });
+}
+
+beforeEach(() => {
+  h.cachedRows = [];
+  h.scrollSpy.mockClear();
+  h.toastError.mockClear();
+  h.toastInfo.mockClear();
+  usePaletteStore.setState({ target: null, highlightedMessageId: null });
+});
+
+describe("useScrollToMessage", () => {
+  it("switches to the branch that holds the target, then scrolls to it", async () => {
+    // Tree: user u1 → assistant a1 (branch A) / a2 (branch B). Default active
+    // path picks the latest child (a2); target a1 is on the inactive branch.
+    h.cachedRows = [
+      row({ id: "u1", role: "user", content: "hi", parent_message_id: null, created_at: "2026-04-21T00:00:00Z" }),
+      row({ id: "a1", parent_message_id: "u1", created_at: "2026-04-21T00:00:01Z" }),
+      row({ id: "a2", parent_message_id: "u1", branch_from_message_id: "a1", created_at: "2026-04-21T00:00:02Z" }),
+    ];
+    seed("idle");
+    usePaletteStore.getState().setTarget({ sessionId: SID, messageId: "a1" });
+
+    const { rerender } = renderHook(
+      ({ msgs }: { msgs: ChatMessage[] }) => useScrollToMessage(AGENT, SID, msgs),
+      { initialProps: { msgs: [chatMsg("u1", "user"), chatMsg("a2")] } },
+    );
+
+    // Branch B is inactive after resolution — the fork parent now points at a1.
+    expect(useChatStore.getState().agents[AGENT]?.selectedBranches).toEqual({ u1: "a1" });
+
+    // Re-render as the resolved branch (a1 now in the window) → hook scrolls.
+    await act(async () => {
+      rerender({ msgs: [chatMsg("u1", "user"), chatMsg("a1")] });
+    });
+    expect(h.scrollSpy).toHaveBeenCalledWith(1);
+    // Highlight flashed on the target.
+    expect(usePaletteStore.getState().highlightedMessageId).toBe("a1");
+    // Target consumed.
+    expect(usePaletteStore.getState().target).toBeNull();
+  });
+
+  it("toasts and clears the target when the message is absent and no more history", async () => {
+    h.cachedRows = [row({ id: "x1", role: "user", content: "hi" })];
+    seed("idle", /* hasMoreHistory */ false);
+    usePaletteStore.getState().setTarget({ sessionId: SID, messageId: "gone" });
+
+    await act(async () => {
+      renderHook(() => useScrollToMessage(AGENT, SID, [chatMsg("x1", "user")]));
+    });
+
+    expect(h.toastError).toHaveBeenCalledTimes(1);
+    expect(usePaletteStore.getState().target).toBeNull();
+    expect(h.scrollSpy).not.toHaveBeenCalled();
+  });
+
+  it("silent mode never toasts or highlights on failure", async () => {
+    h.cachedRows = [row({ id: "x1", role: "user", content: "hi" })];
+    seed("idle", false);
+    usePaletteStore.getState().setTarget({ sessionId: SID, messageId: "gone", silent: true });
+
+    await act(async () => {
+      renderHook(() => useScrollToMessage(AGENT, SID, [chatMsg("x1", "user")]));
+    });
+
+    expect(h.toastError).not.toHaveBeenCalled();
+    expect(h.toastInfo).not.toHaveBeenCalled();
+    expect(usePaletteStore.getState().highlightedMessageId).toBeNull();
+    expect(usePaletteStore.getState().target).toBeNull();
+  });
+
+  it("refuses to jump while the agent is streaming", async () => {
+    h.cachedRows = [row({ id: "a1", parent_message_id: null })];
+    seed("streaming");
+    usePaletteStore.getState().setTarget({ sessionId: SID, messageId: "a1" });
+
+    await act(async () => {
+      renderHook(() => useScrollToMessage(AGENT, SID, [chatMsg("a1")]));
+    });
+
+    expect(h.toastError).toHaveBeenCalledTimes(1);
+    expect(h.scrollSpy).not.toHaveBeenCalled();
+    expect(usePaletteStore.getState().target).toBeNull();
+  });
+});

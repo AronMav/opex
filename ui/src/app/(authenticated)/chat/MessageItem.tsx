@@ -11,6 +11,7 @@ import {
   useShallow,
 } from "@/stores/chat-selectors";
 import { useAuthStore } from "@/stores/auth-store";
+import { usePaletteStore } from "@/stores/palette-store";
 import { useTranslation } from "@/hooks/use-translation";
 import type { ChatMessage, MessagePart, TextPart as TextPartType } from "@/stores/chat-store";
 import { findSiblings, getCachedRawMessages } from "@/stores/chat-store";
@@ -52,6 +53,23 @@ const _partsRenderCache = new WeakMap<ChatMessage, ReactNode[]>();
 // ── Tool status mapping ─────────────────────────────────────────────────────
 
 import { mapToolPartState } from "@/lib/tool-state";
+
+// ── Jump-to-message highlight ────────────────────────────────────────────────
+// Flash class applied to the row currently targeted by the search palette /
+// bookmark jump (useScrollToMessage sets highlightedMessageId for ~2s). The
+// selector returns a boolean for THIS message so only the matched row
+// re-renders when the highlight moves (Zustand strict-equal gating). `duration`
+// tokens keep the fade design-system-compliant.
+const HIGHLIGHT_CLASS = "ring-2 ring-primary/40 rounded-lg transition-opacity duration-1000";
+
+function useIsHighlighted(message: ChatMessage): boolean {
+  return usePaletteStore(
+    (s) =>
+      s.highlightedMessageId != null &&
+      (s.highlightedMessageId === message.id ||
+        !!message.mergedIds?.includes(s.highlightedMessageId)),
+  );
+}
 
 // ── Empty part view (loading indicator for empty assistant messages) ─────────
 
@@ -158,6 +176,7 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
 
   const isSending = message.status === "sending";
   const isFailed = message.status === "failed";
+  const isHighlighted = useIsHighlighted(message);
   const [editing, setEditing] = useState(false);
 
   // Swipe right to edit (mobile)
@@ -178,7 +197,8 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
       className={cn(
         "group flex gap-3 py-5 md:py-6 border-t border-border/30 dark:border-border/30 first:border-t-0",
         isAgentSender && "bg-muted/20 dark:bg-muted/10 rounded-lg px-3",
-        isFailed && "border-l-2 border-l-destructive pl-3"
+        isFailed && "border-l-2 border-l-destructive pl-3",
+        isHighlighted && HIGHLIGHT_CLASS
       )}
     >
       <span className="message-avatar">
@@ -266,6 +286,7 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
   const agentIconUrl = agentName ? agentIcons[agentName] || null : null;
 
   const hasParts = message.parts.length > 0;
+  const isHighlighted = useIsHighlighted(message);
 
   // PERF-03: WeakMap cache for rendered parts — only re-render if message object changed.
   // Cache key is the ChatMessage object reference; PERF-02 in-place mutation ensures
@@ -310,6 +331,7 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
         continuesPrevious
           ? "pt-0 pb-2 md:pb-3"
           : "py-5 md:py-6 border-t border-border/30 dark:border-border/30 first:border-t-0",
+        isHighlighted && HIGHLIGHT_CLASS,
       )}
     >
       <span className="message-avatar">

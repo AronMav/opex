@@ -1364,5 +1364,7 @@
   "palette.messages": "Сообщения",
   "palette.all_agents": "Искать по всем агентам",
   "palette.empty": "Ничего не найдено",
-  "palette.loading": "Идёт поиск..."
+  "palette.loading": "Идёт поиск...",
+  "palette.too_deep": "Не удалось перейти к сообщению — оно слишком далеко в истории или было удалено",
+  "palette.blocked_streaming": "Нельзя перейти к сообщению, пока агент отвечает"
 }
