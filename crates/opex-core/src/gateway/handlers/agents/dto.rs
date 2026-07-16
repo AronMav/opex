@@ -125,6 +125,36 @@ impl AgentDetailDto {
                 core_extra: a.tool_dispatcher.core_extra.clone(),
                 promotion_max: a.tool_dispatcher.promotion_max,
             }),
+            soul: AgentDetailSoulDto {
+                enabled: a.soul.enabled,
+                reflection_threshold: a.soul.reflection_threshold,
+                reflection_cooldown_minutes: a.soul.reflection_cooldown_minutes,
+                context_top_k: a.soul.context_top_k,
+                context_budget_tokens: a.soul.context_budget_tokens,
+                max_events_per_session: a.soul.max_events_per_session,
+            },
+            drift: AgentDetailDriftDto {
+                enabled: a.drift.enabled,
+                threshold: a.drift.threshold,
+                min_history: a.drift.min_history,
+                baseline_turns: a.drift.baseline_turns,
+                correct: a.drift.correct,
+                anchor: a.drift.anchor.clone(),
+            },
+            initiative: AgentDetailInitiativeDto {
+                enabled: a.initiative.enabled,
+                daily_proposal_cap: a.initiative.daily_proposal_cap,
+                decompose: a.initiative.decompose,
+                daily_plan: a.initiative.daily_plan,
+                auto_approve_day_plan: a.initiative.auto_approve_day_plan,
+                daily_token_budget: a.initiative.daily_token_budget,
+            },
+            emotion: AgentDetailEmotionDto {
+                enabled: a.emotion.enabled,
+                intensity_importance_k: a.emotion.intensity_importance_k,
+                blend_rate: a.emotion.blend_rate,
+                decay_half_life_hours: a.emotion.decay_half_life_hours,
+            },
             approval: a.approval.as_ref().map(|ap| AgentDetailApprovalDto {
                 enabled: ap.enabled,
                 require_for: ap.require_for.clone(),
@@ -267,6 +297,14 @@ mod tests {
         assert!(!caps.vision);
         assert!(!caps.imagegen);
         assert!(!caps.websearch);
+    }
+
+    #[test]
+    fn soul_dto_fields_present() {
+        // Compile-time guard: the four soul fields exist and are non-Option.
+        fn _assert(d: &super::AgentDetailDto) {
+            let _ = (d.soul.enabled, d.drift.enabled, d.initiative.enabled, d.emotion.enabled);
+        }
     }
 
     #[test]

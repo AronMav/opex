@@ -103,6 +103,61 @@ crate::register_ts_dto!(AgentDetailToolLoopDto);
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-gen", ts(export))]
+pub struct AgentDetailSoulDto {
+    pub enabled: bool,
+    pub reflection_threshold: f64,
+    // u64 → number: values always within JS safe integer range (minutes)
+    #[cfg_attr(feature = "ts-gen", ts(type = "number"))]
+    pub reflection_cooldown_minutes: u64,
+    pub context_top_k: usize,
+    pub context_budget_tokens: u32,
+    pub max_events_per_session: usize,
+}
+crate::register_ts_dto!(AgentDetailSoulDto);
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-gen", ts(export))]
+pub struct AgentDetailDriftDto {
+    pub enabled: bool,
+    pub threshold: f32,
+    pub min_history: usize,
+    pub baseline_turns: usize,
+    pub correct: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-gen", ts(optional))]
+    pub anchor: Option<String>,
+}
+crate::register_ts_dto!(AgentDetailDriftDto);
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-gen", ts(export))]
+pub struct AgentDetailInitiativeDto {
+    pub enabled: bool,
+    pub daily_proposal_cap: u32,
+    pub decompose: bool,
+    pub daily_plan: bool,
+    pub auto_approve_day_plan: bool,
+    #[cfg_attr(feature = "ts-gen", ts(type = "number"))]
+    pub daily_token_budget: u64,
+}
+crate::register_ts_dto!(AgentDetailInitiativeDto);
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-gen", ts(export))]
+pub struct AgentDetailEmotionDto {
+    pub enabled: bool,
+    pub intensity_importance_k: f32,
+    pub blend_rate: f32,
+    pub decay_half_life_hours: f32,
+}
+crate::register_ts_dto!(AgentDetailEmotionDto);
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-gen", ts(export))]
 pub struct AgentDetailToolDispatcherDto {
     pub enabled: bool,
     pub core_extra: Vec<String>,
@@ -224,6 +279,10 @@ pub struct AgentDetailDto {
     pub max_tools_in_context: Option<usize>,
     pub tool_loop: Option<AgentDetailToolLoopDto>,
     pub tool_dispatcher: Option<AgentDetailToolDispatcherDto>,
+    pub soul: AgentDetailSoulDto,
+    pub drift: AgentDetailDriftDto,
+    pub initiative: AgentDetailInitiativeDto,
+    pub emotion: AgentDetailEmotionDto,
     pub approval: Option<AgentDetailApprovalDto>,
     pub routing: Vec<AgentDetailRoutingDto>,
     pub watchdog: Option<AgentDetailWatchdogDto>,

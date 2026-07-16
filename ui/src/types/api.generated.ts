@@ -12,6 +12,8 @@ export type AgentDetailApprovalDto = { enabled: boolean, require_for: Array<stri
 
 export type AgentDetailCompactionDto = { enabled: boolean, threshold: number, preserve_tool_calls: boolean, preserve_last_n: number, max_context_tokens: number | null, };
 
+export type AgentDetailDriftDto = { enabled: boolean, threshold: number, min_history: number, baseline_turns: number, correct: boolean, anchor?: string, };
+
 export type AgentDetailDto = { name: string, language: string, 
 /**
  * Name of the row in the `profiles` table this agent resolves providers
@@ -25,21 +27,27 @@ profile: string, capabilities: AgentCapabilitiesDto, temperature: number, max_to
  * restarts. `None` when the agent has no icon in the `uploads` table or
  * no upload key is available.
  */
-icon_url: string | null, max_tools_in_context: number | null, tool_loop: AgentDetailToolLoopDto | null, tool_dispatcher: AgentDetailToolDispatcherDto | null, approval: AgentDetailApprovalDto | null, routing: Array<AgentDetailRoutingDto>, watchdog: AgentDetailWatchdogDto | null, hooks: AgentDetailHooksDto | null, max_history_messages: number | null, daily_budget_tokens: number, max_failover_attempts: number, is_running: boolean, config_dirty: boolean, 
+icon_url: string | null, max_tools_in_context: number | null, tool_loop: AgentDetailToolLoopDto | null, tool_dispatcher: AgentDetailToolDispatcherDto | null, soul: AgentDetailSoulDto, drift: AgentDetailDriftDto, initiative: AgentDetailInitiativeDto, emotion: AgentDetailEmotionDto, approval: AgentDetailApprovalDto | null, routing: Array<AgentDetailRoutingDto>, watchdog: AgentDetailWatchdogDto | null, hooks: AgentDetailHooksDto | null, max_history_messages: number | null, daily_budget_tokens: number, max_failover_attempts: number, is_running: boolean, config_dirty: boolean, 
 /**
  * Injected by the handler from scoped TTS_VOICE secret; absent when not set.
  */
 voice?: string, };
 
+export type AgentDetailEmotionDto = { enabled: boolean, intensity_importance_k: number, blend_rate: number, decay_half_life_hours: number, };
+
 export type AgentDetailHeartbeatDto = { cron: string, timezone: string | null, announce_to: string | null, };
 
 export type AgentDetailHooksDto = { log_all_tool_calls: boolean, block_tools: Array<string>, webhooks: Array<WebhookDto>, };
+
+export type AgentDetailInitiativeDto = { enabled: boolean, daily_proposal_cap: number, decompose: boolean, daily_plan: boolean, auto_approve_day_plan: boolean, daily_token_budget: number, };
 
 export type AgentDetailRoutingDto = { condition: string, connection: string | null, model: string | null, temperature: number | null, cooldown_secs: number, };
 
 export type AgentDetailSessionDto = { dm_scope: string, ttl_days: number, max_messages: number, prune_tool_output_after_turns: number | null, };
 
 export type AgentDetailSkillReviewDto = { enabled: boolean, min_tool_calls: number, };
+
+export type AgentDetailSoulDto = { enabled: boolean, reflection_threshold: number, reflection_cooldown_minutes: number, context_top_k: number, context_budget_tokens: number, max_events_per_session: number, };
 
 export type AgentDetailToolDispatcherDto = { enabled: boolean, core_extra: Array<string>, promotion_max: number, };
 
