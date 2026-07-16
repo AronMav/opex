@@ -2124,81 +2124,12 @@ impl AgentConfig {
         let config: Self =
             toml::from_str(&content).with_context(|| "failed to parse agent config TOML")?;
 
-        // Validate delegation policy. Errors here block agent load — misconfigured
-        // delegation is a security/correctness concern, not a tunable.
-        let delegation_errors = config.agent.delegation.validate();
-        if !delegation_errors.is_empty() {
+        let section_errors = config.validate_sections();
+        if !section_errors.is_empty() {
             anyhow::bail!(
-                "agent {:?}: invalid [agent.delegation] section:\n  - {}",
+                "agent {:?}: invalid config:\n  - {}",
                 config.agent.name,
-                delegation_errors.join("\n  - ")
-            );
-        }
-
-        // Validate soul policy. Errors here block agent load — same treatment
-        // as delegation (misconfiguration surfaced at startup, not runtime).
-        let soul_errors = config.agent.soul.validate();
-        if !soul_errors.is_empty() {
-            anyhow::bail!(
-                "agent {:?}: invalid [agent.soul] section:\n  - {}",
-                config.agent.name,
-                soul_errors.join("\n  - ")
-            );
-        }
-
-        // Validate drift policy. Errors here block agent load — same treatment
-        // as soul (misconfiguration surfaced at startup, not runtime).
-        let drift_errors = config.agent.drift.validate();
-        if !drift_errors.is_empty() {
-            anyhow::bail!(
-                "agent {:?}: invalid [agent.drift] section:\n  - {}",
-                config.agent.name,
-                drift_errors.join("\n  - ")
-            );
-        }
-
-        // Validate initiative policy. Errors here block agent load — same
-        // treatment as drift (misconfiguration surfaced at startup, not runtime).
-        let initiative_errors = config.agent.initiative.validate();
-        if !initiative_errors.is_empty() {
-            anyhow::bail!(
-                "agent {:?}: invalid [agent.initiative] section:\n  - {}",
-                config.agent.name,
-                initiative_errors.join("\n  - ")
-            );
-        }
-
-        if config.agent.initiative.daily_plan && config.agent.heartbeat.is_none() {
-            anyhow::bail!(
-                "agent {:?}: [agent.initiative] daily_plan=true requires a configured [agent.heartbeat] (heartbeat drives day-plan generation + advancement)",
-                config.agent.name
-            );
-        }
-        if config.agent.initiative.daily_plan && !config.agent.initiative.enabled {
-            anyhow::bail!(
-                "agent {:?}: [agent.initiative] daily_plan=true requires enabled=true (review M3: otherwise a silent no-op)",
-                config.agent.name
-            );
-        }
-
-        // Validate emotion policy. Errors here block agent load — same
-        // treatment as initiative (misconfiguration surfaced at startup, not runtime).
-        let emotion_errors = config.agent.emotion.validate();
-        if !emotion_errors.is_empty() {
-            anyhow::bail!(
-                "agent {:?}: invalid [agent.emotion] section:\n  - {}",
-                config.agent.name,
-                emotion_errors.join("\n  - ")
-            );
-        }
-
-        // Emotion is opt-in on top of soul: `EmotionConfig::validate()` can't see
-        // `SoulConfig`, so the cross-check lives here (mirrors the
-        // `initiative.daily_plan` cross-checks above).
-        if config.agent.emotion.enabled && !config.agent.soul.enabled {
-            anyhow::bail!(
-                "agent {:?}: [agent.emotion] enabled=true requires [agent.soul] enabled=true",
-                config.agent.name
+                section_errors.join("\n  - ")
             );
         }
 
@@ -2207,6 +2138,76 @@ impl AgentConfig {
 
     pub fn to_toml(&self) -> Result<String> {
         toml::to_string_pretty(self).with_context(|| "failed to serialize agent config to TOML")
+    }
+
+    /// Collect all section + cross-field validation errors (empty = valid).
+    /// Single source of truth shared by `load()` (startup/reload) and the
+    /// create/update HTTP handlers (pre-write). Mirrors the checks that were
+    /// previously inlined in `load()`.
+    pub fn validate_sections(&self) -> Vec<String> {
+        let mut errs = Vec::new();
+        let tag = |section: &str, list: Vec<String>| -> Vec<String> {
+            list.into_iter()
+                .map(|e| format!("[agent.{section}] {e}"))
+                .collect()
+        };
+        errs.extend(tag("delegation", self.agent.delegation.validate()));
+        errs.extend(tag("soul", self.agent.soul.validate()));
+        errs.extend(tag("drift", self.agent.drift.validate()));
+        errs.extend(tag("initiative", self.agent.initiative.validate()));
+        errs.extend(tag("emotion", self.agent.emotion.validate()));
+        if self.agent.initiative.daily_plan && self.agent.heartbeat.is_none() {
+            errs.push(
+                "[agent.initiative] daily_plan=true requires a configured [agent.heartbeat]"
+                    .into(),
+            );
+        }
+        if self.agent.initiative.daily_plan && !self.agent.initiative.enabled {
+            errs.push("[agent.initiative] daily_plan=true requires enabled=true".into());
+        }
+        if self.agent.emotion.enabled && !self.agent.soul.enabled {
+            errs.push("[agent.emotion] enabled=true requires [agent.soul] enabled=true".into());
+        }
+        errs
+    }
+}
+
+#[cfg(test)]
+mod validate_sections_tests {
+    use super::*;
+
+    fn base_cfg() -> AgentConfig {
+        toml::from_str("[agent]\nname = \"T\"\nprovider = \"openai\"\nmodel = \"gpt-4o\"\n").unwrap()
+    }
+
+    #[test]
+    fn emotion_without_soul_is_rejected() {
+        let mut c = base_cfg();
+        c.agent.emotion.enabled = true; // soul stays disabled
+        let errs = c.validate_sections();
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("[agent.emotion]") && e.contains("[agent.soul]")),
+            "expected emotion-requires-soul error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn valid_config_has_no_errors() {
+        assert!(base_cfg().validate_sections().is_empty());
+    }
+
+    #[test]
+    fn daily_plan_without_heartbeat_is_rejected() {
+        let mut c = base_cfg();
+        c.agent.initiative.enabled = true;
+        c.agent.initiative.daily_plan = true; // no heartbeat
+        let errs = c.validate_sections();
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("daily_plan") && e.contains("heartbeat")),
+            "expected daily_plan-requires-heartbeat error, got: {errs:?}"
+        );
     }
 }
 
