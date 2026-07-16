@@ -83,7 +83,7 @@ soul_retrieve (unchanged): created_at recency × importance × relevance
 
 ## 5. Config + migration
 
-- **Migration** `085_sessions_last_extracted_at.sql` (next sequential; latest is `084_profiles.sql`): `ALTER TABLE sessions ADD COLUMN last_extracted_at TIMESTAMPTZ` (nullable, no default → NULL = never extracted). History-preserving, additive.
+- **Migration** `086_sessions_last_extracted_at.sql` (next sequential; latest is `084_profiles.sql`): `ALTER TABLE sessions ADD COLUMN last_extracted_at TIMESTAMPTZ` (nullable, no default → NULL = never extracted). History-preserving, additive.
 - **Module consts** in `scheduler/mod.rs` (retention is a global storage policy, not per-agent — see §3.1 note): `EVENT_RETENTION_DAYS_PER_IMPORTANCE: f64 = 7.0`, `EVENT_MAX_AGE_DAYS: i64 = 180`.
 - **Const** in `knowledge_extractor.rs`: `MIN_NEW_MESSAGES: usize = 4`.
 - No change to `max_events_per_session` (still the per-run cap; with A it now bounds a single non-overlapping span, which is its honest meaning).

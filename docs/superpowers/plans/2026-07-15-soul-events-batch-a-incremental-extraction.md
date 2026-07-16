@@ -22,7 +22,7 @@
 
 ## File Structure
 
-- `migrations/085_sessions_last_extracted_at.sql` (new) — the watermark column.
+- `migrations/086_sessions_last_extracted_at.sql` (new) — the watermark column.
 - `crates/opex-db/src/sessions.rs` (modify) — `get_last_extracted_at` + `set_last_extracted_at`.
 - `crates/opex-core/src/agent/knowledge_extractor.rs` (modify) — `MIN_NEW_MESSAGES` const, pure `select_new_messages`, and the `extract_and_save_inner` rewrite + unit tests.
 
@@ -31,7 +31,7 @@
 ### Task 1: Migration + watermark accessors
 
 **Files:**
-- Create: `migrations/085_sessions_last_extracted_at.sql`
+- Create: `migrations/086_sessions_last_extracted_at.sql`
 - Modify: `crates/opex-db/src/sessions.rs` (add two fns near `load_messages`, ~line 699)
 - Test: `crates/opex-db/src/sessions.rs` `#[cfg(test)]` (sqlx, server-run)
 
@@ -43,7 +43,7 @@
 
 - [ ] **Step 1: Write the migration**
 
-Create `migrations/085_sessions_last_extracted_at.sql`:
+Create `migrations/086_sessions_last_extracted_at.sql`:
 
 ```sql
 -- Per-session watermark for incremental knowledge extraction: the created_at of
@@ -135,7 +135,7 @@ Expected: clean.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add migrations/085_sessions_last_extracted_at.sql crates/opex-db/src/sessions.rs
+git add migrations/086_sessions_last_extracted_at.sql crates/opex-db/src/sessions.rs
 git commit -m "feat(soul): sessions.last_extracted_at watermark + accessors (incremental extraction)"
 ```
 
