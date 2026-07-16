@@ -73,6 +73,7 @@ ProviderTypeMeta {
 ```
 
 Обоснование полей:
+
 - `chat_path: ""` — пустой путь означает «impl сам строит URL» (та же семантика, что у `anthropic`);
   `AnthropicProvider::chat` делает `format!("{base_url}/v1/messages")`, давая `.../anthropic/v1/messages`.
 - `supports_model_listing: false` — на `/anthropic`-шлюзе нет OpenAI `/v1/models`; полагаемся на
@@ -137,6 +138,7 @@ fn auth_headers(&self, api_key: Option<&str>) -> Vec<(String, String)> {
 ```
 
 Заменить хелпером три захардкоженных сайта `x-api-key`:
+
 - `chat` (сейчас `anthropic/mod.rs:183-187`)
 - `chat_stream` (сейчас `anthropic/mod.rs:250-254`)
 - `context_limit_hint` (сейчас `anthropic/mod.rs:428-431`) — здесь заголовки ставятся через
@@ -182,6 +184,31 @@ Unit-тесты (не требуют сети/БД, идут в bin-таргет
 
 Ручная проверка на сервере (реальным ключом): один чат-запрос через пресет Kimi Code, убедиться в
 200 и корректном стриме tool-calls.
+
+## Смежные сайты, проверенные и намеренно не тронутые
+
+Ревью прошёлся по всем местам, где код спец-кейсит `provider_type`. Ниже — что проверено и почему
+правок не требует:
+
+- **`gateway/handlers/agents/lifecycle.rs:105`** (сборка провайдера компакции) — матчит только
+  CLI-типы (`claude-cli | gemini-cli | codex-cli`), всё остальное уходит в `build_provider`. `"kimi"`
+  идёт по тому же пути, что и в основном резолве. Правок нет.
+- **`agent/model_discovery.rs` (`discover_models`, строки ~239 и ~311)** — спец-кейсит
+  `"anthropic" | "claude-cli"` для листинга через `fetch_anthropic_models`. `"kimi"` **намеренно**
+  оставлен в дефолтной `other`-ветке (OpenAI-совместимый листинг). Это безопасно, потому что у пресета
+  `supports_model_listing: false`: UI листинг не предлагает, выпадашка моделей питается из
+  `default_models`. **Важно для будущего:** если когда-нибудь включат `supports_model_listing: true`,
+  листинг поедет по неверной ветке — тогда нужно добавить `"kimi"` в anthropic-плечи `discover_models`
+  И научить `fetch_anthropic_models` Bearer-режиму (сейчас он шлёт `x-api-key`). В рамках этого MVP
+  листинг выключен — трогать `model_discovery` не нужно.
+- **`gateway/handlers/providers.rs:679`** (`"driver": provider_type` для toolgate) — касается только
+  медиа-провайдеров (tts/stt/embedding). Kimi — текстовый, в медиа-слоты не назначается. Не релевантно.
+- **`opex-catalog`** — нет метаданных моделей `kimi-*` (контекст/цены). UI покажет обобщённые бейджи.
+  Опциональный follow-up, вне scope MVP.
+
+**Требование к конфигу (не код):** при создании подключения в UI тип провайдера (`type`) должен быть
+`llm`/`text` — иначе `resolve_provider_for_agent` отбракует строку (`factory.rs:192`). Общее правило
+для всех текстовых провайдеров, не специфично для Kimi.
 
 ## Границы и что НЕ делаем
 
