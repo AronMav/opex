@@ -9,7 +9,7 @@ import { useTranslation } from "@/hooks/use-translation";
 import { useChatStore } from "@/stores/chat-store";
 import { usePaletteStore } from "@/stores/palette-store";
 import { searchAll, listBookmarked } from "@/lib/search-api";
-import { apiGet } from "@/lib/api";
+import { apiFetchRaw } from "@/lib/api";
 import { normalizePathname } from "@/lib/nav";
 import type { BookmarkHit, SearchMessageHit, SearchSessionHit } from "@/types/api";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -21,6 +21,8 @@ import { useHotkey } from "@/hooks/use-hotkey";
 const ALL_AGENTS_KEY = "palette_all_agents";
 const DEBOUNCE_MS = 250;
 const MIN_QUERY_LEN = 2;
+/** Favourites section cap — «Избранное (до 20)» per the T7 spec. */
+const FAVOURITES_LIMIT = 20;
 
 type PaletteRow =
   | { kind: "session"; item: SearchSessionHit }
@@ -94,6 +96,7 @@ export function SearchPalette() {
   const [activeIdx, setActiveIdx] = useState(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestSeq = useRef(0);
+  const bookmarkSeq = useRef(0);
 
   // Hydrate the "search all agents" toggle from localStorage on mount.
   useEffect(() => {
@@ -124,6 +127,9 @@ export function SearchPalette() {
       setQuery("");
       setDebounced("");
       setResult(null);
+      // Clear stale favourites too — without this a reopened palette flashes
+      // the PREVIOUS agent's/scope's favourites until the refetch lands.
+      setBookmarks([]);
       setActiveIdx(0);
     } else if (timerRef.current) {
       clearTimeout(timerRef.current);
@@ -171,12 +177,23 @@ export function SearchPalette() {
   // fresh), show the user's bookmarked messages instead of the "type to
   // search" empty state. Refetches when the palette opens, the query is
   // cleared, or the all-agents scope toggles — mirrors the search effect's
-  // agent-scope contract (searchAll/listBookmarked share the all/agent shape).
+  // agent-scope contract (searchAll/listBookmarked share the all/agent shape)
+  // AND its request-sequence discipline, so a slow earlier response never
+  // clobbers a faster later one (e.g. rapid all-agents toggling).
   useEffect(() => {
     if (!open || query.trim().length > 0) return;
-    listBookmarked(allAgents ? { all: true } : { agent: currentAgent })
-      .then((res) => setBookmarks(res.items))
-      .catch(() => setBookmarks([]));
+    const seq = ++bookmarkSeq.current;
+    listBookmarked(
+      allAgents
+        ? { all: true, limit: FAVOURITES_LIMIT }
+        : { agent: currentAgent, limit: FAVOURITES_LIMIT },
+    )
+      .then((res) => {
+        if (bookmarkSeq.current === seq) setBookmarks(res.items);
+      })
+      .catch(() => {
+        if (bookmarkSeq.current === seq) setBookmarks([]);
+      });
   }, [open, query, allAgents, currentAgent]);
 
   const toggleAllAgents = useCallback((v: boolean) => {
@@ -228,13 +245,22 @@ export function SearchPalette() {
       // Favourites can point at a session deleted since it was bookmarked —
       // verify it still exists before navigating, so a stale favourite never
       // routes the user to a dead end. setTarget is only set on success.
-      apiGet(`/api/sessions/${sessionId}`)
-        .then(() => {
-          usePaletteStore.getState().setTarget({ sessionId, messageId: row.item.message_id });
-          navigate();
+      // apiFetchRaw (not apiGet) so a REAL 404 ("session deleted") can be
+      // told apart from a transient failure (network drop, 5xx) — the latter
+      // must not claim the session is gone.
+      apiFetchRaw(`/api/sessions/${sessionId}`)
+        .then((resp) => {
+          if (resp.ok) {
+            usePaletteStore.getState().setTarget({ sessionId, messageId: row.item.message_id });
+            navigate();
+          } else if (resp.status === 404) {
+            toast.error(t("palette.session_deleted"));
+          } else {
+            toast.error(t("palette.open_error"));
+          }
         })
         .catch(() => {
-          toast.error(t("palette.session_deleted"));
+          toast.error(t("palette.open_error"));
         });
       setOpen(false);
       return;
@@ -301,7 +327,7 @@ export function SearchPalette() {
           <Switch id="palette-all-agents" checked={allAgents} onCheckedChange={toggleAllAgents} size="sm" />
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
-          {(!result || rows.length === 0) && !loading && (
+          {rows.length === 0 && !loading && (
             <p className="py-8 text-center text-sm text-muted-foreground-subtle">{t("palette.empty")}</p>
           )}
           {!result && bookmarks.length > 0 && (

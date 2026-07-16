@@ -82,6 +82,12 @@ function BookmarkButton({ message }: { message: ChatMessage }) {
   const currentAgent = useChatStore((s) => s.currentAgent);
   const activeSessionId = useChatStore((s) => s.agents[s.currentAgent]?.activeSessionId ?? null);
   const [bookmarked, setBookmarked] = useState(!!message.bookmarkedAt);
+  // In-flight guard: a rapid double-click must not fire two overlapping
+  // PATCHes (the second would race the first and could land out of order,
+  // desyncing the optimistic state from the server). Ref (not state) — no
+  // re-render needed, and it must be readable synchronously inside the
+  // click handler.
+  const pendingRef = useRef(false);
 
   // Keep local optimistic state in sync when the underlying message data
   // changes out from under us (e.g. history refetch after invalidation).
@@ -90,6 +96,8 @@ function BookmarkButton({ message }: { message: ChatMessage }) {
   }, [message.bookmarkedAt]);
 
   const handleClick = useCallback(() => {
+    if (pendingRef.current) return; // a toggle is already in flight — ignore
+    pendingRef.current = true;
     const next = !bookmarked;
     setBookmarked(next); // optimistic — flips before the request resolves
     toggleBookmark(message.id, currentAgent, next)
@@ -101,6 +109,9 @@ function BookmarkButton({ message }: { message: ChatMessage }) {
       .catch(() => {
         setBookmarked(!next); // revert on failure (e.g. 404 — message deleted meanwhile)
         toast.error(t("chat.bookmark_error"));
+      })
+      .finally(() => {
+        pendingRef.current = false;
       });
   }, [bookmarked, message.id, currentAgent, activeSessionId, t]);
 

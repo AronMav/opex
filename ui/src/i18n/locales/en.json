@@ -1371,5 +1371,6 @@
   "palette.too_deep": "Couldn't reach that message — it may be too far back or was deleted",
   "palette.blocked_streaming": "Can't jump to a message while the agent is responding",
   "palette.favourites": "Favourites",
-  "palette.session_deleted": "That session no longer exists"
+  "palette.session_deleted": "That session no longer exists",
+  "palette.open_error": "Failed to open the session — try again"
 }

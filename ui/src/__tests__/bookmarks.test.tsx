@@ -2,12 +2,16 @@
  * Wave-2 Task 7: bookmark star (MessageActions) + palette "Favourites" section
  * (SearchPalette, empty-query state).
  *
- * (a) star: optimistic toggle before the PATCH resolves, revert + toast on failure.
- * (b) palette empty query renders a Favourites section from listBookmarked,
- *     with preview text and an agent badge in all-agents mode.
+ * (a) star: optimistic toggle before the PATCH resolves, revert + toast on
+ *     failure, in-flight guard against overlapping double-click PATCHes.
+ * (b) palette empty query renders a Favourites section from listBookmarked
+ *     (limit 20), with preview text, NO stacked empty state, and an agent
+ *     badge in all-agents mode.
  * (c) clicking a favourite sets the palette target and navigates.
- * (d) a favourite whose session has vanished (GET /api/sessions/{id} 404s)
- *     toasts instead of navigating.
+ * (d) a favourite whose session has vanished (REAL 404 on the existence
+ *     probe) toasts session_deleted; a transient probe failure (network
+ *     reject / 5xx) toasts open_error instead — neither navigates.
+ * (e) reopening the palette clears stale favourites (no cross-scope flash).
  */
 import { vi, describe, it, expect, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
@@ -65,10 +69,12 @@ vi.mock("@/lib/queries", () => ({
 }));
 
 // ── Mock: @/lib/api (session-exists probe for palette favourites + assertToken) ──
+// apiFetchRaw is what SearchPalette uses for the probe — Response-like objects
+// let tests distinguish ok / 404 / 5xx / network-reject outcomes.
 
-const mockApiGet = vi.fn();
+const mockApiFetchRaw = vi.fn();
 vi.mock("@/lib/api", () => ({
-  apiGet: (...args: unknown[]) => mockApiGet(...args),
+  apiFetchRaw: (...args: unknown[]) => mockApiFetchRaw(...args),
   assertToken: () => "test-token",
 }));
 
@@ -185,6 +191,28 @@ describe("BookmarkButton (MessageActions)", () => {
     render(<MessageActions message={baseMessage({ id: "m2" })} showReload />);
     expect(screen.getByRole("button", { name: "chat.bookmark_tooltip" })).toBeInTheDocument();
   });
+
+  it("ignores a second click while a toggle is still in flight (no overlapping PATCHes)", async () => {
+    let resolveToggle!: () => void;
+    mockToggleBookmark.mockReturnValue(new Promise<void>((resolve) => { resolveToggle = resolve; }));
+
+    render(<MessageActions message={baseMessage()} showReload={false} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "chat.bookmark_tooltip" }));
+    // Second (double-)click lands while the first PATCH is still pending.
+    fireEvent.click(screen.getByRole("button", { name: "chat.unbookmark_tooltip" }));
+
+    expect(mockToggleBookmark).toHaveBeenCalledTimes(1);
+
+    resolveToggle();
+    await flush();
+
+    // After the in-flight toggle settles the guard releases — a new click fires.
+    mockToggleBookmark.mockResolvedValue(undefined);
+    fireEvent.click(screen.getByRole("button", { name: "chat.unbookmark_tooltip" }));
+    expect(mockToggleBookmark).toHaveBeenCalledTimes(2);
+    expect(mockToggleBookmark).toHaveBeenLastCalledWith("m1", AGENT, false);
+  });
 });
 
 describe("SearchPalette — Favourites section (T7)", () => {
@@ -205,7 +233,7 @@ describe("SearchPalette — Favourites section (T7)", () => {
     mockListBookmarked.mockResolvedValue({ items: BOOKMARK_ITEMS });
     mockSearchAll.mockReset();
     mockSearchAll.mockResolvedValue({ sessions: [], messages: [], count: 0 });
-    mockApiGet.mockReset();
+    mockApiFetchRaw.mockReset();
     mockSelectSession.mockReset();
     mockPush.mockReset();
     mockToastError.mockReset();
@@ -213,27 +241,39 @@ describe("SearchPalette — Favourites section (T7)", () => {
     usePaletteStore.setState({ open: true, target: null, highlightedMessageId: null });
   });
 
-  it("renders the Favourites section from listBookmarked with a preview, and an agent badge in all-agents mode", async () => {
+  it("renders the Favourites section (limit 20) with a preview, no empty state, and an agent badge in all-agents mode", async () => {
     render(<SearchPalette />);
     await flush();
 
-    expect(mockListBookmarked).toHaveBeenCalledWith({ agent: AGENT });
+    expect(mockListBookmarked).toHaveBeenCalledWith({ agent: AGENT, limit: 20 });
     expect(screen.getByText("palette.favourites")).toBeInTheDocument();
     expect(screen.getByText("Session A")).toBeInTheDocument();
     expect(screen.getByText("an important note")).toBeInTheDocument();
-    // Not shown in per-agent mode.
+    // Critical-fix regression guard: with ≥1 favourite rendered, the
+    // "no results" empty state must NOT stack on top of the section.
+    expect(screen.queryByText("palette.empty")).not.toBeInTheDocument();
+    // Agent badge not shown in per-agent mode.
     expect(screen.queryByText(AGENT)).not.toBeInTheDocument();
 
     const toggle = screen.getByRole("switch");
     fireEvent.click(toggle);
     await flush();
 
-    expect(mockListBookmarked).toHaveBeenLastCalledWith({ all: true });
+    expect(mockListBookmarked).toHaveBeenLastCalledWith({ all: true, limit: 20 });
     expect(screen.getByText(AGENT)).toBeInTheDocument();
   });
 
+  it("still renders the empty state when there are no favourites and no query", async () => {
+    mockListBookmarked.mockResolvedValue({ items: [] });
+    render(<SearchPalette />);
+    await flush();
+
+    expect(screen.getByText("palette.empty")).toBeInTheDocument();
+    expect(screen.queryByText("palette.favourites")).not.toBeInTheDocument();
+  });
+
   it("clicking a favourite verifies the session, then setTarget + navigates", async () => {
-    mockApiGet.mockResolvedValue({ id: "s1" });
+    mockApiFetchRaw.mockResolvedValue({ ok: true, status: 200 });
     render(<SearchPalette />);
     await flush();
 
@@ -242,15 +282,15 @@ describe("SearchPalette — Favourites section (T7)", () => {
     fireEvent.mouseDown(row!);
     await flush();
 
-    expect(mockApiGet).toHaveBeenCalledWith("/api/sessions/s1");
+    expect(mockApiFetchRaw).toHaveBeenCalledWith("/api/sessions/s1");
     expect(usePaletteStore.getState().target).toEqual({ sessionId: "s1", messageId: "bm1" });
     expect(mockSelectSession).toHaveBeenCalledWith("s1", AGENT);
     expect(mockPush).not.toHaveBeenCalled();
     expect(mockToastError).not.toHaveBeenCalled();
   });
 
-  it("a vanished session (404 on GET /api/sessions/{id}) toasts and does not navigate", async () => {
-    mockApiGet.mockRejectedValue(new Error("HTTP 404"));
+  it("a vanished session (REAL 404 on GET /api/sessions/{id}) toasts session_deleted and does not navigate", async () => {
+    mockApiFetchRaw.mockResolvedValue({ ok: false, status: 404 });
     render(<SearchPalette />);
     await flush();
 
@@ -262,5 +302,56 @@ describe("SearchPalette — Favourites section (T7)", () => {
     expect(mockSelectSession).not.toHaveBeenCalled();
     expect(mockPush).not.toHaveBeenCalled();
     expect(usePaletteStore.getState().target).toBeNull();
+  });
+
+  it("a transient probe failure (network reject / 5xx) toasts open_error — NOT session_deleted — and does not navigate", async () => {
+    // Network-level failure: the fetch itself rejects.
+    mockApiFetchRaw.mockRejectedValue(new Error("network down"));
+    const { unmount } = render(<SearchPalette />);
+    await flush();
+
+    fireEvent.mouseDown(screen.getByText("Session A").closest("button")!);
+    await flush();
+
+    expect(mockToastError).toHaveBeenCalledWith("palette.open_error");
+    expect(mockToastError).not.toHaveBeenCalledWith("palette.session_deleted");
+    expect(mockSelectSession).not.toHaveBeenCalled();
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(usePaletteStore.getState().target).toBeNull();
+    unmount();
+
+    // Server-side failure: a 5xx answer must also read as transient.
+    mockToastError.mockReset();
+    mockApiFetchRaw.mockResolvedValue({ ok: false, status: 503 });
+    usePaletteStore.setState({ open: true, target: null, highlightedMessageId: null });
+    render(<SearchPalette />);
+    await flush();
+
+    fireEvent.mouseDown(screen.getByText("Session A").closest("button")!);
+    await flush();
+
+    expect(mockToastError).toHaveBeenCalledWith("palette.open_error");
+    expect(mockToastError).not.toHaveBeenCalledWith("palette.session_deleted");
+    expect(mockSelectSession).not.toHaveBeenCalled();
+    expect(usePaletteStore.getState().target).toBeNull();
+  });
+
+  it("reopening the palette clears stale favourites while the refetch is pending (no flash of the previous scope)", async () => {
+    render(<SearchPalette />);
+    await flush();
+    expect(screen.getByText("Session A")).toBeInTheDocument();
+
+    // Close, then reopen with the refetch still in flight — the stale list
+    // must be gone immediately (cleared by the open-reset effect), not shown
+    // until the new response lands.
+    await act(async () => {
+      usePaletteStore.setState({ open: false });
+    });
+    mockListBookmarked.mockReturnValue(new Promise(() => {})); // never resolves
+    await act(async () => {
+      usePaletteStore.setState({ open: true });
+    });
+
+    expect(screen.queryByText("Session A")).not.toBeInTheDocument();
   });
 });
