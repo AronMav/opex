@@ -187,6 +187,14 @@ pub struct CallOptions {
     /// `None` for non-base agents and for agents without prompt caching.
     /// Non-Anthropic providers ignore this field (CACHE-04). See CACHE-02.
     pub claude_md_content: Option<String>,
+
+    /// R5: names of the agent's extension/MCP tools for this turn. Used by the
+    /// OpenAI-compatible streaming path to suppress hallucinated free-form
+    /// tool "calls" (`sequentialthinking\n{...}` etc.) — see
+    /// `providers/openai/hallucinated_tool.rs`. Empty ⇒ the suppressor is a pure
+    /// passthrough. `Arc` so per-iteration `CallOptions` construction is cheap.
+    /// All providers except the OpenAI-compatible streaming path ignore it.
+    pub known_extension_tools: std::sync::Arc<Vec<String>>,
 }
 
 /// Pluggable LLM provider trait.

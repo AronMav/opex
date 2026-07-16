@@ -17,7 +17,7 @@ impl OpenAiCompatibleProvider {
         messages: &[Message],
         tools: &[ToolDefinition],
         chunk_tx: mpsc::Sender<String>,
-        _opts: super::super::CallOptions,
+        opts: super::super::CallOptions,
     ) -> Result<LlmResponse> {
         let effective_model = self.model.effective();
         let body = self.build_chat_body(messages, tools, true);
@@ -98,6 +98,13 @@ impl OpenAiCompatibleProvider {
         // sequence is reassembled from the next chunk before decoding.
         let mut buffer: Vec<u8> = Vec::new();
         let mut thinking_filter = crate::agent::thinking::ThinkingFilter::new();
+        // R5: suppress hallucinated extension-tool "calls" (e.g.
+        // `sequentialthinking\n{...}`) that weak-adherence models emit as
+        // free-form content. Runs AFTER the thinking filter, so `<think>`
+        // reasoning is already stripped. Pure passthrough when the agent has no
+        // extension tools (empty list).
+        let mut hallucinated_filter =
+            super::hallucinated_tool::HallucinatedToolFilter::new(opts.known_extension_tools.clone());
         // Indexed by tool_call index: (id, name, arguments)
         let mut tool_call_parts: Vec<(String, String, String)> = Vec::new();
         let mut usage: Option<StreamingUsage> = None;
@@ -171,7 +178,10 @@ impl OpenAiCompatibleProvider {
                                     full_content.push_str(content);
                                     let filtered = thinking_filter.process(content);
                                     if !filtered.is_empty() {
-                                        chunk_tx.send(filtered).await.ok();
+                                        let visible = hallucinated_filter.process(&filtered);
+                                        if !visible.is_empty() {
+                                            chunk_tx.send(visible).await.ok();
+                                        }
                                     }
                                 }
                                 // Capture DeepSeek reasoning_content (not streamed to UI)
@@ -263,6 +273,14 @@ impl OpenAiCompatibleProvider {
             return Err(anyhow::Error::new(err));
         }
 
+        // R5: flush any text the hallucinated-tool filter was still buffering
+        // (a `NeedMore`/boundary prefix that never became a call). An in-progress
+        // suppression is dropped by `finish()`.
+        let tail = hallucinated_filter.finish();
+        if !tail.is_empty() {
+            chunk_tx.send(tail).await.ok();
+        }
+
         let elapsed = start.elapsed();
         // Convert accumulated tool call parts to ToolCall values
         let mut tool_calls: Vec<opex_types::ToolCall> = tool_call_parts
@@ -295,6 +313,15 @@ impl OpenAiCompatibleProvider {
             );
             tool_calls.extend(xml_calls);
         }
+
+        // R5: post-hoc strip hallucinated extension-tool "calls" from the
+        // PERSISTED content (same conservative matcher as the live filter) so a
+        // reload stays consistent with what was shown live. No-op when the
+        // known-tool list is empty or nothing matched.
+        let full_content = super::hallucinated_tool::strip_hallucinated_tool_calls(
+            &full_content,
+            opts.known_extension_tools.as_slice(),
+        );
 
         tracing::info!(
             provider = %self.provider_name,

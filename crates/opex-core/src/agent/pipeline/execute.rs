@@ -167,6 +167,37 @@ pub async fn execute<S: EventSink>(
     // content-based dedup heuristics in the frontend.
     let mut assistant_msg_id = Uuid::nil();
 
+    // R5: known extension/MCP tool names for this turn — threaded into every
+    // LLM call so the OpenAI-compatible streaming path can suppress hallucinated
+    // free-form tool "calls" (e.g. `sequentialthinking\n{...}`) that
+    // weak-adherence models emit as assistant content instead of going through
+    // the `tool_use` dispatcher. Names don't change within a turn, so compute
+    // once here (mirrors the once-per-turn cost of the context-builder tool
+    // hint). Names shorter than 4 chars are dropped to avoid prose collisions.
+    let known_extension_tools: std::sync::Arc<Vec<String>> = {
+        let deny: Vec<String> = engine
+            .cfg()
+            .agent
+            .tools
+            .as_ref()
+            .map(|p| p.deny.clone())
+            .unwrap_or_default();
+        let names = crate::agent::dispatcher::build_extension_tool_list(
+            engine.cfg().agent.base,
+            &deny,
+            &std::collections::HashSet::new(),
+            &engine.cfg().workspace_dir,
+            &engine.cfg().profile_slots,
+            engine.mcp().as_deref(),
+        )
+        .await
+        .into_iter()
+        .map(|t| t.name)
+        .filter(|n| n.chars().count() >= 4)
+        .collect::<Vec<_>>();
+        std::sync::Arc::new(names)
+    };
+
     // ── Mutable loop state ───────────────────────────────────────────────────
     let loop_config = engine.tool_loop_config();
     let mut final_text = String::new();
@@ -353,6 +384,8 @@ pub async fn execute<S: EventSink>(
             // every LLM call. Anthropic uses it as a third cache breakpoint;
             // other providers ignore the field (CACHE-04).
             claude_md_content: claude_md_content.clone(),
+            // R5: extension-tool names for the hallucinated-call suppressor.
+            known_extension_tools: known_extension_tools.clone(),
         };
         let llm_fut = crate::agent::pipeline::llm_call::chat_stream_with_deadline_retry(
             live_provider,

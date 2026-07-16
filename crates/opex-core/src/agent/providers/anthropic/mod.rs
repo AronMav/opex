@@ -852,6 +852,7 @@ mod tests {
         let opts = CallOptions {
             thinking_level: 0,
             claude_md_content: Some("# Project Rules\n- rustls only".to_string()),
+            ..Default::default()
         };
 
         let (_, body) = provider.build_request_body(&messages, &[], opts);
@@ -890,6 +891,7 @@ mod tests {
         let opts = CallOptions {
             thinking_level: 0,
             claude_md_content: None,
+            ..Default::default()
         };
 
         let (_, body) = provider.build_request_body(&messages, &[], opts);
@@ -922,6 +924,7 @@ mod tests {
         let opts = CallOptions {
             thinking_level: 0,
             claude_md_content: Some("   \n\t  \n".to_string()),
+            ..Default::default()
         };
 
         let (_, body) = provider.build_request_body(&messages, &[], opts);
@@ -953,6 +956,7 @@ mod tests {
         let opts = CallOptions {
             thinking_level: 0,
             claude_md_content: Some("would be ignored".to_string()),
+            ..Default::default()
         };
 
         let (_, body) = provider.build_request_body(&messages, &[], opts);

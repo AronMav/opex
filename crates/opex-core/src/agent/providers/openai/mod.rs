@@ -5,6 +5,7 @@ use super::{async_trait, Arc, SecretsManager, ModelOverride, LlmProvider, Messag
 
 mod chat;
 mod chat_stream;
+mod hallucinated_tool;
 mod minimax_xml;
 mod request;
 mod response;

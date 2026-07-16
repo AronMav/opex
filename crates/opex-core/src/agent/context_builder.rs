@@ -495,13 +495,24 @@ impl ContextBuilder for DefaultContextBuilder {
                 {
                     system_prompt.push_str(&format!(
                         "\n\n## Relevant Tool Hint\n\
-                         Your task may need the **{}** tool: {}{}.\n\
-                         Call tool_use(action=\"describe\", name=\"{}\") to load its schema.\n",
+                         Your task may need an extension tool named `{}`: {}{}.\n\
+                         This tool is NOT directly callable and has no function of its own — \
+                         it is only reachable through the `tool_use` dispatcher. Do NOT write \
+                         `{}` (or `<{}>`, `{}(...)`, `{}` followed by JSON) as message content; \
+                         that is not a tool call and will be shown to the user as plain text.\n\
+                         The ONLY way to use it: first call \
+                         tool_use(action=\"describe\", name=\"{}\") to load its schema, then call \
+                         tool_use(action=\"call\", name=\"{}\", arguments={{...}}).\n",
                         t.name,
                         t.description,
                         crate::agent::tool_handlers::tool_use::required_params_suffix(
                             &t.input_schema
                         ),
+                        t.name,
+                        t.name,
+                        t.name,
+                        t.name,
+                        t.name,
                         t.name,
                     ));
                 }

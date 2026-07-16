@@ -127,6 +127,7 @@ async fn api_llm_complete(
     let opts = CallOptions {
         thinking_level: 0,
         claude_md_content: None,
+        ..Default::default()
     };
     match provider.chat(&messages, &[], opts).await {
         Ok(resp) => (
