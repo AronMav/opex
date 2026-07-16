@@ -662,7 +662,7 @@ export function AgentEditDialog({
                 const g = soulGating(form, !!editingBase);
                 return (
                   <>
-                    <SwitchSection title={t("agents.section_soul")} enabled={form.soulEnabled} onToggle={(v) => upd({ soulEnabled: v })}>
+                    <SwitchSection title={t("agents.section_soul")} enabled={form.soulEnabled} onToggle={(v) => upd(v ? { soulEnabled: v } : { soulEnabled: v, emotionEnabled: false })}>
                       <AdvancedSection label={t("common.advanced")}>
                         <Field label={t("agents.soul_reflection_threshold")} labelClassName="text-xs">
                           <Input type="number" min={1} className="bg-background border-border font-mono text-sm h-8" value={form.soulReflectionThreshold} onChange={(e) => upd({ soulReflectionThreshold: e.target.value })} />
@@ -682,7 +682,7 @@ export function AgentEditDialog({
                       </AdvancedSection>
                     </SwitchSection>
 
-                    <SwitchSection title={t("agents.section_drift")} enabled={form.driftEnabled} onToggle={(v) => upd({ driftEnabled: v })}>
+                    <SwitchSection title={t("agents.section_drift")} enabled={form.driftEnabled} onToggle={(v) => upd(v ? { driftEnabled: v } : { driftEnabled: v, driftCorrect: false })}>
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-medium text-muted-foreground">{t("agents.drift_correct")}</span>
                         <Switch checked={form.driftCorrect} disabled={g.driftCorrectDisabled} onCheckedChange={(v) => upd({ driftCorrect: v })} className="data-[state=checked]:bg-primary" />
@@ -711,7 +711,7 @@ export function AgentEditDialog({
                     <SwitchSection title={t("agents.section_initiative")} enabled={form.initiativeEnabled} disabled={g.initiativeDisabled} note={g.initiativeDisabled ? t("agents.initiative_non_base_note") : undefined} onToggle={(v) => upd({ initiativeEnabled: v })}>
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-medium text-muted-foreground">{t("agents.initiative_daily_plan")}</span>
-                        <Switch checked={form.initiativeDailyPlan} disabled={g.dailyPlanDisabled} onCheckedChange={(v) => upd({ initiativeDailyPlan: v })} className="data-[state=checked]:bg-primary" />
+                        <Switch checked={form.initiativeDailyPlan} disabled={g.dailyPlanDisabled} onCheckedChange={(v) => upd(v ? { initiativeDailyPlan: v } : { initiativeDailyPlan: v, initiativeAutoApprove: false })} className="data-[state=checked]:bg-primary" />
                       </div>
                       <p className="text-xs text-muted-foreground">{t("agents.initiative_daily_plan_hint")}</p>
                       <div className="flex items-center justify-between">

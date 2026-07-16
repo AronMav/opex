@@ -245,6 +245,20 @@ describe("formToPayload", () => {
     const payload: any = formToPayload({ ...emptyForm });
     expect(payload.soul).toEqual(expect.objectContaining({ enabled: false }));
   });
+
+  it("preserves an explicit 0 for drift.threshold and emotion.intensity_importance_k", () => {
+    const f = { ...emptyForm, driftEnabled: true, driftThreshold: "0", emotionEnabled: true, soulEnabled: true, emotionK: "0" };
+    const p: any = formToPayload(f);
+    expect(p.drift.threshold).toBe(0);              // not 0.15
+    expect(p.emotion.intensity_importance_k).toBe(0); // not 3
+  });
+
+  it("blank numeric field still falls back to the default", () => {
+    const f = { ...emptyForm, driftEnabled: true, driftThreshold: "", emotionEnabled: true, soulEnabled: true, emotionK: "" };
+    const p: any = formToPayload(f);
+    expect(p.drift.threshold).toBe(0.15);
+    expect(p.emotion.intensity_importance_k).toBe(3);
+  });
 });
 
 // ── detailToForm tests ──────────────────────────────────────────────────────

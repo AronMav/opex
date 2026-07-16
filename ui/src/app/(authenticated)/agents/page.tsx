@@ -225,6 +225,14 @@ export function detailToForm(d: AgentDetail): FormState {
   };
 }
 
+// Parse a numeric form field, preserving a legitimate 0 (unlike `parseFloat(x) || d`,
+// which clobbers 0 to the default). Falls back to `dflt` only for empty/NaN input.
+function numOr(s: string, dflt: number): number {
+  if (s.trim() === "") return dflt;
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : dflt;
+}
+
 export function formToPayload(f: FormState) {
   const splitList = (s: string) =>
     s.split(",").map((x) => x.trim()).filter(Boolean);
@@ -335,7 +343,7 @@ export function formToPayload(f: FormState) {
     },
     drift: {
       enabled: f.driftEnabled,
-      threshold: parseFloat(f.driftThreshold) || 0.15,
+      threshold: numOr(f.driftThreshold, 0.15),
       min_history: parseInt(f.driftMinHistory) || 6,
       baseline_turns: parseInt(f.driftBaselineTurns) || 3,
       correct: f.driftCorrect,
@@ -351,7 +359,7 @@ export function formToPayload(f: FormState) {
     },
     emotion: {
       enabled: f.emotionEnabled,
-      intensity_importance_k: parseFloat(f.emotionK) || 3,
+      intensity_importance_k: numOr(f.emotionK, 3),
       blend_rate: parseFloat(f.emotionBlendRate) || 0.3,
       decay_half_life_hours: parseFloat(f.emotionHalfLife) || 12,
     },
