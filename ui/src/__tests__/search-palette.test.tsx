@@ -23,11 +23,24 @@ vi.mock("@/hooks/use-translation", () => ({
   useTranslation: () => ({ t: (key: string) => key, locale: "en" }),
 }));
 
-// ── Mock: chat-store (only currentAgent is read by the palette) ────────────
+// ── Mock: chat-store (currentAgent read via hook; selectSession via getState,
+// house pattern — see ChatThread.voice-drain.test.tsx) ─────────────────────
 
+const mockSelectSession = vi.fn();
 vi.mock("@/stores/chat-store", () => ({
-  useChatStore: (selector: (s: { currentAgent: string }) => unknown) =>
-    selector({ currentAgent: "Agent1" }),
+  useChatStore: Object.assign(
+    (selector: (s: { currentAgent: string }) => unknown) => selector({ currentAgent: "Agent1" }),
+    { getState: () => ({ currentAgent: "Agent1", selectSession: mockSelectSession }) },
+  ),
+}));
+
+// ── Mock: next/navigation (router.push + pathname, mutable per-test) ───────
+
+let mockPathname = "/chat";
+const mockPush = vi.fn();
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mockPush }),
+  usePathname: () => mockPathname,
 }));
 
 // ── Mock: search-api ─────────────────────────────────────────────────────────
@@ -74,6 +87,9 @@ describe("SearchPalette (Ctrl+K)", () => {
     vi.useFakeTimers();
     mockSearchAll.mockReset();
     mockSearchAll.mockResolvedValue(SEARCH_RESULT);
+    mockSelectSession.mockReset();
+    mockPush.mockReset();
+    mockPathname = "/chat";
     window.localStorage.clear();
     usePaletteStore.setState({ open: true, target: null, highlightedMessageId: null });
   });
@@ -132,6 +148,68 @@ describe("SearchPalette (Ctrl+K)", () => {
     expect(usePaletteStore.getState().open).toBe(true);
     fireEvent.keyDown(window, { key: "ArrowDown" });
     fireEvent.keyDown(window, { key: "Enter" });
+    expect(usePaletteStore.getState().open).toBe(false);
+  });
+
+  // Task 4 — selecting a message result for the CURRENT agent while already on
+  // /chat: navigate in-place via selectSession + set the scroll target (Task 3's
+  // use-scroll-to-message consumes it once history lands), no route push.
+  it("message result, same agent, on /chat: selectSession + setTarget, no router.push", async () => {
+    render(<SearchPalette />);
+    const input = screen.getByPlaceholderText("palette.placeholder");
+    fireEvent.change(input, { target: { value: "hello" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    await flush();
+
+    const row = screen.getByText("Session A").closest("button");
+    expect(row).not.toBeNull();
+    fireEvent.mouseDown(row!);
+
+    expect(mockSelectSession).toHaveBeenCalledWith("s1", "Agent1");
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(usePaletteStore.getState().target).toEqual({ sessionId: "s1", messageId: "m1" });
+    expect(usePaletteStore.getState().open).toBe(false);
+  });
+
+  // Selecting a message result belonging to a DIFFERENT agent must cross-agent
+  // jump via router.push (encoded agent + session query params) — selectSession
+  // would silently reuse the wrong agent's session pool.
+  it("message result, other agent: router.push with encoded agent+session, setTarget still set", async () => {
+    mockSearchAll.mockResolvedValue({
+      sessions: [],
+      messages: [{ ...SEARCH_RESULT.messages[0], agent_id: "Agent 2" }],
+      count: 1,
+    });
+    render(<SearchPalette />);
+    const input = screen.getByPlaceholderText("palette.placeholder");
+    fireEvent.change(input, { target: { value: "hello" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    await flush();
+
+    const row = screen.getByText("Session A").closest("button");
+    fireEvent.mouseDown(row!);
+
+    expect(mockPush).toHaveBeenCalledWith("/chat?agent=Agent%202&s=s1");
+    expect(mockSelectSession).not.toHaveBeenCalled();
+    expect(usePaletteStore.getState().target).toEqual({ sessionId: "s1", messageId: "m1" });
+    expect(usePaletteStore.getState().open).toBe(false);
+  });
+
+  // Session-result rows never set a scroll target — there's no specific
+  // message to jump to, just the session itself.
+  it("session result: selectSession without setTarget", async () => {
+    render(<SearchPalette />);
+    const input = screen.getByPlaceholderText("palette.placeholder");
+    fireEvent.change(input, { target: { value: "hello" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    await flush();
+
+    const row = screen.getByText("Session B").closest("button");
+    fireEvent.mouseDown(row!);
+
+    expect(mockSelectSession).toHaveBeenCalledWith("s2", "Agent1");
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(usePaletteStore.getState().target).toBeNull();
     expect(usePaletteStore.getState().open).toBe(false);
   });
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useRouter, usePathname } from "next/navigation";
 import { Loader2, Search as SearchIcon } from "lucide-react";
 import { useTranslation } from "@/hooks/use-translation";
 import { useChatStore } from "@/stores/chat-store";
@@ -67,6 +68,8 @@ export function SearchPalette() {
   const open = usePaletteStore((s) => s.open);
   const setOpen = usePaletteStore((s) => s.setOpen);
   const currentAgent = useChatStore((s) => s.currentAgent);
+  const router = useRouter();
+  const pathname = usePathname();
 
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -171,11 +174,31 @@ export function SearchPalette() {
   );
 
   const handleSelect = useCallback((row: PaletteRow) => {
-    // Task 4 extension point: navigate via usePaletteStore.getState().setTarget(...)
-    // before closing. For now, selection just closes the palette.
-    void row;
+    const agentId = row.item.agent_id;
+    const sessionId = row.item.session_id;
+
+    // Message rows carry a specific message to jump to — set the target
+    // BEFORE navigating so use-scroll-to-message (Task 3) picks it up as
+    // soon as this session's history lands, regardless of which of the two
+    // navigation paths below is taken. Session rows just land on the
+    // session with no particular message highlighted.
+    if (row.kind === "message") {
+      usePaletteStore.getState().setTarget({ sessionId, messageId: row.item.message_id });
+    }
+
+    if (agentId === currentAgent && pathname === "/chat") {
+      // Same agent, already on the chat page — switch sessions in place via
+      // the store action (no route change, no remount).
+      useChatStore.getState().selectSession(sessionId, agentId);
+    } else {
+      // Different agent, or the palette was opened from a non-chat page —
+      // route there directly. use-session-restore's `?agent=&s=` deep-link
+      // resolver (same mechanism as shared URLs) takes it from here.
+      router.push(`/chat?agent=${encodeURIComponent(agentId)}&s=${sessionId}`);
+    }
+
     setOpen(false);
-  }, [setOpen]);
+  }, [setOpen, currentAgent, pathname, router]);
 
   useEffect(() => {
     if (!open || rows.length === 0) return;
