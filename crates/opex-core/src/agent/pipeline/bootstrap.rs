@@ -193,20 +193,20 @@ pub async fn bootstrap<S: EventSink>(
     );
 
     // 5. ProcessingGuard — broadcasts "typing" via ui_event_tx (independent of sink)
-    let start_event = serde_json::json!({
-        "type": "agent_processing",
-        "agent": engine.cfg().agent.name,
-        "session_id": session_id.to_string(),
-        "status": "start",
-        "channel": ctx.msg.channel,
-    });
+    let start_ws_event = opex_types::ws::WsEvent::AgentProcessing {
+        agent: engine.cfg().agent.name.clone(),
+        status: "start".to_string(),
+        session_id: Some(session_id.to_string()),
+        channel: Some(ctx.msg.channel.clone()),
+    };
+    let start_event = serde_json::to_value(&start_ws_event).unwrap_or_default();
     // Broadcast the start event — sidebar relies on WS `agent_processing`
     // to refresh the session list (ui/src/lib/queries.ts:387). ProcessingGuard
     // only emits the `end` event via Drop; without this explicit start the UI
     // never learns about a newly started session until it completes.
     // Regression fixed 2026-04-20 (pipeline unification had dropped this).
     if let Some(tx) = &engine.state().ui_event_tx {
-        let _ = tx.send(start_event.to_string());
+        let _ = tx.send(start_ws_event.to_json());
     }
     let processing_guard = ProcessingGuard::new(
         engine.state().ui_event_tx.clone(),

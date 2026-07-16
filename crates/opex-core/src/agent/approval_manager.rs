@@ -112,12 +112,14 @@ impl ApprovalManager {
                         "tool": tool_name, "approval_id": id.to_string()
                     }),
                 );
-                Self::broadcast_ui(ui_event_tx, serde_json::json!({
-                    "type": "approval_requested",
-                    "approval_id": id.to_string(),
-                    "agent": agent_name,
-                    "tool_name": tool_name,
-                }));
+                Self::broadcast_ui(
+                    ui_event_tx,
+                    opex_types::ws::WsEvent::ApprovalRequested {
+                        approval_id: id.to_string(),
+                        agent: agent_name.to_string(),
+                        tool_name: tool_name.to_string(),
+                    },
+                );
                 // Fire-and-forget notification
                 if let Some(ui_tx) = ui_event_tx {
                     let db = self.db.clone();
@@ -348,10 +350,10 @@ impl ApprovalManager {
 
     fn broadcast_ui(
         ui_event_tx: Option<&tokio::sync::broadcast::Sender<String>>,
-        event: serde_json::Value,
+        event: opex_types::ws::WsEvent,
     ) {
         if let Some(tx) = ui_event_tx {
-            tx.send(event.to_string()).ok();
+            tx.send(event.to_json()).ok();
         }
     }
 }

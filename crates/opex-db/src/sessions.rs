@@ -1755,12 +1755,12 @@ pub async fn add_participant(
         // Broadcast to all participants so their sidebars/badges refresh
         if let Some(tx) = ui_event_tx {
             for participant in &p {
-                let event = serde_json::json!({
-                    "type": "session_updated",
-                    "agent": participant,
-                    "session_id": session_id.to_string(),
-                });
-                let _ = tx.send(event.to_string());
+                let event = opex_types::ws::WsEvent::SessionUpdated {
+                    agent: participant.clone(),
+                    session_id: Some(session_id.to_string()),
+                    channel: None,
+                };
+                let _ = tx.send(event.to_json());
             }
         }
         p

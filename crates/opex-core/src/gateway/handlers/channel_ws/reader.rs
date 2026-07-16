@@ -193,12 +193,12 @@ pub(super) async fn run(
                         }
 
                         // UI sidebar refresh (preserved from old loop).
-                        let event = serde_json::json!({
-                            "type": "session_updated",
-                            "agent": agent_name,
-                            "channel": state.channel_type,
-                        });
-                        ctx.bus.ui_event_tx.send(event.to_string()).ok();
+                        let event = opex_types::ws::WsEvent::SessionUpdated {
+                            agent: agent_name.clone(),
+                            session_id: None,
+                            channel: Some(state.channel_type.clone()),
+                        };
+                        ctx.bus.ui_event_tx.send(event.to_json()).ok();
                     }
                     ChannelInbound::Cancel { request_id } => {
                         let cancelled = session_queue::cancel(&request_id, &inflight).await;

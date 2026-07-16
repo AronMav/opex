@@ -8,6 +8,8 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
+use opex_types::ws::{NotificationReadData, NotificationsReadAllData, WsEvent};
+
 use crate::gateway::clusters::{ChannelBus, InfraServices};
 use crate::gateway::AppState;
 
@@ -43,22 +45,20 @@ fn default_notification_type() -> String { "watchdog_alert".to_string() }
 // Emitted over `ui_event_tx` so every open tab reconciles read-state to the
 // server-authoritative unread count (fixes blind local decrement drift).
 
-pub(crate) fn notification_read_event(id: Uuid, unread_count: i64) -> serde_json::Value {
-    serde_json::json!({
-        "type": "notification_read",
-        "data": { "id": id.to_string(), "unread_count": unread_count }
-    })
+pub(crate) fn notification_read_event(id: Uuid, unread_count: i64) -> WsEvent {
+    WsEvent::NotificationRead {
+        data: NotificationReadData { id: id.to_string(), unread_count },
+    }
 }
 
-fn notifications_read_all_event(unread_count: i64) -> serde_json::Value {
-    serde_json::json!({
-        "type": "notifications_read_all",
-        "data": { "unread_count": unread_count }
-    })
+fn notifications_read_all_event(unread_count: i64) -> WsEvent {
+    WsEvent::NotificationsReadAll {
+        data: NotificationsReadAllData { unread_count },
+    }
 }
 
-fn notifications_cleared_event() -> serde_json::Value {
-    serde_json::json!({ "type": "notifications_cleared" })
+fn notifications_cleared_event() -> WsEvent {
+    WsEvent::NotificationsCleared
 }
 
 /// POST /api/notifications — create a notification (bell + WS broadcast).
@@ -169,7 +169,7 @@ pub(crate) async fn api_mark_notification_read(
                 match crate::db::notifications::count_unread(&infra.db).await {
                     Ok(unread) => {
                         bus.ui_event_tx
-                            .send(notification_read_event(id, unread).to_string())
+                            .send(notification_read_event(id, unread).to_json())
                             .ok();
                     }
                     Err(e) => {
@@ -196,7 +196,7 @@ pub(crate) async fn api_mark_all_notifications_read(
         Ok(count) => {
             // After mark-all, unread count is authoritatively 0.
             bus.ui_event_tx
-                .send(notifications_read_all_event(0).to_string())
+                .send(notifications_read_all_event(0).to_json())
                 .ok();
             Json(serde_json::json!({"ok": true, "updated": count})).into_response()
         }
@@ -218,7 +218,7 @@ pub(crate) async fn api_clear_all_notifications(
     {
         Ok(r) => {
             bus.ui_event_tx
-                .send(notifications_cleared_event().to_string())
+                .send(notifications_cleared_event().to_json())
                 .ok();
             Json(serde_json::json!({"ok": true, "deleted": r.rows_affected()})).into_response()
         }
@@ -304,7 +304,12 @@ pub async fn notify(
         .unwrap_or(false);
     if !muted {
         ui_event_tx
-            .send(serde_json::json!({"type": "notification", "data": notification}).to_string())
+            .send(
+                WsEvent::Notification {
+                    data: serde_json::to_value(&notification).unwrap_or(serde_json::Value::Null),
+                }
+                .to_json(),
+            )
             .ok();
     }
 
@@ -318,7 +323,8 @@ mod tests {
     #[test]
     fn read_event_shape() {
         let id = Uuid::nil();
-        let ev = notification_read_event(id, 3);
+        let ev: serde_json::Value =
+            serde_json::from_str(&notification_read_event(id, 3).to_json()).unwrap();
         assert_eq!(ev["type"], "notification_read");
         assert_eq!(ev["data"]["id"], id.to_string());
         assert_eq!(ev["data"]["unread_count"], 3);
@@ -326,14 +332,16 @@ mod tests {
 
     #[test]
     fn read_all_event_shape() {
-        let ev = notifications_read_all_event(0);
+        let ev: serde_json::Value =
+            serde_json::from_str(&notifications_read_all_event(0).to_json()).unwrap();
         assert_eq!(ev["type"], "notifications_read_all");
         assert_eq!(ev["data"]["unread_count"], 0);
     }
 
     #[test]
     fn cleared_event_shape() {
-        let ev = notifications_cleared_event();
+        let ev: serde_json::Value =
+            serde_json::from_str(&notifications_cleared_event().to_json()).unwrap();
         assert_eq!(ev["type"], "notifications_cleared");
     }
 }

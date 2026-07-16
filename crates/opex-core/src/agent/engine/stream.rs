@@ -71,15 +71,16 @@ impl Drop for ProcessingGuard {
                 map.remove(&self.tracker_key);
             }
         if let Some(ref tx) = self.tx {
-            let mut event = serde_json::json!({
-                "type": "agent_processing",
-                "agent": self.agent_name,
-                "status": "end",
-            });
-            if let Some(ref sid) = self.session_id {
-                event["session_id"] = serde_json::Value::String(sid.clone());
-            }
-            tx.send(event.to_string()).ok();
+            tx.send(
+                opex_types::ws::WsEvent::AgentProcessing {
+                    agent: self.agent_name.clone(),
+                    status: "end".to_string(),
+                    session_id: self.session_id.clone(),
+                    channel: None,
+                }
+                .to_json(),
+            )
+            .ok();
         }
     }
 }

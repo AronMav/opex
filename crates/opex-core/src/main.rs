@@ -99,16 +99,15 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for BroadcastLogLayer 
             tracing::Level::TRACE => "DEBUG",
         };
 
-        let json = serde_json::json!({
-            "type": "log",
-            "level": level,
-            "target": event.metadata().target(),
-            "message": visitor.message,
-            "timestamp": chrono::Utc::now().to_rfc3339(),
-        });
+        let log_event = opex_types::ws::WsEvent::Log {
+            level: level.to_string(),
+            target: event.metadata().target().to_string(),
+            message: visitor.message,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
 
         // Best-effort send — drop if no subscribers
-        self.tx.send(json.to_string()).ok();
+        self.tx.send(log_event.to_json()).ok();
     }
 }
 

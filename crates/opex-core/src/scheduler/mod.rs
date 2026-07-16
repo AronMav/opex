@@ -1692,12 +1692,12 @@ fn broadcast_session_event(
     agent: &str,
     channel: &str,
 ) {
-    let event = serde_json::json!({
-        "type": "session_updated",
-        "agent": agent,
-        "channel": channel,
-    });
-    tx.send(event.to_string()).ok();
+    let event = opex_types::ws::WsEvent::SessionUpdated {
+        agent: agent.to_string(),
+        session_id: None,
+        channel: Some(channel.to_string()),
+    };
+    tx.send(event.to_json()).ok();
 }
 
 /// Decay `relevance_score` for raw (non-pinned) PRIVATE memory chunks.

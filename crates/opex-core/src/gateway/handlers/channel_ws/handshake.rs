@@ -98,7 +98,7 @@ pub(super) async fn handle_ready(
     }
     ctx.bus
         .ui_event_tx
-        .send(serde_json::json!({"type": "channels_changed", "agent": agent_name}).to_string())
+        .send(opex_types::ws::WsEvent::ChannelsChanged { agent: agent_name.to_string() }.to_json())
         .ok();
 
     // Subscribe to the channel action router and hand off the receiver to the

@@ -32,28 +32,29 @@ pub async fn handle_canvas(
                 content: content.to_string(),
                 title: title.map(|s| s.to_string()),
             });
-            let event = serde_json::json!({
-                "type": "canvas_update",
-                "agent": agent_name,
-                "action": action,
-                "content_type": ct,
-                "content": content,
-                "title": title,
-            });
+            let event = opex_types::ws::WsEvent::CanvasUpdate {
+                agent: agent_name.to_string(),
+                action: action.to_string(),
+                content_type: Some(ct.to_string()),
+                content: Some(content.to_string()),
+                title: title.map(std::string::ToString::to_string),
+            };
             if let Some(tx) = ui_event_tx {
-                tx.send(event.to_string()).ok();
+                tx.send(event.to_json()).ok();
             }
             "Canvas updated".to_string()
         }
         "clear" => {
             *canvas_state.write().await = None;
-            let event = serde_json::json!({
-                "type": "canvas_update",
-                "agent": agent_name,
-                "action": "clear",
-            });
+            let event = opex_types::ws::WsEvent::CanvasUpdate {
+                agent: agent_name.to_string(),
+                action: "clear".to_string(),
+                content_type: None,
+                content: None,
+                title: None,
+            };
             if let Some(tx) = ui_event_tx {
-                tx.send(event.to_string()).ok();
+                tx.send(event.to_json()).ok();
             }
             "Canvas cleared".to_string()
         }

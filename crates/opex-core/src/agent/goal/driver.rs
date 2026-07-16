@@ -349,7 +349,7 @@ async fn deliver(engine: &AgentEngine, target: &GoalTarget, session_id: Uuid, te
         }
         None => {
             if let Some(tx) = engine.state().ui_event_tx.as_ref() {
-                let ev = serde_json::json!({ "type": "goal-turn", "sessionId": session_id.to_string() }).to_string();
+                let ev = opex_types::ws::WsEvent::GoalTurn { session_id: session_id.to_string() }.to_json();
                 let _ = tx.send(ev);
             }
         }

@@ -574,14 +574,13 @@ pub(crate) async fn api_invite_to_session(
     match crate::db::sessions::add_participant(&infra.db, id, &req.agent_name, None).await {
         Ok(participants) => {
             // Broadcast to WebSocket for live UI updates
-            let event = serde_json::json!({
-                "type": "agent_joined",
-                "agent_name": req.agent_name,
-                "session_id": id.to_string(),
-                "invited_by": "user",
-                "participants": participants,
-            });
-            bus.ui_event_tx.send(event.to_string()).ok();
+            let event = opex_types::ws::WsEvent::AgentJoined {
+                agent_name: req.agent_name.clone(),
+                session_id: id.to_string(),
+                invited_by: "user".to_string(),
+                participants: participants.clone(),
+            };
+            bus.ui_event_tx.send(event.to_json()).ok();
 
             Json(json!({ "participants": participants })).into_response()
         }

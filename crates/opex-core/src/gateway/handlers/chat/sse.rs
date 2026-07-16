@@ -314,12 +314,12 @@ pub(crate) async fn api_chat_sse(
         }
 
         // Notify UI about session update so sidebar refreshes
-        let event = serde_json::json!({
-            "type": "session_updated",
-            "agent": agent_for_broadcast,
-            "channel": crate::agent::channel_kind::channel::UI,
-        });
-        ui_tx.send(event.to_string()).ok();
+        let event = opex_types::ws::WsEvent::SessionUpdated {
+            agent: agent_for_broadcast,
+            session_id: None,
+            channel: Some(crate::agent::channel_kind::channel::UI.to_string()),
+        };
+        ui_tx.send(event.to_json()).ok();
     }.instrument(request_span));
 
     // Converter task: StreamEvent → SSE JSON events (Vercel AI SDK v3 UI format).

@@ -784,7 +784,11 @@ async fn run_file_handler(
         // `type:"file"` is wired in Phase 4; until then this send is a no-op.
         for artifact in &outcome.artifact_urls {
             let _ = channels.ui_event_tx.send(
-                json!({"type": "file", "url": artifact, "mediaType": meta.mime}).to_string(),
+                opex_types::ws::WsEvent::File {
+                    url: artifact.clone(),
+                    media_type: meta.mime.clone(),
+                }
+                .to_json(),
             );
         }
     }
@@ -813,16 +817,15 @@ pub(crate) fn file_job_progress_event(
     phase: &str,
     pct: i32,
     status: &str,
-) -> serde_json::Value {
-    serde_json::json!({
-        "type": "file_job_progress",
-        "job_id": job_id,
-        "handler_id": handler_id,
-        "session_id": session_id,
-        "phase": phase,
-        "pct": pct,
-        "status": status,
-    })
+) -> opex_types::ws::WsEvent {
+    opex_types::ws::WsEvent::FileJobProgress {
+        job_id: job_id.to_string(),
+        handler_id: handler_id.to_string(),
+        session_id: session_id.to_string(),
+        phase: phase.to_string(),
+        pct,
+        status: status.to_string(),
+    }
 }
 
 // ── Async-job callback endpoints ──────────────────────────────────────────────
@@ -864,7 +867,7 @@ async fn job_progress(
             body.pct,
             "processing",
         );
-        let _ = state.channels.ui_event_tx.send(ev.to_string());
+        let _ = state.channels.ui_event_tx.send(ev.to_json());
     }
     StatusCode::NO_CONTENT
 }
@@ -958,7 +961,7 @@ async fn job_complete(
         100,
         terminal,
     );
-    let _ = state.channels.ui_event_tx.send(ev.to_string());
+    let _ = state.channels.ui_event_tx.send(ev.to_json());
     StatusCode::NO_CONTENT
 }
 
@@ -1049,7 +1052,7 @@ pub(crate) async fn fail_stuck_job_and_notify(
         100,
         "failed",
     );
-    let _ = state.channels.ui_event_tx.send(ev.to_string());
+    let _ = state.channels.ui_event_tx.send(ev.to_json());
     true
 }
 
@@ -1229,14 +1232,18 @@ mod tests {
 
     #[test]
     fn file_job_progress_event_has_generic_shape() {
-        let ev = file_job_progress_event(
-            "job-1",
-            "summarize_video",
-            "sess-9",
-            "digest",
-            42,
-            "processing",
-        );
+        let ev: serde_json::Value = serde_json::from_str(
+            &file_job_progress_event(
+                "job-1",
+                "summarize_video",
+                "sess-9",
+                "digest",
+                42,
+                "processing",
+            )
+            .to_json(),
+        )
+        .unwrap();
         assert_eq!(ev["type"], "file_job_progress");
         assert_eq!(ev["job_id"], "job-1");
         assert_eq!(ev["handler_id"], "summarize_video");

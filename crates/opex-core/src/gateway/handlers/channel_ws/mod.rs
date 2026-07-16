@@ -103,7 +103,7 @@ async fn handle_channel_ws(socket: WebSocket, ctx: CwsCtx, agent_name: String) {
     }
     // Notify UI about channel disconnect
     ctx.bus.ui_event_tx.send(
-        serde_json::json!({"type": "channels_changed", "agent": &agent_name}).to_string()
+        opex_types::ws::WsEvent::ChannelsChanged { agent: agent_name.clone() }.to_json()
     ).ok();
 
     tracing::info!(agent = %agent_name, channel = %connected_channel_type, "channel adapter disconnected");
@@ -370,9 +370,6 @@ enum WsServerMessage {
     /// Error occurred.
     #[serde(rename = "error")]
     Error { message: String },
-    /// Pong response.
-    #[serde(rename = "pong")]
-    Pong,
 }
 
 pub(crate) async fn ws_handler(
@@ -442,7 +439,7 @@ async fn handle_ws(socket: WebSocket, agents: AgentCore, bus: ChannelBus, status
 
                 match client_msg {
                     WsClientMessage::Ping => {
-                        if ws_sink.send(ws_json(&WsServerMessage::Pong)).await.is_err() { break; }
+                        if ws_sink.send(ws_json(&opex_types::ws::WsEvent::Pong)).await.is_err() { break; }
                     }
                     WsClientMessage::SubscribeLogs => {
                         log_rx = Some(bus.log_tx.subscribe());

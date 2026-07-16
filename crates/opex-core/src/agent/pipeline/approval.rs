@@ -49,12 +49,15 @@ pub async fn resolve_approval(
     );
 
     if let Some(ref tx) = ctx.state.ui_event_tx {
-        tx.send(serde_json::json!({
-            "type": "approval_resolved",
-            "approval_id": approval_id.to_string(),
-            "agent": ctx.cfg.agent.name,
-            "status": status,
-        }).to_string()).ok();
+        tx.send(
+            opex_types::ws::WsEvent::ApprovalResolved {
+                approval_id: approval_id.to_string(),
+                agent: ctx.cfg.agent.name.clone(),
+                status: status.to_string(),
+            }
+            .to_json(),
+        )
+        .ok();
     }
 
     // N7 durability: mark the persistent `tool_approval` notification row read in
@@ -74,7 +77,7 @@ pub async fn resolve_approval(
                         crate::gateway::handlers::notifications::notification_read_event(
                             notif_id, unread,
                         )
-                        .to_string(),
+                        .to_json(),
                     )
                     .ok();
                 }
