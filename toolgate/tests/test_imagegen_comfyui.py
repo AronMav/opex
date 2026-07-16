@@ -119,6 +119,19 @@ def test_explicit_node_override_wins():
     assert graph["a"]["inputs"]["text"] == ""
 
 
+def test_all_samplers_seeded_in_multistage_graph():
+    # Two-stage graph (base + refiner) — BOTH KSampler seeds must be randomized.
+    wf = {
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"text": ""}},
+        "9": {"class_type": "KSampler", "inputs": {"seed": 111}},
+        "12": {"class_type": "KSampler", "inputs": {"seed": 222}},
+    }
+    drv = ComfyUIImageGen(base_url=BASE, options={"workflow": wf})
+    graph = drv._build_graph("x", "512x512", None)
+    assert graph["9"]["inputs"]["seed"] != 111
+    assert graph["12"]["inputs"]["seed"] != 222
+
+
 def test_seed_uses_noise_seed_field_when_present():
     wf = {
         "5": {"class_type": "CLIPTextEncode", "inputs": {"text": ""}},

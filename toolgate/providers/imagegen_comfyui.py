@@ -128,12 +128,20 @@ class ComfyUIImageGen:
                 graph[size_node]["inputs"]["height"] = self._clamp_dim(h)
 
         # Randomize the seed each call so repeat prompts don't return the same
-        # cached latent. (random is fine here — this is toolgate, not a
+        # cached latent. Multi-stage graphs (base sampler + refiner) carry more
+        # than one sampler node — seed EVERY one, else a fixed refiner seed
+        # would pin part of the result. An explicit options.nodes.seed override
+        # pins just that node. (random is fine here — this is toolgate, not a
         # replayable workflow script.)
-        seed_node = self._find_node(graph, "seed", _SEED_CLASSES)
-        if seed_node is not None:
+        explicit = self._nodes.get("seed")
+        if isinstance(explicit, str) and explicit in graph:
+            seed_nodes = [explicit]
+        else:
+            seed_nodes = [nid for nid, n in graph.items()
+                          if isinstance(n, dict) and n.get("class_type") in _SEED_CLASSES]
+        for nid in seed_nodes:
+            inputs = graph[nid].setdefault("inputs", {})
             seed = random.randint(0, _MAX_SEED)
-            inputs = graph[seed_node].setdefault("inputs", {})
             if "noise_seed" in inputs:
                 inputs["noise_seed"] = seed
             else:
