@@ -16,6 +16,11 @@ pub(crate) const REFLECTION_MAX_CHARS: usize = 500;
 pub(crate) const BACKOFF_AFTER_FAILURES: u32 = 3;
 pub(crate) const BACKOFF_PAUSE_HOURS: i64 = 24;
 const LLM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// Overall wall-clock bound on a single reflection cycle. A cycle makes several
+/// LLM calls (each capped at LLM_TIMEOUT=60s) plus DB work; this ceiling sits
+/// above a legitimate multi-call cycle but converts a genuinely hung DB call
+/// into a bounded failure so the per-agent reflection lock cannot wedge forever.
+const CYCLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Per-agent runtime state: reflection lock + failure backoff. INJECTED via
 /// SoulDeps (не глобальный static — спека §9 требует injected lock, и тесты
@@ -94,7 +99,16 @@ pub async fn maybe_reflect(
             return;
         }
     }
-    match run_cycle(db, agent, provider, memory_store, deps).await {
+    let cycle_result = match tokio::time::timeout(
+        CYCLE_TIMEOUT,
+        run_cycle(db, agent, provider, memory_store, deps),
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(_elapsed) => Err(anyhow::anyhow!("reflection cycle timed out after {CYCLE_TIMEOUT:?}")),
+    };
+    match cycle_result {
         Ok(()) => {
             *deps.runtime.backoff.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = (0, None);
             tracing::info!(agent, "reflection cycle complete");
