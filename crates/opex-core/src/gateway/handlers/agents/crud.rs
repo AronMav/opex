@@ -42,6 +42,30 @@ pub(crate) fn preserve_hooks_webhooks(
     // copies the entire HooksConfig (including webhooks) from existing.
 }
 
+/// Preserve config sections that have NO corresponding payload field on PUT.
+///
+/// `build_agent_config` rebuilds `[agent.soul]`, `[agent.drift]`,
+/// `[agent.initiative]`, `[agent.delegation]` and `[agent.emotion]` as
+/// `::default()` (all disabled) because the API payload carries no fields for
+/// them — they are operator-level knobs set only via TOML hand-edit. Without
+/// this restore, any UI save of any other field would emit `enabled = false`
+/// into the TOML and silently wipe an operator's hand-configured soul layer.
+///
+/// Same precedent as `base`/`hooks`/`webhooks`. See PR #24 review C5 (which
+/// added `delegation` + `emotion`) — `soul`/`drift`/`initiative` were the
+/// remaining sections in this class and are folded in here so the next new
+/// no-payload section only has one place to update.
+pub(crate) fn preserve_no_payload_sections(
+    new: &mut crate::config::AgentConfig,
+    existing: &crate::config::AgentConfig,
+) {
+    new.agent.delegation = existing.agent.delegation.clone();
+    new.agent.emotion = existing.agent.emotion.clone();
+    new.agent.soul = existing.agent.soul.clone();
+    new.agent.drift = existing.agent.drift.clone();
+    new.agent.initiative = existing.agent.initiative.clone();
+}
+
 // ── agent_id table catalogue + helpers ──────────────────────────────────────
 //
 // Centralized list of every table whose `agent_id` column references
@@ -712,16 +736,11 @@ pub(crate) async fn api_update_agent(
     let mut cfg = build_agent_config(new_name.clone(), payload);
     // Preserve base from existing config — never changed via API
     cfg.agent.base = existing_cfg.agent.base;
-    // Preserve delegation from existing config — never changed via PUT API.
-    // Same precedent as `base`/`hooks`: there is no payload field, so always
-    // re-use what's on disk. Without this, the documented migration path
-    // (TOML hand-edit `[agent.delegation] max_depth = 2`) silently resets to
-    // default on the next UI update of ANY field. See PR #24 review C5.
-    cfg.agent.delegation = existing_cfg.agent.delegation.clone();
-    // Preserve emotion from existing config — same gap/fix as `delegation`:
-    // `[agent.emotion]` has no payload field, so a PUT would otherwise reset
-    // an operator's TOML-enabled emotion layer back to default (disabled).
-    cfg.agent.emotion = existing_cfg.agent.emotion.clone();
+    // Preserve the no-payload config sections (delegation, emotion, soul, drift,
+    // initiative) from disk — none has a payload field, so build_agent_config
+    // rebuilt them as ::default() (disabled). Without this, any UI save silently
+    // wipes an operator's TOML-enabled soul layer. See PR #24 review C5.
+    preserve_no_payload_sections(&mut cfg, &existing_cfg);
     // Preserve fields not in payload
     if cfg.agent.hooks.is_none() {
         cfg.agent.hooks = existing_cfg.agent.hooks.clone();
@@ -1319,6 +1338,49 @@ mod tests {
             0,
             "provided=true must not overwrite the explicit empty list"
         );
+    }
+
+    // ── preserve_no_payload_sections ─────────────────────────────────────────
+    //
+    // Guards the data-loss fix: PUT has no payload field for the soul-layer
+    // config sections ([agent.soul], [agent.drift], [agent.initiative],
+    // [agent.delegation], [agent.emotion]). `build_agent_config` rebuilds them
+    // as `::default()` (all disabled), so without preserve-from-disk any UI save
+    // of any field silently wipes an operator's TOML-enabled soul layer.
+
+    use super::preserve_no_payload_sections;
+
+    #[test]
+    fn preserve_no_payload_sections_keeps_soul_layer_from_disk() {
+        // existing: operator enabled the whole soul layer via TOML on disk.
+        let existing: AgentConfig = toml::from_str(
+            "[agent]\nname = \"Test\"\nprovider = \"openai\"\nmodel = \"gpt-4o\"\n\
+             [agent.soul]\nenabled = true\n\
+             [agent.drift]\nenabled = true\ncorrect = true\n\
+             [agent.initiative]\nenabled = true\ndaily_plan = true\n\
+             [agent.delegation]\nmax_depth = 2\n\
+             [agent.emotion]\nenabled = true\n",
+        )
+        .expect("existing AgentConfig must parse");
+
+        // new: what build_agent_config produces — every section defaulted (off).
+        let mut new_cfg: AgentConfig = toml::from_str(
+            "[agent]\nname = \"Test\"\nprovider = \"openai\"\nmodel = \"gpt-4o\"\n",
+        )
+        .expect("new AgentConfig must parse");
+        assert!(!new_cfg.agent.soul.enabled, "precondition: new soul is default-off");
+        assert!(!new_cfg.agent.drift.enabled, "precondition: new drift is default-off");
+        assert!(!new_cfg.agent.initiative.enabled, "precondition: new initiative is default-off");
+
+        preserve_no_payload_sections(&mut new_cfg, &existing);
+
+        assert!(new_cfg.agent.soul.enabled, "soul must be preserved from disk");
+        assert!(new_cfg.agent.drift.enabled, "drift must be preserved from disk");
+        assert!(new_cfg.agent.drift.correct, "drift.correct must be preserved from disk");
+        assert!(new_cfg.agent.initiative.enabled, "initiative must be preserved from disk");
+        assert!(new_cfg.agent.initiative.daily_plan, "initiative.daily_plan must be preserved");
+        assert_eq!(new_cfg.agent.delegation.max_depth, 2, "delegation must be preserved from disk");
+        assert!(new_cfg.agent.emotion.enabled, "emotion must be preserved from disk");
     }
 
     /// Per D-09: Simulated failure mid-rename should leave DB in pre-rename state.
