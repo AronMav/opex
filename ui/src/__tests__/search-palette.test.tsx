@@ -35,8 +35,11 @@ vi.mock("@/stores/chat-store", () => ({
 }));
 
 // ── Mock: next/navigation (router.push + pathname, mutable per-test) ───────
+// The default pathname carries a trailing slash — the REAL runtime value:
+// next.config.ts sets `trailingSlash: true` (static export), so production
+// usePathname() returns "/chat/", never "/chat".
 
-let mockPathname = "/chat";
+let mockPathname = "/chat/";
 const mockPush = vi.fn();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush }),
@@ -89,7 +92,7 @@ describe("SearchPalette (Ctrl+K)", () => {
     mockSearchAll.mockResolvedValue(SEARCH_RESULT);
     mockSelectSession.mockReset();
     mockPush.mockReset();
-    mockPathname = "/chat";
+    mockPathname = "/chat/";
     window.localStorage.clear();
     usePaletteStore.setState({ open: true, target: null, highlightedMessageId: null });
   });
@@ -154,7 +157,9 @@ describe("SearchPalette (Ctrl+K)", () => {
   // Task 4 — selecting a message result for the CURRENT agent while already on
   // /chat: navigate in-place via selectSession + set the scroll target (Task 3's
   // use-scroll-to-message consumes it once history lands), no route push.
-  it("message result, same agent, on /chat: selectSession + setTarget, no router.push", async () => {
+  // mockPathname is "/chat/" (trailing slash, the production value under
+  // trailingSlash:true) — this test guards the pathname normalization.
+  it("message result, same agent, on /chat/: selectSession + setTarget, no router.push", async () => {
     render(<SearchPalette />);
     const input = screen.getByPlaceholderText("palette.placeholder");
     fireEvent.change(input, { target: { value: "hello" } });
@@ -190,6 +195,25 @@ describe("SearchPalette (Ctrl+K)", () => {
     fireEvent.mouseDown(row!);
 
     expect(mockPush).toHaveBeenCalledWith("/chat?agent=Agent%202&s=s1");
+    expect(mockSelectSession).not.toHaveBeenCalled();
+    expect(usePaletteStore.getState().target).toEqual({ sessionId: "s1", messageId: "m1" });
+    expect(usePaletteStore.getState().open).toBe(false);
+  });
+
+  // Same agent but the palette was opened from a NON-chat page — there is no
+  // mounted chat page for selectSession to act on, so it must route to /chat.
+  it("message result, same agent, non-chat page: router.push, not selectSession", async () => {
+    mockPathname = "/agents/";
+    render(<SearchPalette />);
+    const input = screen.getByPlaceholderText("palette.placeholder");
+    fireEvent.change(input, { target: { value: "hello" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    await flush();
+
+    const row = screen.getByText("Session A").closest("button");
+    fireEvent.mouseDown(row!);
+
+    expect(mockPush).toHaveBeenCalledWith("/chat?agent=Agent1&s=s1");
     expect(mockSelectSession).not.toHaveBeenCalled();
     expect(usePaletteStore.getState().target).toEqual({ sessionId: "s1", messageId: "m1" });
     expect(usePaletteStore.getState().open).toBe(false);

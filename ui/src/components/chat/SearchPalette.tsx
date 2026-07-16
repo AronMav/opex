@@ -8,6 +8,7 @@ import { useTranslation } from "@/hooks/use-translation";
 import { useChatStore } from "@/stores/chat-store";
 import { usePaletteStore } from "@/stores/palette-store";
 import { searchAll } from "@/lib/search-api";
+import { normalizePathname } from "@/lib/nav";
 import type { SearchMessageHit, SearchSessionHit } from "@/types/api";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -59,9 +60,13 @@ function Snippet({ text }: { text: string }) {
  * `usePaletteStore` for its own open state (toggled by the global Ctrl+K
  * listener in app/layout.tsx).
  *
- * Selection currently only closes the palette — `handleSelect` is the single
- * extension point Task 4 wires up for jump-to-message navigation (it will
- * call `usePaletteStore.getState().setTarget(...)` there).
+ * Selecting a result navigates to it: message rows first set
+ * `usePaletteStore.target` ({sessionId, messageId} — consumed by
+ * use-scroll-to-message once the session's history loads), then either switch
+ * sessions in place via `selectSession` (same agent, already on /chat) or
+ * `router.push("/chat?agent=…&s=…")` for cross-agent jumps / non-chat pages
+ * (the deep-link resolver in use-session-restore takes over). Session rows
+ * navigate the same way but never set a target.
  */
 export function SearchPalette() {
   const { t } = useTranslation();
@@ -186,7 +191,10 @@ export function SearchPalette() {
       usePaletteStore.getState().setTarget({ sessionId, messageId: row.item.message_id });
     }
 
-    if (agentId === currentAgent && pathname === "/chat") {
+    // normalizePathname: `trailingSlash: true` in next.config.ts (static
+    // export) makes usePathname() return "/chat/" at runtime — an exact
+    // "/chat" comparison would never match in production.
+    if (agentId === currentAgent && normalizePathname(pathname) === "/chat") {
       // Same agent, already on the chat page — switch sessions in place via
       // the store action (no route change, no remount).
       useChatStore.getState().selectSession(sessionId, agentId);
