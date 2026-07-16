@@ -3024,12 +3024,7 @@ mod last_extracted_at_tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn last_extracted_at_roundtrips(pool: sqlx::PgPool) {
         // A session row is required (FK / row must exist to UPDATE).
-        let sid = uuid::Uuid::new_v4();
-        sqlx::query("INSERT INTO sessions (id, agent_id, status) VALUES ($1, 'A', 'done')")
-            .bind(sid)
-            .execute(&pool)
-            .await
-            .unwrap();
+        let sid = create_new_session(&pool, "A", "user1", "telegram").await.unwrap();
 
         // NULL initially.
         assert!(get_last_extracted_at(&pool, sid).await.unwrap().is_none());
