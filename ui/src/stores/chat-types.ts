@@ -290,6 +290,8 @@ export interface AgentState {
    * Single source of truth — replaces the static model-limits.ts table.
    */
   modelContextLimit: number | null;
+  /** sync_begin.truncated — replay неполон (патологическое переполнение буфера); показываем баннер до конца хода. */
+  replayTruncated: boolean;
 }
 
 // ── Store interface ─────────────────────────────────────────────────────────
@@ -374,5 +376,6 @@ export function emptyAgentState(): AgentState {
     hasMoreHistory: false,
     isLoadingHistory: false,
     modelContextLimit: null,
+    replayTruncated: false,
   };
 }

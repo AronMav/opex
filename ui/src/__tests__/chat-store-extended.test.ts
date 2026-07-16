@@ -282,6 +282,7 @@ describe("STATE-01: history to live transition", () => {
           hasMoreHistory: false,
           isLoadingHistory: false,
           modelContextLimit: null,
+          replayTruncated: false,
         };
       } else {
         s.agents["TestAgent"].messageSource = { mode: "history", sessionId: "sess-history" };

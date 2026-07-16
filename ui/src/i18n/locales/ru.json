@@ -1245,6 +1245,7 @@
   "chat.switch_agent": "Сменить агента",
   "chat.session_list": "Список сессий",
   "chat.render_error": "Не удалось отобразить сообщение.",
+  "chat.replay_truncated": "Длинный ответ — полный текст появится после завершения хода.",
   "providers.timeouts_section": "Таймауты (секунды, 0 = без ограничения)",
   "providers.timeout_connect": "Подключение",
   "providers.timeout_request": "Запрос (не-стриминг)",

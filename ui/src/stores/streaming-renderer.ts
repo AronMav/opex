@@ -204,6 +204,7 @@ export function createStreamingRenderer(store: StoreAccess) {
       streamError: null,
       connectionError: null,
       isLlmReconnecting: false,
+      replayTruncated: false,
     });
     recordEventActivity(agent);
 
@@ -320,6 +321,7 @@ export function createStreamingRenderer(store: StoreAccess) {
       connectionError: null,
       turnLimitMessage: null,
       isLlmReconnecting: false,
+      replayTruncated: false,
     });
     recordEventActivity(agent);
     saveUiState(agent);

@@ -502,6 +502,7 @@ export async function processSSEStream(
             // client render is id-keyed (see selectRenderMessages/mergeRender),
             // not positionally boundary-sliced. The server still emits it.
             lastRunStatus = event.runStatus;
+            if (event.truncated) session.write({ replayTruncated: true });
             session.buffer.reset();
             batching = true;
             break;

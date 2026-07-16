@@ -53,6 +53,7 @@ export function ChatThread({
   const activeSessionId = useChatStore((s) => s.agents[currentAgent]?.activeSessionId ?? null);
   const connectionPhase = useChatStore((s) => s.agents[currentAgent]?.connectionPhase ?? "idle");
   const isLlmReconnecting = useChatStore((s) => s.agents[currentAgent]?.isLlmReconnecting ?? false);
+  const replayTruncated = useChatStore((s) => s.agents[currentAgent]?.replayTruncated ?? false);
 
   // "Running" = active connection phase OR WS push reports the session active.
   // DB run_status is no longer consulted in the hot path (spec I3).
@@ -316,6 +317,15 @@ export function ChatThread({
           server's `reconnecting` SSE event (isLlmReconnecting). Distinct from
           the transport layer, which no longer reconnects (T8). */}
       {isLlmReconnecting && <ReconnectingIndicator className="my-4" />}
+
+      {/* Pathological replay-buffer overflow (Task 4, server-side compaction
+          failed to keep up) — non-intrusive notice that the visible text is
+          partial until the turn completes. Hidden once the turn ends. */}
+      {replayTruncated && isStreaming && (
+        <div className="mx-auto my-2 rounded-md bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
+          {t("chat.replay_truncated")}
+        </div>
+      )}
 
       {/* Error banner — also shown when the engine was interrupted mid-stream
           and the resume endpoint returns a sync event with status="interrupted"

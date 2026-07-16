@@ -82,6 +82,7 @@ function seedStore() {
       hasMoreHistory: false,
       isLoadingHistory: false,
       modelContextLimit: null,
+      replayTruncated: false,
     };
   });
 }

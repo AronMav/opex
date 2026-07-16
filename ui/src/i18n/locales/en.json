@@ -1245,6 +1245,7 @@
   "chat.switch_agent": "Switch agent",
   "chat.session_list": "Session list",
   "chat.render_error": "Failed to render message content.",
+  "chat.replay_truncated": "Long response — the full text will appear when the turn completes.",
   "providers.timeouts_section": "Timeouts (seconds, 0 = no limit)",
   "providers.timeout_connect": "Connect",
   "providers.timeout_request": "Request (non-streaming)",

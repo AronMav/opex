@@ -116,6 +116,7 @@ describe("MessageItem re-render count (REF-05)", () => {
         hasMoreHistory: false,
         isLoadingHistory: false,
         modelContextLimit: null,
+        replayTruncated: false,
       };
     });
 
