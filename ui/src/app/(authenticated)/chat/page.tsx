@@ -10,15 +10,10 @@ import {
 import { useHotkey } from "@/hooks/use-hotkey";
 import { ChatRuntimeProvider } from "@/providers/assistant-runtime";
 import { useTranslation } from "@/hooks/use-translation";
-import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
-import { Loader } from "@/components/ui/loader";
-import { Virtuoso } from "react-virtuoso";
-import { VirtuosoList, VirtuosoListItem } from "@/components/chat/virtuoso-list-roles";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import {
@@ -41,19 +36,13 @@ import {
 import {
   Plus,
   Clock,
-  Search,
-  Trash2,
-  Pencil,
-  Share2,
   PanelRight,
   MessageSquare,
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChatThread } from "./ChatThread";
 import { ContextBar } from "./ContextBar";
 import { CanvasPanel } from "./CanvasPanel";
-import { ParentBadge } from "@/components/chat/ParentBadge";
 import { CompactChainBanner } from "@/components/chat/CompactChainBanner";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { useSessions, useAgents, qk } from "@/lib/queries";
@@ -61,15 +50,15 @@ import { useAgentTextModel } from "@/hooks/use-profiles";
 import { queryClient } from "@/lib/query-client";
 import { shareSession } from "@/lib/api";
 import type { SessionRow } from "@/types/api";
-import { TaskPlanPanel } from "@/components/TaskPlanPanel";
 import { useSessionRestore } from "./hooks/use-session-restore";
 import { useChatWs } from "./hooks/use-chat-ws";
+import { SessionSidebar } from "./SessionSidebar";
 
 const EMPTY_SESSIONS: SessionRow[] = [];
 const EMPTY_ACTIVE: string[] = [];
 
 export default function ChatPage() {
-  const { t, locale } = useTranslation();
+  const { t } = useTranslation();
   const { agents, refreshIfStale } = useAuthStore(
     useShallow((s) => ({ agents: s.agents, refreshIfStale: s.refreshIfStale })),
   );
@@ -320,261 +309,35 @@ export default function ChatPage() {
     </Select>
   );
 
-  // Filtered sessions
-  const filteredSessions = useMemo(() =>
-    sessionFilter
-      ? sessions.filter((s) => {
-          const q = sessionFilter.toLowerCase();
-          return (
-            (s.title && s.title.toLowerCase().includes(q)) ||
-            (s.user_id && s.user_id.toLowerCase().includes(q)) ||
-            s.channel.toLowerCase().includes(q) ||
-            s.id.toLowerCase().includes(q)
-          );
-        })
-      : sessions,
-    [sessions, sessionFilter],
-  );
+  // ── Session sidebar props (state + handlers stay in page.tsx so the desktop
+  // pane and mobile Sheet share one state instance; SessionSidebar is presentational) ──
+  const sidebarProps = {
+    currentAgent,
+    isStreaming,
+    sessions,
+    sessionsData,
+    sessionsLoading,
+    sessionsTotal,
+    activeSessionId,
+    activeSessionIds,
+    selectedSessions,
+    deletingSelected,
+    deletingSessionId,
+    sharingSessionId,
+    sessionFilter,
+    setSessionFilter,
+    renamingSessionId,
+    setRenamingSessionId,
+    renameValue,
+    setRenameValue,
+    onNewChat: handleNewChat,
+    onSelectSession: handleSelectSession,
+    onDeleteSessions: handleDeleteSessions,
+    onDeleteSession: handleDeleteSession,
+    onShareSession: handleShareSession,
+    toggleSessionSelection,
+  };
 
-  // ── Session sidebar ──
-  const sessionList = (
-    <div className="flex h-full flex-col bg-sidebar">
-      <TaskPlanPanel agentName={currentAgent} isStreaming={isStreaming} />
-      <div className="flex items-center justify-between px-3 py-3 md:px-5 md:py-5 border-b border-border/50">
-        <div className="flex flex-col gap-1">
-          <span className="text-sm font-display font-semibold text-foreground">
-            {t("chat.sessions")}
-          </span>
-          <span className="text-xs text-muted-foreground-subtle">
-            {t("chat.sessions_count", { count: sessionsTotal })}
-          </span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          {sessions.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className={`h-8 px-2 text-xs transition-colors ${
-                selectedSessions.size > 0
-                  ? "text-destructive bg-destructive/10 hover:bg-destructive/30"
-                  : "text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10"
-              }`}
-              onClick={handleDeleteSessions}
-              disabled={deletingSelected}
-              title={selectedSessions.size > 0
-                ? t("chat.delete_selected")
-                : t("chat.delete_all_sessions", { agent: currentAgent })}
-            >
-              {deletingSelected ? (
-                <Loader className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="h-3.5 w-3.5" />
-              )}
-              {selectedSessions.size > 0 && (
-                <span className="ml-1">{selectedSessions.size}</span>
-              )}
-            </Button>
-          )}
-          <Button
-            variant="outline"
-            size="sm"
-            className="hidden lg:inline-flex h-8 px-3 border-primary/30 !bg-primary/10 text-primary text-xs font-medium transition-all hover:bg-primary/10 hover:text-primary hover:border-primary/30"
-            onClick={handleNewChat}
-          >
-            <Plus className="mr-1.5 h-4 w-4" /> {t("chat.new")}
-          </Button>
-        </div>
-      </div>
-
-      <div className="shrink-0 px-3 py-2 border-b border-border/30">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
-          <Input
-            value={sessionFilter}
-            onChange={(e) => setSessionFilter(e.target.value)}
-            placeholder={t("chat.search_sessions")}
-            className="h-8 pl-8 text-xs bg-muted/30 border-border/50 placeholder:text-muted-foreground/30"
-          />
-        </div>
-      </div>
-      <div className="flex-1 min-h-0 px-3 relative overflow-hidden">
-        {sessionsLoading && sessions.length === 0 ? (
-          <div className="space-y-4 p-3">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="space-y-2">
-                <Skeleton className="h-3 w-16 bg-muted/30" />
-                <Skeleton className="h-4 w-full bg-muted/30" />
-              </div>
-            ))}
-          </div>
-        ) : filteredSessions.length === 0 ? (
-          <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-border px-6 text-center">
-            <p className="text-sm text-muted-foreground-subtle">
-              {sessionFilter ? t("chat.no_sessions_match") : t("chat.no_sessions")}
-            </p>
-          </div>
-        ) : (
-          <div className="h-full">
-            <Virtuoso
-              data={filteredSessions}
-              className="!h-full scrollbar-none"
-              components={{ List: VirtuosoList, Item: VirtuosoListItem }}
-              itemContent={(_index, s) => {
-                const isSelected = selectedSessions.has(s.id);
-                const displayTitle = s.title || s.user_id || t("chat.no_title");
-                return (
-                  <div className="group relative pb-1.5 flex items-stretch gap-1 min-w-0">
-                    <button
-                      onClick={() => toggleSessionSelection(s.id)}
-                      className={`shrink-0 self-center h-5 w-5 md:h-3.5 md:w-3.5 rounded border transition-colors flex items-center justify-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
-                        isSelected
-                          ? "bg-primary border-primary"
-                          : "border-border/50 bg-transparent hover:border-primary/30"
-                      }`}
-                      role="checkbox"
-                      aria-checked={isSelected}
-                      aria-label={t("chat.select_session")}
-                    >
-                      {isSelected && (
-                        <svg className="h-3.5 w-3.5 md:h-2.5 md:w-2.5 text-primary-foreground" viewBox="0 0 10 10" fill="none">
-                          <path d="M2 5l2.5 2.5L8 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      )}
-                    </button>
-                    <button
-                      onClick={() => handleSelectSession(s)}
-                      className={`relative flex w-full min-w-0 flex-col gap-1.5 rounded-lg px-3 py-2.5 pb-9 md:px-4 md:py-3 md:pb-3 md:pr-14 text-left transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background overflow-hidden ${
-                        activeSessionId === s.id
-                        ? "bg-accent shadow-inner"
-                        : "hover:bg-accent/40"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <div className="flex items-center gap-1 min-w-0 flex-1">
-                          <span
-                            className={`font-display text-xs font-bold uppercase tracking-tight shrink-0 ${
-                              activeSessionId === s.id
-                                ? "text-primary"
-                                : "text-muted-foreground/60 group-hover:text-muted-foreground"
-                            }`}
-                          >
-                            {s.channel}
-                          </span>
-                          {(activeSessionIds.includes(s.id) || s.run_status === "running") ? (
-                            <span className="ml-1.5 rounded px-1.5 py-0.5 font-mono text-3xs uppercase tracking-wider bg-success/15 text-success flex items-center gap-1 shrink-0">
-                              <span className="h-3 w-3 rounded-full bg-success animate-pulse" />
-                              {t("chat.status_running")}
-                            </span>
-                          ) : (s.run_status === "interrupted" || s.run_status === "timeout" || s.run_status === "failed") ? (
-                            <span className="ml-1 rounded px-1 py-0.5 font-mono text-3xs uppercase tracking-wider bg-destructive/10 text-destructive/80 shrink-0">
-                              {s.run_status === "interrupted" ? t("chat.status_interrupted") : s.run_status === "timeout" ? t("chat.status_timeout") : t("chat.status_failed")}
-                            </span>
-                          ) : null}
-                        </div>
-                        {/* Participant avatars removed — agents are now session-scoped via agent tool */}
-                        <span className="font-mono text-xs tabular-nums text-muted-foreground-subtle shrink-0">
-                          {relativeTime(s.last_message_at, locale)}
-                        </span>
-                      </div>
-                      {renamingSessionId === s.id ? (
-                        <input
-                          autoFocus
-                          value={renameValue}
-                          onChange={(e) => setRenameValue(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              useChatStore.getState().renameSession(s.id, renameValue);
-                              setRenamingSessionId(null);
-                            } else if (e.key === "Escape") {
-                              setRenamingSessionId(null);
-                            }
-                          }}
-                          onBlur={() => {
-                            if (renameValue !== (s.title || "")) {
-                              useChatStore.getState().renameSession(s.id, renameValue);
-                            }
-                            setRenamingSessionId(null);
-                          }}
-                          className="w-full truncate text-sm bg-transparent border-b border-primary outline-none focus-visible:ring-1 focus-visible:ring-ring text-foreground placeholder:text-muted-foreground/50"
-                          placeholder={t("chat.rename_session")}
-                        />
-                      ) : (
-                        <>
-                          <p
-                            className={`text-sm transition-colors break-words line-clamp-2 ${
-                              activeSessionId === s.id
-                                ? "text-foreground"
-                                : "text-muted-foreground/60 group-hover:text-muted-foreground/60"
-                            } ${!s.title && !s.user_id ? "italic text-muted-foreground/50" : ""}`}
-                          >
-                            {displayTitle}
-                            {s.segment_count != null && s.segment_count > 1 && (
-                              <span className="ml-1.5 text-xs text-muted-foreground/50 tabular-nums not-italic whitespace-nowrap">
-                                ◈{s.segment_count}
-                              </span>
-                            )}
-                          </p>
-                          {s.parent_session_id && (
-                            <ParentBadge
-                              parentTitle={
-                                sessionsData?.sessions?.find((p) => p.id === s.parent_session_id)?.title ?? null
-                              }
-                              onNavigate={() =>
-                                useChatStore.getState().selectSession(s.parent_session_id!, currentAgent)
-                              }
-                            />
-                          )}
-                        </>
-                      )}
-                      {activeSessionId === s.id && (
-                        <div className="absolute left-0 top-1/2 -translate-y-1/2 h-8 w-0.5 rounded-full bg-primary" />
-                      )}
-                    </button>
-                    <div className="absolute right-1.5 bottom-1 flex flex-row md:right-2 md:top-2 md:bottom-auto md:flex-col items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity duration-150 z-10">
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setRenamingSessionId(s.id);
-                            setRenameValue(s.title || "");
-                          }}
-                          className="text-muted-foreground/50 hover:text-foreground"
-                          title={t("chat.rename_hint")}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={(e) => handleShareSession(e, s.id)}
-                          disabled={sharingSessionId === s.id}
-                          className="text-muted-foreground/50 hover:text-foreground"
-                          title={t("chat.share_session")}
-                        >
-                          <Share2 className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={(e) => handleDeleteSession(e, s.id)}
-                          disabled={deletingSessionId === s.id}
-                          className="text-muted-foreground/50 hover:bg-destructive/10 hover:text-destructive"
-                          title={t("chat.delete_session")}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                  </div>
-                );
-              }}
-            />
-          </div>
-        )}
-      </div>
-    </div>
-  );
 
   // ── Main layout ──
   return (
@@ -583,7 +346,7 @@ export default function ChatPage() {
       <h1 className="sr-only">{t("chat.title")}</h1>
       {/* Desktop sidebar — visible only at lg+ */}
       <aside className="hidden w-70 shrink-0 flex-col border-r border-border lg:flex" aria-label={t("chat.session_list")}>
-        {sessionList}
+        <SessionSidebar {...sidebarProps} />
       </aside>
 
       {/* Chat area */}
@@ -644,7 +407,7 @@ export default function ChatPage() {
               className="w-[85dvw] border-r border-border bg-sidebar p-0"
             >
               <SheetTitle className="sr-only">{t("chat.sessions")}</SheetTitle>
-              {sessionList}
+              <SessionSidebar {...sidebarProps} />
             </SheetContent>
           </Sheet>
           <Button
