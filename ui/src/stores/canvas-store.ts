@@ -22,8 +22,8 @@ interface CanvasStoreActions {
   handleEvent(event: {
     action: string;
     agent?: string;
-    content_type?: string;
-    content?: string;
+    content_type?: string | null;
+    content?: string | null;
     title?: string | null;
   }, key?: string): void;
   clearCanvas(key: string): void;

@@ -100,7 +100,7 @@ export default function AuthenticatedLayout({
 
   // Approval requests must be visible on ANY page — agent can hang waiting for approval
   useWsSubscription("approval_requested", (msg) => {
-    const { approval_id: approvalId, agent: agentName, tool: toolName } = msg;
+    const { approval_id: approvalId, agent: agentName, tool_name: toolName } = msg;
     toast(`${agentName}: ${toolName}`, {
       description: t("chat.approval_description", { tool: toolName, agent: agentName }),
       duration: 30000,

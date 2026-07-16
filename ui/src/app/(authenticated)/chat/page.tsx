@@ -306,7 +306,7 @@ export default function ChatPage() {
   // Server-driven session status via WS agent_processing events.
   // Backend sends initial state on WS connect, then start/end events in real-time.
   // This updates activeSessionIds in Zustand — the single source of truth for "is session running?".
-  useWsSubscription("agent_processing", useCallback((data: { agent: string; status: string; session_id?: string }) => {
+  useWsSubscription("agent_processing", useCallback((data) => {
     if (!data.session_id) return;
     const store = useChatStore.getState();
     if (data.status === "start") {
@@ -328,6 +328,12 @@ export default function ChatPage() {
     } else {
       store.setVideoProgress(data.session_id, data.phase, data.phase);
     }
+  }, []));
+
+  // Another agent was invited into this session (multi-agent sessions) — keep
+  // the participant list in the chat store in sync so the UI can render it.
+  useWsSubscription("agent_joined", useCallback((data) => {
+    useChatStore.getState().updateSessionParticipants(data.session_id, data.participants);
   }, []));
 
   // approval_requested handler moved to layout.tsx (must be visible on any page)
