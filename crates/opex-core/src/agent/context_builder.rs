@@ -221,6 +221,11 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     /// at apply time.
     fn agent_core_extra(&self) -> &[String];
 
+    /// Global `[tool_dispatcher] always_core` list — extension tools promoted
+    /// to native tools[] for every dispatcher-mode agent (and excluded from the
+    /// dispatcher catalogue/hint/suppressor).
+    fn dispatcher_always_core(&self) -> &[String];
+
     /// Agent's effective tool-policy deny list (consumed by trigger-hint
     /// logic and extension-list assembly). Returns the union of
     /// `agent.tools.deny` and the delegation-computed deny list
@@ -481,6 +486,7 @@ impl ContextBuilder for DefaultContextBuilder {
                 deps.agent_base(),
                 &deny,
                 &std::collections::HashSet::new(),
+                deps.dispatcher_always_core(),
                 deps.workspace_dir(),
                 deps.profile_slots(),
                 deps.mcp_registry(),

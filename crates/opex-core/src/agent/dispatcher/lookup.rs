@@ -29,6 +29,7 @@ pub async fn build_extension_tool_list(
     is_base_agent: bool,
     deny: &[String],
     promoted: &std::collections::HashSet<String>,
+    always_core: &[String],
     workspace_dir: &str,
     slots: &crate::db::profiles::Slots,
     mcp: Option<&crate::mcp::McpRegistry>,
@@ -87,6 +88,9 @@ pub async fn build_extension_tool_list(
         }
     }
 
+    // Global always_core tools are promoted to native tools[] elsewhere, so
+    // they must NOT appear in the dispatcher catalogue / suppressor list.
+    out.retain(|t| !always_core.iter().any(|n| n == &t.name));
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
@@ -94,17 +98,19 @@ pub async fn build_extension_tool_list(
 /// Linear lookup. Used by describe handler. The list is < 100 entries in
 /// practice — no index is warranted.
 // allow(dead_code): consumed by tool_handlers/tool_use.rs.
-#[allow(dead_code)]
+// allow(too_many_arguments): mirrors build_extension_tool_list's parameter set plus `name`.
+#[allow(dead_code, clippy::too_many_arguments)]
 pub async fn find_extension_tool(
     name: &str,
     is_base_agent: bool,
     deny: &[String],
     promoted: &std::collections::HashSet<String>,
+    always_core: &[String],
     workspace_dir: &str,
     slots: &crate::db::profiles::Slots,
     mcp: Option<&crate::mcp::McpRegistry>,
 ) -> Option<ToolDefinition> {
-    build_extension_tool_list(is_base_agent, deny, promoted, workspace_dir, slots, mcp)
+    build_extension_tool_list(is_base_agent, deny, promoted, always_core, workspace_dir, slots, mcp)
         .await
         .into_iter()
         .find(|t| t.name == name)
@@ -130,5 +136,27 @@ mod tests {
         assert!(!is_valid_tool_name("tool with spaces"));
         assert!(!is_valid_tool_name("tool/sub"));
         assert!(!is_valid_tool_name(&"a".repeat(65)));
+    }
+
+    #[tokio::test]
+    async fn always_core_name_excluded_from_extension_list() {
+        // `process` is a system tool in all_system_tool_names() but NOT in
+        // static_core_tool_names(), so it normally appears in the extension list.
+        // With it in always_core, it must NOT.
+        let slots = crate::db::profiles::Slots::default();
+        let without = build_extension_tool_list(
+            true, &[], &std::collections::HashSet::new(), &[],
+            ".", &slots, None,
+        ).await;
+        assert!(without.iter().any(|t| t.name == "process"),
+            "control: `process` is a system extension tool (not static-core)");
+
+        let with = build_extension_tool_list(
+            true, &[], &std::collections::HashSet::new(),
+            &["process".to_string()],
+            ".", &slots, None,
+        ).await;
+        assert!(!with.iter().any(|t| t.name == "process"),
+            "always_core name must be filtered out of the extension list");
     }
 }

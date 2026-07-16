@@ -186,6 +186,7 @@ pub async fn execute<S: EventSink>(
             engine.cfg().agent.base,
             &deny,
             &std::collections::HashSet::new(),
+            &engine.cfg().app_config.tool_dispatcher.always_core,
             &engine.cfg().workspace_dir,
             &engine.cfg().profile_slots,
             engine.mcp().as_deref(),
