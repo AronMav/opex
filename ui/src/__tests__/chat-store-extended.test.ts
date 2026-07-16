@@ -48,6 +48,7 @@ function makeRow(overrides: Partial<MessageRow>): MessageRow {
     branch_from_message_id: null,
     abort_reason: null,
     is_mirror: false,
+    bookmarked_at: null,
     ...overrides,
   };
 }

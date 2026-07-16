@@ -1,0 +1,266 @@
+/**
+ * Wave-2 Task 7: bookmark star (MessageActions) + palette "Favourites" section
+ * (SearchPalette, empty-query state).
+ *
+ * (a) star: optimistic toggle before the PATCH resolves, revert + toast on failure.
+ * (b) palette empty query renders a Favourites section from listBookmarked,
+ *     with preview text and an agent badge in all-agents mode.
+ * (c) clicking a favourite sets the palette target and navigates.
+ * (d) a favourite whose session has vanished (GET /api/sessions/{id} 404s)
+ *     toasts instead of navigating.
+ */
+import { vi, describe, it, expect, beforeEach } from "vitest";
+import { render, screen, fireEvent, act } from "@testing-library/react";
+import "@testing-library/jest-dom/vitest";
+
+// ── Polyfill: ResizeObserver (not available in jsdom, Radix primitives poke it) ──
+
+globalThis.ResizeObserver = class ResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof globalThis.ResizeObserver;
+
+// ── Mock: translation hook (identity) ───────────────────────────────────────
+
+vi.mock("@/hooks/use-translation", () => ({
+  useTranslation: () => ({ t: (key: string) => key, locale: "en" }),
+}));
+
+// ── Mock: sonner toast ───────────────────────────────────────────────────────
+
+const mockToastError = vi.fn();
+vi.mock("sonner", () => ({
+  toast: { error: (...args: unknown[]) => mockToastError(...args), success: vi.fn(), info: vi.fn() },
+}));
+
+// ── Mock: search-api (toggleBookmark + listBookmarked) ──────────────────────
+
+const mockToggleBookmark = vi.fn();
+const mockListBookmarked = vi.fn();
+const mockSearchAll = vi.fn();
+vi.mock("@/lib/search-api", () => ({
+  toggleBookmark: (...args: unknown[]) => mockToggleBookmark(...args),
+  listBookmarked: (...args: unknown[]) => mockListBookmarked(...args),
+  searchAll: (...args: unknown[]) => mockSearchAll(...args),
+}));
+
+// ── Mock: @/lib/query-client ─────────────────────────────────────────────────
+
+const mockInvalidateQueries = vi.fn();
+vi.mock("@/lib/query-client", () => ({
+  queryClient: { invalidateQueries: (...args: unknown[]) => mockInvalidateQueries(...args) },
+}));
+
+// ── Mock: @/lib/queries — self-contained stub (avoids pulling in the real
+// module's other store/hook imports). `qk.sessionMessages` mirrors the real
+// key builder's shape exactly. `useProviderActive` stubs out SpeakButton's
+// react-query hook (only exercised when showReload renders it). ────────────
+
+vi.mock("@/lib/queries", () => ({
+  useProviderActive: () => ({ data: [], isLoading: false, error: null }),
+  qk: {
+    sessionMessages: (id: string) => ["sessions", id, "messages"] as const,
+  },
+}));
+
+// ── Mock: @/lib/api (session-exists probe for palette favourites + assertToken) ──
+
+const mockApiGet = vi.fn();
+vi.mock("@/lib/api", () => ({
+  apiGet: (...args: unknown[]) => mockApiGet(...args),
+  assertToken: () => "test-token",
+}));
+
+// ── Mock: chat-store ─────────────────────────────────────────────────────────
+
+const AGENT = "Agent1";
+const SESSION = "sess-1";
+const mockSelectSession = vi.fn();
+vi.mock("@/stores/chat-store", () => ({
+  useChatStore: Object.assign(
+    (selector: (s: Record<string, unknown>) => unknown) => {
+      const state = {
+        currentAgent: AGENT,
+        agents: {
+          [AGENT]: {
+            activeSessionId: SESSION,
+            messageSource: { mode: "live", messages: [] },
+          },
+        },
+      };
+      return selector(state);
+    },
+    {
+      getState: () => ({
+        currentAgent: AGENT,
+        selectSession: mockSelectSession,
+      }),
+    },
+  ),
+}));
+
+// ── Mock: next/navigation (palette tests only) ──────────────────────────────
+
+let mockPathname = "/chat/";
+const mockPush = vi.fn();
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mockPush }),
+  usePathname: () => mockPathname,
+}));
+
+import { MessageActions } from "@/app/(authenticated)/chat/MessageActions";
+import type { ChatMessage } from "@/stores/chat-types";
+import { qk } from "@/lib/queries";
+import { SearchPalette } from "@/components/chat/SearchPalette";
+import { usePaletteStore } from "@/stores/palette-store";
+
+async function flush() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+function baseMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
+  return {
+    id: "m1",
+    role: "assistant",
+    parts: [{ type: "text", text: "hello" }],
+    bookmarkedAt: null,
+    ...overrides,
+  };
+}
+
+describe("BookmarkButton (MessageActions)", () => {
+  beforeEach(() => {
+    mockToggleBookmark.mockReset();
+    mockInvalidateQueries.mockReset();
+    mockToastError.mockReset();
+  });
+
+  it("optimistically flips the icon before the PATCH resolves", async () => {
+    let resolveToggle!: () => void;
+    mockToggleBookmark.mockReturnValue(new Promise<void>((resolve) => { resolveToggle = resolve; }));
+
+    render(<MessageActions message={baseMessage()} showReload={false} />);
+
+    const button = screen.getByRole("button", { name: "chat.bookmark_tooltip" });
+    fireEvent.click(button);
+
+    // Icon/aria-label flips immediately — BEFORE the mocked PATCH resolves.
+    expect(screen.getByRole("button", { name: "chat.unbookmark_tooltip" })).toBeInTheDocument();
+    expect(mockToggleBookmark).toHaveBeenCalledWith("m1", AGENT, true);
+
+    resolveToggle();
+    await flush();
+
+    expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: qk.sessionMessages(SESSION) });
+    // Stays bookmarked after success.
+    expect(screen.getByRole("button", { name: "chat.unbookmark_tooltip" })).toBeInTheDocument();
+  });
+
+  it("reverts the optimistic toggle and toasts on a failed PATCH (e.g. 404)", async () => {
+    mockToggleBookmark.mockRejectedValue(new Error("HTTP 404"));
+
+    render(<MessageActions message={baseMessage()} showReload={false} />);
+
+    const button = screen.getByRole("button", { name: "chat.bookmark_tooltip" });
+    fireEvent.click(button);
+    expect(screen.getByRole("button", { name: "chat.unbookmark_tooltip" })).toBeInTheDocument();
+
+    await flush();
+
+    // Reverted back to the unbookmarked icon/label.
+    expect(screen.getByRole("button", { name: "chat.bookmark_tooltip" })).toBeInTheDocument();
+    expect(mockToastError).toHaveBeenCalledWith("chat.bookmark_error");
+    expect(mockInvalidateQueries).not.toHaveBeenCalled();
+  });
+
+  it("renders the star for BOTH showReload branches (user + assistant rows)", () => {
+    const { unmount } = render(<MessageActions message={baseMessage()} showReload={false} />);
+    expect(screen.getByRole("button", { name: "chat.bookmark_tooltip" })).toBeInTheDocument();
+    unmount();
+
+    render(<MessageActions message={baseMessage({ id: "m2" })} showReload />);
+    expect(screen.getByRole("button", { name: "chat.bookmark_tooltip" })).toBeInTheDocument();
+  });
+});
+
+describe("SearchPalette — Favourites section (T7)", () => {
+  const BOOKMARK_ITEMS = [
+    {
+      message_id: "bm1",
+      session_id: "s1",
+      session_title: "Session A",
+      agent_id: AGENT,
+      preview: "an important note",
+      role: "user",
+      bookmarked_at: "2026-07-16T00:00:00Z",
+    },
+  ];
+
+  beforeEach(() => {
+    mockListBookmarked.mockReset();
+    mockListBookmarked.mockResolvedValue({ items: BOOKMARK_ITEMS });
+    mockSearchAll.mockReset();
+    mockSearchAll.mockResolvedValue({ sessions: [], messages: [], count: 0 });
+    mockApiGet.mockReset();
+    mockSelectSession.mockReset();
+    mockPush.mockReset();
+    mockToastError.mockReset();
+    mockPathname = "/chat/";
+    usePaletteStore.setState({ open: true, target: null, highlightedMessageId: null });
+  });
+
+  it("renders the Favourites section from listBookmarked with a preview, and an agent badge in all-agents mode", async () => {
+    render(<SearchPalette />);
+    await flush();
+
+    expect(mockListBookmarked).toHaveBeenCalledWith({ agent: AGENT });
+    expect(screen.getByText("palette.favourites")).toBeInTheDocument();
+    expect(screen.getByText("Session A")).toBeInTheDocument();
+    expect(screen.getByText("an important note")).toBeInTheDocument();
+    // Not shown in per-agent mode.
+    expect(screen.queryByText(AGENT)).not.toBeInTheDocument();
+
+    const toggle = screen.getByRole("switch");
+    fireEvent.click(toggle);
+    await flush();
+
+    expect(mockListBookmarked).toHaveBeenLastCalledWith({ all: true });
+    expect(screen.getByText(AGENT)).toBeInTheDocument();
+  });
+
+  it("clicking a favourite verifies the session, then setTarget + navigates", async () => {
+    mockApiGet.mockResolvedValue({ id: "s1" });
+    render(<SearchPalette />);
+    await flush();
+
+    const row = screen.getByText("Session A").closest("button");
+    expect(row).not.toBeNull();
+    fireEvent.mouseDown(row!);
+    await flush();
+
+    expect(mockApiGet).toHaveBeenCalledWith("/api/sessions/s1");
+    expect(usePaletteStore.getState().target).toEqual({ sessionId: "s1", messageId: "bm1" });
+    expect(mockSelectSession).toHaveBeenCalledWith("s1", AGENT);
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  it("a vanished session (404 on GET /api/sessions/{id}) toasts and does not navigate", async () => {
+    mockApiGet.mockRejectedValue(new Error("HTTP 404"));
+    render(<SearchPalette />);
+    await flush();
+
+    const row = screen.getByText("Session A").closest("button");
+    fireEvent.mouseDown(row!);
+    await flush();
+
+    expect(mockToastError).toHaveBeenCalledWith("palette.session_deleted");
+    expect(mockSelectSession).not.toHaveBeenCalled();
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(usePaletteStore.getState().target).toBeNull();
+  });
+});

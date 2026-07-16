@@ -20,6 +20,7 @@ function makeRow(overrides: Partial<MessageRow> & { id: string; created_at?: str
     abort_reason: null,
     thinking_blocks: null,
     is_mirror: false,
+    bookmarked_at: null,
     ...overrides,
   };
 }

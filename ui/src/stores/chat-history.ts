@@ -181,6 +181,7 @@ function convertHistoryImpl(rows: MessageRow[], isAgentStreaming?: boolean, sele
         agentId: m.agent_id ?? undefined,
         parentMessageId: m.parent_message_id ?? undefined,
         branchFromMessageId: m.branch_from_message_id ?? undefined,
+        bookmarkedAt: m.bookmarked_at ?? null,
       });
     } else if (m.role === "assistant" && !m.tool_call_id) {
       // Assistant text block
@@ -216,6 +217,7 @@ function convertHistoryImpl(rows: MessageRow[], isAgentStreaming?: boolean, sele
         status: isAborted ? "aborted" : undefined,
         abortReason: isAborted ? (m.abort_reason ?? null) : undefined,
         isMirror: m.is_mirror ?? false,
+        bookmarkedAt: m.bookmarked_at ?? null,
       };
     } else if (m.role === "tool" && m.tool_call_id) {
       // Tool result block — always attach to the latest assistant message

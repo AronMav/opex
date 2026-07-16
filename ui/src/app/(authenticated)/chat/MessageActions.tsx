@@ -4,7 +4,9 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useChatStore } from "@/stores/chat-store";
 import { assertToken } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
-import { useProviderActive } from "@/lib/queries";
+import { useProviderActive, qk } from "@/lib/queries";
+import { queryClient } from "@/lib/query-client";
+import { toggleBookmark } from "@/lib/search-api";
 import { useTranslation } from "@/hooks/use-translation";
 import type { ChatMessage, TextPart } from "@/stores/chat-store";
 import { Button } from "@/components/ui/button";
@@ -20,6 +22,8 @@ import {
   Pencil,
   Trash2,
   MoreHorizontal,
+  Bookmark,
+  BookmarkCheck,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { toast } from "sonner";
@@ -66,6 +70,53 @@ function CopyButton({ message }: { message: ChatMessage }) {
         <Check className="h-3.5 w-3.5 text-success" />
       ) : (
         <Copy className="h-3.5 w-3.5" />
+      )}
+    </Button>
+  );
+}
+
+// ── Bookmark toggle button (T7) ──────────────────────────────────────────────
+
+function BookmarkButton({ message }: { message: ChatMessage }) {
+  const { t } = useTranslation();
+  const currentAgent = useChatStore((s) => s.currentAgent);
+  const activeSessionId = useChatStore((s) => s.agents[s.currentAgent]?.activeSessionId ?? null);
+  const [bookmarked, setBookmarked] = useState(!!message.bookmarkedAt);
+
+  // Keep local optimistic state in sync when the underlying message data
+  // changes out from under us (e.g. history refetch after invalidation).
+  useEffect(() => {
+    setBookmarked(!!message.bookmarkedAt);
+  }, [message.bookmarkedAt]);
+
+  const handleClick = useCallback(() => {
+    const next = !bookmarked;
+    setBookmarked(next); // optimistic — flips before the request resolves
+    toggleBookmark(message.id, currentAgent, next)
+      .then(() => {
+        if (activeSessionId) {
+          queryClient.invalidateQueries({ queryKey: qk.sessionMessages(activeSessionId) });
+        }
+      })
+      .catch(() => {
+        setBookmarked(!next); // revert on failure (e.g. 404 — message deleted meanwhile)
+        toast.error(t("chat.bookmark_error"));
+      });
+  }, [bookmarked, message.id, currentAgent, activeSessionId, t]);
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      onClick={handleClick}
+      className={`rounded-full text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50 ${TOUCH_ICON}`}
+      title={bookmarked ? t("chat.unbookmark_tooltip") : t("chat.bookmark_tooltip")}
+      aria-label={bookmarked ? t("chat.unbookmark_tooltip") : t("chat.bookmark_tooltip")}
+    >
+      {bookmarked ? (
+        <BookmarkCheck className="h-3.5 w-3.5 text-primary" />
+      ) : (
+        <Bookmark className="h-3.5 w-3.5" />
       )}
     </Button>
   );
@@ -342,6 +393,7 @@ export function MessageActions({
   return (
     <div className="flex items-center gap-0.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity">
       <CopyButton message={message} />
+      <BookmarkButton message={message} />
       {showReload && (
         <>
           <ReloadButton />

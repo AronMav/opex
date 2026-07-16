@@ -293,6 +293,9 @@
   "chat.voice_queued": "Will send after the reply",
   "chat.feedback_error": "Failed to submit feedback",
   "chat.copy_error": "Failed to copy to clipboard",
+  "chat.bookmark_tooltip": "Bookmark message",
+  "chat.unbookmark_tooltip": "Remove bookmark",
+  "chat.bookmark_error": "Failed to update bookmark",
   "chat.more_actions": "More actions",
   "chat.agent_responding": "{{agent}} is responding",
   "chat.agent_joined": "{{agent}} joined the conversation",
@@ -1366,5 +1369,7 @@
   "palette.empty": "No results",
   "palette.loading": "Searching...",
   "palette.too_deep": "Couldn't reach that message — it may be too far back or was deleted",
-  "palette.blocked_streaming": "Can't jump to a message while the agent is responding"
+  "palette.blocked_streaming": "Can't jump to a message while the agent is responding",
+  "palette.favourites": "Favourites",
+  "palette.session_deleted": "That session no longer exists"
 }

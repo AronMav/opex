@@ -42,6 +42,7 @@ function makeUserRow(id: string, content: string, createdAt: string): MessageRow
     branch_from_message_id: null,
     abort_reason: null,
     is_mirror: false,
+    bookmarked_at: null,
   };
 }
 
@@ -62,6 +63,7 @@ function makeAssistantRow(id: string, content: string, createdAt: string, agent:
     branch_from_message_id: null,
     abort_reason: null,
     is_mirror: false,
+    bookmarked_at: null,
   };
 }
 

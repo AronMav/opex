@@ -47,10 +47,15 @@ vi.mock("next/navigation", () => ({
 }));
 
 // ── Mock: search-api ─────────────────────────────────────────────────────────
+// listBookmarked is fetched on mount (empty-query favourites section, T7) —
+// stub it so the pre-existing search tests (which never type an empty query
+// on purpose, but DO mount with an empty query before typing) don't crash.
 
 const mockSearchAll = vi.fn();
+const mockListBookmarked = vi.fn();
 vi.mock("@/lib/search-api", () => ({
   searchAll: (...args: unknown[]) => mockSearchAll(...args),
+  listBookmarked: (...args: unknown[]) => mockListBookmarked(...args),
 }));
 
 import { SearchPalette } from "@/components/chat/SearchPalette";
@@ -90,6 +95,8 @@ describe("SearchPalette (Ctrl+K)", () => {
     vi.useFakeTimers();
     mockSearchAll.mockReset();
     mockSearchAll.mockResolvedValue(SEARCH_RESULT);
+    mockListBookmarked.mockReset();
+    mockListBookmarked.mockResolvedValue({ items: [] });
     mockSelectSession.mockReset();
     mockPush.mockReset();
     mockPathname = "/chat/";

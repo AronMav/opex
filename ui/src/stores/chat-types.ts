@@ -154,6 +154,8 @@ export interface ChatMessage {
   abortReason?: string | null;
   /** True when this message was written by a cron delivery (session mirroring). */
   isMirror?: boolean;
+  /** ISO timestamp if this message is bookmarked, null/undefined otherwise (T7). */
+  bookmarkedAt?: string | null;
 }
 
 // ── Connection phase FSM (FSM-01) ────────────────────────────────────────────

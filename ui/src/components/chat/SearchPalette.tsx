@@ -4,12 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Loader2, Search as SearchIcon } from "lucide-react";
+import { toast } from "sonner";
 import { useTranslation } from "@/hooks/use-translation";
 import { useChatStore } from "@/stores/chat-store";
 import { usePaletteStore } from "@/stores/palette-store";
-import { searchAll } from "@/lib/search-api";
+import { searchAll, listBookmarked } from "@/lib/search-api";
+import { apiGet } from "@/lib/api";
 import { normalizePathname } from "@/lib/nav";
-import type { SearchMessageHit, SearchSessionHit } from "@/types/api";
+import type { BookmarkHit, SearchMessageHit, SearchSessionHit } from "@/types/api";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -22,7 +24,8 @@ const MIN_QUERY_LEN = 2;
 
 type PaletteRow =
   | { kind: "session"; item: SearchSessionHit }
-  | { kind: "message"; item: SearchMessageHit };
+  | { kind: "message"; item: SearchMessageHit }
+  | { kind: "bookmark"; item: BookmarkHit };
 
 function readAllAgentsPref(): boolean {
   if (typeof window === "undefined") return false;
@@ -67,6 +70,12 @@ function Snippet({ text }: { text: string }) {
  * `router.push("/chat?agent=…&s=…")` for cross-agent jumps / non-chat pages
  * (the deep-link resolver in use-session-restore takes over). Session rows
  * navigate the same way but never set a target.
+ *
+ * While the query box is empty, the body shows a "Favourites" section (T7)
+ * fed by `listBookmarked` instead of the "type to search" placeholder.
+ * Favourite rows behave like message rows on selection, except the target
+ * session is verified to still exist (`GET /api/sessions/{id}`) before
+ * navigating — a bookmark can outlive the session it points at.
  */
 export function SearchPalette() {
   const { t } = useTranslation();
@@ -81,6 +90,7 @@ export function SearchPalette() {
   const [allAgents, setAllAgents] = useState(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ sessions: SearchSessionHit[]; messages: SearchMessageHit[] } | null>(null);
+  const [bookmarks, setBookmarks] = useState<BookmarkHit[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestSeq = useRef(0);
@@ -157,6 +167,18 @@ export function SearchPalette() {
       });
   }, [debounced, allAgents, currentAgent]);
 
+  // Favourites (T7): while the query box is empty (nothing typed, or opened
+  // fresh), show the user's bookmarked messages instead of the "type to
+  // search" empty state. Refetches when the palette opens, the query is
+  // cleared, or the all-agents scope toggles — mirrors the search effect's
+  // agent-scope contract (searchAll/listBookmarked share the all/agent shape).
+  useEffect(() => {
+    if (!open || query.trim().length > 0) return;
+    listBookmarked(allAgents ? { all: true } : { agent: currentAgent })
+      .then((res) => setBookmarks(res.items))
+      .catch(() => setBookmarks([]));
+  }, [open, query, allAgents, currentAgent]);
+
   const toggleAllAgents = useCallback((v: boolean) => {
     setAllAgents(v);
     try {
@@ -167,20 +189,56 @@ export function SearchPalette() {
     }
   }, []);
 
-  const rows: PaletteRow[] = useMemo(
-    () =>
-      result
-        ? [
-            ...result.sessions.map((item): PaletteRow => ({ kind: "session", item })),
-            ...result.messages.map((item): PaletteRow => ({ kind: "message", item })),
-          ]
-        : [],
-    [result],
-  );
+  // Search results take priority; while there's no active search (empty
+  // query, nothing debounced yet) the favourites list fills the palette body.
+  const rows: PaletteRow[] = useMemo(() => {
+    if (result) {
+      return [
+        ...result.sessions.map((item): PaletteRow => ({ kind: "session", item })),
+        ...result.messages.map((item): PaletteRow => ({ kind: "message", item })),
+      ];
+    }
+    if (query.trim().length === 0) {
+      return bookmarks.map((item): PaletteRow => ({ kind: "bookmark", item }));
+    }
+    return [];
+  }, [result, bookmarks, query]);
 
   const handleSelect = useCallback((row: PaletteRow) => {
     const agentId = row.item.agent_id;
     const sessionId = row.item.session_id;
+
+    // normalizePathname: `trailingSlash: true` in next.config.ts (static
+    // export) makes usePathname() return "/chat/" at runtime — an exact
+    // "/chat" comparison would never match in production.
+    const navigate = () => {
+      if (agentId === currentAgent && normalizePathname(pathname) === "/chat") {
+        // Same agent, already on the chat page — switch sessions in place via
+        // the store action (no route change, no remount).
+        useChatStore.getState().selectSession(sessionId, agentId);
+      } else {
+        // Different agent, or the palette was opened from a non-chat page —
+        // route there directly. use-session-restore's `?agent=&s=` deep-link
+        // resolver (same mechanism as shared URLs) takes it from here.
+        router.push(`/chat?agent=${encodeURIComponent(agentId)}&s=${sessionId}`);
+      }
+    };
+
+    if (row.kind === "bookmark") {
+      // Favourites can point at a session deleted since it was bookmarked —
+      // verify it still exists before navigating, so a stale favourite never
+      // routes the user to a dead end. setTarget is only set on success.
+      apiGet(`/api/sessions/${sessionId}`)
+        .then(() => {
+          usePaletteStore.getState().setTarget({ sessionId, messageId: row.item.message_id });
+          navigate();
+        })
+        .catch(() => {
+          toast.error(t("palette.session_deleted"));
+        });
+      setOpen(false);
+      return;
+    }
 
     // Message rows carry a specific message to jump to — set the target
     // BEFORE navigating so use-scroll-to-message (Task 3) picks it up as
@@ -191,22 +249,9 @@ export function SearchPalette() {
       usePaletteStore.getState().setTarget({ sessionId, messageId: row.item.message_id });
     }
 
-    // normalizePathname: `trailingSlash: true` in next.config.ts (static
-    // export) makes usePathname() return "/chat/" at runtime — an exact
-    // "/chat" comparison would never match in production.
-    if (agentId === currentAgent && normalizePathname(pathname) === "/chat") {
-      // Same agent, already on the chat page — switch sessions in place via
-      // the store action (no route change, no remount).
-      useChatStore.getState().selectSession(sessionId, agentId);
-    } else {
-      // Different agent, or the palette was opened from a non-chat page —
-      // route there directly. use-session-restore's `?agent=&s=` deep-link
-      // resolver (same mechanism as shared URLs) takes it from here.
-      router.push(`/chat?agent=${encodeURIComponent(agentId)}&s=${sessionId}`);
-    }
-
+    navigate();
     setOpen(false);
-  }, [setOpen, currentAgent, pathname, router]);
+  }, [setOpen, currentAgent, pathname, router, t]);
 
   useEffect(() => {
     if (!open || rows.length === 0) return;
@@ -258,6 +303,33 @@ export function SearchPalette() {
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {(!result || rows.length === 0) && !loading && (
             <p className="py-8 text-center text-sm text-muted-foreground-subtle">{t("palette.empty")}</p>
+          )}
+          {!result && bookmarks.length > 0 && (
+            <div className="mb-2">
+              <h4 className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground-subtle">
+                {t("palette.favourites")}
+              </h4>
+              {bookmarks.map((b, i) => {
+                const active = i === activeIdx;
+                return (
+                  <button
+                    key={b.message_id}
+                    type="button"
+                    className={`flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors ${
+                      active ? "bg-accent text-accent-foreground" : "hover:bg-accent/60"
+                    }`}
+                    onMouseEnter={() => setActiveIdx(i)}
+                    onMouseDown={(e) => { e.preventDefault(); handleSelect({ kind: "bookmark", item: b }); }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="flex-1 truncate text-muted-foreground">{b.session_title ?? b.session_id}</span>
+                      {allAgents && <Badge variant="outline" size="xs">{b.agent_id}</Badge>}
+                    </div>
+                    <div className="truncate">{b.preview}</div>
+                  </button>
+                );
+              })}
+            </div>
           )}
           {result && result.sessions.length > 0 && (
             <div className="mb-2">

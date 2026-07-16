@@ -293,6 +293,9 @@
   "chat.voice_queued": "Отправлю после ответа",
   "chat.feedback_error": "Ошибка отправки отзыва",
   "chat.copy_error": "Ошибка копирования",
+  "chat.bookmark_tooltip": "Добавить в избранное",
+  "chat.unbookmark_tooltip": "Убрать из избранного",
+  "chat.bookmark_error": "Не удалось обновить закладку",
   "chat.more_actions": "Ещё",
   "chat.agent_responding": "{{agent}} отвечает",
   "chat.agent_joined": "{{agent}} присоединился к разговору",
@@ -1366,5 +1369,7 @@
   "palette.empty": "Ничего не найдено",
   "palette.loading": "Идёт поиск...",
   "palette.too_deep": "Не удалось перейти к сообщению — оно слишком далеко в истории или было удалено",
-  "palette.blocked_streaming": "Нельзя перейти к сообщению, пока агент отвечает"
+  "palette.blocked_streaming": "Нельзя перейти к сообщению, пока агент отвечает",
+  "palette.favourites": "Избранное",
+  "palette.session_deleted": "Эта сессия больше не существует"
 }

@@ -629,3 +629,22 @@ export interface SearchResponse {
   sessions: SearchSessionHit[];
   count: number;
 }
+
+// ── Bookmarks (wave 2, T6/T7) ────────────────────────────────────────────────
+// GET /api/messages/bookmarked?agent=|all=true&limit= — see
+// crates/opex-core/src/gateway/handlers/sessions.rs::api_list_bookmarked
+
+/** One bookmarked-message entry, as returned by GET /api/messages/bookmarked. */
+export interface BookmarkHit {
+  message_id: string;
+  session_id: string;
+  session_title: string | null;
+  agent_id: string;
+  preview: string;
+  role: string;
+  bookmarked_at: string;
+}
+
+export interface BookmarkedResponse {
+  items: BookmarkHit[];
+}
