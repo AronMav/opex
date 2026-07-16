@@ -25,14 +25,23 @@
 //! - `<toolname>` / `<toolname ...>` — XML shape (suppressed through `</toolname>`)
 //! - `toolname{...}` / `toolname\n{...}` / `toolname {...}` — JSON shape (suppressed
 //!   through the balanced `}`)
-//! - `toolname(...)` — call shape (suppressed through the balanced `)`)
+//!
+//! Deliberately NOT suppressed: `toolname(...)` — a function-call paren shape.
+//! Models do not actually hallucinate `name(json)` (the observed shapes are the
+//! two above); meanwhile a short function-like tool name (`fetch`, `search`) is
+//! common in legitimate code examples like `fetch('https://x')` at a line start,
+//! so treating `(` as invocation punctuation was an over-suppression risk with
+//! no matching real-world hallucination pattern to justify it.
 //!
 //! ### What it will NEVER suppress (conservatism guarantees)
 //! - Prose that merely *mentions* a tool name mid-sentence
 //!   ("what does sequentialthinking do?") — the name is not at a boundary and/or
 //!   is not immediately followed by invocation punctuation.
 //! - A known tool name followed by ordinary text
-//!   ("sequentialthinking is a reasoning tool") — no `{`/`(`/`<...>` after the name.
+//!   ("sequentialthinking is a reasoning tool") — no `{`/`<...>` after the name.
+//! - A known tool name used as a function call in code
+//!   ("fetch('https://x')", "search(query)") — the paren shape is never treated
+//!   as invocation punctuation (see above).
 //! - Any content when the known-tool list is empty — the filter is a pure
 //!   passthrough (zero behaviour change when no extension tools are configured).
 //! - A real native `tool_use` call — those arrive in the SSE `tool_calls` array,
@@ -66,8 +75,6 @@ enum Boundary {
     Xml(String),
     /// `name{...}` call detected; suppress through the balanced `}`.
     Brace,
-    /// `name(...)` call detected; suppress through the balanced `)`.
-    Paren,
 }
 
 /// Classify the text at a message/line boundary. `seg` MUST start at a boundary.
@@ -171,7 +178,6 @@ fn classify_name(rest: &str, known: &[String]) -> Boundary {
         // `name.len()` bytes matched an ASCII-cased known name → char boundary.
         match scan_invocation(&rest[nb.len()..]) {
             InvPunct::Brace => return Boundary::Brace,
-            InvPunct::Paren => return Boundary::Paren,
             InvPunct::NeedMore => any_prefix = true,
             InvPunct::No => {}
         }
@@ -185,13 +191,13 @@ fn classify_name(rest: &str, known: &[String]) -> Boundary {
 
 enum InvPunct {
     Brace,
-    Paren,
     NeedMore,
     No,
 }
 
-/// After a matched name, look for `{`/`(` allowing only horizontal whitespace and
-/// at most one newline in between. Anything else means "not a call".
+/// After a matched name, look for `{` allowing only horizontal whitespace and
+/// at most one newline in between. Anything else — including `(`, deliberately
+/// not treated as invocation punctuation (see module docs) — means "not a call".
 fn scan_invocation(tail: &str) -> InvPunct {
     let b = tail.as_bytes();
     let mut i = 0;
@@ -207,7 +213,6 @@ fn scan_invocation(tail: &str) -> InvPunct {
     match b.get(i) {
         None => InvPunct::NeedMore,
         Some(b'{') => InvPunct::Brace,
-        Some(b'(') => InvPunct::Paren,
         Some(_) => InvPunct::No,
     }
 }
@@ -269,8 +274,8 @@ enum Mode {
     MidLine,
     /// Inside a detected XML call — drop bytes until the close tag.
     SuppressXml { close: String },
-    /// Inside a detected `{`/`(` call — drop bytes until the balanced close.
-    SuppressBalanced { open: u8, close: u8 },
+    /// Inside a detected `{...}` call — drop bytes until the balanced `}`.
+    SuppressBrace,
 }
 
 /// Stateful streaming filter that suppresses hallucinated extension-tool calls
@@ -294,7 +299,7 @@ impl HallucinatedToolFilter {
     /// Feed a chunk; return the text safe to emit (may be empty while buffering
     /// or suppressing).
     // reviewed: all slice offsets from ASCII scans (whitespace, '\n', '<', '{',
-    // '(', '}', ')', close-tag, and ASCII-cased known-name lengths) — char boundaries.
+    // '}', close-tag, and ASCII-cased known-name lengths) — char boundaries.
     #[allow(clippy::string_slice)]
     pub(crate) fn process(&mut self, chunk: &str) -> String {
         if self.known.is_empty() {
@@ -306,7 +311,20 @@ impl HallucinatedToolFilter {
         loop {
             match self.mode.clone() {
                 Mode::Boundary => match classify_boundary(&self.buffer, &self.known) {
-                    Boundary::NeedMore => break,
+                    Boundary::NeedMore => {
+                        // R5 fix 2: a boundary token (or leading whitespace)
+                        // that never resolves into a definite call/no-match
+                        // would otherwise buffer unboundedly (e.g. a known
+                        // name followed by a very long run of whitespace).
+                        // Apply the same fail-open cap as the two Suppress*
+                        // modes: flush as text and resume passthrough.
+                        if self.buffer.len() > MAX_SUPPRESS_BYTES {
+                            out.push_str(&self.buffer);
+                            self.buffer.clear();
+                            self.mode = Mode::MidLine;
+                        }
+                        break;
+                    }
                     Boundary::NoMatch => {
                         if let Some(p) = self.buffer.find('\n') {
                             out.push_str(&self.buffer[..=p]);
@@ -320,18 +338,7 @@ impl HallucinatedToolFilter {
                         }
                     }
                     Boundary::Xml(close) => self.mode = Mode::SuppressXml { close },
-                    Boundary::Brace => {
-                        self.mode = Mode::SuppressBalanced {
-                            open: b'{',
-                            close: b'}',
-                        }
-                    }
-                    Boundary::Paren => {
-                        self.mode = Mode::SuppressBalanced {
-                            open: b'(',
-                            close: b')',
-                        }
-                    }
+                    Boundary::Brace => self.mode = Mode::SuppressBrace,
                 },
                 Mode::MidLine => {
                     if let Some(p) = self.buffer.find('\n') {
@@ -357,8 +364,8 @@ impl HallucinatedToolFilter {
                         break;
                     }
                 }
-                Mode::SuppressBalanced { open, close } => {
-                    if let Some(end) = find_balanced_end(&self.buffer, open, close) {
+                Mode::SuppressBrace => {
+                    if let Some(end) = find_balanced_end(&self.buffer, b'{', b'}') {
                         self.buffer.drain(..end); // drop the suppressed call
                         self.mode = Mode::MidLine;
                     } else if self.buffer.len() > MAX_SUPPRESS_BYTES {
@@ -382,7 +389,7 @@ impl HallucinatedToolFilter {
     pub(crate) fn finish(&mut self) -> String {
         let out = match self.mode {
             Mode::Boundary | Mode::MidLine => std::mem::take(&mut self.buffer),
-            Mode::SuppressXml { .. } | Mode::SuppressBalanced { .. } => String::new(),
+            Mode::SuppressXml { .. } | Mode::SuppressBrace => String::new(),
         };
         self.buffer.clear();
         self.mode = Mode::Boundary;
@@ -473,14 +480,6 @@ mod tests {
     }
 
     #[test]
-    fn name_paren_call_suppressed() {
-        let mut f = filter();
-        let mut out = f.process("brave_search({\"q\":\"x\"})\nok");
-        out.push_str(&f.finish());
-        assert_eq!(out, "\nok");
-    }
-
-    #[test]
     fn name_json_split_across_chunks() {
         let mut f = filter();
         let mut out = f.process("sequential");
@@ -532,6 +531,29 @@ mod tests {
         let mut f = filter();
         // `brave_searches` is a superset token — not the tool `brave_search`.
         let s = "brave_searches{not a call}";
+        let mut out = f.process(s);
+        out.push_str(&f.finish());
+        assert_eq!(out, s);
+    }
+
+    // Fix 1: the paren call-shape `name(...)` is deliberately NOT detected —
+    // models don't actually hallucinate it, and a function-like known tool
+    // name (`fetch`, `search`) is common in legitimate line-start code
+    // examples. These must pass through byte-identical.
+
+    #[test]
+    fn fetch_paren_code_example_not_suppressed() {
+        let mut f = HallucinatedToolFilter::new(std::sync::Arc::new(vec!["fetch".to_string()]));
+        let s = "fetch('https://x')";
+        let mut out = f.process(s);
+        out.push_str(&f.finish());
+        assert_eq!(out, s);
+    }
+
+    #[test]
+    fn search_paren_code_example_not_suppressed() {
+        let mut f = HallucinatedToolFilter::new(std::sync::Arc::new(vec!["search".to_string()]));
+        let s = "search(query)";
         let mut out = f.process(s);
         out.push_str(&f.finish());
         assert_eq!(out, s);
@@ -628,6 +650,23 @@ mod tests {
         out.push_str(&f.finish());
         // Never closed → flushed as text rather than swallowed.
         assert!(out.contains(&big), "over-cap unclosed call must fail open to text");
+    }
+
+    // Fix 2: `NeedMore` (a matched boundary token, or leading whitespace, that
+    // never resolves into a definite call/no-match) must be capped the same
+    // way as the two `Suppress*` modes — otherwise a known name followed by an
+    // unbounded run of whitespace before any terminator buffers forever.
+    #[test]
+    fn needmore_over_cap_fails_open() {
+        let mut f = filter();
+        let spaces = " ".repeat(MAX_SUPPRESS_BYTES + 100);
+        let payload = format!("sequentialthinking{spaces}");
+        let mut out = f.process(&payload);
+        out.push_str(&f.finish());
+        assert_eq!(
+            out, payload,
+            "unresolved NeedMore buffer over cap must fail open to text, byte-identical"
+        );
     }
 
     // ── boundary helper units ────────────────────────────────────────────────

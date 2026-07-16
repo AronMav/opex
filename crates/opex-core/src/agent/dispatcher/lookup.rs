@@ -25,8 +25,6 @@ pub fn is_valid_tool_name(name: &str) -> bool {
 /// drop currently-promoted tools (they are in per-session core for this turn).
 /// Capability tools shadow same-named YAML files.
 /// Sorted alphabetically by name.
-// allow(dead_code): consumed by tool_handlers/tool_use.rs.
-#[allow(dead_code)]
 pub async fn build_extension_tool_list(
     is_base_agent: bool,
     deny: &[String],

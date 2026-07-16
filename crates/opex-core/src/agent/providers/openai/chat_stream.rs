@@ -314,12 +314,17 @@ impl OpenAiCompatibleProvider {
             tool_calls.extend(xml_calls);
         }
 
-        // R5: post-hoc strip hallucinated extension-tool "calls" from the
+        // R5 fix 3: post-hoc strip hallucinated extension-tool "calls" from the
         // PERSISTED content (same conservative matcher as the live filter) so a
-        // reload stays consistent with what was shown live. No-op when the
-        // known-tool list is empty or nothing matched.
+        // reload stays consistent with what was shown live. Runs on the
+        // THINKING-STRIPPED content — same input the live path effectively
+        // sees (thinking_filter runs before hallucinated_filter per-chunk) —
+        // so a call on the SAME line as a `</think>` close (e.g.
+        // `</think>sequentialthinking\n{...}`) is still caught; matching on raw
+        // `full_content` would leave that call mid-line and unsuppressed.
+        // No-op when the known-tool list is empty or nothing matched.
         let full_content = super::hallucinated_tool::strip_hallucinated_tool_calls(
-            &full_content,
+            &crate::agent::thinking::strip_thinking(&full_content),
             opts.known_extension_tools.as_slice(),
         );
 
