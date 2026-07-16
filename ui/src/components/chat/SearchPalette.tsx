@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { useHotkey } from "@/hooks/use-hotkey";
 
 const ALL_AGENTS_KEY = "palette_all_agents";
 const DEBOUNCE_MS = 250;
@@ -84,17 +85,19 @@ export function SearchPalette() {
   // Global Ctrl+K / Cmd+K hotkey — registered here (rather than in the root
   // layout, which must stay a Server Component for its `metadata`/`viewport`
   // exports) so the palette is a fully self-contained drop-in next to the
-  // toaster: mount it once, get the hotkey for free.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setOpen(true);
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [setOpen]);
+  // toaster: mount it once, get the hotkey for free. The palette OWNS Ctrl+K
+  // (the old focus-composer binding in chat/page.tsx was removed — "/" covers
+  // that now). `allowInInput: true` is intentional: a command palette must be
+  // able to open from anywhere, including while a textarea/input has focus
+  // (Slack/Linear standard), not just when focus is elsewhere on the page.
+  useHotkey(
+    "k",
+    (e) => {
+      e.preventDefault();
+      setOpen(true);
+    },
+    { ctrlOrMeta: true, allowInInput: true },
+  );
 
   // Reset transient state each time the palette opens; cancel any pending
   // debounce timer when it closes.
@@ -187,9 +190,9 @@ export function SearchPalette() {
         e.preventDefault();
         const safeIdx = Math.min(activeIdx, rows.length - 1);
         handleSelect(rows[safeIdx]);
-      } else if (e.key === "Escape") {
-        setOpen(false);
       }
+      // Escape is intentionally NOT handled here — Radix Dialog already
+      // closes on Escape, so a second handler would be redundant.
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);

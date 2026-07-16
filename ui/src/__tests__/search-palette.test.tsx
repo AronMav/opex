@@ -168,4 +168,23 @@ describe("SearchPalette (Ctrl+K)", () => {
     const toggle2 = screen.getByRole("switch");
     expect(toggle2).toHaveAttribute("aria-checked", "true");
   });
+
+  // (ж) Ctrl+K opens the palette even while a textarea elsewhere has focus —
+  // the palette owns Ctrl+K globally (allowInInput), it must not be
+  // swallowed by the composer's own input handling.
+  it("Ctrl+K opens the palette even when a textarea has focus", async () => {
+    usePaletteStore.setState({ open: false, target: null, highlightedMessageId: null });
+    render(
+      <>
+        <textarea data-testid="composer" />
+        <SearchPalette />
+      </>,
+    );
+    const textarea = screen.getByTestId("composer");
+    textarea.focus();
+    expect(document.activeElement).toBe(textarea);
+
+    fireEvent.keyDown(textarea, { key: "k", ctrlKey: true });
+    expect(usePaletteStore.getState().open).toBe(true);
+  });
 });

@@ -286,12 +286,9 @@ export default function ChatPage() {
     handleNewChat();
   }, { ctrlOrMeta: true, shift: true });
 
-  // Ctrl/Cmd+K — focus chat input (global scope)
-  useHotkey("k", (e) => {
-    e.preventDefault();
-    const input = document.querySelector<HTMLTextAreaElement>('[data-composer-input] textarea');
-    input?.focus();
-  }, { ctrlOrMeta: true });
+  // Ctrl/Cmd+K is owned by the search palette (SearchPalette.tsx) — the
+  // legacy focus-composer binding was removed here; "/" already covers
+  // focusing the composer from anywhere.
 
   // Agent selector component (reused in desktop header and mobile)
   const agentSelector = (
