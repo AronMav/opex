@@ -1,13 +1,11 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { useSearchParams } from "next/navigation";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useAuthStore } from "@/stores/auth-store";
 import {
   useChatStore,
   isActivePhase,
-  getInitialAgent,
 } from "@/stores/chat-store";
 import { useWsSubscription } from "@/hooks/use-ws-subscription";
 import { useHotkey } from "@/hooks/use-hotkey";
@@ -62,22 +60,16 @@ import { useCanvasStore } from "@/stores/canvas-store";
 import { useSessions, useAgents, qk } from "@/lib/queries";
 import { useAgentTextModel } from "@/hooks/use-profiles";
 import { queryClient } from "@/lib/query-client";
-import { assertToken, shareSession } from "@/lib/api";
+import { shareSession } from "@/lib/api";
 import type { SessionRow } from "@/types/api";
 import { TaskPlanPanel } from "@/components/TaskPlanPanel";
+import { useSessionRestore } from "./hooks/use-session-restore";
 
 const EMPTY_SESSIONS: SessionRow[] = [];
 const EMPTY_ACTIVE: string[] = [];
 
 export default function ChatPage() {
   const { t, locale } = useTranslation();
-  const searchParams = useSearchParams();
-  const urlSessionId = searchParams.get("s");
-  // Override state: null = user switched agents (block resolver); undefined = use real searchParams.
-  // Set synchronously in switchAgent so it batches with setCurrentAgent in the same render.
-  const [overrideUrlSession, setOverrideUrlSession] = useState<string | null | undefined>(undefined);
-  const effectiveUrlSessionId =
-    overrideUrlSession !== undefined ? overrideUrlSession : urlSessionId;
   const { agents, refreshIfStale } = useAuthStore(
     useShallow((s) => ({ agents: s.agents, refreshIfStale: s.refreshIfStale })),
   );
@@ -111,25 +103,6 @@ export default function ChatPage() {
     return currentAgentDefaultModel || null;
   }, [modelOverride, currentAgentDefaultModel]);
 
-  // Track which agents have been auto-restored (per-agent, not global boolean)
-  // This preserves "new chat" state when switching A → B → A
-  const restoredAgents = useRef(new Set<string>());
-
-  // Initialize current agent on mount
-  useEffect(() => {
-    if (agents.length > 0 && !currentAgent) {
-      const initial = getInitialAgent(agents);
-      useChatStore.getState().setCurrentAgent(initial);
-    }
-  }, [agents, currentAgent]);
-
-  // Sync agent state when agents list changes (e.g. after async restore)
-  useEffect(() => {
-    if (agents.length > 0 && currentAgent && !agents.includes(currentAgent)) {
-      useChatStore.getState().setCurrentAgent(agents[0]);
-    }
-  }, [agents, currentAgent]);
-
   // Refresh agent icons if stale (>60s since last fetch)
   useEffect(() => { refreshIfStale(); }, [refreshIfStale]);
 
@@ -142,145 +115,15 @@ export default function ChatPage() {
   // React Query can report isLoading=false before the first fetch completes (initial state).
   const sessionsReady = !sessionsLoading && sessionsData !== undefined;
 
-  // Reset override to undefined whenever Next.js router actually navigates
-  // (e.g., user clicks a deep-link, router.push). window.history.replaceState
-  // does NOT update useSearchParams, so this does not fire during a switch.
-  useEffect(() => {
-    setOverrideUrlSession(undefined);
-  }, [searchParams]);
-
-  // Cross-agent URL deep-link resolver. When ?s= session is not in the current agent's
-  // list, fetch the session to find its owning agent and switch to it. This handles
-  // shared URLs where the recipient's localStorage points to a different agent.
-  //
-  // After switching, we DIRECTLY call selectSession(urlSessionId, targetAgent) to
-  // honour the deep link without depending on the restoration effect's race-prone
-  // state machine. The restoration effect for the new agent will see that
-  // activeSessionId is already set + mode=history and become a no-op (the
-  // "already viewing a real session — don't touch" branch).
-  //
-  // Pre-marking restoredAgents prevents the restoration effect from clobbering
-  // our deep-link selection if it happens to run between setCurrentAgent and
-  // selectSession (e.g. when Arty's sessions list arrives before our state
-  // updates have all flushed).
-  const urlResolveFetched = useRef<string | null>(null);
-  useEffect(() => {
-    if (!effectiveUrlSessionId || !sessionsReady || !currentAgent) return;
-    const agentState = useChatStore.getState().agents[currentAgent];
-    if (agentState?.activeSessionId === effectiveUrlSessionId) return;
-    if (sessions.some((s) => s.id === effectiveUrlSessionId)) return; // restore effect handles this
-    if (urlResolveFetched.current === effectiveUrlSessionId) return; // already tried
-    urlResolveFetched.current = effectiveUrlSessionId;
-    fetch(`/api/sessions/${effectiveUrlSessionId}`, {
-      headers: { Authorization: `Bearer ${assertToken()}` },
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: { agent_id?: string } | null) => {
-        if (!data?.agent_id) return;
-        const targetAgent = data.agent_id;
-        if (!agents.includes(targetAgent) || targetAgent === currentAgent) return;
-        restoredAgents.current.add(targetAgent);
-        useChatStore.getState().setCurrentAgent(targetAgent);
-        useChatStore.getState().selectSession(effectiveUrlSessionId, targetAgent);
-      })
-      .catch(() => {});
-  }, [effectiveUrlSessionId, sessionsReady, sessions, currentAgent, agents]);
-
-  useEffect(() => {
-    if (!currentAgent || !sessionsReady) return;
-
-    // Already restored this agent — skip
-    if (restoredAgents.current.has(currentAgent)) return;
-
-    const agentState = useChatStore.getState().agents[currentAgent];
-
-    // If already streaming — don't touch
-    if (isActivePhase(agentState?.connectionPhase)) {
-      return;
-    }
-
-    // If has activeSessionId but UI shows new-chat — WS set the ID but didn't load the session.
-    // Load it now.
-    if (agentState?.activeSessionId && agentState?.messageSource?.mode === "new-chat") {
-      restoredAgents.current.add(currentAgent);
-      useChatStore.getState().selectSession(agentState.activeSessionId, currentAgent);
-      return;
-    }
-
-    // If already viewing a real session (live or history) — validate it still
-    // exists in the current sessions list. Pre-populated last session IDs may
-    // be stale (deleted or outside the top-40 window); fall through to re-select
-    // in that case so the restore effect picks a valid session.
-    if (agentState?.activeSessionId && agentState?.messageSource?.mode !== "new-chat") {
-      if (sessions.some((s) => s.id === agentState.activeSessionId)) {
-        restoredAgents.current.add(currentAgent);
-        return;
-      }
-      // Session not found — fall through to re-select below
-    }
-
-    // Priority 1: URL ?s= param (deep link)
-    if (effectiveUrlSessionId && sessions.some((s) => s.id === effectiveUrlSessionId)) {
-      restoredAgents.current.add(currentAgent);
-      const urlSession = sessions.find((s) => s.id === effectiveUrlSessionId);
-      useChatStore.getState().selectSession(effectiveUrlSessionId, currentAgent);
-      // If session is still running, mark it so ChatThread's auto-resume effect picks it up
-      if (urlSession?.run_status === "running") {
-        useChatStore.getState().markSessionActive(currentAgent, effectiveUrlSessionId);
-      }
-      return;
-    }
-
-    // IMPORTANT: If effectiveUrlSessionId exists but is NOT in current agent's sessions,
-    // it likely belongs to a different agent. Do NOT fall through to Priority 2
-    // (most-recent session) — selecting another session here triggers the URL-sync
-    // effect to overwrite ?s= with the wrong session id, clobbering the deep link
-    // before the cross-agent resolver effect has a chance to switch us to the
-    // correct agent. Bail out and let the resolver handle it; deliberately do NOT
-    // mark currentAgent as restored so a later visit (without deep link) still
-    // restores normally.
-    if (effectiveUrlSessionId && !sessions.some((s) => s.id === effectiveUrlSessionId)) {
-      return;
-    }
-
-    // Priority 2: Most recent session
-    if (sessions.length > 0) {
-      restoredAgents.current.add(currentAgent);
-      useChatStore.getState().selectSession(sessions[0].id, currentAgent);
-      if (sessions[0].run_status === "running") {
-        useChatStore.getState().markSessionActive(currentAgent, sessions[0].id);
-      }
-      return;
-    }
-
-    restoredAgents.current.add(currentAgent);
-    useChatStore.getState().newChat();
-  }, [sessionsReady, sessions, currentAgent, effectiveUrlSessionId]);
-
-  // Sync activeSessionId → URL ?s= param.
-  //
-  // Guard: if effectiveUrlSessionId points to a session NOT in the current agent's
-  // sessions list, the cross-agent resolver is likely mid-flight. Don't overwrite
-  // ?s= in that window. When overrideUrlSession = null (user switched agents),
-  // effectiveUrlSessionId is null and the guard doesn't block — allowing ?s= to
-  // update to the new agent's session once restore completes.
-  useEffect(() => {
-    if (!activeSessionId) return;
-    const currentUrlSession = searchParams.get("s");
-    if (currentUrlSession === activeSessionId) return;
-
-    if (
-      effectiveUrlSessionId &&
-      sessions.length > 0 &&
-      !sessions.some((s) => s.id === effectiveUrlSessionId)
-    ) {
-      return; // resolver in flight — don't overwrite
-    }
-
-    const url = new URL(window.location.href);
-    url.searchParams.set("s", activeSessionId);
-    window.history.replaceState(null, "", url.pathname + url.search);
-  }, [activeSessionId, searchParams, sessions, effectiveUrlSessionId]);
+  // Session-restore state machine: override state, cross-agent deep-link resolver,
+  // 5-priority restore, and activeSessionId → URL ?s= sync. Extracted verbatim.
+  const { setOverrideUrlSession, restoredAgents } = useSessionRestore({
+    currentAgent,
+    sessions,
+    sessionsReady,
+    activeSessionId,
+    agents,
+  });
 
   // Refresh session list and currently viewed session when backend finishes processing
   useWsSubscription("session_updated", useCallback(() => {

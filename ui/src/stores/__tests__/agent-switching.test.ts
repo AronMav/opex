@@ -223,12 +223,12 @@ describe("setCurrentAgent — preserved invariants", () => {
 
 // ── 5. Restore-effect validation (static analysis of page.tsx) ───────────────
 
-describe("restore effect — page.tsx validates pre-populated session ID", () => {
+describe("restore effect — use-session-restore validates pre-populated session ID", () => {
   it("checks sessions.some() before marking the pre-populated session as restored", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
     const src = fs.readFileSync(
-      path.resolve(__dirname, "../../app/(authenticated)/chat/page.tsx"),
+      path.resolve(__dirname, "../../app/(authenticated)/chat/hooks/use-session-restore.ts"),
       "utf8"
     );
 
@@ -241,7 +241,7 @@ describe("restore effect — page.tsx validates pre-populated session ID", () =>
     const fs = await import("node:fs");
     const path = await import("node:path");
     const src = fs.readFileSync(
-      path.resolve(__dirname, "../../app/(authenticated)/chat/page.tsx"),
+      path.resolve(__dirname, "../../app/(authenticated)/chat/hooks/use-session-restore.ts"),
       "utf8"
     );
 
@@ -273,14 +273,25 @@ describe("overrideUrlSession override-state contract", () => {
     );
   }
 
+  // Restore machine extracted to a dedicated hook — its override-state contract
+  // is now asserted against the hook source rather than page.tsx.
+  async function getRestoreSrc() {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    return fs.readFileSync(
+      path.resolve(__dirname, "../../app/(authenticated)/chat/hooks/use-session-restore.ts"),
+      "utf8"
+    );
+  }
+
   it("declares overrideUrlSession state", async () => {
-    const src = await getPageSrc();
+    const src = await getRestoreSrc();
     expect(src).toContain("overrideUrlSession");
     expect(src).toContain("setOverrideUrlSession");
   });
 
   it("declares effectiveUrlSessionId derived from override", async () => {
-    const src = await getPageSrc();
+    const src = await getRestoreSrc();
     expect(src).toContain("effectiveUrlSessionId");
     expect(src).toContain(
       "overrideUrlSession !== undefined ? overrideUrlSession : urlSessionId"
@@ -298,7 +309,7 @@ describe("overrideUrlSession override-state contract", () => {
   });
 
   it("cross-agent resolver uses effectiveUrlSessionId in body and deps", async () => {
-    const src = await getPageSrc();
+    const src = await getRestoreSrc();
     const resolverBlock = src.slice(
       src.indexOf("urlResolveFetched = useRef"),
       src.indexOf("}, [effectiveUrlSessionId,") + "}, [effectiveUrlSessionId,".length
@@ -308,7 +319,7 @@ describe("overrideUrlSession override-state contract", () => {
   });
 
   it("URL-sync guard uses effectiveUrlSessionId", async () => {
-    const src = await getPageSrc();
+    const src = await getRestoreSrc();
     const syncBlock = src.slice(
       src.indexOf("// Sync activeSessionId → URL ?s= param"),
       src.indexOf("}, [activeSessionId, searchParams, sessions, effectiveUrlSessionId]);")
