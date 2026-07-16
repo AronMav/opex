@@ -22,7 +22,6 @@ const MAX_CONTEXT_MESSAGES: usize = 20;
 /// Minimum NEW user/assistant messages (since the session watermark) required
 /// before an extraction run fires. Batches extraction so overlapping windows
 /// are not re-summarized every turn (spec §2.1).
-#[allow(dead_code)] // removed in Task 3 when wired into extract_and_save_inner
 const MIN_NEW_MESSAGES: usize = 4;
 /// LLM call timeout.
 const EXTRACTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -99,7 +98,6 @@ pub async fn extract_and_save(
 /// Returns `None` when fewer than `MIN_NEW_MESSAGES` new messages exist (caller
 /// skips this run until more accumulate). Otherwise returns the last
 /// `MAX_CONTEXT_MESSAGES` of them, chronological order. Pure — unit-tested.
-#[allow(dead_code)] // removed in Task 3 when wired into extract_and_save_inner
 fn select_new_messages(
     rows: &[crate::db::sessions::MessageRow],
     watermark: Option<chrono::DateTime<chrono::Utc>>,
@@ -126,23 +124,20 @@ async fn extract_and_save_inner(
     soul_deps: &crate::agent::soul::reflection::SoulDeps,
     initiative: &Option<crate::agent::initiative::tick::InitiativeDeps>,
 ) -> Result<()> {
-    // 1. Load messages
+    // 1. Load messages (whole session — the watermark filter is applied purely).
     let rows = crate::db::sessions::load_messages(db, session_id, None).await?;
     if rows.len() < MIN_MESSAGES {
         return Ok(());
     }
 
-    // 2. Build context: last N user+assistant messages (skip tool results to save tokens)
-    let relevant: Vec<&crate::db::sessions::MessageRow> = rows.iter()
-        .filter(|m| m.role == "user" || m.role == "assistant")
-        .collect();
-
-    let start_idx = relevant.len().saturating_sub(MAX_CONTEXT_MESSAGES);
-    let context_msgs = &relevant[start_idx..];
-
-    if context_msgs.is_empty() {
-        return Ok(());
-    }
+    // 1b. Incremental gate: only NEW user/assistant messages since the session
+    // watermark, and only once ≥ MIN_NEW_MESSAGES have accumulated (spec §2).
+    let watermark = crate::db::sessions::get_last_extracted_at(db, session_id).await?;
+    let Some(context_msgs) = select_new_messages(&rows, watermark) else {
+        return Ok(()); // not enough new material yet — wait for the next turn
+    };
+    // Newest included message → the watermark to persist on success.
+    let new_watermark = context_msgs.last().map(|m| m.created_at);
 
     // 3. Format conversation for LLM
     let mut conversation = String::new();
@@ -273,6 +268,14 @@ async fn extract_and_save_inner(
         }
     }
 
+    // Advance the watermark ONLY here — reached only when every `?` step above
+    // succeeded. A failure earlier returns Err and leaves the watermark, so the
+    // same span is retried next turn (spec §2.1).
+    if let Some(ts) = new_watermark
+        && let Err(e) = crate::db::sessions::set_last_extracted_at(db, session_id, ts).await
+    {
+        tracing::warn!(agent = agent_name, error = %e, "failed to advance extraction watermark");
+    }
     Ok(())
 }
 
