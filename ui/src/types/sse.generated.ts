@@ -18,8 +18,10 @@ export type SseEvent = { "type": "data-session-id", data: DataSessionIdPayload, 
  */
 timeoutMs: number, } | { "type": "tool-approval-resolved", approvalId: string, action: ApprovalAction, modifiedInput: unknown | null, } | { "type": "finish", agentName: string, } | { "type": "error", errorText: string, } | { "type": "reconnecting", attempt: number, delay_ms: number, } | { "type": "sync", content: string, toolCalls: Array<unknown>, status: SyncStatus, error: string | null, } | { "type": "sync_begin", boundaryMessageId: string | null, runStatus: SyncStatus, 
 /**
- * Буфер переполнился — replay неполон; клиент берёт частичный текст
- * из REST (streaming_db персистит инкрементально) + хвост буфера.
+ * Буфер переполнился И компакция (слияние соседних text-delta одного
+ * блока) не смогла решительно ужать его (ниже половины ёмкости) —
+ * некомпактируемый или слабо-компактируемый флуд. Replay неполон;
+ * клиент показывает баннер и полагается на финальный рефетч истории.
  */
 truncated: boolean, } | { "type": "sync_end", lastSeq: number | null, } | { "type": "usage" } & UsagePayload;
 
