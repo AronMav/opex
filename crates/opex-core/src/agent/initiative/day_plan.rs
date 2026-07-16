@@ -91,7 +91,14 @@ pub async fn day_plan_tick(db: &PgPool, engine: &AgentEngine, agent: &str, deps:
 }
 
 async fn day_plan_tick_inner(db: &PgPool, engine: &AgentEngine, agent: &str, deps: &InitiativeDeps) -> anyhow::Result<()> {
-    if deps.is_base || !deps.cfg.enabled || deps.owner_id.is_none() { return Ok(()); }
+    if deps.is_base || !deps.cfg.enabled || deps.owner_id.is_none() {
+        tracing::debug!(
+            agent, is_base = deps.is_base,
+            enabled = deps.cfg.enabled, has_owner = deps.owner_id.is_some(),
+            "day_plan_tick gated out",
+        );
+        return Ok(());
+    }
     let plan = agent_plans::get_or_create(db, agent).await?;
     let today = crate::agent::initiative::tick::today_in_tz(&deps.timezone);
 

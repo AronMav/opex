@@ -644,7 +644,10 @@ pub async fn delete_by_source(db: &PgPool, source: &str) -> Result<u64> {
 
 /// Wipe all memory for an agent.
 pub async fn wipe_agent_memory(db: &PgPool, agent_id: &str) -> Result<u64> {
-    let result = sqlx::query("DELETE FROM memory_chunks WHERE agent_id = $1")
+    // Biography (kind event/reflection) is immortal via routine paths — deliberate
+    // removal is the raw-SQL quarantine runbook only. This admin wipe spares it,
+    // matching run_memory_decay / cleanup / reindex-purge / clear_embeddings.
+    let result = sqlx::query("DELETE FROM memory_chunks WHERE agent_id = $1 AND kind = 'fact'")
         .bind(agent_id)
         .execute(db)
         .await?;

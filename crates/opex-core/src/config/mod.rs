@@ -2211,6 +2211,13 @@ impl AgentConfig {
         if self.agent.initiative.daily_plan && !self.agent.initiative.enabled {
             errs.push("[agent.initiative] daily_plan=true requires enabled=true".into());
         }
+        if self.agent.base && self.agent.initiative.enabled {
+            errs.push(
+                "[agent.initiative] enabled=true is not allowed for a base agent \
+                 (initiative is non-base only)"
+                    .to_string(),
+            );
+        }
         if self.agent.emotion.enabled && !self.agent.soul.enabled {
             errs.push("[agent.emotion] enabled=true requires [agent.soul] enabled=true".into());
         }

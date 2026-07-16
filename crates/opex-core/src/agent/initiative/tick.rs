@@ -69,6 +69,11 @@ async fn initiative_tick_inner(
     // itself is not re-checked here — the call site is gated on
     // soul_deps.cfg.enabled in knowledge_extractor.)
     if deps.is_base || !deps.cfg.enabled || deps.owner_id.is_none() {
+        tracing::debug!(
+            agent = agent_name, is_base = deps.is_base,
+            enabled = deps.cfg.enabled, has_owner = deps.owner_id.is_some(),
+            "initiative_tick gated out",
+        );
         return Ok(());
     }
     let plan = agent_plans::get_or_create(db, agent_name).await?;
