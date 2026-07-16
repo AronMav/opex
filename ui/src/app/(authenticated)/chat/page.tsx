@@ -652,7 +652,7 @@ export default function ChatPage() {
                         : "hover:bg-accent/40"
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
                         <div className="flex items-center gap-1 min-w-0 flex-1">
                           <span
                             className={`font-display text-xs font-bold uppercase tracking-tight shrink-0 ${
@@ -734,7 +734,7 @@ export default function ChatPage() {
                         <div className="absolute left-0 top-1/2 -translate-y-1/2 h-8 w-0.5 rounded-full bg-primary" />
                       )}
                     </button>
-                    <div className="absolute right-1.5 bottom-1 flex flex-row md:right-2 md:top-1/2 md:bottom-auto md:translate-y-0 md:-translate-y-1/2 md:flex-col items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity duration-150 z-10">
+                    <div className="absolute right-1.5 bottom-1 flex flex-row md:right-2 md:top-2 md:bottom-auto md:flex-col items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity duration-150 z-10">
                         <Button
                           variant="ghost"
                           size="icon-sm"
