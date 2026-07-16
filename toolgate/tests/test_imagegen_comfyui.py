@@ -75,17 +75,29 @@ def test_model_override_sets_unet_name():
     assert graph["1"]["inputs"]["unet_name"] == "other_checkpoint.safetensors"
 
 
+# The baseline DEFAULT_WORKFLOW carries no LoRA node — a LoRA is an operator
+# addition supplied via options.workflow, so these tests provide one explicitly.
+_WF_WITH_LORA = {
+    "5": {"class_type": "CLIPTextEncode", "inputs": {"text": ""}},
+    "4": {"class_type": "LoraLoaderModelOnly", "inputs": {"lora_name": "style.safetensors", "strength_model": 0.8}},
+}
+
+
 def test_lora_strength_override():
-    drv = ComfyUIImageGen(base_url=BASE, options={"comfy_lora_strength": 1.5})
+    drv = ComfyUIImageGen(base_url=BASE, options={"workflow": _WF_WITH_LORA, "comfy_lora_strength": 1.5})
     graph = drv._build_graph("x", "512x512", None)
     assert graph["4"]["inputs"]["strength_model"] == 1.5
 
 
-def test_lora_strength_default_kept_when_unset():
-    drv = ComfyUIImageGen(base_url=BASE)
+def test_lora_strength_unset_keeps_node_value():
+    drv = ComfyUIImageGen(base_url=BASE, options={"workflow": _WF_WITH_LORA})
     graph = drv._build_graph("x", "512x512", None)
-    # graph's baked-in default (1.2) is untouched
-    assert graph["4"]["inputs"]["strength_model"] == 1.2
+    assert graph["4"]["inputs"]["strength_model"] == 0.8
+
+
+def test_default_workflow_has_no_lora_node():
+    from providers.imagegen_comfyui import DEFAULT_WORKFLOW
+    assert not any(n.get("class_type") == "LoraLoaderModelOnly" for n in DEFAULT_WORKFLOW.values())
 
 
 def test_missing_prompt_node_raises():

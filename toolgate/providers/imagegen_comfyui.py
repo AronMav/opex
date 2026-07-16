@@ -16,8 +16,8 @@ node-id renumbering) with optional explicit id overrides via `options.nodes`.
 The whole template + node mapping can be replaced from the Providers UI
 (`options.workflow`, `options.nodes`) without a code change.
 
-Content is passed through unfiltered — content support is a property of the
-configured graph (LoRAs / checkpoint), not of this driver.
+Content is passed through unfiltered — any content policy is a property of the
+configured graph / model, not of this driver.
 
 Relevant `options` keys (all optional, live in `providers.options`):
   workflow            full API-format graph dict (defaults to DEFAULT_WORKFLOW)
@@ -39,23 +39,22 @@ import httpx
 from providers.base import resolve_request_timeout
 
 
-# Operator's working krea2-turbo graph, captured from ComfyUI /history.
-# content-capable by design (the operator's installed "Krea 2 content v4.1" LoRA is
-# node "4", strength 1.2). Only nodes 5/8/9 (prompt / size / seed) are
-# overwritten per request; every other node — checkpoint, CLIP, VAE, LoRA,
-# sampler, tiled decode — is used verbatim so behaviour matches the operator's
-# ComfyUI exactly. NB: the Krea2 conditioning-rebalance (node "6") is present
-# but intentionally bypassed — KSampler.positive reads node "5" directly.
+# Baseline krea2-turbo text-to-image graph. Only nodes 5/8/9 (prompt / size /
+# seed) are overwritten per request; the rest (checkpoint, CLIP, VAE, sampler,
+# tiled decode) is used verbatim. Operators who run extra nodes — a style LoRA,
+# conditioning tweaks — supply their full API-format graph via the provider's
+# `options.workflow`, so the deployed pipeline is configured out-of-band rather
+# than hard-coded here. NB: the conditioning-rebalance (node "6") is present but
+# bypassed — KSampler.positive reads node "5" directly.
 DEFAULT_WORKFLOW: dict = {
     "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "krea2_turbo_int8_convrot.safetensors", "weight_dtype": "default"}},
     "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "Huihui-Qwen3-VL-4B-Instruct-abliterated-fp8_scaled.safetensors", "type": "krea2", "device": "default"}},
     "3": {"class_type": "VAELoader", "inputs": {"vae_name": "krea2RealVae_v10.safetensors"}},
-    "4": {"class_type": "LoraLoaderModelOnly", "inputs": {"lora_name": "krea2_lora.safetensors", "strength_model": 1.2, "model": ["1", 0]}},
     "5": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["2", 0]}},
     "6": {"class_type": "ConditioningKrea2Rebalance", "inputs": {"conditioning": ["5", 0], "multiplier": 4.0, "per_layer_weights": "1.0,1.0,1.0,1.0,1.0,1.0,1.0,2.5,5.0,1.1,4.0,1.0"}},
     "7": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["5", 0]}},
     "8": {"class_type": "EmptySD3LatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
-    "9": {"class_type": "KSampler", "inputs": {"model": ["4", 0], "positive": ["5", 0], "negative": ["7", 0], "latent_image": ["8", 0], "seed": 424242, "steps": 8, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+    "9": {"class_type": "KSampler", "inputs": {"model": ["1", 0], "positive": ["5", 0], "negative": ["7", 0], "latent_image": ["8", 0], "seed": 424242, "steps": 8, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
     "10": {"class_type": "VAEDecodeTiled", "inputs": {"samples": ["9", 0], "vae": ["3", 0], "tile_size": 512, "overlap": 64, "temporal_size": 64, "temporal_overlap": 8}},
     "11": {"class_type": "SaveImage", "inputs": {"images": ["10", 0], "filename_prefix": "opex"}},
 }
@@ -89,8 +88,9 @@ class ComfyUIImageGen:
         # Hard ceiling per side (guards the GPU against an over-large request —
         # the model is told 2K max, but a stray 4096 would OOM ComfyUI).
         self._max_dim = int(opts.get("comfy_max_dim", 2048))
-        # Optional LoRA strength override (the krea2 content LoRA works in ~1.0–1.5).
-        # None keeps whatever the workflow's LoraLoaderModelOnly node carries.
+        # Optional LoRA strength override for graphs whose workflow includes a
+        # LoRA node (typical range ~1.0–1.5). None keeps the node's own value;
+        # a no-op when the active workflow has no LoraLoaderModelOnly node.
         ls = opts.get("comfy_lora_strength")
         self._lora_strength = float(ls) if ls is not None else None
         wf = opts.get("workflow")
