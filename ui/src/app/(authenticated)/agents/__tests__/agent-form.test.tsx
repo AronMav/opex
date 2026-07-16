@@ -4,6 +4,7 @@ import "@testing-library/jest-dom/vitest";
 
 // ── Pure function imports ───────────────────────────────────────────────────
 import { detailToForm, formToPayload, emptyForm } from "../page";
+import { soulGating } from "../AgentEditDialog";
 import type { FormState, AgentEditDialogProps } from "../AgentEditDialog";
 
 // ── Mocks for UI tests ─────────────────────────────────────────────────────
@@ -410,5 +411,16 @@ describe("AgentEditDialog UI", () => {
     expect(screen.getAllByRole("combobox").length).toBeGreaterThan(0);
     const manageLink = screen.getByText(/agents\.manage_profiles/i).closest("a");
     expect(manageLink).toHaveAttribute("href", "/profiles/");
+  });
+});
+
+// ── soulGating tests ────────────────────────────────────────────────────────
+
+describe("soulGating", () => {
+  it("gates soul cross-fields", () => {
+    expect(soulGating({ soulEnabled: false, driftEnabled: false, initiativeDailyPlan: false }, false))
+      .toEqual({ emotionDisabled: true, driftCorrectDisabled: true, autoApproveDisabled: true, initiativeDisabled: false });
+    expect(soulGating({ soulEnabled: true, driftEnabled: true, initiativeDailyPlan: true }, true))
+      .toEqual({ emotionDisabled: false, driftCorrectDisabled: false, autoApproveDisabled: false, initiativeDisabled: true });
   });
 });

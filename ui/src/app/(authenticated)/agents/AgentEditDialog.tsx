@@ -38,7 +38,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { ChannelRow, RoutingRule } from "@/types/api";
 import type { WebhookDto } from "@/types/api.generated";
-import { ChevronDown, Bot, ExternalLink, Camera, Settings, Wrench, Zap, Archive, Clock, Radio } from "lucide-react";
+import { ChevronDown, Bot, ExternalLink, Camera, Settings, Wrench, Zap, Archive, Clock, Radio, Sparkles } from "lucide-react";
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { RoutingRulesEditor } from "./RoutingRulesEditor";
 import { useProviders } from "@/lib/queries";
 import { useProfiles } from "@/hooks/use-profiles";
@@ -185,16 +186,32 @@ export interface AgentEditDialogProps {
   editingBase?: boolean;
 }
 
-type AgentTab = "general" | "tools" | "behavior" | "session" | "schedule" | "channels";
+type AgentTab = "general" | "tools" | "behavior" | "soul" | "session" | "schedule" | "channels";
 
 const AGENT_TABS: { id: AgentTab; icon: React.ComponentType<{ className?: string }>; labelKey: TranslationKey }[] = [
-  { id: "general",  icon: Settings, labelKey: "agents.tab_general"  },
-  { id: "tools",    icon: Wrench,   labelKey: "agents.tab_tools"    },
-  { id: "behavior", icon: Zap,      labelKey: "agents.tab_behavior" },
-  { id: "session",  icon: Archive,  labelKey: "agents.tab_session"  },
-  { id: "schedule", icon: Clock,    labelKey: "agents.tab_schedule" },
-  { id: "channels", icon: Radio,    labelKey: "agents.tab_channels" },
+  { id: "general",  icon: Settings,  labelKey: "agents.tab_general"  },
+  { id: "tools",    icon: Wrench,    labelKey: "agents.tab_tools"    },
+  { id: "behavior", icon: Zap,       labelKey: "agents.tab_behavior" },
+  { id: "soul",     icon: Sparkles,  labelKey: "agents.tab_soul"     },
+  { id: "session",  icon: Archive,   labelKey: "agents.tab_session"  },
+  { id: "schedule", icon: Clock,     labelKey: "agents.tab_schedule" },
+  { id: "channels", icon: Radio,     labelKey: "agents.tab_channels" },
 ];
+
+/** Cross-field gating for the Soul tab — mirrors the server-side `validate()`
+ *  invariants (soul-layer design spec §validation). Pure so it's unit-testable
+ *  without mounting the dialog. */
+export function soulGating(
+  form: { soulEnabled: boolean; driftEnabled: boolean; initiativeDailyPlan: boolean },
+  editingBase: boolean,
+) {
+  return {
+    emotionDisabled: !form.soulEnabled,
+    driftCorrectDisabled: !form.driftEnabled,
+    autoApproveDisabled: !form.initiativeDailyPlan,
+    initiativeDisabled: editingBase,
+  };
+}
 
 export function AgentEditDialog({
   open,
@@ -624,6 +641,112 @@ export function AgentEditDialog({
                 )}
             </div>
 
+            {/* ── Soul tab ──
+                 Placed last in DOM order (though it's positioned after Behavior
+                 in the AGENT_TABS bar) so its always-mounted, initially-unchecked
+                 switches don't shift the "first unchecked switch" indices that
+                 agent-tabs.test.tsx relies on for the Session/Schedule tabs.
+                 Panels overlay via col-start-1 row-start-1, so DOM order has no
+                 visual effect. */}
+            <div className={`col-start-1 row-start-1 space-y-3 transition-none ${activeTab === "soul" ? "" : "opacity-0 pointer-events-none select-none"}`}>
+              {(() => {
+                const g = soulGating(form, !!editingBase);
+                return (
+                  <>
+                    <SwitchSection title={t("agents.section_soul")} enabled={form.soulEnabled} onToggle={(v) => upd({ soulEnabled: v })}>
+                      <AdvancedSection label={t("common.advanced")}>
+                        <Field label={t("agents.soul_reflection_threshold")} labelClassName="text-xs">
+                          <Input type="number" min={1} className="bg-background border-border font-mono text-sm h-8" value={form.soulReflectionThreshold} onChange={(e) => upd({ soulReflectionThreshold: e.target.value })} />
+                        </Field>
+                        <Field label={t("agents.soul_cooldown_min")} labelClassName="text-xs">
+                          <Input type="number" min={0} max={1440} className="bg-background border-border font-mono text-sm h-8" value={form.soulCooldownMin} onChange={(e) => upd({ soulCooldownMin: e.target.value })} />
+                        </Field>
+                        <Field label={t("agents.soul_top_k")} labelClassName="text-xs">
+                          <Input type="number" min={1} max={20} className="bg-background border-border font-mono text-sm h-8" value={form.soulTopK} onChange={(e) => upd({ soulTopK: e.target.value })} />
+                        </Field>
+                        <Field label={t("agents.soul_budget_tokens")} labelClassName="text-xs">
+                          <Input type="number" min={100} max={4000} className="bg-background border-border font-mono text-sm h-8" value={form.soulBudgetTokens} onChange={(e) => upd({ soulBudgetTokens: e.target.value })} />
+                        </Field>
+                        <Field label={t("agents.soul_max_events")} labelClassName="text-xs">
+                          <Input type="number" min={1} max={30} className="bg-background border-border font-mono text-sm h-8" value={form.soulMaxEvents} onChange={(e) => upd({ soulMaxEvents: e.target.value })} />
+                        </Field>
+                      </AdvancedSection>
+                    </SwitchSection>
+
+                    <SwitchSection title={t("agents.section_drift")} enabled={form.driftEnabled} onToggle={(v) => upd({ driftEnabled: v })}>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-muted-foreground">{t("agents.drift_correct")}</span>
+                        <Switch checked={form.driftCorrect} disabled={g.driftCorrectDisabled} onCheckedChange={(v) => upd({ driftCorrect: v })} className="data-[state=checked]:bg-primary" />
+                      </div>
+                      <Field label={t("agents.drift_anchor")} labelClassName="text-xs" hint={t("agents.drift_anchor_hint")}>
+                        <textarea
+                          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                          rows={2}
+                          value={form.driftAnchor}
+                          onChange={(e) => upd({ driftAnchor: e.target.value })}
+                        />
+                      </Field>
+                      <AdvancedSection label={t("common.advanced")}>
+                        <Field label={t("agents.drift_threshold")} labelClassName="text-xs">
+                          <Input type="number" step="0.01" min={0} max={2} className="bg-background border-border font-mono text-sm h-8" value={form.driftThreshold} onChange={(e) => upd({ driftThreshold: e.target.value })} />
+                        </Field>
+                        <Field label={t("agents.drift_min_history")} labelClassName="text-xs">
+                          <Input type="number" min={2} max={50} className="bg-background border-border font-mono text-sm h-8" value={form.driftMinHistory} onChange={(e) => upd({ driftMinHistory: e.target.value })} />
+                        </Field>
+                        <Field label={t("agents.drift_baseline_turns")} labelClassName="text-xs">
+                          <Input type="number" min={1} max={10} className="bg-background border-border font-mono text-sm h-8" value={form.driftBaselineTurns} onChange={(e) => upd({ driftBaselineTurns: e.target.value })} />
+                        </Field>
+                      </AdvancedSection>
+                    </SwitchSection>
+
+                    <SwitchSection title={t("agents.section_initiative")} enabled={form.initiativeEnabled} onToggle={(v) => upd({ initiativeEnabled: v })}>
+                      {g.initiativeDisabled && <p className="text-xs text-warning">{t("agents.initiative_non_base_note")}</p>}
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-muted-foreground">{t("agents.initiative_daily_plan")}</span>
+                        <Switch checked={form.initiativeDailyPlan} disabled={g.initiativeDisabled} onCheckedChange={(v) => upd({ initiativeDailyPlan: v })} className="data-[state=checked]:bg-primary" />
+                      </div>
+                      <p className="text-xs text-muted-foreground">{t("agents.initiative_daily_plan_hint")}</p>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-muted-foreground">{t("agents.initiative_auto_approve")}</span>
+                        <Switch checked={form.initiativeAutoApprove} disabled={g.autoApproveDisabled || g.initiativeDisabled} onCheckedChange={(v) => upd({ initiativeAutoApprove: v })} className="data-[state=checked]:bg-primary" />
+                      </div>
+                      <AdvancedSection label={t("common.advanced")}>
+                        <Field label={t("agents.initiative_proposal_cap")} labelClassName="text-xs">
+                          <Input type="number" min={1} max={10} disabled={g.initiativeDisabled} className="bg-background border-border font-mono text-sm h-8" value={form.initiativeProposalCap} onChange={(e) => upd({ initiativeProposalCap: e.target.value })} />
+                        </Field>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-muted-foreground">{t("agents.initiative_decompose")}</span>
+                          <Switch checked={form.initiativeDecompose} disabled={g.initiativeDisabled} onCheckedChange={(v) => upd({ initiativeDecompose: v })} className="data-[state=checked]:bg-primary" />
+                        </div>
+                        <Field label={t("agents.initiative_token_budget")} labelClassName="text-xs" hint={t("agents.initiative_token_budget_hint")}>
+                          <Input type="number" min={0} max={1000000000000} disabled={g.initiativeDisabled} className="bg-background border-border font-mono text-sm h-8" value={form.initiativeTokenBudget} onChange={(e) => upd({ initiativeTokenBudget: e.target.value })} />
+                        </Field>
+                      </AdvancedSection>
+                    </SwitchSection>
+
+                    <SwitchSection
+                      title={t("agents.section_emotion")}
+                      enabled={form.emotionEnabled}
+                      onToggle={(v) => { if (v && g.emotionDisabled) return; upd({ emotionEnabled: v }); }}
+                    >
+                      {g.emotionDisabled && <p className="text-xs text-warning">{t("agents.emotion_requires_soul_note")}</p>}
+                      <AdvancedSection label={t("common.advanced")}>
+                        <Field label={t("agents.emotion_k")} labelClassName="text-xs">
+                          <Input type="number" step="0.1" min={0} max={5} className="bg-background border-border font-mono text-sm h-8" value={form.emotionK} onChange={(e) => upd({ emotionK: e.target.value })} />
+                        </Field>
+                        <Field label={t("agents.emotion_blend_rate")} labelClassName="text-xs">
+                          <Input type="number" step="0.05" min={0} max={1} className="bg-background border-border font-mono text-sm h-8" value={form.emotionBlendRate} onChange={(e) => upd({ emotionBlendRate: e.target.value })} />
+                        </Field>
+                        <Field label={t("agents.emotion_half_life")} labelClassName="text-xs">
+                          <Input type="number" step="0.5" min={0} className="bg-background border-border font-mono text-sm h-8" value={form.emotionHalfLife} onChange={(e) => upd({ emotionHalfLife: e.target.value })} />
+                        </Field>
+                      </AdvancedSection>
+                    </SwitchSection>
+                  </>
+                );
+              })()}
+            </div>
+
           </div></div>
         </DialogBody>
 
@@ -790,6 +913,19 @@ function SwitchSection({
       </div>
       {enabled && <div className="animate-in fade-in duration-200">{children}</div>}
     </div>
+  );
+}
+
+/** Collapsed-by-default group for the seldom-tuned numeric knobs of a soul
+ *  sub-section, so the panel doesn't overwhelm with fields on first open. */
+function AdvancedSection({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <Collapsible className="mt-2">
+      <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+        <ChevronDown className="h-3 w-3" /> {label}
+      </CollapsibleTrigger>
+      <CollapsibleContent className="space-y-2 pt-2">{children}</CollapsibleContent>
+    </Collapsible>
   );
 }
 
