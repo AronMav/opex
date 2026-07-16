@@ -1700,6 +1700,15 @@ fn broadcast_session_event(
     tx.send(event.to_json()).ok();
 }
 
+/// Event retention (spec §3): a soul `event` is deleted once its age exceeds
+/// `importance * EVENT_RETENTION_DAYS_PER_IMPORTANCE` days, capped at
+/// `EVENT_MAX_AGE_DAYS`. Importance-weighted so trivial episodic memories fade
+/// fast while significant ones persist long enough to be consolidated into a
+/// (permanent) reflection. Reflections are exempt. Global storage policy, not
+/// per-agent config.
+const EVENT_RETENTION_DAYS_PER_IMPORTANCE: f64 = 7.0;
+const EVENT_MAX_AGE_DAYS: i64 = 180;
+
 /// Decay `relevance_score` for raw (non-pinned) PRIVATE memory chunks.
 /// `half_life` = 30 days. Deletes chunks with score < 0.05.
 ///
@@ -1739,19 +1748,38 @@ async fn run_memory_decay(db: &PgPool) -> Result<(u64, u64)> {
 
 /// Free function behind the memory-decay-cleanup cron job (extracted so the
 /// soul-guard sqlx test can call the production path directly instead of a
-/// copy of the SQL). Deletes very old, low-score, non-pinned chunks.
-/// Soul biography (kind event/reflection) is exempt: see `run_memory_decay` doc.
+/// copy of the SQL). Deletes very old, low-score, non-pinned `fact` chunks,
+/// plus soul `event` chunks that have aged past their importance-weighted
+/// retention window (spec §3). `reflection` chunks are always exempt —
+/// permanent durable biography. Returns the combined row count.
 pub(crate) async fn run_memory_decay_cleanup(db: &PgPool) -> Result<u64> {
-    let result = sqlx::query(
+    // Facts: very old, low-score (unchanged).
+    let facts = sqlx::query(
         "DELETE FROM memory_chunks WHERE pinned = false AND relevance_score < 0.1 \
          AND accessed_at < now() - interval '180 days' AND kind = 'fact'",
     )
     .execute(db)
-    .await?;
-    Ok(result.rows_affected())
+    .await?
+    .rows_affected();
+
+    // Events (spec §3): age out on an importance-weighted schedule. Reflections
+    // are NOT included — they are permanent durable biography.
+    let events = sqlx::query(
+        "DELETE FROM memory_chunks \
+         WHERE kind = 'event' AND pinned = false \
+           AND created_at < now() - make_interval(days => \
+                 LEAST(importance::float8 * $1::float8, $2::float8)::int)",
+    )
+    .bind(EVENT_RETENTION_DAYS_PER_IMPORTANCE)
+    .bind(EVENT_MAX_AGE_DAYS)
+    .execute(db)
+    .await?
+    .rows_affected();
+
+    Ok(facts + events)
 }
 
-// ── Soul-guard tests (kind='fact' hard-delete predicate) ───────────────────
+// ── Soul-guard tests (kind='fact'/'event' hard-delete predicates) ──────────
 //
 // Live-DB tests need testcontainers/Docker, so gated to Linux/x86_64 like the
 // neighboring hybrid-RRF suite in `memory/store.rs`. Exercises the production
@@ -1762,34 +1790,42 @@ mod soul_guard_tests {
     use sqlx::PgPool;
 
     #[sqlx::test(migrations = "../../migrations")]
-    async fn decay_cleanup_spares_soul_kinds(db: PgPool) {
-        // one 'fact' and one 'event' chunk, both eligible by score/age except kind
-        for (kind, id) in [("fact", "a"), ("event", "b")] {
+    async fn cleanup_ages_events_by_importance_but_spares_reflections(db: PgPool) {
+        // helper: insert one chunk with explicit kind/importance/created_at age.
+        async fn ins(db: &PgPool, tag: &str, kind: &str, importance: f32, age_days: i64) {
             sqlx::query(
                 "INSERT INTO memory_chunks \
-                 (id, agent_id, content, source, pinned, scope, relevance_score, kind, accessed_at) \
-                 VALUES (gen_random_uuid(), 'A', $1, 'soul_event:s', false, 'private', 0.01, $2, now() - interval '200 days')",
+                 (id, agent_id, content, source, pinned, scope, relevance_score, kind, importance, created_at, accessed_at) \
+                 VALUES (gen_random_uuid(), 'A', $1, 'soul_event:s', false, 'private', 0.01, $2, $3, \
+                         now() - make_interval(days => $4::int), now() - make_interval(days => $4::int))",
             )
-            .bind(format!("content-{id}"))
-            .bind(kind)
-            .execute(&db)
-            .await
-            .unwrap();
+            .bind(tag).bind(kind).bind(importance).bind(age_days)
+            .execute(db).await.unwrap();
         }
 
-        let removed = run_memory_decay_cleanup(&db).await.unwrap();
-        assert_eq!(removed, 1);
+        // fact: eligible by score/age → deleted.
+        ins(&db, "fact-old", "fact", 5.0, 200).await;
+        // event imp 2, 20 days: 20 > 2*7(=14) → deleted.
+        ins(&db, "evt-trivial-old", "event", 2.0, 20).await;
+        // event imp 10, 20 days: 20 < 10*7(=70) → SPARED.
+        ins(&db, "evt-significant-young", "event", 10.0, 20).await;
+        // event imp 10, 200 days: past MAX_AGE(180) → deleted.
+        ins(&db, "evt-significant-ancient", "event", 10.0, 200).await;
+        // reflection, ancient + low score → ALWAYS spared.
+        ins(&db, "refl-ancient", "reflection", 3.0, 300).await;
 
-        let kinds: Vec<String> =
-            sqlx::query_scalar("SELECT kind FROM memory_chunks WHERE agent_id = 'A'")
-                .fetch_all(&db)
-                .await
-                .unwrap();
-        assert_eq!(
-            kinds,
-            vec!["event".to_string()],
-            "event must survive, fact must be deleted"
-        );
+        run_memory_decay_cleanup(&db).await.unwrap();
+
+        async fn exists(db: &PgPool, tag: &str) -> bool {
+            let n: i64 = sqlx::query_scalar("SELECT count(*) FROM memory_chunks WHERE content = $1")
+                .bind(tag).fetch_one(db).await.unwrap();
+            n > 0
+        }
+        assert!(!exists(&db, "fact-old").await, "old fact must be deleted");
+        assert!(!exists(&db, "evt-trivial-old").await, "trivial old event must be deleted");
+        assert!(exists(&db, "evt-significant-young").await, "significant young event must survive");
+        assert!(!exists(&db, "evt-significant-ancient").await, "event past max-age must be deleted");
+        assert!(exists(&db, "refl-ancient").await, "reflection must NEVER be deleted");
     }
 }
 
