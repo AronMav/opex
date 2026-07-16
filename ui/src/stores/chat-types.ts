@@ -162,11 +162,19 @@ export interface ChatMessage {
  * Single authoritative phase enum for stream lifecycle state.
  * FSM-01: authoritative connection phase enum.
  *
- * Server-authoritative cutover (T7): the union collapsed to four states.
- * - "reconnecting" was removed — a dropped connection now stays "submitted"
- *   while the single connect path re-opens (staleness/visibility gating in T8).
- * - "complete" was removed — it folded into "idle". The boundary render keeps a
- *   finished assistant visible, so no distinct post-finish phase is needed.
+ * - "idle" — no turn in flight. Also the state a finished turn settles into;
+ *   the boundary render keeps the completed assistant message visible, so
+ *   there is no separate post-finish phase.
+ * - "submitted" — a turn was POSTed and the client is waiting for/reading the
+ *   envelope stream, before or between assistant text.
+ * - "streaming" — the envelope has been applied and assistant output is live.
+ * - "error" — the turn (or reconnect) ended in an unrecoverable error.
+ *
+ * A dropped connection does NOT get its own phase: it stays "submitted"
+ * while the single connect path (`streaming-renderer.ts` `connect`) re-opens
+ * the stream, gated by staleness/visibility checks. Whether that re-open is
+ * in progress is tracked by the orthogonal `isLlmReconnecting` flag on
+ * `AgentState`, not by `ConnectionPhase` itself.
  */
 export type ConnectionPhase = "idle" | "submitted" | "streaming" | "error";
 

@@ -44,8 +44,9 @@ export function startTurn(
 
 /**
  * GET /api/chat/{sessionId}/stream — connects once, processes the envelope
- * (sync_begin → replay → sync_end → live → finish) via processSSEStream in
- * batch-apply mode, and dispatches `cb`. Does not retry or reconnect itself.
+ * (sync_begin → replay → sync_end → live → finish) via processSSEStream (the
+ * replayed envelope commits to the store as a single batch at sync_end), and
+ * dispatches `cb`. Does not retry or reconnect itself.
  */
 export function openTurnStream(
   agent: string,
