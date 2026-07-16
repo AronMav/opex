@@ -4,18 +4,12 @@
 
 import type { ActionDeps } from "../../chat-store";
 import type { AgentState } from "../../chat-types";
-import { emptyAgentState } from "../../chat-types";
+import { makeUpdate } from "./_shared";
 
 export function createComposerActions(deps: ActionDeps) {
   const { get, set } = deps;
 
-  // ── Internal helper (mirroring store-level update) ──────────────────────
-  function update(agent: string, patch: Partial<AgentState>) {
-    set((draft) => {
-      if (!draft.agents[agent]) draft.agents[agent] = emptyAgentState();
-      Object.assign(draft.agents[agent], patch);
-    });
-  }
+  const update = makeUpdate(set);
 
   // ── Composer actions ────────────────────────────────────────────────────
 

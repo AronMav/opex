@@ -4,39 +4,19 @@
 // factory provides, plus queryClient and the streaming renderer.
 
 import type { ActionDeps } from "../../chat-store";
-import { emptyAgentState } from "../../chat-types";
-import type { AgentState } from "../../chat-types";
 import { qk } from "@/lib/queries";
 import { saveLastSession, getLastSessionId } from "../../chat-persistence";
 import { isActivePhase } from "../../chat-types";
 import { selectIsReplayingHistory } from "../../chat-selectors";
 import { getTranslations } from "@/i18n";
 import { useLanguageStore } from "@/stores/language-store";
+import { makeUpdate, makeEnsure } from "./_shared";
 
 export function createNavigationActions(deps: ActionDeps) {
   const { get, set, queryClient, renderer } = deps;
 
-  // ── Internal helpers (mirroring store-level ensure/update) ──────────────
-
-  function ensure(agent: string): AgentState {
-    const s = get().agents[agent];
-    if (s) return s;
-    const fresh = emptyAgentState();
-    // Restore persisted context limit so ContextBar shows correct value before first SSE.
-    try {
-      const stored = localStorage.getItem(`ctx_limit:${agent}`);
-      if (stored) fresh.modelContextLimit = Number(stored) || null;
-    } catch {}
-    set((draft) => { draft.agents[agent] = fresh; });
-    return fresh;
-  }
-
-  function update(agent: string, patch: Partial<AgentState>) {
-    set((draft) => {
-      if (!draft.agents[agent]) draft.agents[agent] = emptyAgentState();
-      Object.assign(draft.agents[agent], patch);
-    });
-  }
+  const update = makeUpdate(set);
+  const ensure = makeEnsure(get, set);
 
   // ── Navigation actions ───────────────────────────────────────────────────
 

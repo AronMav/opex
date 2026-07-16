@@ -6,10 +6,7 @@
 import { startTurn, openTurnStream } from "./stream/chat-stream";
 import { apiPatch, apiPost } from "@/lib/api";
 
-import {
-  uuid,
-  emptyAgentState,
-} from "./chat-types";
+import { uuid } from "./chat-types";
 import type {
   ChatMessage,
   MessagePart,
@@ -19,6 +16,7 @@ import type {
 } from "./chat-types";
 import { getCachedRawMessages, resolveActivePath } from "./chat-history";
 import { streamSessionManager } from "./stream-session";
+import { makeUpdate } from "./chat/actions/_shared";
 
 // ── Store access interface ─────────────────────────────────────────────────
 // Typed against the ChatStore shape (type-only import — erased at runtime, so
@@ -84,12 +82,16 @@ export function createStreamingRenderer(store: StoreAccess) {
   }
 
   // ── Internal helpers ────────────────────────────────────────────────────
+  // NOTE: `makeUpdate` is resolved lazily inside the function body (not
+  // `const update = makeUpdate(store.set)` at construction time) — this module
+  // sits in a real import cycle (streaming-renderer → stream/chat-stream →
+  // chat-store → streaming-renderer), and eagerly dereferencing an import
+  // binding while that cycle is still resolving throws a TDZ ReferenceError.
+  // Deferring the reference into the function body (only touched when
+  // `update()` is actually called, well after module load settles) avoids it.
 
-  function update(agent: string, patch: Partial<AgentState>) {
-    store.set((draft) => {
-      if (!draft.agents[agent]) draft.agents[agent] = emptyAgentState();
-      Object.assign(draft.agents[agent], patch);
-    });
+  function update(agent: string, patch: Partial<AgentState>): void {
+    makeUpdate(store.set)(agent, patch);
   }
 
   // ── Debounced UI state persistence to server ──────────────────────────────

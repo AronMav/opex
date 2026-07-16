@@ -4,13 +4,14 @@
 // factory provides, plus queryClient and the streaming renderer.
 
 import type { ActionDeps } from "../../chat-store";
-import { emptyAgentState, getLiveMessages } from "../../chat-types";
+import { getLiveMessages } from "../../chat-types";
 import type { AgentState, CompressionDividerPart, ChatMessage } from "../../chat-types";
 import type { CompressionEvent, MessagesResponse } from "@/types/api";
 import { qk } from "@/lib/queries";
 import { apiDelete, apiPatch, getToken } from "@/lib/api";
 import { saveLastSession } from "../../chat-persistence";
 import { getCachedHistoryMessages, convertHistory } from "../../chat-history";
+import { makeUpdate } from "./_shared";
 
 function insertCompressionDividers(
   messages: ChatMessage[],
@@ -42,14 +43,7 @@ function insertCompressionDividers(
 export function createSessionCrudActions(deps: ActionDeps) {
   const { get, set, queryClient, renderer } = deps;
 
-  // ── Internal helpers (mirroring store-level update) ─────────────────────
-
-  function update(agent: string, patch: Partial<AgentState>) {
-    set((draft) => {
-      if (!draft.agents[agent]) draft.agents[agent] = emptyAgentState();
-      Object.assign(draft.agents[agent], patch);
-    });
-  }
+  const update = makeUpdate(set);
 
   // ── Session CRUD actions ─────────────────────────────────────────────────
 
