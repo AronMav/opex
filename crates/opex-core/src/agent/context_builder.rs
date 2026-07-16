@@ -709,9 +709,9 @@ impl ContextBuilder for DefaultContextBuilder {
                 let core_extra: std::collections::HashSet<String> =
                     deps.agent_core_extra().iter().cloned().collect();
 
+                let always_core = deps.dispatcher_always_core();
                 all_tools.retain(|t| {
-                    core_names.contains(t.name.as_str())
-                        || core_extra.contains(&t.name)
+                    keep_in_native_partition(&t.name, &core_names, &core_extra, always_core)
                 });
             } else if let Some(max_k) = deps.agent_max_tools_in_context() {
                 // Legacy dynamic top-K path — only when dispatcher is OFF.
@@ -834,6 +834,20 @@ fn shares_significant_token(user_text: &str, tool_name: &str, tool_desc: &str) -
     let combined = format!("{tool_name} {tool_desc}").to_lowercase();
     combined.split_whitespace()
         .any(|w| w.len() >= 3 && user_words.contains(w))
+}
+
+/// Whether a tool stays in the native per-turn `tools[]` array under the
+/// dispatcher partition: static core, per-agent `core_extra`, or global
+/// `always_core`. Everything else is reachable via the `tool_use` dispatcher.
+fn keep_in_native_partition(
+    name: &str,
+    core_names: &std::collections::HashSet<&str>,
+    core_extra: &std::collections::HashSet<String>,
+    always_core: &[String],
+) -> bool {
+    core_names.contains(name)
+        || core_extra.contains(name)
+        || always_core.iter().any(|n| n == name)
 }
 
 /// Strip `<minimax:tool_call>…</minimax:tool_call>` blocks from a string.
@@ -1259,6 +1273,21 @@ mod tests {
     fn breakdown_total_includes_soul() {
         let b = ContextBreakdown { system_prompt: 1, skills: 2, multi_agent: 3, memory: 4, soul: 7, todo: 5, tools: 6, conversation: 8 };
         assert_eq!(b.total(), 36);
+    }
+
+    #[test]
+    fn native_partition_keeps_always_core() {
+        use std::collections::HashSet;
+        let core: HashSet<&str> = ["workspace_read"].into_iter().collect();
+        let core_extra: HashSet<String> = HashSet::new();
+        let always = vec!["sequentialthinking".to_string()];
+
+        // static core kept
+        assert!(super::keep_in_native_partition("workspace_read", &core, &core_extra, &always));
+        // always_core kept
+        assert!(super::keep_in_native_partition("sequentialthinking", &core, &core_extra, &always));
+        // unrelated extension dropped
+        assert!(!super::keep_in_native_partition("brave_search", &core, &core_extra, &always));
     }
 
 }
