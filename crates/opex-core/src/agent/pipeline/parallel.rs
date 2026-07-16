@@ -82,6 +82,15 @@ pub trait ToolExecutor: Send + Sync {
         Duration::from_secs(600)
     }
 
+    /// Outer wrapper timeout for a non-`agent` tool call. Reads
+    /// `AppConfig.agent_tool` (`default_tool_timeout_secs` + per-tool
+    /// `tool_timeout_overrides`) at call time so config hot-reload takes effect
+    /// on the next tool batch. The default impl returns the historical
+    /// hardcoded 120s so test stubs keep compiling.
+    fn tool_timeout(&self, _tool_name: &str) -> Duration {
+        Duration::from_secs(120)
+    }
+
     /// Per-tool semantic-cache config (None = tool is not cacheable). Default: not cacheable.
     fn semantic_cache_config(&self, _tool: &str) -> Option<crate::config::SemanticCacheToolConfig> {
         None
@@ -397,7 +406,6 @@ pub async fn execute_tool_calls_partitioned(
     }
 
     // 4. Execute
-    let default_timeout = Duration::from_secs(120);
     let agent_safety_timeout = executor.agent_safety_timeout();
 
     // NOTE: `args_hash` MUST hash `loop_detector_key(tc)` (NOT `tc.name`) so the
@@ -492,7 +500,7 @@ pub async fn execute_tool_calls_partitioned(
                     let timeout = if name == "agent" {
                         agent_safety_timeout
                     } else {
-                        default_timeout
+                        executor.tool_timeout(&name)
                     };
                     let result = match tokio::time::timeout(
                         timeout,
@@ -683,7 +691,7 @@ pub async fn execute_tool_calls_partitioned(
         let timeout = if tool_calls[i].name == "agent" {
             agent_safety_timeout
         } else {
-            default_timeout
+            executor.tool_timeout(&tool_calls[i].name)
         };
         let raw = match tokio::time::timeout(
             timeout,

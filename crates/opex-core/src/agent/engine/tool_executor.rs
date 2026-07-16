@@ -230,6 +230,14 @@ impl crate::agent::pipeline::parallel::ToolExecutor for AgentEngine {
         )
     }
 
+    /// Reads `AppConfig.agent_tool` (default + per-tool overrides) at call time
+    /// so config hot-reload takes effect on the next tool batch.
+    fn tool_timeout(&self, tool_name: &str) -> std::time::Duration {
+        std::time::Duration::from_secs(
+            self.cfg().app_config.agent_tool.tool_timeout_secs(tool_name),
+        )
+    }
+
     fn semantic_cache_config(&self, tool: &str) -> Option<crate::config::SemanticCacheToolConfig> {
         self.cfg().app_config.semantic_cache.for_tool(tool)
     }

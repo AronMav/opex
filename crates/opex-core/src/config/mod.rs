@@ -222,6 +222,20 @@ pub struct AgentToolConfig {
     /// authoritative timeouts fire first. Default: 600 seconds.
     #[serde(default = "default_safety_timeout_secs")]
     pub safety_timeout_secs: u64,
+    /// Default outer wrapper timeout (seconds) for any non-`agent` tool call.
+    /// Replaces the former hardcoded 120s in `pipeline::parallel`. Fast tools
+    /// finish well within this; a slow media tool that proxies to a backend
+    /// with its own longer cap should use `tool_timeout_overrides` rather than
+    /// raising this globally. Default: 120 seconds.
+    #[serde(default = "default_tool_timeout_secs")]
+    pub default_tool_timeout_secs: u64,
+    /// Per-tool outer-timeout overrides (tool name → seconds). Lets a slow
+    /// media tool (e.g. `generate_image`, which proxies to ComfyUI with its
+    /// own ~400s cap) exceed `default_tool_timeout_secs` without blunt-raising
+    /// every tool. Set the override strictly larger than the backend's own
+    /// timeout so the backend fails first. Empty by default.
+    #[serde(default)]
+    pub tool_timeout_overrides: HashMap<String, u64>,
 }
 
 fn default_message_wait_for_idle_secs() -> u64 {
@@ -233,6 +247,9 @@ fn default_message_result_secs() -> u64 {
 fn default_safety_timeout_secs() -> u64 {
     600
 }
+fn default_tool_timeout_secs() -> u64 {
+    120
+}
 
 impl Default for AgentToolConfig {
     fn default() -> Self {
@@ -240,6 +257,8 @@ impl Default for AgentToolConfig {
             message_wait_for_idle_secs: default_message_wait_for_idle_secs(),
             message_result_secs: default_message_result_secs(),
             safety_timeout_secs: default_safety_timeout_secs(),
+            default_tool_timeout_secs: default_tool_timeout_secs(),
+            tool_timeout_overrides: HashMap::new(),
         }
     }
 }
@@ -254,6 +273,15 @@ impl AgentToolConfig {
             > self
                 .message_wait_for_idle_secs
                 .saturating_add(self.message_result_secs)
+    }
+
+    /// Resolve the outer wrapper timeout (seconds) for a non-`agent` tool:
+    /// the per-tool override if present, else `default_tool_timeout_secs`.
+    pub fn tool_timeout_secs(&self, tool_name: &str) -> u64 {
+        self.tool_timeout_overrides
+            .get(tool_name)
+            .copied()
+            .unwrap_or(self.default_tool_timeout_secs)
     }
 
     /// Emit a `tracing::warn` if the invariant is violated. Called from
@@ -3500,6 +3528,8 @@ message_result_secs = 900
             message_wait_for_idle_secs: 100,
             message_result_secs: 500,
             safety_timeout_secs: 300, // less than 100 + 500 = 600
+            default_tool_timeout_secs: 120,
+            tool_timeout_overrides: HashMap::new(),
         };
         assert!(!cfg.invariant_holds());
         cfg.warn_if_invariant_violated(); // must not panic
@@ -3694,6 +3724,39 @@ model = "gpt-4o"
     }
 
     // ── GlobalToolDispatcherConfig parsing ──
+
+    #[test]
+    fn tool_timeout_secs_uses_override_then_default() {
+        let mut cfg = AgentToolConfig::default();
+        assert_eq!(cfg.default_tool_timeout_secs, 120);
+        // No override → default.
+        assert_eq!(cfg.tool_timeout_secs("generate_image"), 120);
+        assert_eq!(cfg.tool_timeout_secs("web_fetch"), 120);
+        // Override wins only for the named tool.
+        cfg.tool_timeout_overrides
+            .insert("generate_image".to_string(), 450);
+        assert_eq!(cfg.tool_timeout_secs("generate_image"), 450);
+        assert_eq!(cfg.tool_timeout_secs("web_fetch"), 120);
+    }
+
+    #[test]
+    fn agent_tool_timeout_overrides_parse_from_toml() {
+        let cfg: AppConfig = toml::from_str(
+            r#"
+            [gateway]
+            listen = "0.0.0.0:18789"
+            [database]
+            url = "postgres://localhost/test"
+            [agent_tool]
+            default_tool_timeout_secs = 120
+            [agent_tool.tool_timeout_overrides]
+            generate_image = 450
+            "#,
+        )
+        .expect("config with tool_timeout_overrides parses");
+        assert_eq!(cfg.agent_tool.tool_timeout_secs("generate_image"), 450);
+        assert_eq!(cfg.agent_tool.tool_timeout_secs("memory"), 120);
+    }
 
     #[test]
     fn global_tool_dispatcher_defaults_empty_and_parses() {
