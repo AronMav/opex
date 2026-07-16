@@ -10,6 +10,8 @@ import { qk } from "@/lib/queries";
 import { saveLastSession, getLastSessionId } from "../../chat-persistence";
 import { isActivePhase } from "../../chat-types";
 import { selectIsReplayingHistory } from "../../chat-selectors";
+import { getTranslations } from "@/i18n";
+import { useLanguageStore } from "@/stores/language-store";
 
 export function createNavigationActions(deps: ActionDeps) {
   const { get, set, queryClient, renderer } = deps;
@@ -63,9 +65,10 @@ export function createNavigationActions(deps: ActionDeps) {
           const s = draft.agents[prev];
           if (s) s.pendingMessage = null;
         });
-        void import("sonner").then(({ toast }) =>
-          toast.info("Сообщение из очереди отменено — вы сменили агента"),
-        );
+        void import("sonner").then(({ toast }) => {
+          const translations = getTranslations(useLanguageStore.getState().locale);
+          toast.info(translations["chat.queue_discarded_agent_changed"]);
+        });
       }
 
       // MEM-01: clean up all Maps for previous agent.

@@ -1189,6 +1189,7 @@
   "chat.cancel_queue": "Cancel queue",
   "chat.queue_prefix": "Queued: \"{{content}}\"",
   "chat.queue_discarded_context_changed": "Queued message discarded — context changed",
+  "chat.queue_discarded_agent_changed": "Queued message discarded — you switched agents",
   "chat.search_messages": "Search messages...",
   "chat.search_prev": "Previous result",
   "chat.search_next": "Next result",

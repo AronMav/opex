@@ -170,6 +170,50 @@ describe("processSSEStream", () => {
     expect(text).toBe("resumed text");
   });
 
+  it("Fix H: syncs a null-stamped pendingMessage.sessionId to the newly-assigned session id (new-chat case)", async () => {
+    // A message queued during the "submitted" window of a brand-new chat is
+    // stamped sessionId: null (queueMessage reads activeSessionId, which is
+    // still null pre-first-byte). Once data-session-id arrives with the
+    // turn's real session id, the pending stamp must be updated in the SAME
+    // atomic write so ChatThread's drain-effect stamp check (sessionId must
+    // equal activeSessionId) sees a match instead of false-discarding it.
+    const session = streamSessionManager.start("Arty");
+    useChatStore.setState((draft: any) => {
+      draft.agents.Arty.pendingMessage = { content: "queued before session id", sessionId: null, agent: "Arty" };
+    });
+    const frames = [
+      `data: ${JSON.stringify({ type: "data-session-id", data: { sessionId: "s1" } })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      callbacks: makeCallbacks(),
+    });
+    const state = useChatStore.getState().agents.Arty;
+    expect(state.activeSessionId).toBe("s1");
+    expect(state.pendingMessage?.sessionId).toBe("s1");
+  });
+
+  it("Fix H: does NOT touch a pendingMessage already stamped with a concrete sessionId (genuine later switch)", async () => {
+    // A message queued while resumed into an EXISTING session (S0) must keep
+    // its S0 stamp even if this stream's data-session-id reports a different
+    // session — that's a real context mismatch the drain effect must still
+    // catch, not a same-turn assignment to sync.
+    const session = streamSessionManager.start("Arty");
+    useChatStore.setState((draft: any) => {
+      draft.agents.Arty.pendingMessage = { content: "queued for S0", sessionId: "S0", agent: "Arty" };
+    });
+    const frames = [
+      `data: ${JSON.stringify({ type: "data-session-id", data: { sessionId: "s1" } })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      callbacks: makeCallbacks(),
+    });
+    const state = useChatStore.getState().agents.Arty;
+    expect(state.activeSessionId).toBe("s1");
+    expect(state.pendingMessage?.sessionId).toBe("S0");
+  });
+
   it("BUG-C: connectionPhase stays error after finish when sync error preceded it", async () => {
     const session = streamSessionManager.start("Arty");
     const frames = [

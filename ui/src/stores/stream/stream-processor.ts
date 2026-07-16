@@ -182,9 +182,22 @@ export async function processSSEStream(
                 }
               });
               const contextLimit = event.data.contextLimit;
-              session.write({
-                activeSessionId: sid,
-                ...(contextLimit != null && { modelContextLimit: contextLimit }),
+              session.writeDraft((agentDraft: AgentState) => {
+                agentDraft.activeSessionId = sid;
+                if (contextLimit != null) agentDraft.modelContextLimit = contextLimit;
+                // Fix H (new-chat case): a message queued (F085) BEFORE this turn's
+                // session id was known is stamped `pendingMessage.sessionId = null`
+                // (see queueMessage). Now that the turn's real session id has
+                // arrived, sync the stamp to it — same-turn session assignment,
+                // not a context switch — so ChatThread's drain-effect stamp check
+                // (sessionId must match activeSessionId) sees a match instead of
+                // false-discarding the queued message. A pending item already
+                // stamped with a concrete sessionId (queued while resumed into an
+                // existing session) is left untouched: that's a genuine
+                // later-switch case the drain effect must still catch.
+                if (agentDraft.pendingMessage && agentDraft.pendingMessage.sessionId == null) {
+                  agentDraft.pendingMessage.sessionId = sid;
+                }
               });
               // Persist so the value survives page refresh (restored on agent init).
               if (contextLimit != null) {
