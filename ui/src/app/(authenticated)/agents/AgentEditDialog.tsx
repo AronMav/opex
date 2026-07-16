@@ -202,14 +202,23 @@ const AGENT_TABS: { id: AgentTab; icon: React.ComponentType<{ className?: string
  *  invariants (soul-layer design spec §validation). Pure so it's unit-testable
  *  without mounting the dialog. */
 export function soulGating(
-  form: { soulEnabled: boolean; driftEnabled: boolean; initiativeDailyPlan: boolean },
+  form: {
+    soulEnabled: boolean;
+    driftEnabled: boolean;
+    initiativeDailyPlan: boolean;
+    initiativeTokenBudget: string;
+    hbEnabled: boolean;
+  },
   editingBase: boolean,
 ) {
   return {
     emotionDisabled: !form.soulEnabled,
     driftCorrectDisabled: !form.driftEnabled,
-    autoApproveDisabled: !form.initiativeDailyPlan,
     initiativeDisabled: editingBase,
+    // M2: server rejects daily_plan without a configured heartbeat.
+    dailyPlanDisabled: editingBase || !form.hbEnabled,
+    // M1: server requires daily_token_budget > 0 when auto_approve is on.
+    autoApproveDisabled: !form.initiativeDailyPlan || !(parseInt(form.initiativeTokenBudget) > 0),
   };
 }
 
@@ -699,11 +708,11 @@ export function AgentEditDialog({
                       </AdvancedSection>
                     </SwitchSection>
 
-                    <SwitchSection title={t("agents.section_initiative")} enabled={form.initiativeEnabled} onToggle={(v) => upd({ initiativeEnabled: v })}>
-                      {g.initiativeDisabled && <p className="text-xs text-warning">{t("agents.initiative_non_base_note")}</p>}
+                    {g.initiativeDisabled && <p className="text-xs text-warning">{t("agents.initiative_non_base_note")}</p>}
+                    <SwitchSection title={t("agents.section_initiative")} enabled={form.initiativeEnabled} disabled={g.initiativeDisabled} onToggle={(v) => upd({ initiativeEnabled: v })}>
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-medium text-muted-foreground">{t("agents.initiative_daily_plan")}</span>
-                        <Switch checked={form.initiativeDailyPlan} disabled={g.initiativeDisabled} onCheckedChange={(v) => upd({ initiativeDailyPlan: v })} className="data-[state=checked]:bg-primary" />
+                        <Switch checked={form.initiativeDailyPlan} disabled={g.dailyPlanDisabled} onCheckedChange={(v) => upd({ initiativeDailyPlan: v })} className="data-[state=checked]:bg-primary" />
                       </div>
                       <p className="text-xs text-muted-foreground">{t("agents.initiative_daily_plan_hint")}</p>
                       <div className="flex items-center justify-between">
@@ -724,12 +733,13 @@ export function AgentEditDialog({
                       </AdvancedSection>
                     </SwitchSection>
 
+                    {g.emotionDisabled && <p className="text-xs text-warning">{t("agents.emotion_requires_soul_note")}</p>}
                     <SwitchSection
                       title={t("agents.section_emotion")}
                       enabled={form.emotionEnabled}
-                      onToggle={(v) => { if (v && g.emotionDisabled) return; upd({ emotionEnabled: v }); }}
+                      disabled={g.emotionDisabled}
+                      onToggle={(v) => upd({ emotionEnabled: v })}
                     >
-                      {g.emotionDisabled && <p className="text-xs text-warning">{t("agents.emotion_requires_soul_note")}</p>}
                       <AdvancedSection label={t("common.advanced")}>
                         <Field label={t("agents.emotion_k")} labelClassName="text-xs">
                           <Input type="number" step="0.1" min={0} max={5} className="bg-background border-border font-mono text-sm h-8" value={form.emotionK} onChange={(e) => upd({ emotionK: e.target.value })} />
@@ -892,11 +902,13 @@ function SwitchSection({
   title,
   enabled,
   onToggle,
+  disabled = false,
   children,
 }: {
   title: string;
   enabled: boolean;
   onToggle: (v: boolean) => void;
+  disabled?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -908,6 +920,7 @@ function SwitchSection({
         <Switch
           checked={enabled}
           onCheckedChange={onToggle}
+          disabled={disabled}
           className="data-[state=checked]:bg-primary"
         />
       </div>

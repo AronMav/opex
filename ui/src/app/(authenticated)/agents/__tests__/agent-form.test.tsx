@@ -418,9 +418,53 @@ describe("AgentEditDialog UI", () => {
 
 describe("soulGating", () => {
   it("gates soul cross-fields", () => {
-    expect(soulGating({ soulEnabled: false, driftEnabled: false, initiativeDailyPlan: false }, false))
-      .toEqual({ emotionDisabled: true, driftCorrectDisabled: true, autoApproveDisabled: true, initiativeDisabled: false });
-    expect(soulGating({ soulEnabled: true, driftEnabled: true, initiativeDailyPlan: true }, true))
-      .toEqual({ emotionDisabled: false, driftCorrectDisabled: false, autoApproveDisabled: false, initiativeDisabled: true });
+    expect(soulGating(
+      { soulEnabled: false, driftEnabled: false, initiativeDailyPlan: false, initiativeTokenBudget: "0", hbEnabled: false },
+      false,
+    )).toEqual({
+      emotionDisabled: true,
+      driftCorrectDisabled: true,
+      autoApproveDisabled: true,
+      initiativeDisabled: false,
+      dailyPlanDisabled: true,
+    });
+    expect(soulGating(
+      { soulEnabled: true, driftEnabled: true, initiativeDailyPlan: true, initiativeTokenBudget: "5000", hbEnabled: true },
+      true,
+    )).toEqual({
+      emotionDisabled: false,
+      driftCorrectDisabled: false,
+      autoApproveDisabled: false,
+      initiativeDisabled: true,
+      dailyPlanDisabled: true,
+    });
+  });
+
+  it("dailyPlanDisabled requires a configured heartbeat even for non-base agents (M2)", () => {
+    const g = soulGating(
+      { soulEnabled: true, driftEnabled: true, initiativeDailyPlan: false, initiativeTokenBudget: "5000", hbEnabled: false },
+      false,
+    );
+    expect(g.dailyPlanDisabled).toBe(true);
+
+    const g2 = soulGating(
+      { soulEnabled: true, driftEnabled: true, initiativeDailyPlan: false, initiativeTokenBudget: "5000", hbEnabled: true },
+      false,
+    );
+    expect(g2.dailyPlanDisabled).toBe(false);
+  });
+
+  it("autoApproveDisabled requires a positive daily_token_budget even when daily_plan is on (M1)", () => {
+    const zeroBudget = soulGating(
+      { soulEnabled: true, driftEnabled: true, initiativeDailyPlan: true, initiativeTokenBudget: "0", hbEnabled: true },
+      false,
+    );
+    expect(zeroBudget.autoApproveDisabled).toBe(true);
+
+    const positiveBudget = soulGating(
+      { soulEnabled: true, driftEnabled: true, initiativeDailyPlan: true, initiativeTokenBudget: "500", hbEnabled: true },
+      false,
+    );
+    expect(positiveBudget.autoApproveDisabled).toBe(false);
   });
 });

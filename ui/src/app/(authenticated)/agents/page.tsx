@@ -324,7 +324,11 @@ export function formToPayload(f: FormState) {
     soul: {
       enabled: f.soulEnabled,
       reflection_threshold: parseFloat(f.soulReflectionThreshold) || 150,
-      reflection_cooldown_minutes: parseInt(f.soulCooldownMin) || 60,
+      // M4: preserve an explicit 0 (server accepts 0..=1440) instead of
+      // falling back to the default via `|| 60`, which would clobber it.
+      reflection_cooldown_minutes: f.soulCooldownMin.trim() === ""
+        ? 60
+        : (Number.isFinite(parseInt(f.soulCooldownMin)) ? parseInt(f.soulCooldownMin) : 60),
       context_top_k: parseInt(f.soulTopK) || 6,
       context_budget_tokens: parseInt(f.soulBudgetTokens) || 800,
       max_events_per_session: parseInt(f.soulMaxEvents) || 10,
