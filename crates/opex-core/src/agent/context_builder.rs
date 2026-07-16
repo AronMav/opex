@@ -8,6 +8,10 @@ use opex_types::{IncomingMessage, Message, ToolDefinition};
 use std::sync::Weak;
 use uuid::Uuid;
 
+/// Process-wide guard: warn at most once per process about `always_core`
+/// names that match no tool in the assembled universe (F3).
+static ALWAYS_CORE_WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 /// Estimate-only per-category context-size breakdown (T17 triage — hermes
@@ -710,6 +714,23 @@ impl ContextBuilder for DefaultContextBuilder {
                     deps.agent_core_extra().iter().cloned().collect();
 
                 let always_core = deps.dispatcher_always_core();
+
+                // F3: warn once per process about always_core names that match
+                // no tool in the assembled universe (typo / absent tool).
+                if !always_core.is_empty() && ALWAYS_CORE_WARNED.get().is_none() {
+                    let known: std::collections::HashSet<String> =
+                        all_tools.iter().map(|t| t.name.clone()).collect();
+                    let missing = unmatched_always_core(always_core, &known);
+                    if !missing.is_empty() {
+                        tracing::warn!(
+                            missing = ?missing,
+                            "[tool_dispatcher] always_core names not found in any tool source \
+                             (typo or tool absent) — they will never be promoted"
+                        );
+                    }
+                    let _ = ALWAYS_CORE_WARNED.set(());
+                }
+
                 all_tools.retain(|t| {
                     keep_in_native_partition(&t.name, &core_names, &core_extra, always_core)
                 });
@@ -848,6 +869,15 @@ fn keep_in_native_partition(
     core_names.contains(name)
         || core_extra.contains(name)
         || always_core.iter().any(|n| n == name)
+}
+
+/// `always_core` names that match no tool in `known` (the assembled tool
+/// universe). Used to warn the operator about typos / absent tools.
+fn unmatched_always_core(
+    configured: &[String],
+    known: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    configured.iter().filter(|n| !known.contains(*n)).cloned().collect()
 }
 
 /// Strip `<minimax:tool_call>…</minimax:tool_call>` blocks from a string.
@@ -1288,6 +1318,17 @@ mod tests {
         assert!(super::keep_in_native_partition("sequentialthinking", &core, &core_extra, &always));
         // unrelated extension dropped
         assert!(!super::keep_in_native_partition("brave_search", &core, &core_extra, &always));
+    }
+
+    #[test]
+    fn unmatched_always_core_reports_typos() {
+        use std::collections::HashSet;
+        let known: HashSet<String> = ["sequentialthinking".to_string()].into_iter().collect();
+        let configured = vec!["sequentialthinking".to_string(), "sequentialthinkng".to_string()];
+        assert_eq!(
+            super::unmatched_always_core(&configured, &known),
+            vec!["sequentialthinkng".to_string()],
+        );
     }
 
 }
