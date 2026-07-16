@@ -330,7 +330,12 @@ export function SearchPalette() {
           {rows.length === 0 && !loading && (
             <p className="py-8 text-center text-sm text-muted-foreground-subtle">{t("palette.empty")}</p>
           )}
-          {!result && bookmarks.length > 0 && (
+          {/* The empty-query gate keeps this render in lockstep with `rows`
+              (which only folds bookmarks in while the query is empty).
+              Without it, favourites rendered WHILE TYPING (query non-empty,
+              result not yet landed) — mouse-clickable but absent from `rows`,
+              i.e. keyboard-unreachable, and stacked under palette.empty. */}
+          {!result && query.trim().length === 0 && bookmarks.length > 0 && (
             <div className="mb-2">
               <h4 className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground-subtle">
                 {t("palette.favourites")}

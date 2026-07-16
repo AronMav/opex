@@ -272,6 +272,27 @@ describe("SearchPalette — Favourites section (T7)", () => {
     expect(screen.queryByText("palette.favourites")).not.toBeInTheDocument();
   });
 
+  it("hides the favourites section as soon as a query is being typed (1 char, below search threshold)", async () => {
+    render(<SearchPalette />);
+    await flush();
+    expect(screen.getByText("palette.favourites")).toBeInTheDocument();
+
+    // One character: below MIN_QUERY_LEN so no search fires and `result`
+    // stays null — the residual-review case where favourites used to linger
+    // (mouse-clickable but keyboard-unreachable, stacked under palette.empty).
+    fireEvent.change(screen.getByPlaceholderText("palette.placeholder"), { target: { value: "a" } });
+
+    expect(screen.queryByText("palette.favourites")).not.toBeInTheDocument();
+    expect(screen.queryByText("Session A")).not.toBeInTheDocument();
+    // rows is now empty → the single empty state renders alone (consistent).
+    expect(screen.getByText("palette.empty")).toBeInTheDocument();
+
+    // Clearing the query brings favourites straight back (still in state).
+    fireEvent.change(screen.getByPlaceholderText("palette.placeholder"), { target: { value: "" } });
+    expect(screen.getByText("palette.favourites")).toBeInTheDocument();
+    expect(screen.queryByText("palette.empty")).not.toBeInTheDocument();
+  });
+
   it("clicking a favourite verifies the session, then setTarget + navigates", async () => {
     mockApiFetchRaw.mockResolvedValue({ ok: true, status: 200 });
     render(<SearchPalette />);
