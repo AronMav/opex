@@ -139,7 +139,7 @@ Show 3–5 prompts as named style options. For each:
 
 ```
 **Option 1 — Cinematic Neon Noir**
-A lone figure walks through rain-slicked streets, neon reflections on wet asphalt, dramatic side lighting, photorealistic, ultra-detailed, shallow depth of field, no text
+A lone figure walks through rain-slicked streets, neon reflections on wet asphalt, dramatic side lighting, photorealistic, ultra-detailed, shallow depth of field, sharp focus
 ```
 
 Offer to preview at draft quality before committing.
@@ -176,13 +176,13 @@ After showing the result:
 - **Always write in English** — the model (a local Flux-family model via ComfyUI) understands English best. Translate the user's request yourself.
 - **Specific > abstract** — "a red sports car parked in front of a modern glass building at dusk" beats "beautiful car".
 - **Always specify style** — without an explicit style the result is unpredictable. If the user didn't specify, pick one (photorealistic for realistic scenes, digital art for game/fantasy content).
-- **50–100 words optimal** — longer prompts get partially ignored by most providers.
-- **End with negatives** — `no text, no watermark, no blur, no extra limbs`.
+- **50–100 words optimal** — longer prompts get partially ignored.
+- **No negative phrases** — this model runs at **cfg 1.0 with a zeroed-out negative**, so it *ignores* negative prompts entirely. Worse, naming an unwanted thing in the prompt (`no text`, `no watermark`) tends to make it *appear*. Describe only what you WANT. To suppress clutter, phrase it positively: `clean minimal background`, `sharp focus`, `smooth skin` — never `no clutter` / `no blur`.
 
 ### Prompt Structure
 
 ```
-[Subject] [Action/Pose], [Setting/Background], [Style], [Lighting], [Color palette], [Camera/Composition], [What to avoid]
+[Subject] [Action/Pose], [Setting/Background], [Style], [Lighting], [Color palette], [Camera/Composition]
 ```
 
 **Elements to include as needed:**
@@ -192,14 +192,14 @@ After showing the result:
 - **Lighting** — `golden hour light`, `soft studio lighting`, `dramatic side lighting`, `neon glow`, `overcast daylight`
 - **Composition** — `close-up portrait`, `wide establishing shot`, `bird's eye view`, `rule of thirds`, `centered symmetry`
 - **Color palette** — `warm earth tones`, `cool blues and purples`, `monochrome`, `vibrant saturated colors`
-- **Negative hints** — `no text`, `no watermark`, `no blur`, `no extra limbs`
+- **Cleanliness (positive form)** — `clean background`, `sharp focus`, `flawless detail` — not `no clutter` / `no blur`
 
 **Good prompt example:**
 ```
 A lone astronaut standing on the surface of Mars, looking at Earth rising above the horizon,
 photorealistic, dramatic cinematic lighting, orange-red dust and rocks in foreground,
 deep blue Earth in distance, ultra-detailed spacesuit, wide establishing shot,
-volumetric atmosphere, no text, no watermark
+volumetric atmosphere, sharp focus
 ```
 
 ---
@@ -221,7 +221,7 @@ Minimalist flat logo design for [concept], simple geometric shapes,
 **Story illustration:**
 ```
 Illustration for a story about [topic], [mood] atmosphere, [style],
-[key visual elements from the text], no text overlay
+[key visual elements from the text], clean composition
 ```
 
 **Product / UI concept art:**
