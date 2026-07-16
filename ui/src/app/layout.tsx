@@ -4,6 +4,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { LanguageSync } from "@/components/language-sync";
+import { SearchPalette } from "@/components/chat/SearchPalette";
 import "./globals.css";
 
 const nunito = Nunito({
@@ -54,6 +55,7 @@ export default function RootLayout({
             {children}
           </TooltipProvider>
           <Toaster position="top-center" />
+          <SearchPalette />
           <LanguageSync />
         </ThemeProvider>
       </body>

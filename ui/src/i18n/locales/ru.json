@@ -314,6 +314,7 @@
   "chat.shortcut_newline": "Новая строка",
   "chat.shortcut_new_chat": "Новый чат",
   "chat.shortcut_search": "Поиск сообщений",
+  "chat.shortcut_palette": "Поиск по всем сессиям",
   "chat.shortcut_focus": "Фокус на ввод",
   "chat.shortcut_stop": "Остановить генерацию",
   "chat.shortcut_help": "Показать горячие клавиши",
@@ -1356,5 +1357,12 @@
   "profiles.slot_tts": "TTS",
   "profiles.slot_vision": "Зрение",
   "profiles.slot_imagegen": "Генерация изображений",
-  "profiles.slot_websearch": "Веб-поиск"
+  "profiles.slot_websearch": "Веб-поиск",
+
+  "palette.placeholder": "Поиск по сообщениям и сессиям...",
+  "palette.sessions": "Сессии",
+  "palette.messages": "Сообщения",
+  "palette.all_agents": "Искать по всем агентам",
+  "palette.empty": "Ничего не найдено",
+  "palette.loading": "Идёт поиск..."
 }

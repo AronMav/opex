@@ -314,6 +314,7 @@
   "chat.shortcut_newline": "New line",
   "chat.shortcut_new_chat": "New chat",
   "chat.shortcut_search": "Search messages",
+  "chat.shortcut_palette": "Search all sessions",
   "chat.shortcut_focus": "Focus input",
   "chat.shortcut_stop": "Stop generation",
   "chat.shortcut_help": "Show shortcuts",
@@ -1356,5 +1357,12 @@
   "profiles.slot_tts": "TTS",
   "profiles.slot_vision": "Vision",
   "profiles.slot_imagegen": "Image generation",
-  "profiles.slot_websearch": "Web search"
+  "profiles.slot_websearch": "Web search",
+
+  "palette.placeholder": "Search messages and sessions...",
+  "palette.sessions": "Sessions",
+  "palette.messages": "Messages",
+  "palette.all_agents": "Search all agents",
+  "palette.empty": "No results",
+  "palette.loading": "Searching..."
 }

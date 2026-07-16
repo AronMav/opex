@@ -595,3 +595,37 @@ export interface HandlerAllowlistRow {
   action_ref: string;
   enabled: boolean;
 }
+
+// ── Search palette (Ctrl+K) ──────────────────────────────────────────────────
+// GET /api/sessions/search?q=&agent=|all=true&limit= — see
+// crates/opex-core/src/gateway/handlers/sessions.rs::api_search_sessions
+
+/** A message-level FTS hit. `snippet` carries `<b>`/`</b>` markers around the
+ *  matched terms — render by splitting on the markers, NEVER dangerouslySetInnerHTML. */
+export interface SearchMessageHit {
+  message_id: string;
+  content: string;
+  session_id: string;
+  session_title: string | null;
+  agent_id: string;
+  user_id: string | null;
+  channel: string | null;
+  role: string;
+  created_at: string;
+  rank: number;
+  snippet: string;
+}
+
+/** A session-title FTS hit. */
+export interface SearchSessionHit {
+  session_id: string;
+  title: string | null;
+  agent_id: string;
+  last_message_at: string;
+}
+
+export interface SearchResponse {
+  messages: SearchMessageHit[];
+  sessions: SearchSessionHit[];
+  count: number;
+}

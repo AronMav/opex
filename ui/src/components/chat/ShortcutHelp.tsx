@@ -25,6 +25,7 @@ const SHORTCUT_GROUPS: Array<{
       { keys: ["Shift", "Enter"], descKey: "chat.shortcut_newline" as TranslationKey },
       { keys: ["Ctrl", "Shift", "N"], descKey: "chat.shortcut_new_chat" as TranslationKey },
       { keys: ["Ctrl", "Shift", "F"], descKey: "chat.shortcut_search" as TranslationKey },
+      { keys: ["Ctrl", "K"], descKey: "chat.shortcut_palette" as TranslationKey },
       { keys: ["/"], descKey: "chat.shortcut_focus" as TranslationKey },
       { keys: ["Escape"], descKey: "chat.shortcut_stop" as TranslationKey },
       { keys: ["Ctrl", "/"], descKey: "chat.shortcut_help" as TranslationKey },
