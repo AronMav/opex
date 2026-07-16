@@ -338,4 +338,42 @@ mod tests {
         assert_eq!(sub.events.len(), 10_000);
         assert!(sub.truncated);
     }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn overflow_compacts_text_deltas(pool: sqlx::PgPool) {
+        let registry = StreamRegistry::new(pool);
+        let sid = Uuid::new_v4();
+        sqlx::query("INSERT INTO sessions (id, agent_id, user_id, channel) VALUES ($1, 'A', 'u', 'ui')")
+            .bind(sid)
+            .execute(registry.db())
+            .await
+            .expect("seed session");
+        registry
+            .register_with_token(sid, "A", CancellationToken::new(), Uuid::new_v4())
+            .await
+            .unwrap();
+        let key = sid.to_string();
+        let total: u64 = 10_000 + 500;
+        for i in 0..total {
+            registry
+                .push_event(&key, &format!("{{\"type\":\"text-delta\",\"id\":\"t1\",\"delta\":\"x{i};\"}}"))
+                .await;
+        }
+        let sub = registry.subscribe(&key).await.unwrap();
+        // Компакция должна была ужать буфер — replay полный, без truncated.
+        assert!(!sub.truncated, "delta stream must compact, not truncate");
+        assert!(sub.events.len() < MAX_BUFFER_SIZE);
+        // seq строго монотонен и последний seq сохранён.
+        assert!(sub.events.windows(2).all(|w| w[0].0 < w[1].0));
+        assert_eq!(sub.events.last().unwrap().0, total - 1);
+        // Семантическая полнота: конкатенация всех delta == исходный текст.
+        let mut concat = String::new();
+        for (_, json) in &sub.events {
+            let v: serde_json::Value = serde_json::from_str(json).unwrap();
+            assert_eq!(v["type"], "text-delta");
+            concat.push_str(v["delta"].as_str().unwrap());
+        }
+        let expected: String = (0..total).map(|i| format!("x{i};")).collect();
+        assert_eq!(concat, expected);
+    }
 }
