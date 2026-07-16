@@ -89,7 +89,26 @@ impl SkillDef {
         let yaml_str = rest[..close].trim();
         let body = rest[close + 4..].trim_start().to_string();
 
-        let meta: SkillFrontmatter = serde_yaml::from_str(yaml_str).ok()?;
+        let meta: SkillFrontmatter = match serde_yaml::from_str(yaml_str) {
+            Ok(meta) => meta,
+            Err(err) => {
+                // Agent/LLM-authored frontmatter routinely contains prose with
+                // `: ` (colon-space) or `#` inside unquoted scalar values, which
+                // strict YAML rejects ("mapping values are not allowed here").
+                // Rather than silently dropping the whole skill, fall back to a
+                // tolerant line-based parser for this flat, known schema.
+                match parse_frontmatter_lenient(yaml_str) {
+                    Some(meta) => {
+                        tracing::debug!(
+                            error = %err,
+                            "skill frontmatter: strict YAML failed, recovered via lenient parser"
+                        );
+                        meta
+                    }
+                    None => return None,
+                }
+            }
+        };
         if meta.name.is_empty() {
             return None;
         }
@@ -100,6 +119,100 @@ impl SkillDef {
         })
     }
 
+}
+
+/// Tolerant, line-based frontmatter parser used only as a fallback when strict
+/// YAML parsing fails. The skill frontmatter schema is flat and fixed, so we can
+/// recover the common failure mode where an agent-authored scalar value (e.g.
+/// `description`) or list item contains characters a strict YAML plain scalar
+/// disallows — most notably `: ` (colon-space). Splitting each `key: value` line
+/// on its *first* colon keeps any subsequent colons as part of the value.
+///
+/// Returns `None` when even this lenient pass can't recover a usable skill
+/// (i.e. no `name`), so genuinely-broken files are still rejected.
+// reviewed: quote-strip slices are guarded by ASCII-quote byte checks — char boundaries
+#[allow(clippy::string_slice)]
+fn parse_frontmatter_lenient(yaml_str: &str) -> Option<SkillFrontmatter> {
+    fn unquote(s: &str) -> String {
+        let bytes = s.as_bytes();
+        if bytes.len() >= 2 {
+            let (first, last) = (bytes[0], bytes[bytes.len() - 1]);
+            if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+                return s[1..s.len() - 1].to_string();
+            }
+        }
+        s.to_string()
+    }
+
+    let mut meta = SkillFrontmatter::default();
+    let mut saw_name = false;
+    // Which list the most recent `key:` header opened (triggers / tools_required).
+    let mut list_key: Option<&'static str> = None;
+
+    for line in yaml_str.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        // List item belonging to the last-seen list header.
+        if let Some(rest) = trimmed.strip_prefix('-') {
+            let item = unquote(rest.trim());
+            if item.is_empty() {
+                continue;
+            }
+            match list_key {
+                Some("triggers") => meta.triggers.push(item),
+                Some("tools_required") => meta.tools_required.push(item),
+                _ => {}
+            }
+            continue;
+        }
+
+        // `key: value` — split on the FIRST colon so `: ` inside the value stays.
+        let Some(colon) = line.find(':') else { continue };
+        let key = line[..colon].trim();
+        let value = unquote(line[colon + 1..].trim());
+
+        // Any new top-level key ends the previous list context.
+        list_key = None;
+
+        match key {
+            "name" => {
+                meta.name = value;
+                saw_name = true;
+            }
+            "description" => meta.description = value,
+            "priority" => {
+                if let Ok(p) = value.parse::<i32>() {
+                    meta.priority = p;
+                }
+            }
+            "state" => {
+                meta.state = match value.to_ascii_lowercase().as_str() {
+                    "stale" => SkillState::Stale,
+                    "archived" => SkillState::Archived,
+                    _ => SkillState::Active,
+                };
+            }
+            "last_used_at" => {
+                meta.last_used_at = if value.is_empty() || value == "null" || value == "~" {
+                    None
+                } else {
+                    Some(value)
+                };
+            }
+            "pinned" => meta.pinned = value.parse::<bool>().ok(),
+            "triggers" => list_key = Some("triggers"),
+            "tools_required" => list_key = Some("tools_required"),
+            _ => {}
+        }
+    }
+
+    if !saw_name || meta.name.is_empty() {
+        return None;
+    }
+    Some(meta)
 }
 
 // ── Loader ────────────────────────────────────────────────────────────────────
@@ -611,6 +724,60 @@ mod tests {
         let skill = SkillDef::parse(content).unwrap();
         assert_eq!(skill.meta.state, SkillState::Archived);
         assert!(skill.meta.last_used_at.is_some());
+    }
+
+    // ── Lenient fallback for agent-authored frontmatter ───────────────────────
+    // Regression: a real skill (`its-search`) was silently dropped on every
+    // skill-load pass because its `description` contained `: ` (colon-space)
+    // inside an unquoted YAML plain scalar — "Двухтактный цикл: search → read".
+    // Strict serde_yaml rejects that ("mapping values are not allowed here"),
+    // and `parse` swallowed the error via `.ok()?`, so the skill vanished.
+
+    #[test]
+    fn parse_description_with_colon_space_recovers_via_lenient() {
+        let content = "---\n\
+name: its-search\n\
+description: Базовый паттерн поиска и чтения документации 1С на ИТС (its.1c.ru) через инструмент its. Двухтактный цикл: search → read, с фильтрацией результатов и верификацией найденного.\n\
+triggers:\n\
+  - найди на ИТС\n\
+  - документация 1С\n\
+  - its.1c.ru\n\
+tools_required:\n\
+  - its\n\
+  - search_web\n\
+  - web_fetch\n\
+priority: 5\n\
+state: active\n\
+last_used_at: null\n\
+---\n\n# Поиск документации 1С на ИТС\n";
+        let skill = SkillDef::parse(content).expect("colon-in-description must not drop the skill");
+        assert_eq!(skill.meta.name, "its-search");
+        assert!(
+            skill.meta.description.contains("цикл: search → read"),
+            "description must be preserved verbatim, got: {}",
+            skill.meta.description
+        );
+        assert_eq!(skill.meta.triggers.len(), 3);
+        assert_eq!(skill.meta.triggers[0], "найди на ИТС");
+        assert_eq!(skill.meta.tools_required, vec!["its", "search_web", "web_fetch"]);
+        assert_eq!(skill.meta.priority, 5);
+        assert_eq!(skill.meta.state, SkillState::Active);
+        assert!(skill.meta.last_used_at.is_none());
+        assert!(skill.instructions.starts_with("# Поиск документации"));
+    }
+
+    #[test]
+    fn parse_trigger_with_colon_space_recovers_via_lenient() {
+        let content = "---\nname: t\ndescription: ok\ntriggers:\n  - when user says: help me\n  - normal trigger\n---\n\nBody.";
+        let skill = SkillDef::parse(content).expect("colon in a trigger item must not drop the skill");
+        assert_eq!(skill.meta.triggers, vec!["when user says: help me", "normal trigger"]);
+    }
+
+    #[test]
+    fn parse_lenient_still_requires_name() {
+        // Broken YAML (colon-space in value) AND no name → unrecoverable → None.
+        let content = "---\ndescription: broken value: with colon\ntriggers:\n  - x\n---\n\nBody.";
+        assert!(SkillDef::parse(content).is_none());
     }
 
     #[tokio::test]
