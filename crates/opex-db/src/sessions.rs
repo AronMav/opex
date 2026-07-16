@@ -698,6 +698,35 @@ pub async fn load_messages(
     Ok(rows)
 }
 
+/// Read a session's incremental-extraction watermark (created_at of the newest
+/// message already summarized). `None` = never extracted.
+pub async fn get_last_extracted_at(
+    db: &PgPool,
+    session_id: Uuid,
+) -> Result<Option<DateTime<Utc>>> {
+    let row: Option<(Option<DateTime<Utc>>,)> =
+        sqlx::query_as("SELECT last_extracted_at FROM sessions WHERE id = $1")
+            .bind(session_id)
+            .fetch_optional(db)
+            .await?;
+    Ok(row.and_then(|r| r.0))
+}
+
+/// Advance a session's incremental-extraction watermark. Called only after a
+/// successful extraction+save (spec §2.1).
+pub async fn set_last_extracted_at(
+    db: &PgPool,
+    session_id: Uuid,
+    ts: DateTime<Utc>,
+) -> Result<()> {
+    sqlx::query("UPDATE sessions SET last_extracted_at = $1 WHERE id = $2")
+        .bind(ts)
+        .bind(session_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 #[derive(Debug, serde::Serialize, sqlx::FromRow)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-gen", ts(export))]
@@ -2985,5 +3014,30 @@ mod get_session_run_status_tests {
         set_session_run_status(&pool, sid, "done").await.unwrap();
         let got = get_session_run_status(&pool, sid).await.unwrap();
         assert_eq!(got.as_deref(), Some("done"));
+    }
+}
+
+#[cfg(test)]
+mod last_extracted_at_tests {
+    use super::*;
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn last_extracted_at_roundtrips(pool: sqlx::PgPool) {
+        // A session row is required (FK / row must exist to UPDATE).
+        let sid = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO sessions (id, agent_id, status) VALUES ($1, 'A', 'done')")
+            .bind(sid)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // NULL initially.
+        assert!(get_last_extracted_at(&pool, sid).await.unwrap().is_none());
+
+        let ts = chrono::Utc::now();
+        set_last_extracted_at(&pool, sid, ts).await.unwrap();
+        let got = get_last_extracted_at(&pool, sid).await.unwrap().expect("some");
+        // Postgres timestamptz is microsecond precision — compare within 1ms.
+        assert!((got - ts).num_milliseconds().abs() <= 1, "roundtrip ts mismatch: {got} vs {ts}");
     }
 }
