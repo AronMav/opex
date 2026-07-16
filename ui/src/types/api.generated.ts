@@ -105,7 +105,7 @@ export type MemoryStatsDto = { total: number, total_chunks: number, pinned: numb
 
 export type MemoryTaskStatsDto = { pending: number, processing: number, done: number, failed: number, };
 
-export type MessageRow = { id: string, role: string, content: string, tool_calls: unknown, tool_call_id: string | null, created_at: string, agent_id: string | null, feedback: number | null, edited_at: string | null, status: string, thinking_blocks: unknown, parent_message_id: string | null, branch_from_message_id: string | null, abort_reason: string | null, is_mirror: boolean, };
+export type MessageRow = { id: string, role: string, content: string, tool_calls: unknown, tool_call_id: string | null, created_at: string, agent_id: string | null, feedback: number | null, edited_at: string | null, status: string, thinking_blocks: unknown, parent_message_id: string | null, branch_from_message_id: string | null, abort_reason: string | null, is_mirror: boolean, bookmarked_at: string | null, };
 
 export type Notification = { id: string, type: string, title: string, body: string, data: Record<string, unknown>, read: boolean, created_at: string, };
 

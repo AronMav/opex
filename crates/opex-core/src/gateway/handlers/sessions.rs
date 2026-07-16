@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json},
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -24,8 +24,10 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/shares/{token}", get(api_get_shared))
         .route("/api/sessions/{id}/invite", post(api_invite_to_session))
         .route("/api/sessions/{id}/messages", get(api_session_messages))
+        .route("/api/messages/bookmarked", get(api_list_bookmarked))
         .route("/api/messages/{id}", delete(api_delete_message))
         .route("/api/messages/{id}/feedback", post(api_message_feedback))
+        .route("/api/messages/{id}/bookmark", patch(api_toggle_bookmark))
         .route("/api/sessions/{id}/fork", post(api_fork_session))
         .route("/api/sessions/{id}/chain", get(api_session_chain))
         .route("/api/sessions/{id}/retry", post(api_retry_session))
@@ -732,6 +734,78 @@ pub(crate) async fn api_message_feedback(
 #[derive(Deserialize)]
 pub(crate) struct FeedbackRequest {
     feedback: i32, // 1 = like, -1 = dislike, 0 = clear
+}
+
+// ── Message bookmarks (wave 2) ──────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub(crate) struct BookmarkRequest {
+    bookmarked: bool,
+}
+
+/// PATCH /api/messages/{id}/bookmark?agent=xxx — set/clear a bookmark on a message.
+///
+/// Requires `?agent=<owner>` and JOINs through `sessions.agent_id` to prevent
+/// cross-agent bookmark writes (same IDOR-guard shape as `api_message_feedback`).
+pub(crate) async fn api_toggle_bookmark(
+    State(infra): State<InfraServices>,
+    Path(id): Path<uuid::Uuid>,
+    Query(q): Query<SessionsQuery>,
+    Json(body): Json<BookmarkRequest>,
+) -> impl IntoResponse {
+    let agent = match q.agent.as_deref() {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
+    match sessions::toggle_bookmark(&infra.db, id, agent, body.bookmarked).await {
+        Ok(n) if n > 0 => StatusCode::NO_CONTENT.into_response(),
+        Ok(_) => ApiError::NotFound("message not found or wrong agent".into()).into_response(),
+        Err(e) => ApiError::Internal(e.to_string()).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct BookmarkedQuery {
+    agent: Option<String>,
+    all: Option<bool>,
+    limit: Option<i64>,
+}
+
+/// GET /api/messages/bookmarked?agent=&all=&limit= — list bookmarked messages.
+///
+/// `all=true` lists across every agent (deliberate escape hatch, mirrors
+/// `/api/sessions/search`); otherwise `agent` is required.
+pub(crate) async fn api_list_bookmarked(
+    State(infra): State<InfraServices>,
+    Query(q): Query<BookmarkedQuery>,
+) -> impl IntoResponse {
+    let list_all = q.all.unwrap_or(false);
+    let agent = if list_all {
+        None
+    } else {
+        match q.agent.as_deref() {
+            Some(a) if !a.is_empty() => Some(a),
+            _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+        }
+    };
+    let limit = q.limit.unwrap_or(50).min(200);
+
+    let hits = match sessions::list_bookmarked(&infra.db, agent, limit).await {
+        Ok(h) => h,
+        Err(e) => return ApiError::Internal(e.to_string()).into_response(),
+    };
+
+    let items: Vec<Value> = hits.iter().map(|h| json!({
+        "message_id": h.message_id.to_string(),
+        "session_id": h.session_id.to_string(),
+        "session_title": h.session_title,
+        "agent_id": h.agent_id,
+        "preview": sessions::text_preview(&h.content, 160),
+        "role": h.role,
+        "bookmarked_at": h.bookmarked_at.to_rfc3339(),
+    })).collect();
+
+    Json(json!({ "items": items })).into_response()
 }
 
 // ── Fork (branch) endpoint ──────────────────────────────

@@ -103,7 +103,7 @@ pub fn own_assistant_texts(
 mod tests {
     use super::*;
 
-    // MessageRow НЕ выводит Default (только Debug/Serialize/FromRow) — заполняем ВСЕ 15 полей явно.
+    // MessageRow НЕ выводит Default (только Debug/Serialize/FromRow) — заполняем ВСЕ 16 полей явно.
     fn row(role: &str, agent: Option<&str>, content: &str) -> opex_db::sessions::MessageRow {
         opex_db::sessions::MessageRow {
             id: uuid::Uuid::new_v4(),
@@ -121,6 +121,7 @@ mod tests {
             branch_from_message_id: None,
             abort_reason: None,
             is_mirror: false,
+            bookmarked_at: None,
         }
     }
 

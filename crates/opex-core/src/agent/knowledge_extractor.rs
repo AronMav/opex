@@ -621,6 +621,7 @@ mod tests {
             branch_from_message_id: None,
             abort_reason: None,
             is_mirror: false,
+            bookmarked_at: None,
         }
     }
 

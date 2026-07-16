@@ -753,6 +753,8 @@ pub struct MessageRow {
     pub abort_reason: Option<String>,
     #[sqlx(default)]
     pub is_mirror: bool,
+    #[sqlx(default)]
+    pub bookmarked_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Insert or update a streaming assistant message (called every ~2s during LLM response).
@@ -2097,7 +2099,8 @@ pub async fn get_messages_page(
         sqlx::query_as::<_, MessageRow>(
             r#"SELECT id, role, content, tool_calls, tool_call_id, created_at,
                       agent_id, feedback, edited_at, status, thinking_blocks,
-                      parent_message_id, branch_from_message_id, abort_reason, is_mirror
+                      parent_message_id, branch_from_message_id, abort_reason, is_mirror,
+                      bookmarked_at
                FROM messages
                WHERE session_id = $1
                  AND compressed = FALSE
@@ -2114,7 +2117,8 @@ pub async fn get_messages_page(
         sqlx::query_as::<_, MessageRow>(
             r#"SELECT id, role, content, tool_calls, tool_call_id, created_at,
                       agent_id, feedback, edited_at, status, thinking_blocks,
-                      parent_message_id, branch_from_message_id, abort_reason, is_mirror
+                      parent_message_id, branch_from_message_id, abort_reason, is_mirror,
+                      bookmarked_at
                FROM messages
                WHERE session_id = $1
                  AND compressed = FALSE
@@ -2163,6 +2167,110 @@ pub async fn get_messages_page(
     };
 
     Ok(MessagesPage { messages: rows, compression_events: events, has_more })
+}
+
+// ── Message bookmarks (wave 2) ──────────────────────────────────────────────
+
+/// Toggle (set/clear) `messages.bookmarked_at` for a single message, scoped to
+/// the owning agent via a `sessions.agent_id` join — same IDOR-guard shape as
+/// `api_message_feedback` (inline UPDATE, caller maps `rows_affected()==0` to
+/// 404). Returns the number of rows affected (0 or 1).
+pub async fn toggle_bookmark(
+    db: &PgPool,
+    message_id: Uuid,
+    agent_id: &str,
+    on: bool,
+) -> Result<u64> {
+    let r = sqlx::query(
+        "UPDATE messages SET bookmarked_at = CASE WHEN $3 THEN now() ELSE NULL END \
+         WHERE id = $1 AND session_id IN (SELECT id FROM sessions WHERE agent_id = $2)",
+    )
+    .bind(message_id)
+    .bind(agent_id)
+    .bind(on)
+    .execute(db)
+    .await?;
+    Ok(r.rows_affected())
+}
+
+#[derive(Debug, FromRow)]
+pub struct BookmarkedHit {
+    pub message_id: Uuid,
+    pub session_id: Uuid,
+    pub session_title: Option<String>,
+    pub agent_id: String,
+    pub role: String,
+    pub content: String,
+    pub bookmarked_at: DateTime<Utc>,
+}
+
+/// List bookmarked messages, most-recently-bookmarked first.
+/// `agent_id: None` lists across every agent (`?all=true` at the API layer);
+/// `Some(id)` restricts to one agent. JOINs through `sessions` so a message
+/// whose session has since been deleted drops out on its own (no orphan rows).
+pub async fn list_bookmarked(
+    db: &PgPool,
+    agent_id: Option<&str>,
+    limit: i64,
+) -> Result<Vec<BookmarkedHit>> {
+    Ok(sqlx::query_as::<_, BookmarkedHit>(
+        "SELECT m.id AS message_id, m.session_id, s.title AS session_title, \
+                s.agent_id, m.role, m.content, m.bookmarked_at \
+         FROM messages m JOIN sessions s ON m.session_id = s.id \
+         WHERE m.bookmarked_at IS NOT NULL AND ($1::text IS NULL OR s.agent_id = $1) \
+         ORDER BY m.bookmarked_at DESC LIMIT $2",
+    )
+    .bind(agent_id)
+    .bind(limit)
+    .fetch_all(db)
+    .await?)
+}
+
+/// Extract a short preview from message `content`, which may be either plain
+/// text or a JSON array of multimodal parts (`[{"type":"text","text":"..."}, ...]`).
+///
+/// - If `content` parses as a JSON array: collect the `text` field of every
+///   part whose `type` is `"text"`, joined by a space. If no text part is
+///   found, fall back to a placeholder based on the first part's shape:
+///   an image-ish part (`type` containing "image", or a `file` part whose
+///   `mime`/`mime_type` starts with `image/`) yields "изображение",
+///   anything else yields "вложение".
+/// - If `content` does not parse as JSON (or isn't an array): treat the
+///   whole string as plain text.
+///
+/// Truncation is by `chars()`, never by byte index — Cyrillic text is
+/// multi-byte in UTF-8 and a byte slice can split a codepoint and panic.
+pub fn text_preview(content: &str, max_chars: usize) -> String {
+    let truncate = |s: &str| -> String { s.chars().take(max_chars).collect() };
+
+    let Ok(serde_json::Value::Array(parts)) = serde_json::from_str::<serde_json::Value>(content)
+    else {
+        return truncate(content);
+    };
+
+    let texts: Vec<&str> = parts
+        .iter()
+        .filter_map(|p| {
+            if p.get("type").and_then(|t| t.as_str()) == Some("text") {
+                p.get("text").and_then(|t| t.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if !texts.is_empty() {
+        return truncate(&texts.join(" "));
+    }
+
+    // No text parts — placeholder based on the first part's shape.
+    let placeholder = parts.first().map_or("вложение", |p| {
+        let is_image = p.get("type").and_then(|t| t.as_str()).is_some_and(|t| t.contains("image"))
+            || p.get("mime").and_then(|m| m.as_str()).is_some_and(|m| m.starts_with("image/"))
+            || p.get("mime_type").and_then(|m| m.as_str()).is_some_and(|m| m.starts_with("image/"));
+        if is_image { "изображение" } else { "вложение" }
+    });
+    placeholder.to_string()
 }
 
 #[cfg(test)]
@@ -3105,5 +3213,110 @@ mod search_messages_tests {
         // секция сессий по title
         let hits = search_session_titles(&pool, Some("A"), "тестов", 10).await.unwrap();
         assert_eq!(hits.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod bookmark_tests {
+    use super::*;
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn toggle_bookmark_sets_clears_and_enforces_agent_ownership(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "A", "user1", "telegram").await.unwrap();
+        let mid = Uuid::new_v4();
+        sqlx::query("INSERT INTO messages (id, session_id, agent_id, role, content) VALUES ($1,$2,'A','user','hi')")
+            .bind(mid).bind(sid).execute(&pool).await.unwrap();
+
+        // Set bookmark as owning agent A.
+        let n = toggle_bookmark(&pool, mid, "A", true).await.unwrap();
+        assert_eq!(n, 1);
+        let bookmarked_at: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT bookmarked_at FROM messages WHERE id = $1")
+                .bind(mid).fetch_one(&pool).await.unwrap();
+        assert!(bookmarked_at.is_some());
+
+        // Wrong agent (B) cannot toggle A's message — 0 rows affected (IDOR guard).
+        let n = toggle_bookmark(&pool, mid, "B", false).await.unwrap();
+        assert_eq!(n, 0);
+        let still_set: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT bookmarked_at FROM messages WHERE id = $1")
+                .bind(mid).fetch_one(&pool).await.unwrap();
+        assert!(still_set.is_some(), "wrong-agent toggle must not clear the bookmark");
+
+        // Clear via the owning agent.
+        let n = toggle_bookmark(&pool, mid, "A", false).await.unwrap();
+        assert_eq!(n, 1);
+        let cleared: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT bookmarked_at FROM messages WHERE id = $1")
+                .bind(mid).fetch_one(&pool).await.unwrap();
+        assert!(cleared.is_none());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn list_bookmarked_filters_by_agent_and_extracts_preview(pool: sqlx::PgPool) {
+        let sid_a = create_new_session(&pool, "A", "user1", "telegram").await.unwrap();
+        let sid_b = create_new_session(&pool, "B", "user1", "telegram").await.unwrap();
+
+        // A: multimodal content with a text part → preview extraction.
+        let mid1 = Uuid::new_v4();
+        let multimodal = r#"[{"type":"text","text":"привет мир"},{"type":"file","url":"https://x/y.png"}]"#;
+        sqlx::query("INSERT INTO messages (id, session_id, agent_id, role, content) VALUES ($1,$2,'A','user',$3)")
+            .bind(mid1).bind(sid_a).bind(multimodal).execute(&pool).await.unwrap();
+        toggle_bookmark(&pool, mid1, "A", true).await.unwrap();
+
+        // A: plain text, second bookmark.
+        let mid2 = Uuid::new_v4();
+        sqlx::query("INSERT INTO messages (id, session_id, agent_id, role, content) VALUES ($1,$2,'A','assistant','plain reply')")
+            .bind(mid2).bind(sid_a).execute(&pool).await.unwrap();
+        toggle_bookmark(&pool, mid2, "A", true).await.unwrap();
+
+        // B: one bookmark (no text parts — placeholder path).
+        let mid3 = Uuid::new_v4();
+        let no_text = r#"[{"type":"file","mime":"image/png","url":"https://x/z.png"}]"#;
+        sqlx::query("INSERT INTO messages (id, session_id, agent_id, role, content) VALUES ($1,$2,'B','user',$3)")
+            .bind(mid3).bind(sid_b).bind(no_text).execute(&pool).await.unwrap();
+        toggle_bookmark(&pool, mid3, "B", true).await.unwrap();
+
+        let a_only = list_bookmarked(&pool, Some("A"), 20).await.unwrap();
+        assert_eq!(a_only.len(), 2);
+
+        let all = list_bookmarked(&pool, None, 20).await.unwrap();
+        assert_eq!(all.len(), 3);
+
+        let hit1 = all.iter().find(|h| h.message_id == mid1).expect("mid1 present");
+        let preview1 = text_preview(&hit1.content, 160);
+        assert!(preview1.contains("привет"), "preview must surface the text part: {preview1}");
+        assert!(!preview1.contains("{\"type\""), "preview must not leak raw JSON: {preview1}");
+
+        let hit3 = all.iter().find(|h| h.message_id == mid3).expect("mid3 present");
+        let preview3 = text_preview(&hit3.content, 160);
+        assert_eq!(preview3, "изображение");
+    }
+
+    #[test]
+    fn text_preview_plain_text_passthrough() {
+        assert_eq!(text_preview("hello world", 160), "hello world");
+    }
+
+    #[test]
+    fn text_preview_truncates_by_chars_not_bytes() {
+        // Multi-byte Cyrillic text: a byte-index slice here would panic or
+        // corrupt the string; chars().take() must not.
+        let s = "привет ".repeat(50);
+        let out = text_preview(&s, 10);
+        assert_eq!(out.chars().count(), 10);
+        assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn text_preview_multimodal_no_text_part_yields_attachment_placeholder() {
+        let content = r#"[{"type":"file","url":"https://x/y.pdf"}]"#;
+        assert_eq!(text_preview(content, 160), "вложение");
+    }
+
+    #[test]
+    fn text_preview_multimodal_image_part_yields_image_placeholder() {
+        let content = r#"[{"type":"image","url":"https://x/y.png"}]"#;
+        assert_eq!(text_preview(content, 160), "изображение");
     }
 }
