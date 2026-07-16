@@ -146,3 +146,12 @@ safety_timeout_secs = 600         # outer defense-in-depth wrapper (must be > 60
 # digest_provider = "ollama-local"
 # Optional model override for the digest provider (uses provider default when absent).
 # digest_model = "qwen3:32b"
+
+# ═══ Global tool dispatcher ═══
+[tool_dispatcher]
+# Extension tools promoted into the native tools[] of every dispatcher-mode
+# agent (main agents AND dispatcher-mode subagents), and hidden from the
+# tool_use catalogue/hint/suppressor. Fixes weak-prompt-adherence models
+# (e.g. glm-5.2) writing these as free-form text instead of calling them.
+# Distinct from the per-agent [agent.tool_dispatcher]. Empty = no change.
+always_core = ["sequentialthinking"]
