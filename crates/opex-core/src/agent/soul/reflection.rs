@@ -16,11 +16,13 @@ pub(crate) const REFLECTION_MAX_CHARS: usize = 500;
 pub(crate) const BACKOFF_AFTER_FAILURES: u32 = 3;
 pub(crate) const BACKOFF_PAUSE_HOURS: i64 = 24;
 const LLM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-/// Overall wall-clock bound on a single reflection cycle. A cycle makes several
-/// LLM calls (each capped at LLM_TIMEOUT=60s) plus DB work; this ceiling sits
-/// above a legitimate multi-call cycle but converts a genuinely hung DB call
-/// into a bounded failure so the per-agent reflection lock cannot wedge forever.
-const CYCLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+/// Overall wall-clock bound on a single reflection cycle. `run_cycle` makes up
+/// to 5 sequential LLM calls (1 questions + up to 3 insights + 1 SELF.md), each
+/// capped at LLM_TIMEOUT=60s (=300s worst case), plus DB work. 600s sits well
+/// above that so only a genuinely HUNG DB/LLM call trips it (a legit slow cycle
+/// completes), while still bounding a hang so the per-agent reflection lock
+/// cannot wedge forever.
+const CYCLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// Per-agent runtime state: reflection lock + failure backoff. INJECTED via
 /// SoulDeps (не глобальный static — спека §9 требует injected lock, и тесты
