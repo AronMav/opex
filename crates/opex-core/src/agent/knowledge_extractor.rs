@@ -19,6 +19,11 @@ use opex_types::{Message, MessageRole};
 const MIN_MESSAGES: usize = 5;
 /// Maximum messages to include in the extraction prompt.
 const MAX_CONTEXT_MESSAGES: usize = 20;
+/// Minimum NEW user/assistant messages (since the session watermark) required
+/// before an extraction run fires. Batches extraction so overlapping windows
+/// are not re-summarized every turn (spec §2.1).
+#[allow(dead_code)] // removed in Task 3 when wired into extract_and_save_inner
+const MIN_NEW_MESSAGES: usize = 4;
 /// LLM call timeout.
 const EXTRACTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -88,6 +93,27 @@ pub async fn extract_and_save(
             "knowledge extraction failed"
         );
     }
+}
+
+/// Select the user/assistant messages newer than `watermark` for extraction.
+/// Returns `None` when fewer than `MIN_NEW_MESSAGES` new messages exist (caller
+/// skips this run until more accumulate). Otherwise returns the last
+/// `MAX_CONTEXT_MESSAGES` of them, chronological order. Pure — unit-tested.
+#[allow(dead_code)] // removed in Task 3 when wired into extract_and_save_inner
+fn select_new_messages(
+    rows: &[crate::db::sessions::MessageRow],
+    watermark: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<Vec<&crate::db::sessions::MessageRow>> {
+    let new_relevant: Vec<&crate::db::sessions::MessageRow> = rows
+        .iter()
+        .filter(|m| m.role == "user" || m.role == "assistant")
+        .filter(|m| watermark.is_none_or(|w| m.created_at > w))
+        .collect();
+    if new_relevant.len() < MIN_NEW_MESSAGES {
+        return None;
+    }
+    let start = new_relevant.len().saturating_sub(MAX_CONTEXT_MESSAGES);
+    Some(new_relevant[start..].to_vec())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -551,6 +577,64 @@ fn parse_extraction(content: &str) -> Result<ExtractedKnowledge> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── select_new_messages tests ──────────────────────────────────
+
+    fn msg(role: &str, secs: i64) -> crate::db::sessions::MessageRow {
+        crate::db::sessions::MessageRow {
+            id: uuid::Uuid::new_v4(),
+            role: role.to_string(),
+            content: "x".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            created_at: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000 + secs, 0).unwrap(),
+            agent_id: Some("A".to_string()),
+            feedback: None,
+            edited_at: None,
+            status: "done".to_string(),
+            thinking_blocks: None,
+            parent_message_id: None,
+            branch_from_message_id: None,
+            abort_reason: None,
+            is_mirror: false,
+        }
+    }
+
+    #[test]
+    fn none_watermark_takes_all_relevant() {
+        let rows = vec![msg("user", 1), msg("assistant", 2), msg("tool", 3), msg("user", 4), msg("assistant", 5)];
+        // 4 user/assistant ≥ MIN_NEW_MESSAGES(4) → Some, tool filtered out.
+        let sel = select_new_messages(&rows, None).expect("some");
+        assert_eq!(sel.len(), 4);
+        assert!(sel.iter().all(|m| m.role == "user" || m.role == "assistant"));
+    }
+
+    #[test]
+    fn below_min_new_returns_none() {
+        let rows = vec![msg("user", 1), msg("assistant", 2), msg("user", 3)]; // 3 < 4
+        assert!(select_new_messages(&rows, None).is_none());
+    }
+
+    #[test]
+    fn watermark_excludes_older_and_gates() {
+        let rows = vec![msg("user", 1), msg("assistant", 2), msg("user", 3), msg("assistant", 4), msg("user", 5)];
+        let wm = rows[1].created_at; // exclude first two (created_at <= wm)
+        // remaining strictly-newer user/assistant: secs 3,4,5 = 3 < MIN_NEW(4) → None
+        assert!(select_new_messages(&rows, Some(wm)).is_none());
+        // With an earlier watermark: exclude only secs<=1 → 4 remain → Some
+        let wm2 = rows[0].created_at;
+        let sel = select_new_messages(&rows, Some(wm2)).expect("some");
+        assert_eq!(sel.len(), 4);
+        assert!(sel.iter().all(|m| m.created_at > wm2));
+    }
+
+    #[test]
+    fn caps_at_max_context() {
+        let rows: Vec<crate::db::sessions::MessageRow> = (0..30).map(|i| msg("user", i)).collect();
+        let sel = select_new_messages(&rows, None).expect("some");
+        assert_eq!(sel.len(), MAX_CONTEXT_MESSAGES); // last 20
+        assert_eq!(sel[0].created_at, rows[10].created_at); // dropped oldest 10
+    }
 
     // ── parse_extraction tests ──────────────────────────────────────
 
