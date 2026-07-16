@@ -76,6 +76,14 @@ pub(crate) struct AgentCreatePayload {
     pub daily_budget_tokens: Option<u64>,
     /// Cap on fallback attempts per request in multi-provider routing (default 3).
     pub max_failover_attempts: Option<u32>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub soul: Option<Option<SoulPayload>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub drift: Option<Option<DriftPayload>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub initiative: Option<Option<InitiativePayload>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub emotion: Option<Option<EmotionPayload>>,
 }
 
 #[derive(Deserialize)]
@@ -178,6 +186,44 @@ pub(crate) struct WatchdogPayload {
     pub inactivity_secs: Option<u64>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct SoulPayload {
+    pub enabled: Option<bool>,
+    pub reflection_threshold: Option<f64>,
+    pub reflection_cooldown_minutes: Option<u64>,
+    pub context_top_k: Option<usize>,
+    pub context_budget_tokens: Option<u32>,
+    pub max_events_per_session: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct DriftPayload {
+    pub enabled: Option<bool>,
+    pub threshold: Option<f32>,
+    pub min_history: Option<usize>,
+    pub baseline_turns: Option<usize>,
+    pub correct: Option<bool>,
+    pub anchor: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct InitiativePayload {
+    pub enabled: Option<bool>,
+    pub daily_proposal_cap: Option<u32>,
+    pub decompose: Option<bool>,
+    pub daily_plan: Option<bool>,
+    pub auto_approve_day_plan: Option<bool>,
+    pub daily_token_budget: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct EmotionPayload {
+    pub enabled: Option<bool>,
+    pub intensity_importance_k: Option<f32>,
+    pub blend_rate: Option<f32>,
+    pub decay_half_life_hours: Option<f32>,
+}
+
 // ── Config builder ──────────────────────────────────────
 
 pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentConfig {
@@ -220,10 +266,36 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
                 groups: t.groups.unwrap_or_default(),
             }),
             delegation: DelegationConfig::default(),
-            soul: SoulConfig::default(),
-            drift: DriftConfig::default(),
-            initiative: InitiativeConfig::default(),
-            emotion: EmotionConfig::default(),
+            soul: p.soul.flatten().map(|s| SoulConfig {
+                enabled: s.enabled.unwrap_or(false),
+                reflection_threshold: s.reflection_threshold.unwrap_or(150.0),
+                reflection_cooldown_minutes: s.reflection_cooldown_minutes.unwrap_or(60),
+                context_top_k: s.context_top_k.unwrap_or(6),
+                context_budget_tokens: s.context_budget_tokens.unwrap_or(800),
+                max_events_per_session: s.max_events_per_session.unwrap_or(10),
+            }).unwrap_or_default(),
+            drift: p.drift.flatten().map(|d| DriftConfig {
+                enabled: d.enabled.unwrap_or(false),
+                threshold: d.threshold.unwrap_or(0.15),
+                min_history: d.min_history.unwrap_or(6),
+                baseline_turns: d.baseline_turns.unwrap_or(3),
+                correct: d.correct.unwrap_or(false),
+                anchor: d.anchor.filter(|s| !s.is_empty()),
+            }).unwrap_or_default(),
+            initiative: p.initiative.flatten().map(|i| InitiativeConfig {
+                enabled: i.enabled.unwrap_or(false),
+                daily_proposal_cap: i.daily_proposal_cap.unwrap_or(1),
+                decompose: i.decompose.unwrap_or(false),
+                daily_plan: i.daily_plan.unwrap_or(false),
+                auto_approve_day_plan: i.auto_approve_day_plan.unwrap_or(false),
+                daily_token_budget: i.daily_token_budget.unwrap_or(0),
+            }).unwrap_or_default(),
+            emotion: p.emotion.flatten().map(|e| EmotionConfig {
+                enabled: e.enabled.unwrap_or(false),
+                intensity_importance_k: e.intensity_importance_k.unwrap_or(3.0),
+                blend_rate: e.blend_rate.unwrap_or(0.3),
+                decay_half_life_hours: e.decay_half_life_hours.unwrap_or(12.0),
+            }).unwrap_or_default(),
             compaction: p.compaction.flatten().map(|c| CompactionConfig {
                 enabled: c.enabled.unwrap_or(true),
                 threshold: c.threshold.unwrap_or(0.8),
@@ -378,6 +450,10 @@ mod tests {
             prompt_cache: None,
             daily_budget_tokens: None,
             max_failover_attempts: None,
+            soul: None,
+            drift: None,
+            initiative: None,
+            emotion: None,
         }
     }
 
@@ -451,5 +527,111 @@ mod tests {
         payload.max_failover_attempts = Some(7);
         let config = build_agent_config("TestAgent".to_string(), payload);
         assert_eq!(config.agent.max_failover_attempts, 7);
+    }
+
+    // ── soul/drift/initiative/emotion mapping ────────────
+
+    #[test]
+    fn build_agent_config_maps_soul_payload() {
+        let mut p = minimal_payload("T");
+        p.soul = Some(Some(SoulPayload {
+            enabled: Some(true),
+            reflection_threshold: Some(200.0),
+            ..Default::default()
+        }));
+        let cfg = build_agent_config("T".into(), p);
+        assert!(cfg.agent.soul.enabled);
+        assert_eq!(cfg.agent.soul.reflection_threshold, 200.0);
+        // unset fields fall back to config defaults
+        assert_eq!(cfg.agent.soul.context_top_k, 6);
+    }
+
+    #[test]
+    fn build_agent_config_absent_soul_is_default() {
+        let cfg = build_agent_config("T".into(), minimal_payload("T"));
+        assert!(!cfg.agent.soul.enabled);
+    }
+
+    #[test]
+    fn build_agent_config_maps_drift_payload() {
+        let mut p = minimal_payload("T");
+        p.drift = Some(Some(DriftPayload {
+            enabled: Some(true),
+            threshold: Some(0.42),
+            anchor: Some("Owner is Bogdan".to_string()),
+            ..Default::default()
+        }));
+        let cfg = build_agent_config("T".into(), p);
+        assert!(cfg.agent.drift.enabled);
+        assert!((cfg.agent.drift.threshold - 0.42).abs() < f32::EPSILON);
+        assert_eq!(cfg.agent.drift.anchor.as_deref(), Some("Owner is Bogdan"));
+        // unset fields fall back to config defaults
+        assert_eq!(cfg.agent.drift.min_history, 6);
+        assert_eq!(cfg.agent.drift.baseline_turns, 3);
+    }
+
+    #[test]
+    fn build_agent_config_drift_empty_anchor_becomes_none() {
+        let mut p = minimal_payload("T");
+        p.drift = Some(Some(DriftPayload {
+            anchor: Some(String::new()),
+            ..Default::default()
+        }));
+        let cfg = build_agent_config("T".into(), p);
+        assert!(cfg.agent.drift.anchor.is_none());
+    }
+
+    #[test]
+    fn build_agent_config_absent_drift_is_default() {
+        let cfg = build_agent_config("T".into(), minimal_payload("T"));
+        assert!(!cfg.agent.drift.enabled);
+    }
+
+    #[test]
+    fn build_agent_config_maps_initiative_payload() {
+        let mut p = minimal_payload("T");
+        p.initiative = Some(Some(InitiativePayload {
+            enabled: Some(true),
+            daily_proposal_cap: Some(5),
+            daily_token_budget: Some(10_000),
+            ..Default::default()
+        }));
+        let cfg = build_agent_config("T".into(), p);
+        assert!(cfg.agent.initiative.enabled);
+        assert_eq!(cfg.agent.initiative.daily_proposal_cap, 5);
+        assert_eq!(cfg.agent.initiative.daily_token_budget, 10_000);
+        // unset fields fall back to config defaults
+        assert!(!cfg.agent.initiative.decompose);
+        assert!(!cfg.agent.initiative.daily_plan);
+        assert!(!cfg.agent.initiative.auto_approve_day_plan);
+    }
+
+    #[test]
+    fn build_agent_config_absent_initiative_is_default() {
+        let cfg = build_agent_config("T".into(), minimal_payload("T"));
+        assert!(!cfg.agent.initiative.enabled);
+        assert_eq!(cfg.agent.initiative.daily_proposal_cap, 1);
+    }
+
+    #[test]
+    fn build_agent_config_maps_emotion_payload() {
+        let mut p = minimal_payload("T");
+        p.emotion = Some(Some(EmotionPayload {
+            enabled: Some(true),
+            blend_rate: Some(0.5),
+            ..Default::default()
+        }));
+        let cfg = build_agent_config("T".into(), p);
+        assert!(cfg.agent.emotion.enabled);
+        assert!((cfg.agent.emotion.blend_rate - 0.5).abs() < f32::EPSILON);
+        // unset fields fall back to config defaults
+        assert!((cfg.agent.emotion.intensity_importance_k - 3.0).abs() < f32::EPSILON);
+        assert!((cfg.agent.emotion.decay_half_life_hours - 12.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn build_agent_config_absent_emotion_is_default() {
+        let cfg = build_agent_config("T".into(), minimal_payload("T"));
+        assert!(!cfg.agent.emotion.enabled);
     }
 }
