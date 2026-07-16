@@ -1,8 +1,4 @@
 //! `impl ContextBuilderDeps for AgentEngine` — context, memory, compaction helpers.
-//!
-//! `compact_session` is an inherent method on `AgentEngine` and remains accessible
-//! via `crate::agent::engine::AgentEngine::compact_session` (inherent methods travel
-//! with the type, not with the module file).
 
 use anyhow::Result;
 use opex_types::{IncomingMessage, Message};
@@ -143,23 +139,6 @@ impl AgentEngine {
             &cfg.agent.name,
             messages,
             None,
-            |facts| async move { engine.index_facts_to_memory(&facts).await },
-        )
-        .await
-    }
-
-    /// Compact a specific session's messages via API.
-    pub async fn compact_session(&self, session_id: uuid::Uuid) -> Result<(usize, usize)> {
-        let engine = self;
-        let cfg = engine.cfg();
-        crate::agent::pipeline::context::compact_session(
-            &cfg.db,
-            cfg.provider.as_ref(),
-            cfg.compaction_provider.as_deref(),
-            &cfg.agent.language,
-            &cfg.agent.name,
-            session_id,
-            &cfg.audit_queue,
             |facts| async move { engine.index_facts_to_memory(&facts).await },
         )
         .await

@@ -17,55 +17,18 @@ use crate::gateway::clusters::{AgentCore, ChannelBus, InfraServices};
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/sessions", get(api_list_sessions).delete(api_delete_all_sessions))
-        .route("/api/sessions/latest", get(api_latest_session))
         .route("/api/sessions/search", get(api_search_sessions))
         .route("/api/sessions/stuck", get(api_stuck_sessions))
         .route("/api/sessions/{id}", get(api_get_session).delete(api_delete_session).patch(api_patch_session))
-        .route("/api/sessions/{id}/compact", post(api_compact_session))
         .route("/api/sessions/{id}/share", post(api_share_session).delete(api_unshare_session))
         .route("/api/shares/{token}", get(api_get_shared))
-        .route("/api/sessions/{id}/export", get(api_export_session))
         .route("/api/sessions/{id}/invite", post(api_invite_to_session))
         .route("/api/sessions/{id}/messages", get(api_session_messages))
-        .route("/api/messages/{id}", delete(api_delete_message).patch(api_patch_message))
+        .route("/api/messages/{id}", delete(api_delete_message))
         .route("/api/messages/{id}/feedback", post(api_message_feedback))
         .route("/api/sessions/{id}/fork", post(api_fork_session))
-        .route("/api/sessions/{id}/active-path", get(api_active_path))
         .route("/api/sessions/{id}/chain", get(api_session_chain))
         .route("/api/sessions/{id}/retry", post(api_retry_session))
-}
-
-// ── Latest Session endpoint ──
-
-pub(crate) async fn api_latest_session(
-    State(infra): State<InfraServices>,
-    Query(params): Query<HashMap<String, String>>,
-) -> impl IntoResponse {
-    let agent = params.get("agent").map_or("", std::string::String::as_str);
-    if agent.is_empty() {
-        return ApiError::BadRequest("agent parameter required".into()).into_response();
-    }
-
-    let session = match sessions::get_latest_ui_session(&infra.db, agent).await {
-        Ok(Some(s)) => s,
-        Ok(None) => return StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            return ApiError::Internal(e.to_string()).into_response();
-        }
-    };
-
-    let messages = match sessions::load_messages(&infra.db, session.id, Some(100)).await {
-        Ok(m) => m,
-        Err(e) => {
-            return ApiError::Internal(e.to_string()).into_response();
-        }
-    };
-
-    Json(serde_json::json!({
-        "session": session,
-        "messages": messages,
-    }))
-    .into_response()
 }
 
 // ── Sessions & Messages API ──
@@ -588,61 +551,6 @@ pub(crate) async fn api_invite_to_session(
     }
 }
 
-// ── Session Compaction ──
-
-/// POST /api/sessions/{id}/compact — manually compact a session's history.
-///
-/// Requires `?agent=<owner>` to prove ownership: the bearer token is shared
-/// across the whole instance, so without an owner check any token-holder
-/// could compact any session by guessing UUIDs (audit 2026-05-08, IDOR).
-pub(crate) async fn api_compact_session(
-    State(infra): State<InfraServices>,
-    State(agents): State<AgentCore>,
-    Path(id): Path<uuid::Uuid>,
-    Query(q): Query<SessionsQuery>,
-) -> impl IntoResponse {
-    let agent = match q.agent.as_deref() {
-        Some(a) if !a.is_empty() => a,
-        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
-    };
-    if let Err(resp) = verify_session_agent(&infra.db, id, agent).await {
-        return resp;
-    }
-
-    // Find which agent owns this session
-    let session = match sessions::get_session(&infra.db, id).await {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            return ApiError::NotFound("session not found".into()).into_response()
-        }
-        Err(e) => {
-            return ApiError::Internal(e.to_string()).into_response()
-        }
-    };
-
-    let agents_map = agents.map.read().await;
-    let engine = match agents_map.get(&session.agent_id) {
-        Some(handle) => handle.engine.clone(),
-        None => {
-            return ApiError::BadRequest("agent not running".into()).into_response()
-        }
-    };
-    drop(agents_map);
-
-    match engine.compact_session(id).await {
-        Ok((facts, new_count)) => Json(json!({
-            "ok": true,
-            "facts_extracted": facts,
-            "new_message_count": new_count,
-        }))
-        .into_response(),
-        Err(e) => {
-            tracing::error!(session_id = %id, error = %e, "session compaction failed");
-            ApiError::Internal(e.to_string()).into_response()
-        }
-    }
-}
-
 // ── Session sharing (read-only public links) ────────────────────────────────
 
 /// POST /api/sessions/{id}/share?agent=xxx — create (or return existing)
@@ -798,40 +706,6 @@ pub(crate) struct FeedbackRequest {
     feedback: i32, // 1 = like, -1 = dislike, 0 = clear
 }
 
-/// PATCH /api/messages/{id}?agent=xxx — edit message content.
-/// S1: agent query param required; JOIN with sessions prevents cross-agent edits.
-pub(crate) async fn api_patch_message(
-    State(infra): State<InfraServices>,
-    Path(id): Path<uuid::Uuid>,
-    Query(q): Query<SessionsQuery>,
-    Json(body): Json<PatchMessageRequest>,
-) -> impl IntoResponse {
-    let agent = match q.agent.as_deref() {
-        Some(a) if !a.is_empty() => a,
-        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
-    };
-    let result = sqlx::query(
-        "UPDATE messages SET content = $1, edited_at = now() \
-         WHERE id = $2 AND role = 'user' \
-         AND session_id IN (SELECT id FROM sessions WHERE agent_id = $3)"
-    )
-        .bind(&body.content)
-        .bind(id)
-        .bind(agent)
-        .execute(&infra.db)
-        .await;
-    match result {
-        Ok(r) if r.rows_affected() > 0 => Json(json!({"ok": true})).into_response(),
-        Ok(_) => ApiError::NotFound("message not found, not a user message, or wrong agent".into()).into_response(),
-        Err(e) => ApiError::Internal(e.to_string()).into_response(),
-    }
-}
-
-#[derive(Deserialize)]
-pub(crate) struct PatchMessageRequest {
-    content: String,
-}
-
 // ── Fork (branch) endpoint ──────────────────────────────
 
 #[derive(Deserialize)]
@@ -958,106 +832,6 @@ pub(crate) async fn api_patch_session(
     }
 
     Json(json!({"ok": true})).into_response()
-}
-
-/// GET /api/sessions/{id}/export?agent=xxx — export full session as JSON (metadata + all messages).
-///
-/// Audit 2026-05-08: `?agent=` is required (was optional before, defeating
-/// the ownership check). Markdown export carries arbitrary user content,
-/// JSON export carries the full message tree — both should be gated.
-pub(crate) async fn api_export_session(
-    State(infra): State<InfraServices>,
-    Path(id): Path<uuid::Uuid>,
-    Query(params): Query<std::collections::HashMap<String, String>>,
-) -> impl IntoResponse {
-    let agent = match params.get("agent").map(String::as_str) {
-        Some(a) if !a.is_empty() => a,
-        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
-    };
-    if let Err(resp) = verify_session_agent(&infra.db, id, agent).await {
-        return resp;
-    }
-
-    let format = params.get("format").map_or("json", std::string::String::as_str);
-    match format {
-        "markdown" | "md" => {
-            match crate::db::sessions::export_session(&infra.db, id).await {
-                Ok(Some(data)) => {
-                    let md = format_session_as_markdown(&data);
-                    let disposition = format!("attachment; filename=\"session-{id}.md\"");
-                    (
-                        [(axum::http::header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
-                         (axum::http::header::CONTENT_DISPOSITION, disposition.as_str())],
-                        md,
-                    ).into_response()
-                }
-                Ok(None) => ApiError::NotFound("session not found".into()).into_response(),
-                Err(e) => ApiError::Internal(e.to_string()).into_response(),
-            }
-        }
-        _ => {
-            match crate::db::sessions::export_session(&infra.db, id).await {
-                Ok(Some(data)) => Json(data).into_response(),
-                Ok(None) => ApiError::NotFound("session not found".into()).into_response(),
-                Err(e) => ApiError::Internal(e.to_string()).into_response(),
-            }
-        }
-    }
-}
-
-// reviewed: ts[..16] slices ASCII ISO-8601 timestamp, guarded by len() >= 16 — char boundary
-#[allow(clippy::string_slice)]
-fn format_session_as_markdown(data: &serde_json::Value) -> String {
-    let mut md = String::new();
-    let session = &data["session"];
-    let title = session["title"].as_str().unwrap_or("Untitled");
-    let agent = session["agent_id"].as_str().unwrap_or("unknown");
-    let started = session["started_at"].as_str().unwrap_or("");
-
-    md.push_str(&format!("# {title}\n\n"));
-    md.push_str(&format!("**Agent:** {agent} | **Started:** {started}\n\n---\n\n"));
-
-    if let Some(messages) = data["messages"].as_array() {
-        for msg in messages {
-            let role = msg["role"].as_str().unwrap_or("unknown");
-            let content = msg["content"].as_str().unwrap_or("");
-            let ts = msg["created_at"].as_str().unwrap_or("");
-            let ts_short = if ts.len() >= 16 { &ts[..16] } else { ts };
-
-            let role_label = match role {
-                "user" => "User",
-                "assistant" => "Assistant",
-                "system" => "System",
-                "tool" => "Tool Result",
-                _ => role,
-            };
-
-            md.push_str(&format!("## {role_label} ({ts_short})\n\n"));
-
-            if let Some(tool_calls) = msg["tool_calls"].as_array() {
-                for tc in tool_calls {
-                    let name = tc["name"].as_str().unwrap_or("unknown");
-                    let args = tc["arguments"].to_string();
-                    md.push_str(&format!("### Tool: {name}\n```json\n{args}\n```\n\n"));
-                }
-            }
-
-            if !content.is_empty() {
-                md.push_str(content);
-                md.push_str("\n\n");
-            }
-        }
-    }
-    md
-}
-
-
-// ── Branching endpoints ──────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-pub(crate) struct ActivePathQuery {
-    leaf: Option<uuid::Uuid>,
-    agent: Option<String>,
 }
 
 // ── Session Auto-Retry ──────────────────────────────────────────────────────
@@ -1275,28 +1049,6 @@ pub(crate) async fn api_session_chain(
     }
 }
 
-/// GET /api/sessions/{id}/active-path?agent=xxx -- resolve the linear message chain for display.
-///
-/// Requires `?agent=<owner>` (audit 2026-05-08, IDOR).
-pub(crate) async fn api_active_path(
-    State(infra): State<InfraServices>,
-    Path(session_id): Path<uuid::Uuid>,
-    Query(q): Query<ActivePathQuery>,
-) -> impl IntoResponse {
-    let agent = match q.agent.as_deref() {
-        Some(a) if !a.is_empty() => a,
-        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
-    };
-    if let Err(resp) = verify_session_agent(&infra.db, session_id, agent).await {
-        return resp;
-    }
-
-    match sessions::resolve_active_path(&infra.db, session_id, q.leaf).await {
-        Ok(msgs) => Json(json!({ "messages": msgs })).into_response(),
-        Err(e) => ApiError::Internal(e.to_string()).into_response(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1317,60 +1069,6 @@ mod tests {
             "the session must be claimable again once the run finished"
         );
         RETRY_IN_FLIGHT.remove(&id);
-    }
-
-    #[test]
-    fn format_session_markdown_basic_structure() {
-        let data = serde_json::json!({
-            "session": {"title": "Test", "agent_id": "Arty", "started_at": "2026-04-27T10:00:00Z"},
-            "messages": []
-        });
-        let md = format_session_as_markdown(&data);
-        assert!(md.contains("# Test"));
-        assert!(md.contains("**Agent:** Arty"));
-        assert!(md.contains("2026-04-27T10:00:00Z"));
-    }
-
-    #[test]
-    fn format_session_markdown_user_message() {
-        let data = serde_json::json!({
-            "session": {"title": "S", "agent_id": "A", "started_at": ""},
-            "messages": [{"role": "user", "content": "Hello", "created_at": "2026-04-27T10:01:00Z", "tool_calls": []}]
-        });
-        let md = format_session_as_markdown(&data);
-        assert!(md.contains("## User"));
-        assert!(md.contains("Hello"));
-    }
-
-    #[test]
-    fn format_session_markdown_tool_call() {
-        let data = serde_json::json!({
-            "session": {"title": "S", "agent_id": "A", "started_at": ""},
-            "messages": [{"role": "assistant", "content": "", "created_at": "2026-04-27T10:02:00Z",
-                "tool_calls": [{"name": "web_search", "arguments": {"q": "rust"}}]}]
-        });
-        let md = format_session_as_markdown(&data);
-        assert!(md.contains("### Tool: web_search"));
-        assert!(md.contains("```json"));
-    }
-
-    #[test]
-    fn format_session_markdown_missing_fields_use_defaults() {
-        let data = serde_json::json!({});
-        let md = format_session_as_markdown(&data);
-        assert!(md.contains("# Untitled"));
-        assert!(md.contains("**Agent:** unknown"));
-    }
-
-    #[test]
-    fn format_session_markdown_truncates_long_timestamp() {
-        let data = serde_json::json!({
-            "session": {"title": "S", "agent_id": "A", "started_at": ""},
-            "messages": [{"role": "user", "content": "m", "created_at": "2026-04-27T10:05:00.000Z", "tool_calls": []}]
-        });
-        let md = format_session_as_markdown(&data);
-        assert!(md.contains("2026-04-27T10:05"), "truncated prefix must be present");
-        assert!(!md.contains("2026-04-27T10:05:00.000Z"), "full timestamp must not appear — truncated to 16 chars");
     }
 }
 

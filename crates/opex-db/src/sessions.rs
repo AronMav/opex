@@ -1667,71 +1667,6 @@ pub async fn trim_session_messages(db: &PgPool, session_id: Uuid, max_messages: 
     Ok(result.rows_affected())
 }
 
-/// Export a full session as JSON (metadata + all messages).
-pub async fn export_session(db: &PgPool, session_id: Uuid) -> sqlx::Result<Option<serde_json::Value>> {
-    // 1. Fetch session metadata
-    let session = sqlx::query_as::<_, Session>(
-        "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants, retry_count, parent_session_id, end_reason \
-         FROM sessions WHERE id = $1",
-    )
-    .bind(session_id)
-    .fetch_optional(db)
-    .await?;
-
-    let session = match session {
-        Some(s) => s,
-        None => return Ok(None),
-    };
-
-    // 2. Fetch all messages ordered by created_at ASC
-    let messages = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, role, content, tool_calls, tool_call_id, created_at, agent_id, feedback, edited_at, status, thinking_blocks, parent_message_id, branch_from_message_id, abort_reason, is_mirror \
-         FROM messages WHERE session_id = $1 \
-         ORDER BY created_at ASC",
-    )
-    .bind(session_id)
-    .fetch_all(db)
-    .await?;
-
-    let msg_json: Vec<serde_json::Value> = messages
-        .iter()
-        .map(|m| {
-            serde_json::json!({
-                "id": m.id.to_string(),
-                "role": m.role,
-                "content": m.content,
-                "tool_calls": m.tool_calls,
-                "tool_call_id": m.tool_call_id,
-                "created_at": m.created_at.to_rfc3339(),
-                "agent_id": m.agent_id,
-                "feedback": m.feedback.unwrap_or(0),
-                "edited_at": m.edited_at.map(|t| t.to_rfc3339()),
-                "status": m.status,
-                "is_mirror": m.is_mirror,
-            })
-        })
-        .collect();
-
-    // 3. Return as JSON with version field
-    Ok(Some(serde_json::json!({
-        "version": 1,
-        "session": {
-            "id": session.id.to_string(),
-            "agent_id": session.agent_id,
-            "user_id": session.user_id,
-            "channel": session.channel,
-            "started_at": session.started_at.to_rfc3339(),
-            "last_message_at": session.last_message_at.to_rfc3339(),
-            "title": session.title,
-            "metadata": session.metadata,
-            "run_status": session.run_status,
-            "participants": session.participants,
-        },
-        "messages": msg_json,
-        "message_count": msg_json.len(),
-    })))
-}
-
 /// Add an agent to a session's participants list (idempotent).
 /// If `ui_event_tx` is provided, broadcasts a `session_updated` event on success.
 pub async fn add_participant(
@@ -1785,23 +1720,6 @@ pub async fn get_participants(db: &PgPool, session_id: Uuid) -> Result<Vec<Strin
     Ok(row.get("participants"))
 }
 
-/// Get the most recent UI session for an agent (within 4-hour window).
-pub async fn get_latest_ui_session(db: &PgPool, agent_id: &str) -> Result<Option<Session>> {
-    let session = sqlx::query_as::<_, Session>(
-        "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants, retry_count, parent_session_id, end_reason \
-         FROM sessions \
-         WHERE agent_id = $1 AND channel = 'ui' \
-           AND last_message_at > now() - interval '4 hours' \
-         ORDER BY last_message_at DESC \
-         LIMIT 1",
-    )
-    .bind(agent_id)
-    .fetch_optional(db)
-    .await?;
-
-    Ok(session)
-}
-
 // ── Branching support ────────────────────────────────────────────────────────
 
 /// Walk the `parent_message_id` chain from `leaf_message_id` back to root,
@@ -1828,40 +1746,6 @@ pub async fn load_branch_messages(
     .await?;
 
     Ok(rows)
-}
-
-/// Resolve the active path for a session.
-/// If `leaf_message_id` is provided, returns the branch chain ending at that message.
-/// If `None`, finds the latest leaf (a message with no children) and returns its chain.
-/// Falls back to flat history when no branching columns are populated.
-pub async fn resolve_active_path(
-    db: &PgPool,
-    session_id: Uuid,
-    leaf_message_id: Option<Uuid>,
-) -> Result<Vec<MessageRow>> {
-    if let Some(leaf_id) = leaf_message_id {
-        return load_branch_messages(db, session_id, leaf_id).await;
-    }
-
-    // Auto-detect latest leaf: find messages that are not a parent of any other message
-    let leaf_row = sqlx::query(
-        "SELECT m.id FROM messages m \
-         WHERE m.session_id = $1 \
-           AND NOT EXISTS (SELECT 1 FROM messages c WHERE c.parent_message_id = m.id AND c.session_id = $1) \
-         ORDER BY m.created_at DESC LIMIT 1",
-    )
-    .bind(session_id)
-    .fetch_optional(db)
-    .await?;
-
-    match leaf_row {
-        Some(row) => {
-            let leaf_id: Uuid = row.get("id");
-            load_branch_messages(db, session_id, leaf_id).await
-        }
-        // No branching data — fall back to flat history
-        None => load_messages(db, session_id, None).await,
-    }
 }
 
 /// Find the parent of a given message (the message immediately before it in chronological order).

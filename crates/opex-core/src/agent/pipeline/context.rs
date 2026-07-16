@@ -7,10 +7,8 @@ use uuid::Uuid;
 
 use opex_types::{Message, MessageRole};
 use crate::agent::context_builder::{ContextBuilder, ContextSnapshot};
-use crate::agent::engine::row_to_message;
 use crate::agent::history;
 use crate::agent::providers::LlmProvider;
-use crate::agent::session_manager::SessionManager;
 use crate::agent::tool_loop::LoopDetector;
 use crate::config::CompactionConfig;
 use crate::secrets::SecretsManager;
@@ -361,108 +359,6 @@ pub async fn compact_messages_force<F, Fut>(
             });
         }
     }
-}
-
-/// Compact a specific session's messages via API.
-/// Returns `(facts_extracted, new_message_count)`.
-#[allow(clippy::too_many_arguments)]
-pub async fn compact_session<F, Fut>(
-    db: &sqlx::PgPool,
-    provider: &dyn LlmProvider,
-    compaction_provider: Option<&dyn LlmProvider>,
-    language: &str,
-    agent_name: &str,
-    session_id: Uuid,
-    _audit_queue: &crate::db::audit_queue::AuditQueue,
-    index_facts: F,
-) -> Result<(usize, usize)>
-where
-    F: FnOnce(Vec<String>) -> Fut,
-    Fut: std::future::Future<Output = ()>,
-{
-    let rows = SessionManager::new(db.clone())
-        .load_messages(session_id, Some(2000))
-        .await?;
-    if rows.len() < 4 {
-        anyhow::bail!("session too short to compact ({} messages)", rows.len());
-    }
-
-    let mut messages: Vec<Message> = rows.iter().map(row_to_message).collect();
-
-    // Force compaction by using max_tokens=1
-    let facts = history::compact_if_needed(
-        &mut messages,
-        provider,
-        compaction_provider,
-        1,
-        2,
-        Some(language),
-    )
-    .await?;
-
-    let facts_count = facts.as_ref().map(|f| f.len()).unwrap_or(0);
-
-    if let Some(facts) = facts {
-        index_facts(facts).await;
-    }
-
-    // Replace messages in DB (atomic transaction)
-    let mut tx = db.begin().await?;
-    sqlx::query("DELETE FROM messages WHERE session_id = $1")
-        .bind(session_id)
-        .execute(&mut *tx)
-        .await?;
-
-    for msg in &messages {
-        let role = match msg.role {
-            MessageRole::User => "user",
-            MessageRole::Assistant => "assistant",
-            MessageRole::System => "system",
-            MessageRole::Tool => "tool",
-        };
-        let tc_json = msg
-            .tool_calls
-            .as_ref()
-            .and_then(|tc| serde_json::to_value(tc).ok());
-        sqlx::query(
-            "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, agent_id) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
-        )
-        .bind(session_id)
-        .bind(role)
-        .bind(&msg.content)
-        .bind(tc_json.as_ref())
-        .bind(msg.tool_call_id.as_ref().map(|id| id.as_str()))
-        .bind(if role == "assistant" {
-            Some(agent_name)
-        } else {
-            None::<&str>
-        })
-        .execute(&mut *tx)
-        .await?;
-    }
-    tx.commit().await?;
-
-    let new_count = messages.len();
-    crate::db::audit::audit_spawn(
-        db.clone(),
-        agent_name.to_string(),
-        crate::db::audit::event_types::COMPACTION,
-        Some("api".to_string()),
-        serde_json::json!({
-            "session_id": session_id.to_string(),
-            "facts": facts_count,
-            "new_messages": new_count,
-            "original_messages": rows.len(),
-        }),
-    );
-
-    tracing::info!(
-        session_id = %session_id, facts = facts_count,
-        old = rows.len(), new = new_count, "session compacted via API"
-    );
-
-    Ok((facts_count, new_count))
 }
 
 #[cfg(test)]
