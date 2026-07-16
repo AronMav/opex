@@ -86,6 +86,10 @@ pub struct AppConfig {
     /// Video-summarisation tunables (`[video]` section).
     #[serde(default)]
     pub video: VideoConfig,
+    /// Global tool-dispatcher settings (`[tool_dispatcher]`). Promotes named
+    /// extension tools into the native tools[] of every dispatcher-mode agent.
+    #[serde(default)]
+    pub tool_dispatcher: GlobalToolDispatcherConfig,
 }
 
 // ── SemanticCacheConfig ───────────────────────────────────────────────────────
@@ -1753,6 +1757,20 @@ impl Default for ToolDispatcherConfig {
             promotion_max: default_promotion_max(),
         }
     }
+}
+
+/// Global (process-wide) tool-dispatcher settings, `[tool_dispatcher]` in
+/// `opex.toml`. Distinct from the per-agent `[agent.tool_dispatcher]`
+/// (`ToolDispatcherConfig`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
+pub struct GlobalToolDispatcherConfig {
+    /// Extension tool names promoted into the native `tools[]` array for EVERY
+    /// dispatcher-mode agent (main agents and dispatcher-mode subagents), and
+    /// excluded from the dispatcher catalogue/hint/suppressor. Subject to
+    /// per-agent deny-list and `required_base` at apply time. Empty by default
+    /// (no behaviour change).
+    #[serde(default)]
+    pub always_core: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -3673,6 +3691,37 @@ model = "gpt-4o"
         std::fs::write(&p, "[agent]\nname=\"A\"\nprovider=\"p\"\nmodel=\"m\"\n[agent.soul]\nenabled=true\n[agent.emotion]\nenabled=true\n").unwrap();
         assert!(AgentConfig::load(&p).is_ok(), "emotion.enabled with soul.enabled must load");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── GlobalToolDispatcherConfig parsing ──
+
+    #[test]
+    fn global_tool_dispatcher_defaults_empty_and_parses() {
+        // Absent section ⇒ empty list (backward compat).
+        let cfg: AppConfig = toml::from_str(
+            r#"
+            [gateway]
+            listen = "0.0.0.0:18789"
+            [database]
+            url = "postgres://localhost/test"
+            "#,
+        )
+        .expect("minimal config parses");
+        assert!(cfg.tool_dispatcher.always_core.is_empty());
+
+        // Present section ⇒ list parses.
+        let cfg2: AppConfig = toml::from_str(
+            r#"
+            [gateway]
+            listen = "0.0.0.0:18789"
+            [database]
+            url = "postgres://localhost/test"
+            [tool_dispatcher]
+            always_core = ["sequentialthinking"]
+            "#,
+        )
+        .expect("config with [tool_dispatcher] parses");
+        assert_eq!(cfg2.tool_dispatcher.always_core, vec!["sequentialthinking".to_string()]);
     }
 }
 
