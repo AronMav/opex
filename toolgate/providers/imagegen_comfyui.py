@@ -89,6 +89,10 @@ class ComfyUIImageGen:
         # Hard ceiling per side (guards the GPU against an over-large request —
         # the model is told 2K max, but a stray 4096 would OOM ComfyUI).
         self._max_dim = int(opts.get("comfy_max_dim", 2048))
+        # Optional LoRA strength override (the krea2 content LoRA works in ~1.0–1.5).
+        # None keeps whatever the workflow's LoraLoaderModelOnly node carries.
+        ls = opts.get("comfy_lora_strength")
+        self._lora_strength = float(ls) if ls is not None else None
         wf = opts.get("workflow")
         self._workflow = wf if isinstance(wf, dict) and wf else DEFAULT_WORKFLOW
         nodes = opts.get("nodes")
@@ -141,6 +145,11 @@ class ComfyUIImageGen:
                 if isinstance(node, dict) and node.get("class_type") == "UNETLoader":
                     node.setdefault("inputs", {})["unet_name"] = mdl
                     break
+
+        if self._lora_strength is not None:
+            for node in graph.values():
+                if isinstance(node, dict) and node.get("class_type") == "LoraLoaderModelOnly":
+                    node.setdefault("inputs", {})["strength_model"] = self._lora_strength
 
         return graph
 

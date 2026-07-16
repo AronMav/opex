@@ -75,6 +75,19 @@ def test_model_override_sets_unet_name():
     assert graph["1"]["inputs"]["unet_name"] == "other_checkpoint.safetensors"
 
 
+def test_lora_strength_override():
+    drv = ComfyUIImageGen(base_url=BASE, options={"comfy_lora_strength": 1.5})
+    graph = drv._build_graph("x", "512x512", None)
+    assert graph["4"]["inputs"]["strength_model"] == 1.5
+
+
+def test_lora_strength_default_kept_when_unset():
+    drv = ComfyUIImageGen(base_url=BASE)
+    graph = drv._build_graph("x", "512x512", None)
+    # graph's baked-in default (1.2) is untouched
+    assert graph["4"]["inputs"]["strength_model"] == 1.2
+
+
 def test_missing_prompt_node_raises():
     drv = ComfyUIImageGen(base_url=BASE, options={"workflow": {
         "1": {"class_type": "UNETLoader", "inputs": {}},
