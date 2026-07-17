@@ -30,8 +30,6 @@ export type ChatStoreState = ChatStore;
 
 // ── Agent-scoped helpers ─────────────────────────────────────────────────────
 
-const EMPTY_SELECTED_BRANCHES: Readonly<Record<string, string>> = Object.freeze({});
-
 /** Currently-selected agent name. Stable primitive — no `useShallow` required. */
 export const selectCurrentAgent = (s: ChatStoreState): string => s.currentAgent;
 
@@ -41,10 +39,6 @@ export const selectCurrentAgent = (s: ChatStoreState): string => s.currentAgent;
  * subscription, but callers that only read a subset SHOULD use the narrower
  * selectors below to avoid unnecessary re-renders.
  */
-/** Active session id for a given agent (null if none). */
-export const selectActiveSessionId = (agent: string) =>
-  (s: ChatStoreState): string | null => s.agents[agent]?.activeSessionId ?? null;
-
 /** Active session id for the CURRENT agent. */
 export const selectCurrentActiveSessionId = (s: ChatStoreState): string | null =>
   s.agents[s.currentAgent]?.activeSessionId ?? null;
@@ -56,12 +50,6 @@ export const selectCurrentActiveSessionId = (s: ChatStoreState): string | null =
  */
 export const selectCurrentPhaseIsActive = (s: ChatStoreState): boolean =>
   isActivePhase(s.agents[s.currentAgent]?.connectionPhase);
-
-
-/** Branch selection map (stable reference when empty). */
-export const selectSelectedBranches = (agent: string) =>
-  (s: ChatStoreState): Record<string, string> =>
-    s.agents[agent]?.selectedBranches ?? (EMPTY_SELECTED_BRANCHES as Record<string, string>);
 
 // ── Message selectors ────────────────────────────────────────────────────────
 
@@ -96,11 +84,6 @@ export type ChatActions = ReturnType<typeof selectActions>;
 /** Read the bundle of chat actions with shallow-equal re-render gating. */
 export function useChatActions(): ChatActions {
   return useChatStore(useShallow(selectActions));
-}
-
-/** Read selected branches for a given agent with shallow-equal gating. */
-export function useSelectedBranches(agent: string): Record<string, string> {
-  return useChatStore(useShallow(selectSelectedBranches(agent)));
 }
 
 // ── Derived mode selectors ────────────────────────────────────────────────────

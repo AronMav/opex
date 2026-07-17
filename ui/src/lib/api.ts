@@ -197,14 +197,6 @@ export async function apiFetchRaw(
   }
 }
 
-/** GET that returns a Blob (media, file downloads). No client abort — large
- *  downloads must not be cut off by the 30s JSON timeout (F057). */
-export async function apiGetBlob(path: string, extraHeaders?: Record<string, string>): Promise<Blob> {
-  const resp = await apiFetchRaw(path, { method: "GET", headers: extraHeaders }, { timeoutMs: null });
-  if (!resp.ok) throw new Error(await extractError(resp));
-  return resp.blob();
-}
-
 /** POST with FormData (file uploads). Does NOT set Content-Type. No client abort —
  *  large uploads must not be cut off by the 30s JSON timeout (F057). */
 export async function apiPostFormData<T>(path: string, formData: FormData, extraHeaders?: Record<string, string>): Promise<T> {
@@ -274,23 +266,6 @@ export async function shareSession(
     if (!resp.ok) return { ok: false, error: await extractError(resp) };
     const data = (await resp.json()) as { token: string };
     return { ok: true, token: data.token };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Unknown error" };
-  }
-}
-
-/** Revoke a session's share link. */
-export async function unshareSession(
-  sessionId: string,
-  agent: string,
-): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const resp = await apiFetch(
-      `/api/sessions/${sessionId}/share?agent=${encodeURIComponent(agent)}`,
-      { method: "DELETE" },
-    );
-    if (!resp.ok) return { ok: false, error: await extractError(resp) };
-    return { ok: true };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Unknown error" };
   }

@@ -15,7 +15,6 @@ export function uuid(): string {
 // ── Constants ────────────────────────────────────────────────────────────────
 
 export const SESSIONS_PAGE_SIZE = 40;
-export const MESSAGES_HISTORY_LIMIT = 100;
 export const MAX_INPUT_LENGTH = 32_000;
 export const STREAM_THROTTLE_MS = 50;
 

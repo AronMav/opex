@@ -473,18 +473,6 @@ export interface SessionFailuresResponse {
   offset: number;
 }
 
-/**
- * `[agent_tool]` section of `AppConfig` — multi-agent timeouts.
- *
- * Field names mirror the Rust `AgentToolConfig` struct in
- * `crates/opex-core/src/config/mod.rs` exactly.
- */
-export interface AgentToolConfig {
-  message_wait_for_idle_secs: number;
-  message_result_secs: number;
-  safety_timeout_secs: number;
-}
-
 // ── Session compression chains ────────────────────────────────────────────────
 
 export interface SessionChainEntry {
@@ -499,23 +487,6 @@ export interface SessionChainEntry {
 
 export interface SessionChainResponse {
   chain: SessionChainEntry[];
-}
-
-// ── File Handler Hub (Phase 4) ─────────────────────────────────────────────────
-// Source: crates/opex-core/src/gateway/handlers/files.rs (HandlerButton)
-// GET /api/files/{upload_id}/actions → { buttons: FileActionButton[] }
-// `upload_id` is the upload ROW UUID (the `filename` field of POST /api/media/upload).
-// `label` is already localized server-side by the request locale.
-
-export interface FileActionButton {
-  id: string;
-  label: string;
-  icon: string;
-  params: Record<string, unknown>;
-}
-
-export interface FileActionsResponse {
-  buttons: FileActionButton[];
 }
 
 // ── File Handlers admin (Tools tab) ────────────────────────────────────────────

@@ -31,16 +31,6 @@ export function saveLastSession(agent: string, sessionId?: string) {
   } catch { /* ignore */ }
 }
 
-export function clearLastSessionId(agent: string) {
-  try {
-    const data = loadLastSession();
-    if (data.sessions?.[agent]) {
-      delete data.sessions[agent];
-      localStorage.setItem(LAST_SESSION_KEY, JSON.stringify(data));
-    }
-  } catch { /* ignore */ }
-}
-
 export function getInitialAgent(agents: string[]): string {
   const { agent: savedAgent } = loadLastSession();
   if (savedAgent && agents.includes(savedAgent)) return savedAgent;
