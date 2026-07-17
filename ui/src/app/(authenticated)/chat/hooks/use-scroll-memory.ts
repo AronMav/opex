@@ -151,6 +151,15 @@ export function useScrollMemoryWrite(
  * highlight. Attempts at most once per session id — a session flipping in
  * and out of `isStreaming` doesn't re-trigger a restore once it has already
  * been attempted (successfully or not).
+ *
+ * A PENDING jump target always wins over scroll memory: the palette /
+ * bookmark flow sets its target BEFORE navigating (setTarget →
+ * selectSession/router.push → ChatThread mounts → this effect fires), so an
+ * unconditional setTarget here would clobber the user's explicit jump and
+ * land them on the remembered scroll position instead of the searched
+ * message. If any target is already pending, the restore yields (and the
+ * per-session attempt is still consumed — the explicit jump defines where
+ * the user is now; re-restoring after it would yank them away).
  */
 export function useScrollMemoryRestore(sessionId: string | null, isStreaming: boolean): void {
   const attemptedRef = useRef<string | null>(null);
@@ -159,6 +168,9 @@ export function useScrollMemoryRestore(sessionId: string | null, isStreaming: bo
     if (!sessionId || isStreaming) return;
     if (attemptedRef.current === sessionId) return;
     attemptedRef.current = sessionId;
+
+    // Yield to a pending palette/bookmark jump — a live target always wins.
+    if (usePaletteStore.getState().target) return;
 
     const storedId = getStoredScrollPos(sessionId);
     if (!storedId) return;

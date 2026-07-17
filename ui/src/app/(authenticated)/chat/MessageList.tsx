@@ -329,6 +329,11 @@ export function MessageList({
         initialTopMostItemIndex={messages.length > 0 ? messages.length - 1 : 0}
         increaseViewportBy={{ top: 500, bottom: 200 }}
         rangeChanged={(range) => {
+          // NOTE: rangeChanged reports the RENDERED range, which includes the
+          // 500px top overscan from increaseViewportBy — react-virtuoso offers
+          // no visible-only range callback, and computing one would need
+          // custom scroll math. Acceptable imprecision: the restored position
+          // may land up to ~500px above the exact first visible row.
           const item = virtualItems[range.startIndex];
           recordVisibleMessage(item && item.id !== THINKING_ID ? item.id : null);
         }}

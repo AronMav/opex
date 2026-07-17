@@ -15,10 +15,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
-const { setTargetMock } = vi.hoisted(() => ({ setTargetMock: vi.fn() }));
+const { setTargetMock, paletteState } = vi.hoisted(() => ({
+  setTargetMock: vi.fn(),
+  // Mutable holder so tests can stage a PENDING jump target — the restore
+  // guard reads usePaletteStore.getState().target before setting its own.
+  paletteState: {
+    target: null as { sessionId: string; messageId?: string; silent?: boolean } | null,
+  },
+}));
 
 vi.mock("@/stores/palette-store", () => ({
-  usePaletteStore: { getState: () => ({ setTarget: setTargetMock }) },
+  usePaletteStore: {
+    getState: () => ({ target: paletteState.target, setTarget: setTargetMock }),
+  },
 }));
 
 import {
@@ -33,6 +42,7 @@ const SID = "sess-1";
 beforeEach(() => {
   localStorage.clear();
   setTargetMock.mockClear();
+  paletteState.target = null;
   vi.useFakeTimers();
 });
 
@@ -149,5 +159,19 @@ describe("useScrollMemoryRestore", () => {
 
     rerender({ isStreaming: false });
     expect(setTargetMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("yields to a PENDING palette/bookmark jump target (does not clobber it with the stored position)", () => {
+    // Cross-agent palette flow: SearchPalette sets a real (non-silent) target,
+    // then navigates; ChatThread mounts and this restore effect fires with a
+    // stored scroll position for the same session. The explicit jump must win.
+    setStoredScrollPos(SID, "m7");
+    paletteState.target = { sessionId: SID, messageId: "searched-msg" };
+
+    renderHook(() => useScrollMemoryRestore(SID, false));
+
+    // Restore yielded: setTarget was never called, the pending target is intact.
+    expect(setTargetMock).not.toHaveBeenCalled();
+    expect(paletteState.target).toEqual({ sessionId: SID, messageId: "searched-msg" });
   });
 });
