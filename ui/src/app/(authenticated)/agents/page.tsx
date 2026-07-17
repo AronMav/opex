@@ -119,7 +119,7 @@ export const emptyForm: FormState = {
   driftEnabled: false,
   driftThreshold: "0.15",
   driftMinHistory: "6",
-  driftBaselineTurns: "3",
+  driftBaselineTurns: "8",
   driftCorrect: false,
   driftAnchor: "",
   initiativeEnabled: false,

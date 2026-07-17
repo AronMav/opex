@@ -497,6 +497,7 @@
   "agents.drift_anchor": "Якорь личности",
   "agents.drift_anchor_hint": "1–2 предложения-напоминание, кто этот агент.",
   "agents.drift_threshold": "Порог дрейфа",
+  "agents.drift_threshold_deprecated": "Заменён само-калибрующимся z-score (пока только через конфиг).",
   "agents.drift_min_history": "Мин. ходов истории",
   "agents.drift_baseline_turns": "Опорных ходов",
   "agents.section_initiative": "Проактивная инициатива",

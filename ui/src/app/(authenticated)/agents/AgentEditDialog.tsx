@@ -696,8 +696,8 @@ export function AgentEditDialog({
                         />
                       </Field>
                       <AdvancedSection label={t("common.advanced")}>
-                        <Field label={t("agents.drift_threshold")} labelClassName="text-xs">
-                          <Input type="number" step="0.01" min={0} max={2} className="bg-background border-border font-mono text-sm h-8" value={form.driftThreshold} onChange={(e) => upd({ driftThreshold: e.target.value })} />
+                        <Field label={t("agents.drift_threshold")} labelClassName="text-xs" hint={t("agents.drift_threshold_deprecated")}>
+                          <Input type="number" step="0.01" min={0} max={2} disabled className="bg-background border-border font-mono text-sm h-8" value={form.driftThreshold} onChange={(e) => upd({ driftThreshold: e.target.value })} />
                         </Field>
                         <Field label={t("agents.drift_min_history")} labelClassName="text-xs">
                           <Input type="number" min={2} max={50} className="bg-background border-border font-mono text-sm h-8" value={form.driftMinHistory} onChange={(e) => upd({ driftMinHistory: e.target.value })} />

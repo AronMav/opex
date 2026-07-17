@@ -259,6 +259,11 @@ describe("formToPayload", () => {
     expect(p.drift.threshold).toBe(0.15);
     expect(p.emotion.intensity_importance_k).toBe(3);
   });
+
+  it("new-agent form default for driftBaselineTurns is 8 (matches backend v2 default)", () => {
+    const p = formToPayload({ ...emptyForm });
+    expect(p.drift.baseline_turns).toBe(8);
+  });
 });
 
 // ── detailToForm tests ──────────────────────────────────────────────────────
