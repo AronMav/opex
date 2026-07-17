@@ -360,11 +360,23 @@ export async function processSSEStream(
               sseLog(agent, "step-start-already-on-id", { id: event.messageId });
               break;
             }
+            const prevIterationId = session.buffer.assistantId;
             if (session.buffer.snapshot().length > 0) {
               session.commit();
             }
             session.buffer.reset();
             session.buffer.assistantId = event.messageId;
+            // Settle the PREVIOUS iteration's message: it stopped receiving
+            // text the moment the buffer switched ids, so its inline caret
+            // must stop now — `finish` only sweeps at end-of-turn, and the
+            // "calling tool" bubble must not blink for the whole tool run.
+            session.writeDraft((agentDraft: AgentState) => {
+              const src = agentDraft.messageSource;
+              const liveMessages: ChatMessage[] =
+                src.mode === "live" || src.mode === "finishing" ? src.messages : [];
+              const prev = liveMessages.find((m) => m.id === prevIterationId);
+              if (prev && prev.status === "streaming") prev.status = "complete";
+            });
             sseLog(agent, "step-start-new-message", { id: event.messageId });
             break;
           }
@@ -571,21 +583,22 @@ export async function processSSEStream(
             receivedFinishEvent = true;
             session.cancelScheduledCommit();
             session.buffer.flushText();
-            // Capture the id BEFORE reset() below regenerates buffer.assistantId,
-            // so the status settle after reset can still find the right message.
-            const finishedId = session.buffer.assistantId;
             session.commit("streaming");  // final snapshot of all parts; "error" guard in commit() prevents overwrite
             session.buffer.reset();       // clean buffer for next LLM iteration
 
-            // Settle the just-finished assistant message's status to "complete"
-            // so the inline caret (TextPart, keyed on status === "streaming")
-            // stops blinking. Unconditional — not gated on receivedSessionId.
+            // The turn is over: SWEEP the live/finishing messages and settle
+            // every status === "streaming" to "complete" so the inline caret
+            // (TextPart, keyed on status === "streaming") stops blinking on
+            // ALL iterations — not just the final one (step-start settles
+            // earlier iterations eagerly; this covers any stragglers).
+            // Unconditional — not gated on receivedSessionId.
             session.writeDraft((agentDraft: AgentState) => {
               const src = agentDraft.messageSource;
               const liveMessages: ChatMessage[] =
                 src.mode === "live" || src.mode === "finishing" ? src.messages : [];
-              const idx = liveMessages.findIndex((m) => m.id === finishedId);
-              if (idx >= 0) liveMessages[idx].status = "complete";
+              for (const m of liveMessages) {
+                if (m.status === "streaming") m.status = "complete";
+              }
             });
 
             if (receivedSessionId) {
@@ -603,19 +616,21 @@ export async function processSSEStream(
             if (errText.includes("turn limit") || errText.includes("cycle detected")) {
               session.write({ turnLimitMessage: errText });
             } else {
-              const erroredId = session.buffer.assistantId;
               session.writeDraft((agentDraft: AgentState) => {
                 agentDraft.streamError = errText;
                 agentDraft.connectionError = errText;
                 agentDraft.isLlmReconnecting = false;
                 agentDraft.connectionPhase = "error";
-                // Settle the current live message so the inline caret stops —
-                // an errored turn must not keep rendering as "streaming".
+                // Sweep: settle EVERY live message still marked "streaming" —
+                // an error can land after step-start switched buffer ids, so
+                // targeting only the current id would leave earlier
+                // iterations' carets blinking on a dead turn.
                 const src = agentDraft.messageSource;
                 const liveMessages: ChatMessage[] =
                   src.mode === "live" || src.mode === "finishing" ? src.messages : [];
-                const idx = liveMessages.findIndex((m) => m.id === erroredId);
-                if (idx >= 0) liveMessages[idx].status = "complete";
+                for (const m of liveMessages) {
+                  if (m.status === "streaming") m.status = "complete";
+                }
               });
             }
             break;
@@ -656,6 +671,21 @@ export async function processSSEStream(
       } else {
         callbacks.onFinished?.();
       }
+
+      // Turn is terminal (error / finish / terminal runStatus — the
+      // connection-drop branch returned above). Sweep any live message still
+      // marked "streaming": the leftover-buffer commit() just above can land
+      // a message AFTER the in-handler sweeps ran (e.g. an error arriving
+      // before the throttled commit of the current iteration), and a
+      // terminal turn must never leave a blinking caret.
+      session.writeDraft((agentDraft: AgentState) => {
+        const src = agentDraft.messageSource;
+        const liveMessages: ChatMessage[] =
+          src.mode === "live" || src.mode === "finishing" ? src.messages : [];
+        for (const m of liveMessages) {
+          if (m.status === "streaming") m.status = "complete";
+        }
+      });
 
       if (!isError) {
         // T7: "complete" folded into "idle". The finishing→history dance below

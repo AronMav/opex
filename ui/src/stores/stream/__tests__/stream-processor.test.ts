@@ -334,6 +334,36 @@ describe("processSSEStream", () => {
     expect(assistantMsg?.status).toBe("complete");
   });
 
+  it("error event mid multi-iteration sweeps ALL streaming messages to \"complete\"", async () => {
+    // Critical: an error can land after step-start switched buffer ids —
+    // settling only the current id would leave the earlier iteration's
+    // message blinking. The error handler must sweep every live message
+    // still marked "streaming".
+    const session = streamSessionManager.start("Arty");
+    const frames = [
+      `data: ${JSON.stringify({ type: "start", messageId: "iter-0-uuid" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-start", id: "text-1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-delta", id: "text-1", delta: "Calling tool" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-end", id: "text-1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "step-start", stepId: "step_1", messageId: "iter-1-uuid" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-start", id: "text-2" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-delta", id: "text-2", delta: "partial" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-end", id: "text-2" })}\n\n`,
+      `data: ${JSON.stringify({ type: "error", errorText: "boom" })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      callbacks: makeCallbacks(),
+    });
+    await new Promise(r => setTimeout(r, 100));
+    const msgs = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
+    const assistants = msgs.filter((m) => m.role === "assistant");
+    expect(assistants.length).toBeGreaterThanOrEqual(1);
+    for (const msg of assistants) {
+      expect(msg.status, `message ${msg.id} must not stay "streaming"`).not.toBe("streaming");
+    }
+  });
+
   it("BUG-C: connectionPhase stays error after finish when sync error preceded it", async () => {
     const session = streamSessionManager.start("Arty");
     const frames = [

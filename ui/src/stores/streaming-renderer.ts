@@ -143,6 +143,25 @@ export function createStreamingRenderer(store: StoreAccess) {
         a.isLlmReconnecting = false;
       });
     }
+    // Settle streaming message statuses. On abort the stream-processor's
+    // finally-block commit is a no-op (disposeCurrent above bumped the
+    // generation → isCurrent false) and its post-finally handoff is gated on
+    // `!signal.aborted` — so nothing else stops the inline caret. Sweep every
+    // live/finishing message still marked "streaming" to "complete".
+    // Unconditional (NOT gated on an active connectionPhase): dispose() lands
+    // its own `connectionPhase: "idle"` write before we read the phase above,
+    // so gating the sweep on an active phase would skip the common Stop flow.
+    // Runs AFTER the generation bump — must be a direct store write, not a
+    // session.commit (which would silently drop as stale).
+    store.set((draft) => {
+      const a = draft.agents[agent];
+      if (!a) return;
+      const src = a.messageSource;
+      const msgs = src.mode === "live" || src.mode === "finishing" ? src.messages : [];
+      for (const m of msgs) {
+        if (m.status === "streaming") m.status = "complete";
+      }
+    });
   }
 
   /** Public: abort active stream AND notify backend (user Stop).

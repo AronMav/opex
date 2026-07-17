@@ -101,6 +101,69 @@ describe("multi-iteration: one step-start opens one ChatMessage per iteration", 
     expect(iter1.parts.some(p => p.type === "tool")).toBe(false);
   });
 
+  it("after finish, BOTH iteration messages carry status \"complete\" (no stuck caret on the tool bubble)", async () => {
+    // Critical 1: step-start commits the previous iteration's message with
+    // status "streaming", and `finish` used to settle only the FINAL
+    // iteration's id — leaving the earlier "calling tool" bubble blinking
+    // until the history refetch. step-start must settle the OLD id when it
+    // switches, and finish sweeps any stragglers.
+    const session = streamSessionManager.start("Arty");
+    const frames = [
+      // Iteration 0 — text + tool call
+      `data: ${JSON.stringify({ type: "start", messageId: "iter-0-uuid" })}\n\n`,
+      `data: ${JSON.stringify({ type: "step-start", stepId: "step_0", messageId: "iter-0-uuid" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-start", id: "text-1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-delta", id: "text-1", delta: "Calling tool" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-end", id: "text-1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "tool-input-start", toolCallId: "tc1", toolName: "search" })}\n\n`,
+      `data: ${JSON.stringify({ type: "tool-output-available", toolCallId: "tc1", output: "results" })}\n\n`,
+      // Iteration 1 — final answer
+      `data: ${JSON.stringify({ type: "step-start", stepId: "step_1", messageId: "iter-1-uuid" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-start", id: "text-2" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-delta", id: "text-2", delta: "Done!" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-end", id: "text-2" })}\n\n`,
+      `data: ${JSON.stringify({ type: "finish" })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      callbacks: makeCallbacks(),
+    });
+    await new Promise(r => setTimeout(r, 100));
+
+    const live = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
+    const assistants = live.filter(m => m.role === "assistant");
+    expect(assistants).toHaveLength(2);
+    for (const msg of assistants) {
+      expect(msg.status, `message ${msg.id} must not stay "streaming"`).toBe("complete");
+    }
+  });
+
+  it("step-start settles the PREVIOUS iteration's message to \"complete\" mid-turn", async () => {
+    // The earlier iteration stopped receiving text the moment step-start
+    // switched ids — its caret must stop DURING the turn, not only at finish.
+    const session = streamSessionManager.start("Arty");
+    const frames = [
+      `data: ${JSON.stringify({ type: "start", messageId: "iter-0-uuid" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-start", id: "text-1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-delta", id: "text-1", delta: "Calling tool" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-end", id: "text-1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "step-start", stepId: "step_1", messageId: "iter-1-uuid" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-start", id: "text-2" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-delta", id: "text-2", delta: "still stre" })}\n\n`,
+      // stream drops here — no finish. Iteration 0 must already be settled.
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      callbacks: makeCallbacks(),
+    });
+    await new Promise(r => setTimeout(r, 100));
+
+    const live = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
+    const iter0 = live.find(m => m.id === "iter-0-uuid");
+    expect(iter0).toBeDefined();
+    expect(iter0?.status).toBe("complete");
+  });
+
   it("step-start with same id as current buffer is a no-op (iteration 0 dedup)", async () => {
     const session = streamSessionManager.start("Arty");
     const frames = [
