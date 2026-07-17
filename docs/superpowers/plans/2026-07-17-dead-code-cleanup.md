@@ -5,9 +5,11 @@
 **Goal:** Safely remove unambiguously dead code and dead API routes across the OPEX
 monorepo (Rust, UI, toolgate, channels, DB schema) without changing runtime behaviour.
 
-**Architecture:** Five deploy-aligned batches executed and deployed in order (Rust+codegen →
+**Architecture:** Five deploy-aligned batches executed and deployed in order (Rust →
 UI / toolgate+channels → DB migration → dead routes), plus a final doc-rot sweep. Each task
 is a coherent group of deletions verified by a green build/test suite and committed atomically.
+(Revised after HEAD e42f0a65 re-verification: five wire-protocol enum variants originally slated
+for deletion are kept as forward reserves — see Tasks 1.4/1.5 — which also lifts the codegen gate.)
 
 **Tech Stack:** Rust 2024 (cargo, sqlx, ts-rs codegen), Next.js 16 / React 19 / vitest (UI),
 Python/FastAPI (toolgate), TypeScript/Bun (channels), PostgreSQL 17.
@@ -37,11 +39,22 @@ task therefore follows this cycle instead of red-green-refactor:
   `make lint` (clippy `-D warnings` — NOT covered by `cargo check`). Deploy = `make remote-deploy`.
 - **vitest runs ONLY from `ui/`** (never from repo root — CWD gotcha). UI deploy = `deploy-ui.sh`.
 - **rustls-tls only** — never introduce OpenSSL (not relevant to deletions, but do not "fix" by adding deps).
-- **Codegen order is load-bearing:** Batch 1 (opex-types + `gen-types`) must be deployed
-  BEFORE Batches 2/3 consume regenerated TS types.
+- **Codegen order (REVISED — hard-gate LIFTED):** After the HEAD e42f0a65 re-verification, Batch 1
+  no longer deletes any opex-types variant (Task 1.5 became comment-only). No TS types are
+  regenerated, so Batches 2 and 3 no longer depend on a Batch-1 regen. Batches may deploy in any
+  order. (Still deploy Batch 1 first by convention, but it is no longer load-bearing.)
 - **Reserves to KEEP untouched:** `wipe_agent_memory`, `SinkError::Full`, `usage_log.status` +
   `insert_aborted_row`/`STATUS_ABORTED*`, `set_shutdown_drain_reason`/`CancelReason::ShutdownDrain`,
-  deprecated tables `file_scenarios`/`file_scenario_outcomes`/`video_jobs`, `pending_messages`.
+  deprecated tables `file_scenarios`/`file_scenario_outcomes`/`video_jobs`, `pending_messages`,
+  and (added after HEAD e42f0a65 re-verification) the FIVE wire-protocol variants — never emitted
+  by Rust but with live consumer behavior: `StreamEvent::AgentSwitch` (SSE converter + UI multi-agent),
+  `ProcessingPhase::CallingTool`/`Composing` (channel-driver phase rendering),
+  `ChannelOutbound::Reload` (channels session teardown), `WsEvent::AuditEvent` (UI live audit
+  refresh). See Task 1.4 and 1.5 revision notes.
+- **Wire-protocol rule:** an enum variant with NO Rust emitter but a consumer-side handler in
+  `channels/src` or `ui/src` (or the SSE converter) is a protocol RESERVE, not dead code. The
+  audit's static heuristic can mis-grade these — always grep `channels/src` and `ui/src` for a
+  consumer before deleting any wire/enum variant.
 - **Between batches:** deploy, then `make doctor` (green) + `make logs` (no new errors) before
   starting the next batch. A broken batch is reverted with `git revert` independently.
 - Source of truth for what is dead: `docs/architecture/2026-07-17-dead-code-architecture-audit.md`.
@@ -49,10 +62,10 @@ task therefore follows this cycle instead of red-green-refactor:
 
 ---
 
-## BATCH 1 — Rust (opex-core, opex-db, opex-types, other crates) + codegen
+## BATCH 1 — Rust (opex-core, opex-db, opex-types, other crates)
 
 Deploy target after all Batch-1 tasks: `make remote-deploy`. Verify server build is green,
-clippy clean, codegen has no drift, then `make doctor`.
+clippy clean, then `make doctor`. (No TS regen this batch — Task 1.5 is comment-only.)
 
 ### Task 1.1: Dead functions in opex-db
 
@@ -168,26 +181,46 @@ git commit -m "chore(core): drop test-only pub symbols and their vacuous tests"
 
 ### Task 1.4: Dead enum variants (opex-core + opex-catalog)
 
+> **REVISED 2026-07-17 after re-verification against HEAD e42f0a65.** The audit under-graded
+> three variants: they have NO Rust emitter but DO have live consumer-side handlers, so they are
+> wire-protocol RESERVES (keep), not dead code. Do NOT delete them:
+> - `StreamEvent::AgentSwitch` — consumed by `sse_converter.rs:362` (→ SSE `agent-switch`),
+>   `coalescer.rs:29`, `sse_writer.rs:93`, and UI `stream-processor.ts:545` (roadmapped multi-agent
+>   flow). Construction only in `#[test]`.
+> - `ProcessingPhase::CallingTool`, `::Composing` — never constructed by the engine (only
+>   `Thinking` is emitted, `bootstrap.rs:192`), but `engine/stream.rs:30-31` serialises them to
+>   wire strings that the channel drivers actively branch on: `telegram.ts:749,753`,
+>   `slack.ts:159-160`, `discord.ts:154,158`. Leave the `#[allow(dead_code)] // part of the wire
+>   enum` markers in place (they are accurate here).
+>
+> Only the genuinely-dead variants below are removed in this task.
+
 **Files:**
-- Modify: `crates/opex-core/src/agent/stream_event.rs` (`StreamEvent::AgentSwitch`)
-- Modify: `crates/opex-core/src/agent/engine/stream.rs` (`ProcessingPhase::CallingTool`, `::Composing`)
 - Modify: `crates/opex-core/src/agent/pipeline/sink.rs` (`SinkError::Fatal` — **keep `Full`**)
 - Modify: `crates/opex-core/src/agent/hooks.rs` (`HookEvent::AfterResponse`, `::OnError`)
 - Modify: `crates/opex-core/src/agent/providers/error.rs` (`PartialState::Thinking`)
 - Modify: `crates/opex-catalog/src/lib.rs` (`CatalogSource::OpenRouter`, `::LiteLlm`;
   `Caps::{attachment, reasoning, tool_call}`)
 
-- [ ] **Step 1: Confirm-dead** — for each variant, confirm it is never CONSTRUCTED (only matched):
-```
-rg -w "AgentSwitch|Composing|Thinking|OpenRouter|LiteLlm" --type rust
-rg "SinkError::Fatal|HookEvent::AfterResponse|HookEvent::OnError|ProcessingPhase::CallingTool" --type rust
-```
-Expected: no construction site (`Variant { .. }` / `Variant(..)` on the build side) outside tests.
-`SinkError::Full` MUST remain — do not touch it. STOP if a real emitter exists.
+**Do NOT touch:** `stream_event.rs` `AgentSwitch`, `engine/stream.rs` `CallingTool`/`Composing`
+(wire-protocol reserves — see revision note above).
 
-- [ ] **Step 2: Delete** each variant. The compiler will flag now-unreachable `match` arms —
-  remove those arms too. For `Caps::{attachment,reasoning,tool_call}`, remove the fields and any
-  struct-literal initialisers of them in `opex-catalog`.
+- [ ] **Step 1: Confirm-dead** — for each variant, confirm it is never CONSTRUCTED AND has no
+  consumer-side handler (channels TS / UI / SSE converter):
+```
+rg -w "Thinking|OpenRouter|LiteLlm" --type rust
+rg "SinkError::Fatal|HookEvent::AfterResponse|HookEvent::OnError" --type rust
+rg -w "AfterResponse|OnError|PartialState" ui/src channels/src
+```
+Expected: no construction site outside tests AND no channels/UI consumer. `SinkError::Full` MUST
+remain. **STOP if a real emitter OR a consumer-side handler exists** — a wire variant with a
+channels/UI handler is a protocol reserve, not dead (this is how the audit mis-graded AgentSwitch).
+Note: `PartialState::Thinking` is a PROVIDER partial-state variant (`providers/error.rs`), distinct
+from `ProcessingPhase::Thinking` which is LIVE — do not confuse them.
+
+- [ ] **Step 2: Delete** each of the four dead variants. The compiler will flag now-unreachable
+  `match` arms — remove those arms too. For `Caps::{attachment,reasoning,tool_call}`, remove the
+  fields and any struct-literal initialisers of them in `opex-catalog`.
 
 - [ ] **Step 3: Verify compile**
 
@@ -200,42 +233,47 @@ git add -A
 git commit -m "chore(core): remove never-emitted enum variants (keep SinkError::Full reserve)"
 ```
 
-### Task 1.5: Dead protocol variants in opex-types + regenerate TS
+### Task 1.5: Fix wire-reserve markers in opex-types (NO deletion, NO regen)
+
+> **REVISED 2026-07-17 after HEAD e42f0a65 re-verification + architectural decision.**
+> `ChannelOutbound::Reload` and `WsEvent::AuditEvent` were originally slated for deletion. The
+> re-verification showed both are never-emitted-by-Rust wire variants WITH live consumer behavior:
+> - `Reload` → `channels/src/session.ts:210-215` performs a real session teardown (`cleanup()` +
+>   `resolve()`); `bridge.ts:321` acknowledges the type. Reserve for "core restarts a channel
+>   session without killing the process."
+> - `WsEvent::AuditEvent` → `ui/src/app/(authenticated)/monitor/page.tsx:591`
+>   `useWsSubscription("audit_event", …)` performs a real live-refresh (`auditRefetch()`); the
+>   backend audit pipeline (`db::audit_queue`) exists and only lacks the WS emit. Reserve for
+>   "live audit tail."
+>
+> **Decision: KEEP both** (protocol reserves, consistent with `AgentSwitch`/`CallingTool`/
+> `Composing`). Deleting them would remove working consumer code that must be re-added when the
+> producer lands. "No backward compat" does not apply — these are forward reserves, not
+> compatibility shims. This task therefore does NOT delete anything and does NOT regenerate TS.
+> **Consequence: Batch 1 no longer edits the opex-types variant set, so the codegen hard-gate is
+> lifted — Batches 2 and 3 no longer depend on a Batch-1 regen** (see Global Constraints).
 
 **Files:**
-- Modify: `crates/opex-types/src/channels.rs` (`ChannelOutbound::Reload`)
-- Modify: `crates/opex-types/src/ws.rs` (`WsEvent::AuditEvent`)
-- Regenerate: `ui/src/stores/ws.generated.ts` and channels `types.generated.ts` (via `gen-types`)
+- Modify: `crates/opex-types/src/channels.rs` (comment above `ChannelOutbound::Reload`)
+- Modify: `crates/opex-types/src/ws.rs` (comment above `WsEvent::AuditEvent`)
 
-**Interfaces:**
-- Produces: regenerated TS type files WITHOUT `Reload`/`AuditEvent`. Batches 2 (UI) and 3
-  (channels) consume these — they remove the corresponding handlers.
-
-- [ ] **Step 1: Confirm-dead (Rust side)**
+- [ ] **Step 1** Replace any misleading `#[allow(dead_code)]` rationale comment on these two
+  variants with an accurate wire-reserve note, e.g.:
+```rust
+// Wire reserve: no Rust emitter yet; consumer-ready (channels session teardown / UI live-refresh).
+// Do NOT delete — this is a forward protocol reserve, not dead code.
 ```
-rg "ChannelOutbound::Reload|WsEvent::AuditEvent" --type rust
-```
-Expected: construction only in tests (or nowhere). STOP if a prod send-site builds them.
+  (Keep the `#[allow(dead_code)]` attribute itself — it is correct; only the comment changes.)
 
-- [ ] **Step 2: Delete** both variants and any test fixtures/match arms that reference them.
-
-- [ ] **Step 3: Regenerate TS types.** Find the codegen command (grep `gen-types` in `Makefile`):
-```bash
-make gen-types
-```
-Expected: `ui/src/stores/ws.generated.ts` and `channels/src/types.generated.ts` change to drop
-the removed variants; `git status` shows exactly those generated files modified.
-
-- [ ] **Step 4: Verify compile + no drift**
+- [ ] **Step 2: Verify compile**
 
 Run: `cargo check -p opex-types`
-Then re-run `make gen-types` a SECOND time and `git diff --exit-code` on the generated files.
-Expected: compiles clean; second run produces no further diff (codegen is stable).
+Expected: compiles clean (comment-only change).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 ```bash
-git add crates/opex-types/src/channels.rs crates/opex-types/src/ws.rs ui/src/stores/ws.generated.ts channels/src/types.generated.ts
-git commit -m "chore(types): remove dead Reload/AuditEvent protocol variants + regen"
+git add crates/opex-types/src/channels.rs crates/opex-types/src/ws.rs
+git commit -m "docs(types): mark Reload/AuditEvent as forward wire reserves, not dead code"
 ```
 
 ### Task 1.6: Dead config keys (except AgentSettings — Task 1.7)
@@ -628,29 +666,31 @@ git add -A
 git commit -m "chore(toolgate): remove dead registry/config helpers + network-hitting tests"
 ```
 
-### Task 3.3: Remove dead channels code, deps, and Reload handling
+### Task 3.3: Remove dead channels code and unused deps
+
+> **REVISED 2026-07-17.** `Reload` handling in `session.ts`/`bridge.ts` is NO LONGER removed —
+> `ChannelOutbound::Reload` is kept as a wire reserve (Task 1.5), and its consumer performs a real
+> session teardown. Leave `session.ts:210-215` and `bridge.ts:321` untouched.
 
 **Files:**
 - Modify: `channels/src/drivers/common.ts` (remove `decodeBase64Param`)
 - Modify: `channels/src/formatting.ts` (remove `loadedChannels`)
-- Modify: `channels/src/session.ts`, `channels/src/bridge.ts` (remove `Reload` handling)
 - Modify: `channels/package.json` (remove `irc-framework`, `matrix-bot-sdk`, `@opentelemetry/api`)
-- Modify: relevant `channels/src/__tests__/*` (remove tests of deleted symbols/fixtures)
+- Modify: relevant `channels/src/__tests__/*` (remove tests of the two deleted functions only)
 
 - [ ] **Step 1: Confirm-dead**
 ```
 rg -w "decodeBase64Param|loadedChannels" channels/src
-rg -w "reload|Reload" channels/src
 rg "irc-framework|matrix-bot-sdk|@opentelemetry/api" channels/src
 ```
-Expected: `decodeBase64Param` — test only; `loadedChannels` — zero refs; `Reload` — handled in
-`session.ts`/`bridge.ts` + a test fixture but never received (Batch 1 removed the emitter). The
-three deps — never imported in `src` (irc uses raw `node:net`, matrix uses `fetch`). For
-`@opentelemetry/api`, double-check it is not a peer-dep required by the otel sdk packages that
-`otel.ts` dynamically imports; if removing it breaks `bun install`, keep it and note so.
+Expected: `decodeBase64Param` — test only; `loadedChannels` — zero refs. The three deps — never
+imported in `src` (irc uses raw `node:net`, matrix uses `fetch`). For `@opentelemetry/api`,
+double-check it is not a peer-dep required by the otel sdk packages that `otel.ts` dynamically
+imports; if removing it breaks `bun install`, keep it and note so. **Do NOT touch `reload`
+handling** — it is a live reserve consumer.
 
-- [ ] **Step 2: Delete** the two functions, the `Reload` branches + fixture, and the three deps
-  from `package.json`. Run `bun install` to update the lockfile.
+- [ ] **Step 2: Delete** the two functions (+ their tests) and the three deps from
+  `package.json`. Run `bun install` to update the lockfile. Leave all `reload` code in place.
 
 - [ ] **Step 3: Verify**
 ```bash
@@ -661,7 +701,7 @@ Expected: install clean; tests green.
 - [ ] **Step 4: Commit + DEPLOY (requires approval)**
 ```bash
 git add -A
-git commit -m "chore(channels): remove dead helpers, unused deps, Reload handling"
+git commit -m "chore(channels): remove dead helpers and unused deps"
 # after approval: scp changed toolgate .py to server + restart toolgate; restart channels
 ```
 Verify via `make doctor` that toolgate + channels are healthy. Batch 3 complete.
@@ -852,6 +892,12 @@ git commit -m "docs: remove stale graph-worker/searxng/process_start references"
   wipe_agent_memory, deprecated tables, pending_messages) are explicitly excluded in each relevant task.
 - **Decisions honored:** AgentSettings+profile_migration removed (1.7); otel worker removed (1.8);
   UX-gap routes (context-breakdown, allowlist GET/DELETE, unshareSession export) removed (2.3/5.2).
-- **Codegen ordering:** Task 1.5 regenerates + 1.10 deploys before Batches 2/3.
+- **Codegen ordering:** LIFTED after HEAD e42f0a65 re-verification — Task 1.5 is now comment-only
+  (no opex-types deletion, no regen), so Batches 2/3 no longer depend on a Batch-1 regen.
+- **HEAD e42f0a65 re-verification:** five wire-protocol variants reclassified from delete to
+  keep-as-reserve — `StreamEvent::AgentSwitch`, `ProcessingPhase::CallingTool`/`Composing`
+  (Task 1.4), `ChannelOutbound::Reload`, `WsEvent::AuditEvent` (Task 1.5). Their live consumers
+  (channels session teardown / driver phase rendering, SSE converter, UI multi-agent + audit
+  refresh) stay untouched in Batches 2/3. All other targets re-confirmed dead at HEAD.
 - **No placeholders:** each deletion task carries exact paths, exact grep confirm-dead commands,
   and exact verify commands. No "TBD".

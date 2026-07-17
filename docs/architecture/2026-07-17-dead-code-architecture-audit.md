@@ -9,6 +9,16 @@ Cargo/сборка не запускались (Windows-машина не авт
 фантомные имена в защитных механизмах и «замороженные» фичи, у которых потерялась одна из сторон
 (producer без consumer'а и наоборот).
 
+> **ПОПРАВКА 2026-07-17 (ре-верификация на HEAD e42f0a65).** Статический аудит пометил как
+> «мёртвые» пять wire-протокольных enum-вариантов, у которых НЕТ Rust-эмиттера, но ЕСТЬ живые
+> потребители на стороне channels/UI/SSE-конвертера — это forward-резервы протокола, а НЕ мёртвый
+> код: `StreamEvent::AgentSwitch` (SSE `agent-switch` + UI multi-agent), `ProcessingPhase::CallingTool`/
+> `Composing` (отрисовка фаз в telegram/slack/discord), `ChannelOutbound::Reload` (teardown сессии
+> канала в `session.ts`), `WsEvent::AuditEvent` (live-refresh аудита в monitor). В плане чистки они
+> перенесены из удаления в «оставить как резерв» (см. `docs/superpowers/plans/2026-07-17-dead-code-cleanup.md`,
+> задачи 1.4/1.5). Урок: wire-вариант с готовым потребителем — коммит в протокол, а не труп; перед
+> удалением любого enum-варианта грепать `channels/src` и `ui/src`.
+
 ---
 
 ## A. СЛОМАННОЕ — реальный эффект в проде (чинить в первую очередь)
