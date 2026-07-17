@@ -341,15 +341,6 @@ impl McpRegistry {
         matches.first().map(|s| (*s).clone())
     }
 
-    /// Load MCP.md from an MCP server's workspace directory for additional context.
-    #[allow(dead_code)] // Available for future MCP-level prompt injection
-    pub async fn load_mcp_prompt(&self, mcp_name: &str, skills_dir: &str) -> Option<String> {
-        let path = std::path::Path::new(skills_dir)
-            .join(mcp_name)
-            .join("MCP.md");
-        tokio::fs::read_to_string(&path).await.ok()
-    }
-
     /// Clear cached tools for an MCP server.
     pub async fn invalidate_mcp_cache(&self, mcp_name: &str) {
         self.tool_cache.write().await.remove(mcp_name);

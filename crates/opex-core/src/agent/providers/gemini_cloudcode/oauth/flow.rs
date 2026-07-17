@@ -9,10 +9,6 @@
 //! and a `JoinHandle` that resolves to `GoogleCredentials` on success or an
 //! `OauthError` on failure/timeout.
 //!
-//! `login_code_flow` is the thin CLI wrapper: it calls `start_authorization_code_flow`,
-//! opens the browser (best-effort via `webbrowser` behind the `gemini-cloudcode`
-//! feature), prints the URL as fallback, then awaits the join handle.
-//!
 //! # Policy warning
 //!
 //! Per Google's ToS, using their published OAuth client with third-party software
@@ -433,48 +429,6 @@ pub async fn start_authorization_code_flow(
     drop(cancel);
 
     Ok((auth_url, state, handle))
-}
-
-/// Thin CLI wrapper: start the flow, open the browser (best-effort), await completion.
-///
-/// Intended for interactive use from a CLI or setup wizard.  Prints the URL to
-/// stderr if the browser fails to open.
-pub async fn login_code_flow() -> Result<GoogleCredentials, OauthError> {
-    let (client_id, client_secret) = {
-        let creds = super::client_creds::resolve_client_creds();
-        (creds.client_id, creds.client_secret)
-    };
-
-    let (auth_url, _state, handle) =
-        start_authorization_code_flow(&client_id, &client_secret, None).await?;
-
-    // Open browser — best-effort, behind the gemini-cloudcode feature.
-    open_browser_best_effort(&auth_url);
-
-    // Await the background callback task.
-    match handle.await {
-        Ok(result) => result,
-        Err(join_err) => Err(OauthError::Io(std::io::Error::other(format!(
-            "callback task panicked: {join_err}"
-        )))),
-    }
-}
-
-/// Open the authorization URL in the system browser.
-///
-/// Emits a warning with the URL if the `webbrowser` crate is unavailable
-/// (non-gemini-cloudcode builds) or if opening fails.
-fn open_browser_best_effort(url: &str) {
-    #[cfg(feature = "gemini-cloudcode")]
-    {
-        if webbrowser::open(url).is_err() {
-            eprintln!("Open this URL in your browser to authenticate:\n{url}");
-        }
-    }
-    #[cfg(not(feature = "gemini-cloudcode"))]
-    {
-        eprintln!("Open this URL in your browser to authenticate:\n{url}");
-    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

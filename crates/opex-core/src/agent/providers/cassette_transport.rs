@@ -125,34 +125,6 @@ impl CassetteTransport {
         })
     }
 
-    /// Create in explicit mode (for tests that want to bypass env resolution).
-    #[allow(dead_code)]
-    pub fn with_mode(path: impl Into<PathBuf>, mode: Mode) -> Result<Self> {
-        let path = path.into();
-        let real = RealTransport::new(reqwest::Client::new());
-        let state = match mode {
-            Mode::Record => CassetteState {
-                cassette: Cassette::new(Some(serde_json::json!({
-                    "name": path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown"),
-                }))),
-                cursor: 0,
-            },
-            Mode::Replay => {
-                if !path.exists() {
-                    anyhow::bail!("cassette not found: {}", path.display());
-                }
-                let cassette = Cassette::read_from_file(&path)?;
-                CassetteState { cassette, cursor: 0 }
-            }
-        };
-        Ok(Self {
-            mode,
-            path,
-            real,
-            state: AsyncMutex::new(state),
-        })
-    }
-
     /// Persist the cassette (record mode) or assert all interactions consumed
     /// (replay mode). Call at the end of each test.
     pub async fn finalize(&self) -> Result<()> {

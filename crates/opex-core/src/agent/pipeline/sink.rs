@@ -59,22 +59,6 @@ pub mod test_support {
         pub fn close_after(n: usize) -> Self {
             Self { closed_after: Some(n), ..Self::default() }
         }
-
-        #[allow(dead_code)] // used by pipeline::execute tests once integrated.
-        pub fn stream_shapes(&self) -> Vec<&'static str> {
-            self.events
-                .iter()
-                .filter_map(|e| match e {
-                    PipelineEvent::Stream(StreamEvent::MessageStart { .. }) => Some("MessageStart"),
-                    PipelineEvent::Stream(StreamEvent::TextDelta(_)) => Some("TextDelta"),
-                    PipelineEvent::Stream(StreamEvent::Finish { .. }) => Some("Finish"),
-                    PipelineEvent::Stream(StreamEvent::Error(_)) => Some("Error"),
-                    PipelineEvent::Stream(StreamEvent::ToolCallStart { .. }) => Some("ToolCallStart"),
-                    PipelineEvent::Stream(StreamEvent::ToolResult { .. }) => Some("ToolResult"),
-                    _ => None,
-                })
-                .collect()
-        }
     }
 
     impl EventSink for MockSink {
