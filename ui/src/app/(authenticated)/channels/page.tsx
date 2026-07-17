@@ -52,11 +52,12 @@ import {
   Hash,
   MessageSquare,
   Phone,
+  Mail,
   type LucideProps,
 } from "lucide-react";
 import { toast } from "sonner";
 
-const CHANNEL_TYPES = ["telegram", "discord", "matrix", "irc", "slack", "whatsapp"];
+const CHANNEL_TYPES = ["telegram", "discord", "matrix", "irc", "slack", "whatsapp", "email"];
 
 const CHANNEL_ICONS: Record<string, React.FC<LucideProps>> = {
   telegram: Send,
@@ -65,6 +66,7 @@ const CHANNEL_ICONS: Record<string, React.FC<LucideProps>> = {
   irc: Hash,
   slack: MessageSquare,
   whatsapp: Phone,
+  email: Mail,
 };
 
 interface ConfigField {
@@ -103,6 +105,16 @@ const CHANNEL_CONFIG_FIELDS: Record<string, ConfigField[]> = {
     { key: "phone_number_id", labelKey: "channels.field_phone_id", placeholder: "123456789012345", required: true },
     { key: "access_token", labelKey: "channels.field_access_token", placeholder: "", type: "password", required: true },
     { key: "verify_token", labelKey: "channels.field_verify_token", placeholder: "" },
+  ],
+  email: [
+    { key: "imap_user", labelKey: "channels.field_imap_user", placeholder: "you@gmail.com", required: true },
+    { key: "password", labelKey: "channels.field_password", placeholder: "", type: "password", required: true },
+    { key: "imap_host", labelKey: "channels.field_imap_host", placeholder: "imap.gmail.com" },
+    { key: "imap_port", labelKey: "channels.field_imap_port", placeholder: "993" },
+    { key: "smtp_host", labelKey: "channels.field_smtp_host", placeholder: "smtp.gmail.com" },
+    { key: "smtp_port", labelKey: "channels.field_smtp_port", placeholder: "465" },
+    { key: "smtp_user", labelKey: "channels.field_smtp_user", placeholder: "" },
+    { key: "authserv_id", labelKey: "channels.field_authserv_id", placeholder: "" },
   ],
 };
 

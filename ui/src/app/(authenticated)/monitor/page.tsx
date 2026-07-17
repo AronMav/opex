@@ -363,6 +363,7 @@ const FAILURE_KIND_BADGE: Record<string, string> = {
   llm_error: "bg-destructive/10 text-destructive border-destructive/30",
   max_iterations: "bg-warning/15 text-warning border-warning/30",
   tool_error: "bg-warning/15 text-warning border-warning/30",
+  guard_dropped: "bg-warning/15 text-warning border-warning/30",
   other: "bg-muted text-muted-foreground border-border",
 };
 

@@ -447,6 +447,7 @@ export type SessionFailureKind =
   | "tool_error"
   | "sub_agent_timeout"
   | "max_iterations"
+  | "guard_dropped"
   | "other"
   | string; // free-form fallback
 
