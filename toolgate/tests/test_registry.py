@@ -1,25 +1,41 @@
 """Unit tests for ProviderRegistry degraded-mode flag."""
 
 import importlib
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 from registry import ProviderRegistry
-from config import ProvidersConfig, ProviderConfig
+from config import ProvidersConfig
 
 from fastapi.testclient import TestClient
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-async def _empty_load():
-    return ProvidersConfig()
+# Empty providers payload — aload() parses it to zero providers, so the
+# registry reports degraded. Patching httpx (the path aload actually uses)
+# instead of the unused `_aload_config_from_api` symbol makes these tests
+# genuinely exercise the load path rather than passing on connection-refused.
+_EMPTY_PAYLOAD = {"json": {"version": 1, "active": {}, "providers": {}}}
+
+
+def _patch_empty_refresh(monkeypatch):
+    """Force the registry's real load path (`_refresh`) to yield zero providers,
+    so the app starts degraded without a live Core fetch — and WITHOUT patching
+    the process-global `httpx.AsyncClient` (which the app itself uses at startup,
+    so a global fake breaks app import). Unlike the old `_aload_config_from_api`
+    stub, `_refresh` IS on the `aload()` code path, so the patch actually governs
+    the outcome instead of the test silently passing on connection-refused."""
+    async def _empty_refresh(self):
+        with self._lock:
+            self.config = ProvidersConfig()
+            self._instantiate_all()
+    monkeypatch.setattr("registry.ProviderRegistry._refresh", _empty_refresh)
 
 
 def _degraded_test_client(monkeypatch) -> TestClient:
     """Reload app with an empty provider config and return a TestClient over it."""
-    monkeypatch.setattr("registry._aload_config_from_api", _empty_load)
+    _patch_empty_refresh(monkeypatch)
     import app as app_module
     importlib.reload(app_module)
     return TestClient(app_module.app)
@@ -51,7 +67,10 @@ def _install_fake_httpx(monkeypatch, *, payloads):
         async def __aexit__(self, *a): return None
         async def get(self, *a, **kw): return await _get(*a, **kw)
 
-    monkeypatch.setattr("registry.httpx.AsyncClient", lambda: _FakeClient())
+    # Accept (and ignore) constructor args like `timeout=` — patching
+    # httpx.AsyncClient is process-global, so other modules importing httpx
+    # during an app reload (e.g. workspace_helpers) construct the fake too.
+    monkeypatch.setattr("registry.httpx.AsyncClient", lambda *a, **kw: _FakeClient())
     return state
 
 
@@ -59,7 +78,7 @@ def _install_fake_httpx(monkeypatch, *, payloads):
 
 @pytest.mark.asyncio
 async def test_is_degraded_true_when_no_providers_loaded(monkeypatch):
-    monkeypatch.setattr("registry._aload_config_from_api", _empty_load)
+    _install_fake_httpx(monkeypatch, payloads=[_EMPTY_PAYLOAD])
     reg = ProviderRegistry()
     await reg.aload()
     assert reg.is_degraded() is True
@@ -227,17 +246,15 @@ async def test_provider_swap_takes_effect_after_ttl(monkeypatch):
     assert type(first) is not type(second), "different drivers expected"
 
 
-def test_no_reload_endpoint():
+def test_no_reload_endpoint(monkeypatch):
     """POST /reload should return 404 or 405 — endpoint removed."""
-    async def _empty():
-        return ProvidersConfig()
-    # Stub config loader so app starts in degraded mode without making outbound calls.
-    with patch("registry._aload_config_from_api", new=_empty):
-        import app as app_module
-        importlib.reload(app_module)
-        with TestClient(app_module.app) as client:
-            resp = client.post("/reload")
-            assert resp.status_code in (404, 405)
+    # Start the app degraded without a real Core fetch (see _patch_empty_refresh).
+    _patch_empty_refresh(monkeypatch)
+    import app as app_module
+    importlib.reload(app_module)
+    with TestClient(app_module.app) as client:
+        resp = client.post("/reload")
+        assert resp.status_code in (404, 405)
 
 
 # ── Task 18: TTL=30s + ETag conditional GET ───────────────────────────────────

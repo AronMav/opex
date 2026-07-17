@@ -25,7 +25,6 @@ from config import (
     CORE_API_URL,
     ProviderConfig,
     ProvidersConfig,
-    _aload_config_from_api,
 )
 from providers.base import STTProvider, VisionProvider, TTSProvider, ImageGenProvider, EmbeddingProvider, WebSearchProvider
 
