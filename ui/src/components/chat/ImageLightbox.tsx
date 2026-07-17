@@ -86,7 +86,7 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
         <div
           ref={dialogRef}
           tabIndex={-1}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm overflow-auto outline-none"
+          className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/80 backdrop-blur-sm overflow-auto outline-none"
           onClick={handleClose}
           onKeyDown={handleDialogKeyDown}
           role="dialog"
@@ -95,6 +95,7 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
         >
           {/* Toolbar */}
           <div
+            /* local stacking, not layered UI */
             className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 flex items-center gap-2 z-10"
             onClick={(e) => e.stopPropagation()}
           >

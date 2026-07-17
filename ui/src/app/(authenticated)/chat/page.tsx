@@ -348,14 +348,14 @@ export default function ChatPage() {
     <div className="flex h-full flex-col lg:flex-row bg-background overflow-hidden">
       <h1 className="sr-only">{t("chat.title")}</h1>
       {/* Desktop sidebar — visible only at lg+ */}
-      <aside className="hidden w-70 shrink-0 flex-col border-r border-border lg:flex" aria-label={t("chat.session_list")}>
+      <aside className="hidden w-[var(--sidebar-w)] shrink-0 flex-col border-r border-border lg:flex" aria-label={t("chat.session_list")}>
         <SessionSidebar {...sidebarProps} />
       </aside>
 
       {/* Chat area */}
       <div className="flex min-w-0 flex-1 flex-col relative h-full">
         {/* Desktop header */}
-        <div className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-2 lg:gap-4 border-b border-border/50 bg-background/90 backdrop-blur-sm px-4 lg:px-6 lg:flex">
+        <div className="sticky top-0 z-10 hidden h-[var(--toolbar-h)] shrink-0 items-center gap-2 lg:gap-4 border-b border-border/50 bg-background/90 backdrop-blur-sm px-4 lg:px-6 lg:flex">
           <div className="flex items-center gap-3 min-w-0 shrink-0">
             {agentSelector}
             <ChatCanvasTabs />

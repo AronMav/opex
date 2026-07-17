@@ -34,7 +34,7 @@ function CodeBlockHeader({ language, code }: { language?: string; code: string }
         size="xs"
         onClick={handleCopy}
         aria-label={copied ? t("common.copied") : t("common.copy_code")}
-        className="gap-1 hover:text-foreground min-h-[44px] md:min-h-0"
+        className="gap-1 hover:text-foreground tap-target md:min-h-0 md:min-w-0"
       >
         {copied ? (
           <Check className="h-3.5 w-3.5 text-success" />

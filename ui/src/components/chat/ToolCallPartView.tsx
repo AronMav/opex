@@ -78,12 +78,12 @@ function HighlightedOutput({ code, language }: { code: string; language?: string
   }, [code, language]);
 
   if (!html) {
-    return <pre className="max-h-[300px] overflow-auto px-3 pb-2.5 font-mono text-2xs leading-relaxed whitespace-pre-wrap">{code}</pre>;
+    return <pre className="max-h-75 overflow-auto px-3 pb-2.5 font-mono text-2xs leading-relaxed whitespace-pre-wrap">{code}</pre>;
   }
 
   return (
     <div
-      className="max-h-[300px] overflow-auto px-3 pb-2.5 [&>pre]:bg-transparent [&>pre]:px-0 [&>pre]:py-0 [&>pre]:text-2xs [&>pre]:leading-relaxed"
+      className="max-h-75 overflow-auto px-3 pb-2.5 [&>pre]:bg-transparent [&>pre]:px-0 [&>pre]:py-0 [&>pre]:text-2xs [&>pre]:leading-relaxed"
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
@@ -191,7 +191,7 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
                   {t("chat.tool_input")}
                 </span>
               </div>
-              <pre className="max-h-[150px] overflow-auto px-3 pb-2.5 font-mono text-2xs leading-relaxed text-foreground/80 whitespace-pre-wrap">
+              <pre className="max-h-37.5 overflow-auto px-3 pb-2.5 font-mono text-2xs leading-relaxed text-foreground/80 whitespace-pre-wrap">
                 {inputDisplay}
               </pre>
             </div>
@@ -216,7 +216,7 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
                 )}
               </div>
               {hasError || isDenied ? (
-                <pre className="max-h-[300px] overflow-auto px-3 pb-2.5 font-mono text-2xs leading-relaxed whitespace-pre-wrap text-destructive/80">
+                <pre className="max-h-75 overflow-auto px-3 pb-2.5 font-mono text-2xs leading-relaxed whitespace-pre-wrap text-destructive/80">
                   {resultDisplay}
                 </pre>
               ) : (

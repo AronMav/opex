@@ -147,7 +147,7 @@ export default function AuthenticatedLayout({
       <SidebarInset className="flex flex-col h-[100dvh] min-h-0 bg-transparent relative">
         {/* Unified Mobile Header — hidden on chat and workspace (they have their own headers) */}
         {!pageHasOwnHeader(pathname) && (
-        <div className="sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between border-b border-border bg-background px-3 md:hidden">
+        <div className="sticky top-0 z-30 flex h-[var(--toolbar-h)] shrink-0 items-center justify-between border-b border-border bg-background px-3 md:hidden">
           <div className="flex items-center gap-2">
             <SidebarTrigger className="h-9 w-9 text-foreground active:scale-90 transition-transform" />
             <div className="flex items-center gap-2 pr-2 border-r border-border/30">

@@ -78,12 +78,13 @@ export function MermaidBlock({ code }: { code: string }) {
   if (!svgHtml) return <Skeleton className="h-24 w-full rounded" />
 
   const containerClass = expanded
-    ? "fixed inset-4 z-50 flex flex-col rounded-lg border border-border bg-background shadow-2xl"
+    ? "fixed inset-4 z-[var(--z-modal)] flex flex-col rounded-lg border border-border bg-background shadow-2xl"
     : "relative my-4 rounded-md border border-border/50 bg-muted/20"
 
   return (
     <>
       {expanded && (
+        // z-40 backdrop: local stacking, not layered UI
         <div className="fixed inset-0 z-40 bg-black/50" onClick={toggleExpand} />
       )}
       <div className={containerClass}>
@@ -101,7 +102,7 @@ export function MermaidBlock({ code }: { code: string }) {
             >
               <ZoomOut className="h-3.5 w-3.5" />
             </Button>
-            <span className="min-w-[3rem] text-center text-xs tabular-nums text-muted-foreground">
+            <span className="min-w-12 text-center text-xs tabular-nums text-muted-foreground">
               {Math.round(zoom * 100)}%
             </span>
             <Button
@@ -138,8 +139,7 @@ export function MermaidBlock({ code }: { code: string }) {
         </div>
         {/* Diagram — SVG sanitized by DOMPurify */}
         <div
-          className={`overflow-auto ${expanded ? "flex-1" : ""}`}
-          style={expanded ? undefined : { maxHeight: "400px" }}
+          className={`overflow-auto ${expanded ? "flex-1" : "max-h-100"}`}
           onWheel={handleWheel}
           tabIndex={0}
           role="region"
@@ -148,7 +148,7 @@ export function MermaidBlock({ code }: { code: string }) {
           <div
             role="img"
             aria-label="Mermaid flowchart or diagram"
-            className="flex min-h-[120px] items-center justify-center p-4 [&_svg]:max-w-full"
+            className="flex min-h-30 items-center justify-center p-4 [&_svg]:max-w-full"
             style={{
               transform: `scale(${zoom})`,
               transformOrigin: "top center",

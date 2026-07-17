@@ -395,7 +395,7 @@ export default function WorkspacePage() {
   return (
     <div className="flex h-full flex-col bg-background selection:bg-primary/20 overflow-hidden">
       {/* Header / Breadcrumbs */}
-      <div className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-card/30 px-4 md:px-6">
+      <div className="flex h-[var(--toolbar-h)] shrink-0 items-center justify-between border-b border-border bg-card/30 px-4 md:px-6">
         <div className="flex items-center gap-3 overflow-hidden min-w-0">
           <SidebarTrigger className="md:hidden shrink-0 h-9 w-9" />
           <Sheet open={isSidebarOpen} onOpenChange={setIsSidebarOpen}>
@@ -404,7 +404,7 @@ export default function WorkspacePage() {
                 <FolderTree className="h-5 w-5" />
               </Button>
             </SheetTrigger>
-            <SheetContent side="left" className="p-0 w-[75dvw] md:w-70 border-r border-border bg-sidebar">
+            <SheetContent side="left" className="p-0 w-[75dvw] md:w-[var(--sidebar-w)] border-r border-border bg-sidebar">
               {/* Mobile instance — independent ref/state */}
               <WorkspaceFileTree {...fileTreeProps} />
             </SheetContent>

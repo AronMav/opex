@@ -525,7 +525,7 @@ export function ChatComposer() {
           ref={formRef}
           data-composer-input
           className={cn(
-            "relative flex flex-col rounded-xl border bg-card/50 shadow-lg shadow-black/8 transition-all duration-200 focus-within:border-primary/50 focus-within:shadow-primary/8 focus-within:shadow-xl",
+            "relative flex flex-col rounded-xl border bg-card/50 shadow-lg shadow-elev-2 transition-all duration-200 focus-within:border-primary/50 focus-within:shadow-elev-2 focus-within:shadow-xl",
             dragOver ? "border-primary/50 bg-primary/5" : "border-border/50"
           )}
           onPaste={handlePaste}
@@ -536,7 +536,7 @@ export function ChatComposer() {
           onSubmit={handleSubmit}
         >
           {dragOver && (
-            <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/50 bg-primary/5 backdrop-blur-sm pointer-events-none">
+            <div className="absolute inset-0 z-[var(--z-overlay)] flex items-center justify-center rounded-xl border-2 border-dashed border-primary/50 bg-primary/5 backdrop-blur-sm pointer-events-none">
               <div className="flex flex-col items-center gap-1 text-primary/80">
                 <Paperclip className="h-6 w-6" />
                 <span className="text-sm font-medium">{t("chat.drop_to_attach")}</span>

@@ -176,7 +176,7 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
             <span className="font-mono text-3xs font-bold uppercase tracking-wider text-primary/80">
               {t("chat.approval_input")}
             </span>
-            <pre className="bg-muted/30 rounded p-2 text-xs font-mono overflow-x-auto max-h-[200px] mt-1 whitespace-pre-wrap">
+            <pre className="bg-muted/30 rounded p-2 text-xs font-mono overflow-x-auto max-h-50 mt-1 whitespace-pre-wrap">
               {inputDisplay}
             </pre>
           </div>

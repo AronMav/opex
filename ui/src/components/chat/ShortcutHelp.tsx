@@ -35,7 +35,7 @@ const SHORTCUT_GROUPS: Array<{
 
 function KeyBadge({ children }: { children: React.ReactNode }) {
   return (
-    <kbd className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5 rounded border border-border bg-muted text-2xs font-mono font-medium text-muted-foreground">
+    <kbd className="inline-flex items-center justify-center min-w-6 h-6 px-1.5 rounded border border-border bg-muted text-2xs font-mono font-medium text-muted-foreground">
       {children}
     </kbd>
   );

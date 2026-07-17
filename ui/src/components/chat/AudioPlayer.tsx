@@ -282,7 +282,7 @@ export function AudioPlayer({ src }: { src: string }) {
           className="relative flex-1 min-w-0 h-9 cursor-pointer select-none touch-none focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-md"
           style={{ touchAction: "none" }}
         >
-          <div className="absolute inset-0 flex items-center gap-[2px] px-[1px]">
+          <div className="absolute inset-0 flex items-center gap-0.5 px-px">
             {bars.map((amp, i) => {
               // One bar = one slot of the row. Filled iff its slot is to the
               // LEFT of the playhead (use centre of the slot for fairness).
@@ -291,7 +291,7 @@ export function AudioPlayer({ src }: { src: string }) {
               return (
                 <div
                   key={i}
-                  className="flex-1 rounded-[1.5px] transition-[background-color,opacity] duration-75 ease-out"
+                  className="flex-1 rounded-xs transition-[background-color,opacity] duration-75 ease-out"
                   style={{
                     height: `${Math.max(MIN_BAR_HEIGHT, amp) * 100}%`,
                     minHeight: 2,
