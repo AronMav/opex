@@ -202,6 +202,8 @@ pub(crate) struct DriftPayload {
     pub threshold: Option<f32>,
     pub min_history: Option<usize>,
     pub baseline_turns: Option<usize>,
+    pub z_fire: Option<f32>,
+    pub z_release: Option<f32>,
     pub correct: Option<bool>,
     pub anchor: Option<String>,
 }
@@ -278,7 +280,9 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
                 enabled: d.enabled.unwrap_or(false),
                 threshold: d.threshold.unwrap_or(0.15),
                 min_history: d.min_history.unwrap_or(6),
-                baseline_turns: d.baseline_turns.unwrap_or(3),
+                baseline_turns: d.baseline_turns.unwrap_or(8),
+                z_fire: d.z_fire.unwrap_or(2.5),
+                z_release: d.z_release.unwrap_or(1.0),
                 correct: d.correct.unwrap_or(false),
                 anchor: d.anchor.filter(|s| !s.is_empty()),
             }).unwrap_or_default(),
@@ -567,7 +571,9 @@ mod tests {
         assert_eq!(cfg.agent.drift.anchor.as_deref(), Some("Owner is Bogdan"));
         // unset fields fall back to config defaults
         assert_eq!(cfg.agent.drift.min_history, 6);
-        assert_eq!(cfg.agent.drift.baseline_turns, 3);
+        assert_eq!(cfg.agent.drift.baseline_turns, 8);
+        assert!((cfg.agent.drift.z_fire - 2.5).abs() < f32::EPSILON);
+        assert!((cfg.agent.drift.z_release - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
