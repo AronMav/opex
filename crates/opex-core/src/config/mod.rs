@@ -1479,12 +1479,19 @@ impl SoulConfig {
 pub struct DriftConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// DEPRECATED (v2): the absolute-threshold metric is replaced by the
+    /// z-score (`z_fire`/`z_release`). Kept only for wire-compat with agent
+    /// TOMLs / the UI DTO that still send `drift.threshold`; never read.
     #[serde(default = "default_drift_threshold")]
     pub threshold: f32,
     #[serde(default = "default_drift_min_history")]
     pub min_history: usize,
     #[serde(default = "default_drift_baseline_turns")]
     pub baseline_turns: usize,
+    #[serde(default = "default_drift_z_fire")]
+    pub z_fire: f32,
+    #[serde(default = "default_drift_z_release")]
+    pub z_release: f32,
     /// Opt-in: inject an identity anchor into the system prompt when drift is
     /// over threshold. Requires `enabled = true`.
     #[serde(default)]
@@ -1501,7 +1508,13 @@ fn default_drift_min_history() -> usize {
     6
 }
 fn default_drift_baseline_turns() -> usize {
-    3
+    8
+}
+fn default_drift_z_fire() -> f32 {
+    2.5
+}
+fn default_drift_z_release() -> f32 {
+    1.0
 }
 
 impl Default for DriftConfig {
@@ -1511,6 +1524,8 @@ impl Default for DriftConfig {
             threshold: default_drift_threshold(),
             min_history: default_drift_min_history(),
             baseline_turns: default_drift_baseline_turns(),
+            z_fire: default_drift_z_fire(),
+            z_release: default_drift_z_release(),
             correct: false,
             anchor: None,
         }
@@ -1529,6 +1544,15 @@ impl DriftConfig {
         }
         if !(1..=10).contains(&self.baseline_turns) {
             errors.push("drift.baseline_turns must be in [1, 10]".to_string());
+        }
+        if self.z_fire <= 0.0 {
+            errors.push("drift.z_fire must be > 0".to_string());
+        }
+        if self.z_release <= 0.0 {
+            errors.push("drift.z_release must be > 0".to_string());
+        }
+        if self.z_release >= self.z_fire {
+            errors.push("drift.z_release must be < drift.z_fire".to_string());
         }
         if self.correct && !self.enabled {
             errors.push("drift.correct requires drift.enabled = true".to_string());
@@ -3626,7 +3650,9 @@ model = "gpt-4o"
         assert!(!cfg.agent.drift.enabled);
         assert_eq!(cfg.agent.drift.threshold, 0.15);
         assert_eq!(cfg.agent.drift.min_history, 6);
-        assert_eq!(cfg.agent.drift.baseline_turns, 3);
+        assert_eq!(cfg.agent.drift.baseline_turns, 8);
+        assert!((cfg.agent.drift.z_fire - 2.5).abs() < f32::EPSILON);
+        assert!((cfg.agent.drift.z_release - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -3636,12 +3662,17 @@ model = "gpt-4o"
             threshold: 3.0,
             min_history: 1,
             baseline_turns: 20,
+            z_fire: 2.5,
+            z_release: 1.0,
             correct: false,
             anchor: None,
         };
         let errs = bad.validate();
         assert_eq!(errs.len(), 3, "each violated rule reports once: {errs:?}");
         assert!(DriftConfig::default().validate().is_empty());
+
+        let bad_z = DriftConfig { z_fire: 1.0, z_release: 2.0, ..DriftConfig::default() };
+        assert!(bad_z.validate().iter().any(|e| e.contains("z_release")), "z_release>=z_fire must be rejected");
     }
 
     // ── InitiativeConfig ──
