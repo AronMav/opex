@@ -84,8 +84,11 @@ export function MermaidBlock({ code }: { code: string }) {
   return (
     <>
       {expanded && (
-        // z-40 backdrop: local stacking, not layered UI
-        <div className="fixed inset-0 z-40 bg-black/50" onClick={toggleExpand} />
+        <div
+          /* local stacking, not layered UI */
+          className="fixed inset-0 z-40 bg-black/50"
+          onClick={toggleExpand}
+        />
       )}
       <div className={containerClass}>
         {/* Toolbar */}

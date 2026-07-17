@@ -525,7 +525,7 @@ export function ChatComposer() {
           ref={formRef}
           data-composer-input
           className={cn(
-            "relative flex flex-col rounded-xl border bg-card/50 shadow-lg shadow-elev-2 transition-all duration-200 focus-within:border-primary/50 focus-within:shadow-elev-2 focus-within:shadow-xl",
+            "relative flex flex-col rounded-xl border bg-card/50 shadow-elev-2 transition-all duration-200 focus-within:border-primary/50",
             dragOver ? "border-primary/50 bg-primary/5" : "border-border/50"
           )}
           onPaste={handlePaste}
