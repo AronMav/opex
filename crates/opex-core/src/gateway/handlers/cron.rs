@@ -45,7 +45,6 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/cron/{id}", put(api_update_cron).delete(api_delete_cron))
         .route("/api/cron/{id}/run", post(api_run_cron))
         .route("/api/cron/{id}/runs", get(api_cron_runs))
-        .route("/api/cron/runs", get(api_cron_runs_all))
 }
 
 // ── Cron Jobs API ──
@@ -564,7 +563,6 @@ pub(crate) async fn api_run_cron(
 #[derive(Debug, Deserialize)]
 pub(crate) struct CronRunsQuery {
     limit: Option<i64>,
-    days: Option<i64>,
 }
 
 pub(crate) async fn api_cron_runs(
@@ -590,46 +588,6 @@ pub(crate) async fn api_cron_runs(
                     id: r.get::<uuid::Uuid, _>("id").to_string(),
                     job_id: r.get::<Option<uuid::Uuid>, _>("job_id").map(|u| u.to_string()).unwrap_or_default(),
                     job_name: None,
-                    agent_id: r.get::<String, _>("agent_id"),
-                    started_at: r.get::<chrono::DateTime<chrono::Utc>, _>("started_at").to_rfc3339(),
-                    finished_at: r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("finished_at").map(|d| d.to_rfc3339()),
-                    status: r.get::<String, _>("status"),
-                    error: r.get::<Option<String>, _>("error"),
-                    response_preview: r.get::<Option<String>, _>("response_preview"),
-                })
-                .collect();
-            Json(json!({ "runs": runs })).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
-    }
-}
-
-pub(crate) async fn api_cron_runs_all(
-    State(infra): State<InfraServices>,
-    Query(q): Query<CronRunsQuery>,
-) -> impl IntoResponse {
-    let limit = q.limit.unwrap_or(50).min(200);
-    let days = q.days.unwrap_or(7).min(90);
-    let rows = sqlx::query(
-        "SELECT r.id, r.job_id, r.agent_id, r.started_at, r.finished_at, r.status, r.error, r.response_preview, \
-                j.name as job_name \
-         FROM cron_runs r LEFT JOIN scheduled_jobs j ON r.job_id = j.id \
-         WHERE r.started_at > now() - make_interval(days => $1) \
-         ORDER BY r.started_at DESC LIMIT $2",
-    )
-    .bind(days as i32)
-    .bind(limit)
-    .fetch_all(&infra.db)
-    .await;
-
-    match rows {
-        Ok(rows) => {
-            let runs: Vec<CronRunDto> = rows
-                .iter()
-                .map(|r| CronRunDto {
-                    id: r.get::<uuid::Uuid, _>("id").to_string(),
-                    job_id: r.get::<Option<uuid::Uuid>, _>("job_id").map(|u| u.to_string()).unwrap_or_default(),
-                    job_name: r.get::<Option<String>, _>("job_name"),
                     agent_id: r.get::<String, _>("agent_id"),
                     started_at: r.get::<chrono::DateTime<chrono::Utc>, _>("started_at").to_rfc3339(),
                     finished_at: r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("finished_at").map(|d| d.to_rfc3339()),

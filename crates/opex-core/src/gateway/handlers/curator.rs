@@ -1,12 +1,11 @@
 use axum::{
     Router,
-    extract::{Path, State},
+    extract::State,
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::get,
 };
 use serde::Deserialize;
-use uuid::Uuid;
 
 use super::super::AppState;
 use crate::gateway::clusters::{AgentCore, ConfigServices, InfraServices};
@@ -16,9 +15,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/curator/status", get(api_curator_status))
         .route("/api/curator/config", get(api_curator_config_get).put(api_curator_config_put))
         .route("/api/curator/run", axum::routing::post(api_curator_run))
-        .route("/api/curator/preview", axum::routing::post(api_curator_preview))
         .route("/api/curator/runs", get(api_curator_runs))
-        .route("/api/curator/runs/{id}", get(api_curator_run_get))
 }
 
 // ── GET /api/curator/status ───────────────────────────────────────────────────
@@ -186,48 +183,6 @@ pub(crate) async fn api_curator_run(
 
 // ── POST /api/curator/preview ────────────────────────────────────────────────
 
-pub(crate) async fn api_curator_preview(
-    State(infra): State<InfraServices>,
-    State(cfg_svc): State<ConfigServices>,
-    State(agents): State<crate::gateway::clusters::AgentCore>,
-) -> impl IntoResponse {
-    let db = infra.db.clone();
-    let cfg = cfg_svc.shared_config.read().await.curator.clone();
-
-    if let Ok(Some(last)) = crate::db::curator_runs::last_run(&db).await
-        && last.finished_at.is_none()
-        // F074: stale-run bound (see api_curator_run) so a crashed run doesn't
-        // brick preview with a permanent 409.
-        && (chrono::Utc::now() - last.started_at) < chrono::Duration::minutes(30)
-    {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "curator already running", "run_id": last.id})),
-        ).into_response();
-    }
-
-    let run_id = match crate::db::curator_runs::insert_run(&db, "preview", true).await {
-        Ok(id) => id,
-        Err(e) => return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        ).into_response(),
-    };
-
-    tokio::spawn(async move {
-        match crate::curator::run_curator(&db, &cfg, std::sync::Arc::new(agents), crate::config::WORKSPACE_DIR, true).await {
-            Ok(s) => {
-                crate::db::curator_runs::finish_run(&db, run_id, s.phase1, s.phase2, s.phase3, Some(&s.report_md), None, true).await.ok();
-            }
-            Err(e) => {
-                crate::db::curator_runs::finish_run(&db, run_id, 0, 0, 0, None, Some(&e.to_string()), true).await.ok();
-            }
-        }
-    });
-
-    (StatusCode::ACCEPTED, Json(serde_json::json!({"run_id": run_id}))).into_response()
-}
-
 // ── GET /api/curator/runs ─────────────────────────────────────────────────────
 
 use serde::Serialize;
@@ -277,33 +232,3 @@ pub(crate) async fn api_curator_runs(State(infra): State<InfraServices>) -> impl
     }
 }
 
-// ── GET /api/curator/runs/{id} ────────────────────────────────────────────────
-
-pub(crate) async fn api_curator_run_get(
-    State(infra): State<InfraServices>,
-    Path(id): Path<Uuid>,
-) -> impl IntoResponse {
-    match crate::db::curator_runs::get_run(&infra.db, id).await {
-        Ok(Some(r)) => {
-            let duration_ms = r.finished_at.map(|finished| {
-                (finished - r.started_at).num_milliseconds()
-            });
-            let response = CuratorRunResponse {
-                id: r.id,
-                started_at: r.started_at,
-                finished_at: r.finished_at,
-                triggered_by: r.trigger,
-                phase1_transitions: r.phase1,
-                phase2_repairs: r.phase2,
-                phase3_commands: r.phase3,
-                skipped_reason: r.skip_reason,
-                report_md: r.report_md,
-                error: r.error,
-                duration_ms,
-            };
-            Json(response).into_response()
-        }
-        Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"}))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
-    }
-}

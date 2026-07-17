@@ -1,7 +1,7 @@
 use axum::{
     Router,
     body::Body,
-    extract::{FromRequest, State},
+    extract::{State},
     http::{Request, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post},
@@ -15,8 +15,6 @@ pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/config/schema", get(api_get_config_schema))
         .route("/api/config", get(api_get_config).put(api_update_config))
-        .route("/api/config/export", get(api_export_config))
-        .route("/api/config/import", post(api_import_config))
         .route("/api/restart", post(api_restart))
         .route("/api/tts/voices", get(api_tts_voices))
         .route("/api/tts/synthesize", post(api_tts_synthesize))
@@ -619,148 +617,3 @@ pub(crate) async fn api_restart(req: Request<Body>) -> impl IntoResponse {
     Json(json!({"ok": true, "message": "restarting..."})).into_response()
 }
 
-// ── Config Export/Import ──
-
-/// Replace the single `opex.toml.bak` file with timestamped rotation.
-///
-/// Creates `{config_path}.bak.{YYYY-MM-DDTHH-MM-SSZ}` and keeps the newest
-/// `CONFIG_BACKUP_MAX` backups. Older backups are silently deleted.
-/// The legacy `.bak` file (no timestamp) is never touched.
-const CONFIG_BACKUP_MAX: usize = 5;
-
-async fn rotate_config_backups(config_path: &str) {
-    let now = chrono::Utc::now();
-    let stamp = now.format("%Y-%m-%dT%H-%M-%SZ").to_string();
-    let backup_path = format!("{config_path}.bak.{stamp}");
-
-    // Write the new timestamped backup
-    if let Err(e) = tokio::fs::copy(config_path, &backup_path).await {
-        tracing::warn!(error = %e, "failed to write config backup, skipping rotation");
-        return;
-    }
-
-    // Collect existing timestamped backup files (prefix: "opex.toml.bak.")
-    let base = std::path::Path::new(config_path);
-    let dir = base.parent().unwrap_or(std::path::Path::new("."));
-    let stem = base
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let prefix = format!("{stem}.bak.");
-
-    let mut backups: Vec<std::path::PathBuf> = Vec::new();
-    match tokio::fs::read_dir(dir).await {
-        Ok(mut entries) => {
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let name = entry.file_name().to_string_lossy().to_string();
-                // Match ONLY the timestamped pattern: "opex.toml.bak.YYYY-..."
-                // This avoids deleting the legacy "opex.toml.bak" file (no trailing dot/timestamp)
-                if name.starts_with(&prefix) {
-                    backups.push(entry.path());
-                }
-            }
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to read config dir for backup rotation");
-            return;
-        }
-    }
-
-    // Sort lexicographically — ISO timestamps sort correctly (newest = last alphabetically)
-    backups.sort();
-    backups.reverse(); // newest first
-
-    // Remove oldest beyond CONFIG_BACKUP_MAX
-    for old_path in backups.into_iter().skip(CONFIG_BACKUP_MAX) {
-        if let Err(e) = tokio::fs::remove_file(&old_path).await {
-            tracing::warn!(error = %e, path = %old_path.display(), "failed to prune old config backup");
-        } else {
-            tracing::info!(path = %old_path.display(), "pruned old config backup");
-        }
-    }
-}
-
-/// GET /api/config/export — export raw TOML configs (app + all agents).
-pub(crate) async fn api_export_config(req: Request<Body>) -> impl IntoResponse {
-    let ip = crate::gateway::middleware::extract_client_ip(&req);
-    tracing::warn!(ip = %ip, "AUDIT: config export requested");
-    let config_path = opex_gateway_util::config_path::resolve_config_path();
-    let app_toml = std::fs::read_to_string(&config_path).unwrap_or_default();
-    let mut agents = serde_json::Map::new();
-    if let Ok(entries) = std::fs::read_dir("config/agents") {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "toml") {
-                let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
-                let content = std::fs::read_to_string(&path).unwrap_or_default();
-                agents.insert(name, Value::String(content));
-            }
-        }
-    }
-    Json(json!({
-        "app_config": app_toml,
-        "agents": agents,
-    }))
-}
-
-/// POST /api/config/import — import TOML configs (validates before writing, backs up current).
-pub(crate) async fn api_import_config(
-    State(cfg_svc): State<ConfigServices>,
-    req: Request<Body>,
-) -> impl IntoResponse {
-    let _lock = cfg_svc.config_write_lock.lock().await;
-    let config_path = opex_gateway_util::config_path::resolve_config_path();
-    let ip = crate::gateway::middleware::extract_client_ip(&req);
-    tracing::warn!(ip = %ip, "AUDIT: config import requested");
-    let body: Value = match axum::Json::<Value>::from_request(req, &()).await {
-        Ok(axum::Json(v)) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))).into_response(),
-    };
-    // Validate app config TOML — full semantic validation, not just syntax
-    if let Some(app_toml) = body.get("app_config").and_then(|v| v.as_str()) {
-        match toml::from_str::<crate::config::AppConfig>(app_toml) {
-            Ok(parsed) => {
-                // Refuse import that removes auth token (would make gateway unauthenticated)
-                if parsed.gateway.auth_token_env.is_none() {
-                    return (StatusCode::BAD_REQUEST, Json(json!({
-                        "error": "imported config must have gateway.auth_token_env set"
-                    }))).into_response();
-                }
-            }
-            Err(e) => {
-                return (StatusCode::BAD_REQUEST, Json(json!({
-                    "error": format!("invalid app_config: {e}")
-                }))).into_response();
-            }
-        }
-        // Backup current (timestamped rotation, keeps newest CONFIG_BACKUP_MAX)
-        rotate_config_backups(&config_path).await;
-        if let Err(e) = std::fs::write(&config_path, app_toml) {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-        }
-    }
-
-    // Import agent configs
-    if let Some(agents) = body.get("agents").and_then(|v| v.as_object()) {
-        let _ = std::fs::create_dir_all("config/agents");
-        for (name, content) in agents {
-            // Sanitize name to prevent path traversal
-            if name.contains('/') || name.contains('\\') || name.contains("..") || name.is_empty() {
-                return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("invalid agent name '{name}'")}))).into_response();
-            }
-            if let Some(toml_str) = content.as_str() {
-                if toml_str.parse::<toml::Table>().is_err() {
-                    return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("invalid TOML for agent '{name}'")}))).into_response();
-                }
-                let path = format!("config/agents/{name}.toml");
-                let _ = std::fs::copy(&path, format!("{path}.bak"));
-                if let Err(e) = std::fs::write(&path, toml_str) {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-                }
-            }
-        }
-    }
-
-    Json(json!({"ok": true})).into_response()
-}

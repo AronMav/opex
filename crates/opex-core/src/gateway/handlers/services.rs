@@ -5,7 +5,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Json},
-    routing::{get, post},
+    routing::{post},
 };
 use serde_json::{json, Value};
 
@@ -15,7 +15,6 @@ use crate::process_manager::ProcessManager;
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/api/services", get(api_list_services))
         .route("/api/services/{name}/{action}", post(api_service_action))
         .route("/api/containers/{name}/restart", post(api_container_restart))
 }
@@ -68,51 +67,6 @@ async fn docker_compose_ps(compose_file: &str, service: &str) -> Option<Value> {
         }
         _ => None,
     }
-}
-
-/// Run `docker ps -a --format json` to list ALL containers on the host.
-async fn docker_ps_all() -> Vec<Value> {
-    let args = ["ps", "-a", "--format", "{{json .}}"];
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        tokio::process::Command::new("docker").args(args).output(),
-    ).await;
-    match result {
-        Ok(Ok(output)) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            stdout.lines().filter_map(|line| {
-                let line = line.trim();
-                if line.is_empty() { return None; }
-                let v: Value = serde_json::from_str(line).ok()?;
-                let name = v.get("Names").and_then(|s| s.as_str()).unwrap_or("").to_string();
-                let state = v.get("State").and_then(|s| s.as_str()).unwrap_or("unknown").to_string();
-                let status_text = v.get("Status").and_then(|s| s.as_str()).unwrap_or("").to_string();
-                let image = v.get("Image").and_then(|s| s.as_str()).unwrap_or("").to_string();
-                // Extract health from status text (e.g. "Up 4 days (healthy)")
-                let health = if status_text.contains("(healthy)") {
-                    "healthy"
-                } else if status_text.contains("(unhealthy)") {
-                    "unhealthy"
-                } else {
-                    ""
-                };
-                Some(json!({
-                    "name": name,
-                    "image": image,
-                    "status": state,
-                    "health": health,
-                    "status_text": status_text,
-                    "managed": false,
-                }))
-            }).collect()
-        }
-        _ => vec![],
-    }
-}
-
-pub(crate) async fn api_list_services() -> Json<Value> {
-    let result = docker_ps_all().await;
-    Json(json!({ "services": result }))
 }
 
 pub(crate) async fn api_service_action(

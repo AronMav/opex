@@ -56,6 +56,7 @@ pub async fn list_runs(db: &PgPool, limit: i64) -> Result<Vec<CuratorRun>> {
 }
 
 /// Return a single run by `id`, or `None` if not found.
+#[allow(dead_code)] // sole caller was the removed GET /api/curator/runs/{id} route.
 pub async fn get_run(db: &PgPool, id: Uuid) -> Result<Option<CuratorRun>> {
     let row = sqlx::query_as::<_, CuratorRun>(
         "SELECT id, trigger, status, skip_reason, phase1, phase2, phase3, \
