@@ -48,3 +48,15 @@ test("survives highlightRanges toggling on without a rules-of-hooks crash", () =
   ).not.toThrow();
   expect(screen.getByText("hello")).toBeInTheDocument();
 });
+
+// ── W4-3: loader roles — inline caret means "text is arriving here" ────────
+
+test("renders inline streaming caret while streaming", () => {
+  render(<TextPart text="Привет" streaming />);
+  expect(screen.getByTestId("streaming-cursor")).toBeInTheDocument();
+});
+
+test("no caret when complete", () => {
+  render(<TextPart text="Привет" />);
+  expect(screen.queryByTestId("streaming-cursor")).toBeNull();
+});

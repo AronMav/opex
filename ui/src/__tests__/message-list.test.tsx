@@ -291,8 +291,10 @@ describe("MessageItem", () => {
       parts: [],
       agentId: "Bot",
     };
-    const { container } = render(<MessageItem message={msg} />);
-    // CometLoader renders an sr-only "Loading" label
+    const { getByTestId, container } = render(<MessageItem message={msg} />);
+    // W4-3: empty parts render PartSkeleton (quiet skeleton bar), not CometLoader —
+    // the sr-only "Loading" label lives inside the skeleton.
+    expect(getByTestId("part-skeleton")).toBeInTheDocument();
     const liveLabel = container.querySelector('[class*="sr-only"]');
     expect(liveLabel).toBeInTheDocument();
   });

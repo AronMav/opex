@@ -21,7 +21,7 @@ import { cn } from "@/lib/utils";
 import { AlertCircle } from "lucide-react";
 // Collapsible removed — tool grouping disabled
 import { CompressionDivider } from "@/components/chat/CompressionDivider";
-import { CometLoader } from "@/components/ui/loader";
+import { PartSkeleton } from "@/components/ui/loader";
 import { Button } from "@/components/ui/button";
 import { MessageActions } from "./MessageActions";
 import { MessageEditForm } from "./MessageEditForm";
@@ -74,7 +74,7 @@ function useIsHighlighted(message: ChatMessage): boolean {
 // ── Empty part view (loading indicator for empty assistant messages) ─────────
 
 function EmptyPartView() {
-  return <div className="py-1"><CometLoader /></div>;
+  return <PartSkeleton />;
 }
 
 // ── Part renderer dispatch ──────────────────────────────────────────────────
@@ -82,7 +82,7 @@ function EmptyPartView() {
 function renderPart(part: MessagePart, index: number, streaming = false) {
   switch (part.type) {
     case "text":
-      return <TextPart key={`text-${index}`} text={part.text} />;
+      return <TextPart key={`text-${index}`} text={part.text} streaming={streaming} />;
     case "reasoning":
       return <ReasoningPart key={`reasoning-${index}`} text={part.text} streaming={streaming} />;
     case "tool": {

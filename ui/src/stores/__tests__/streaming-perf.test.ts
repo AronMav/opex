@@ -253,6 +253,8 @@ vi.mock("@/components/ui/loader", () => ({
   CircularLoader: () => null,
   PulseDotLoader: () => null,
   Loader: () => null,
+  StreamingCaret: () => null,
+  PartSkeleton: () => null,
 }));
 
 vi.mock("lucide-react", () => {

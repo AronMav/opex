@@ -3,6 +3,7 @@
 import React, { memo } from "react";
 import { cleanContent } from "@/lib/format";
 import { MessageContent } from "@/components/ui/message";
+import { StreamingCaret } from "@/components/ui/loader";
 import { useChatStore } from "@/stores/chat-store";
 import { useSmoothedText } from "@/hooks/use-smoothed-text";
 
@@ -17,6 +18,15 @@ interface TextPartProps {
   highlightRanges?: HighlightRange[];
   /** When true, the active match gets a stronger highlight color. */
   isActive?: boolean;
+  /**
+   * True when THIS part's message is still actively streaming (message.status
+   * === "streaming", threaded from MessageItem's renderAllParts). Distinct
+   * from the internal isStreaming below (global connectionPhase, used only
+   * for the smoothed-text buffering): this one drives the inline
+   * StreamingCaret, which must appear only at the end of the message that is
+   * actually still receiving deltas.
+   */
+  streaming?: boolean;
 }
 
 /**
@@ -49,7 +59,7 @@ function HighlightedText({ text, ranges, isActive }: { text: string; ranges: Hig
   return <span>{parts}</span>;
 }
 
-export const TextPart = memo(function TextPart({ text, highlightRanges, isActive }: TextPartProps) {
+export const TextPart = memo(function TextPart({ text, highlightRanges, isActive, streaming }: TextPartProps) {
   const isStreaming = useChatStore(
     (s) => s.agents[s.currentAgent]?.connectionPhase === "streaming"
   );
@@ -74,17 +84,20 @@ export const TextPart = memo(function TextPart({ text, highlightRanges, isActive
 
   if (!smoothed) return null;
   return (
-    <MessageContent
-      markdown
-      isStreaming={isStreaming}
-      className="prose prose-sm dark:prose-invert max-w-none bg-transparent p-0 overflow-x-auto
-        [&_p]:leading-relaxed [&_p]:text-foreground [&_p]:text-message
-        [&_pre]:my-4 [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/50 [&_pre]:shadow-inner [&_pre]:rounded-lg
-        [&_table]:block [&_table]:overflow-x-auto [&_table]:w-full
-        [&_a]:text-primary [&_a]:font-bold [&_a]:no-underline hover:[&_a]:underline
-        [&_li]:text-foreground [&_strong]:text-foreground [&_strong]:font-bold"
-    >
-      {smoothed}
-    </MessageContent>
+    <>
+      <MessageContent
+        markdown
+        isStreaming={isStreaming}
+        className="prose prose-sm dark:prose-invert max-w-none bg-transparent p-0 overflow-x-auto
+          [&_p]:leading-relaxed [&_p]:text-foreground [&_p]:text-message
+          [&_pre]:my-4 [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/50 [&_pre]:shadow-inner [&_pre]:rounded-lg
+          [&_table]:block [&_table]:overflow-x-auto [&_table]:w-full
+          [&_a]:text-primary [&_a]:font-bold [&_a]:no-underline hover:[&_a]:underline
+          [&_li]:text-foreground [&_strong]:text-foreground [&_strong]:font-bold"
+      >
+        {smoothed}
+      </MessageContent>
+      {streaming && <StreamingCaret />}
+    </>
   );
 });

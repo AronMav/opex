@@ -89,6 +89,29 @@ export function CometLoader({ className }: { className?: string }) {
   )
 }
 
+/** Inline blinking caret shown at the end of actively streaming text.
+ *  Deliberately NOT the CometLoader: the comet means "thinking", the caret
+ *  means "text is arriving right here". */
+export function StreamingCaret() {
+  return (
+    <span
+      data-testid="streaming-cursor"
+      aria-hidden="true"
+      className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[0.125em] rounded-sm bg-primary/70 animate-pulse"
+    />
+  )
+}
+
+/** Quiet placeholder for an assistant part that exists but has no content yet. */
+export function PartSkeleton() {
+  return (
+    <div data-testid="part-skeleton" className="py-1">
+      <span className="sr-only">Loading</span>
+      <div className="h-3 w-24 animate-pulse rounded bg-muted/50" />
+    </div>
+  )
+}
+
 function Loader({ variant = "circular", size = "md", className }: LoaderProps) {
   if (variant === "pulse-dot") {
     return <PulseDotLoader size={size} className={className} />
