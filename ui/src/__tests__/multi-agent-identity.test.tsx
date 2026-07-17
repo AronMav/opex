@@ -238,7 +238,6 @@ describe("Multi-Agent Identity (MAID)", () => {
         <MessageList
           messages={messages}
           isStreaming={false}
-          isTextStreaming={false}
           showThinking={false}
           isLoadingHistory={false}
           emptyState={<div />}
@@ -261,7 +260,6 @@ describe("Multi-Agent Identity (MAID)", () => {
         <MessageList
           messages={messages}
           isStreaming={false}
-          isTextStreaming={false}
           showThinking={false}
           isLoadingHistory={false}
           emptyState={<div />}
@@ -284,7 +282,6 @@ describe("Multi-Agent Identity (MAID)", () => {
         <MessageList
           messages={messages}
           isStreaming={false}
-          isTextStreaming={false}
           showThinking={false}
           isLoadingHistory={false}
           emptyState={<div />}
@@ -304,7 +301,6 @@ describe("Multi-Agent Identity (MAID)", () => {
         <MessageList
           messages={[]}
           isStreaming={true}
-          isTextStreaming={true}
           showThinking={true}
           isLoadingHistory={false}
           emptyState={<div />}

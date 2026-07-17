@@ -374,7 +374,6 @@ describe("Turn animations", () => {
       <MessageList
         messages={[msg]}
         isStreaming={false}
-        isTextStreaming={false}
         showThinking={false}
         isLoadingHistory={false}
         emptyState={null}
@@ -397,7 +396,6 @@ describe("Turn animations", () => {
       <MessageList
         messages={[msg]}
         isStreaming={false}
-        isTextStreaming={false}
         showThinking={false}
         isLoadingHistory={false}
         emptyState={null}
@@ -419,7 +417,6 @@ describe("Turn animations", () => {
       <MessageList
         messages={[msg]}
         isStreaming={false}
-        isTextStreaming={false}
         showThinking={false}
         isLoadingHistory={false}
         emptyState={null}
@@ -447,7 +444,6 @@ describe("MessageList a11y (C1 + H1)", () => {
       <MessageList
         messages={[baseMsg]}
         isStreaming={false}
-        isTextStreaming={false}
         showThinking={false}
         isLoadingHistory={false}
         emptyState={null}
@@ -483,7 +479,6 @@ describe("MessageList load-earlier guard (B3)", () => {
           agentId: "Bot", createdAt: new Date(Date.now() - 10000).toISOString(),
         }]}
         isStreaming={false}
-        isTextStreaming={false}
         showThinking={false}
         isLoadingHistory={false}
         emptyState={null}
@@ -506,7 +501,6 @@ describe("MessageList thinking indicator (H3)", () => {
       <MessageList
         messages={[]}
         isStreaming={true}
-        isTextStreaming={false}
         showThinking={true}
         isLoadingHistory={false}
         emptyState={null}
@@ -575,7 +569,6 @@ describe("Virtualization stress (UI-04)", () => {
       <MessageList
         messages={msgs}
         isStreaming={false}
-        isTextStreaming={false}
         showThinking={false}
         isLoadingHistory={false}
         emptyState={null}
@@ -594,7 +587,6 @@ describe("Virtualization stress (UI-04)", () => {
       <MessageList
         messages={msgs}
         isStreaming={false}
-        isTextStreaming={false}
         showThinking={false}
         isLoadingHistory={false}
         emptyState={null}

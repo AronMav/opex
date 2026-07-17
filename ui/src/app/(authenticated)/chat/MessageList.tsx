@@ -164,7 +164,6 @@ export function MessageList({
   agent,
   messages,
   isStreaming,
-  isTextStreaming,
   showThinking,
   isLoadingHistory,
   emptyState,
@@ -177,8 +176,6 @@ export function MessageList({
   agent?: string;
   messages: ChatMessage[];
   isStreaming: boolean;
-  /** True only during active text emission (phase === "streaming"), not during reconnect. */
-  isTextStreaming: boolean;
   showThinking: boolean;
   isLoadingHistory: boolean;
   emptyState: ReactNode;

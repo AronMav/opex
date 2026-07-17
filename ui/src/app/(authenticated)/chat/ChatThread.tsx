@@ -165,9 +165,6 @@ export function ChatThread({
   const hasMessages = msgCount > 0;
 
   const isStreaming = isActivePhase(connectionPhase);
-  // Only true during active text emission ("streaming") — the "submitted"
-  // pre-first-byte window shows the thinking indicator instead of the cursor.
-  const isTextStreaming = connectionPhase === "streaming";
 
   // Scroll-position memory (13c): on opening a non-streaming session with a
   // previously stored position, silently jumps there (same mechanism as
@@ -310,7 +307,6 @@ export function ChatThread({
         agent={currentAgent}
         messages={allMessages}
         isStreaming={isStreaming}
-        isTextStreaming={isTextStreaming}
         showThinking={showThinking}
         searchOpen={search.isOpen}
 
