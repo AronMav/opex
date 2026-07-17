@@ -178,7 +178,7 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
 
     /// Persona-drift probe (Stage B). Returns the identity-anchor block to append
     /// to the system prompt when correction fires (`[agent.drift] correct=true`
-    /// and drift over threshold), else `None`. Detect-only + timeline logging are
+    /// and z-score fires per Schmitt hysteresis), else `None`. Detect-only + timeline logging are
     /// unchanged; the return is `None` on every non-correcting path.
     async fn drift_probe(&self, history: &[opex_db::sessions::MessageRow], session_id: Uuid) -> Option<String>;
 
@@ -574,7 +574,7 @@ impl ContextBuilder for DefaultContextBuilder {
         let todo_len = system_prompt.len() - pre_todo_len;
 
         // Stage B Phase 2: identity anchor at the tail (highest salience) when
-        // drift crossed the threshold this turn. Rare (only over-threshold turns).
+        // the drift z-score fired this turn. Rare (only when hysteresis is active).
         if let Some(block) = drift_anchor {
             system_prompt.push_str(&block);
         }
