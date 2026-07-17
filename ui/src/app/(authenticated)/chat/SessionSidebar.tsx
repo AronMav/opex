@@ -228,7 +228,7 @@ export function SessionSidebar({
                     </button>
                     <button
                       onClick={() => onSelectSession(s)}
-                      className={`relative flex w-full min-w-0 flex-col gap-1.5 rounded-lg px-3 py-2.5 pb-9 md:px-4 md:py-3 md:pb-3 md:pr-14 text-left transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background overflow-hidden ${
+                      className={`relative flex w-full min-w-0 flex-col gap-1.5 rounded-lg px-3 py-2.5 pb-9 md:px-4 md:py-3 md:pb-3 text-left transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background overflow-hidden ${
                         activeSessionId === s.id
                         ? "bg-accent shadow-inner"
                         : "hover:bg-accent/40"
@@ -316,7 +316,7 @@ export function SessionSidebar({
                         <div className="absolute left-0 top-1/2 -translate-y-1/2 h-8 w-0.5 rounded-full bg-primary" />
                       )}
                     </button>
-                    <div className="absolute right-1.5 bottom-1 flex flex-row md:right-2 md:top-2 md:bottom-auto md:flex-col items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity duration-150 z-10">
+                    <div className="absolute right-1.5 bottom-1 flex flex-row md:right-1.5 md:top-1.5 md:bottom-auto items-center gap-0.5 md:gap-0 md:rounded-md md:bg-accent/90 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity duration-150 z-10">
                         <Button
                           variant="ghost"
                           size="icon-sm"
@@ -325,17 +325,17 @@ export function SessionSidebar({
                             setRenamingSessionId(s.id);
                             setRenameValue(s.title || "");
                           }}
-                          className="text-muted-foreground-subtle hover:text-foreground"
+                          className="md:size-6 text-muted-foreground-subtle hover:text-foreground"
                           title={t("chat.rename_hint")}
                         >
-                          <Pencil className="h-4 w-4" />
+                          <Pencil className="h-3.5 w-3.5" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="icon-sm"
                           onClick={(e) => onShareSession(e, s.id)}
                           disabled={sharingSessionId === s.id}
-                          className="text-muted-foreground-subtle hover:text-foreground"
+                          className="md:size-6 text-muted-foreground-subtle hover:text-foreground"
                           title={t("chat.share_session")}
                         >
                           <Share2 className="h-3.5 w-3.5" />
@@ -345,7 +345,7 @@ export function SessionSidebar({
                           size="icon-sm"
                           onClick={(e) => onDeleteSession(e, s.id)}
                           disabled={deletingSessionId === s.id}
-                          className="text-muted-foreground-subtle hover:bg-destructive/10 hover:text-destructive"
+                          className="md:size-6 text-muted-foreground-subtle hover:bg-destructive/10 hover:text-destructive"
                           title={t("chat.delete_session")}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
