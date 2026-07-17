@@ -169,6 +169,7 @@ pub async fn list_agent_icon_ids(
 }
 
 /// Delete the icon for an agent. No-op if absent. Returns rows affected (0 or 1).
+#[allow(dead_code)] // sole caller was the removed DELETE /api/agents/{name}/icon.
 pub async fn delete_agent_icon(pool: &PgPool, agent_name: &str) -> Result<u64> {
     let result = sqlx::query(
         r#"DELETE FROM uploads WHERE owner_type = 'agent_icon' AND owner_id = $1"#,

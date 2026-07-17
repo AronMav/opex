@@ -46,6 +46,7 @@ pub struct ContextBreakdown {
 }
 
 impl ContextBreakdown {
+    #[allow(dead_code)] // consumed by the removed context-breakdown endpoint's aggregation.
     pub fn total(&self) -> usize {
         self.system_prompt + self.skills + self.multi_agent + self.memory + self.soul + self.todo + self.tools + self.conversation
     }

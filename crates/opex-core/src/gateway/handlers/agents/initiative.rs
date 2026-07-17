@@ -17,8 +17,6 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/agents/{name}/plan/proposals/{id}/approve", post(api_approve_proposal))
         .route("/api/agents/{name}/plan/proposals/{id}/dismiss", post(api_dismiss_proposal))
         .route("/api/agents/{name}/plan/goals/{session_id}/cancel", post(api_cancel_goal))
-        .route("/api/agents/{name}/plan/day/{date}/approve", post(api_approve_day_plan))
-        .route("/api/agents/{name}/plan/day/{date}/dismiss", post(api_dismiss_day_plan))
 }
 
 async fn api_get_plan(
@@ -278,44 +276,6 @@ pub(crate) async fn dismiss_day_plan(
         .await
         .map_err(|e| ProposalError::Db(e.to_string()))?;
     Ok(())
-}
-
-async fn api_approve_day_plan(
-    State(app): State<AppState>,
-    Path((name, date)): Path<(String, chrono::NaiveDate)>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    if validate_agent_name(&name).is_err() {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "bad name"}))));
-    }
-    let Some(engine) = app.agents.get_engine(&name).await else {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "agent not found"}))));
-    };
-    match approve_day_plan(&app.infra.db, &engine, date).await {
-        Ok(materialized) => Ok(Json(json!({"ok": true, "materialized": materialized}))),
-        Err(ProposalError::BaseAgent) => {
-            Err((StatusCode::FORBIDDEN, Json(json!({"error": "initiative is non-base only"}))))
-        }
-        Err(ProposalError::Db(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e})))),
-    }
-}
-
-async fn api_dismiss_day_plan(
-    State(app): State<AppState>,
-    Path((name, date)): Path<(String, chrono::NaiveDate)>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    if validate_agent_name(&name).is_err() {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "bad name"}))));
-    }
-    let Some(engine) = app.agents.get_engine(&name).await else {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "agent not found"}))));
-    };
-    match dismiss_day_plan(&app.infra.db, &engine, date).await {
-        Ok(()) => Ok(Json(json!({"ok": true}))),
-        Err(ProposalError::BaseAgent) => {
-            Err((StatusCode::FORBIDDEN, Json(json!({"error": "initiative is non-base only"}))))
-        }
-        Err(ProposalError::Db(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e})))),
-    }
 }
 
 #[cfg(test)]

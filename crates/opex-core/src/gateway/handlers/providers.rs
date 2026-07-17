@@ -29,9 +29,8 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/media-drivers", get(api_list_media_drivers))
         .route("/api/media-config", get(api_media_config_export))
         .route("/api/providers", get(api_list_providers).post(api_create_provider))
-        .route("/api/providers/{id}", get(api_get_provider).put(api_update_provider).delete(api_delete_provider).patch(api_patch_cli_options))
+        .route("/api/providers/{id}", get(api_get_provider).put(api_update_provider).delete(api_delete_provider))
         .route("/api/providers/{id}/models", get(api_unified_provider_models))
-        .route("/api/providers/{id}/resolve", get(api_provider_resolve))
         .route("/api/providers/{id}/test-cli", post(api_test_cli))
         .route("/api/provider-active", get(api_list_provider_active).put(api_set_provider_active))
 }
@@ -523,46 +522,6 @@ pub(crate) async fn api_unified_provider_models(
     }
 }
 
-// ── Resolve (unmasked credentials for internal use) ─────────────────────────
-
-pub(crate) async fn api_provider_resolve(
-    State(infra): State<InfraServices>,
-    State(auth): State<AuthServices>,
-    Path(id): Path<Uuid>,
-) -> impl IntoResponse {
-    let provider = match providers::get_provider(&infra.db, id).await {
-        Ok(Some(p)) => p,
-        Ok(None) => return (StatusCode::NOT_FOUND, Json(json!({"error": "provider not found"}))).into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
-    };
-
-    let api_key = resolve_key(&auth.secrets, &provider).await.unwrap_or_default();
-
-    // Audit 2026-05-08: this endpoint returns the plaintext API key. Mirror
-    // the SECRET_REVEALED event already emitted by /api/secrets/{name}/reveal
-    // so a forensic timeline shows every plaintext-credential extraction,
-    // regardless of which path produced it.
-    crate::db::audit::audit_spawn(
-        infra.db.clone(),
-        String::new(),
-        crate::db::audit::event_types::SECRET_REVEALED,
-        None,
-        json!({
-            "kind": "provider_api_key",
-            "provider_id": id.to_string(),
-            "provider_name": provider.name,
-            "provider_type": provider.provider_type,
-        }),
-    );
-
-    Json(json!({
-        "base_url": provider.base_url,
-        "provider_type": provider.provider_type,
-        "default_model": provider.default_model,
-        "api_key": api_key,
-    })).into_response()
-}
-
 // ── Active handlers ─────────────────────────────────────────────────────────
 
 /// Since profiles now own all agent-facing capability routing, the global
@@ -870,28 +829,6 @@ fn install_hint(preset_id: &str) -> &'static str {
     }
 }
 
-/// Allowed option keys for PATCH CLI options endpoint.
-const ALLOWED_CLI_OPTION_KEYS: &[&str] = &["command", "args", "prompt_arg", "model_arg", "env_key"];
-
-/// Validate that only allowed keys are present in the CLI options object.
-fn validate_cli_option_keys(options: &Value) -> Result<(), String> {
-    if let Some(obj) = options.as_object() {
-        let unknown: Vec<&String> = obj.keys()
-            .filter(|k| !ALLOWED_CLI_OPTION_KEYS.contains(&k.as_str()))
-            .collect();
-        if !unknown.is_empty() {
-            return Err(format!(
-                "unknown option keys: {}. Allowed: {}",
-                unknown.iter().map(|k| k.as_str()).collect::<Vec<_>>().join(", "),
-                ALLOWED_CLI_OPTION_KEYS.join(", ")
-            ));
-        }
-        Ok(())
-    } else {
-        Err("options must be a JSON object".into())
-    }
-}
-
 /// Reusable CLI health-check logic — validates CLI installation, API key, and runs a test prompt.
 /// Used by both `api_test_cli` and `api_patch_cli_options`.
 async fn run_cli_health_check(
@@ -1120,107 +1057,6 @@ pub(crate) async fn api_test_cli(
     (StatusCode::OK, Json(serde_json::to_value(result).unwrap_or_default())).into_response()
 }
 
-// ── PATCH CLI options ──────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct PatchCliOptionsBody {
-    pub options: Value,
-}
-
-/// `PATCH /api/providers/{id}`
-///
-/// Updates CLI-specific options (command, args, `prompt_arg`, `model_arg`, `env_key`)
-/// with validation: command override is checked via which/where.exe.
-/// After successful update, runs a health-check and returns the result.
-pub(crate) async fn api_patch_cli_options(
-    State(infra): State<InfraServices>,
-    State(auth): State<AuthServices>,
-    Path(id): Path<Uuid>,
-    Json(body): Json<PatchCliOptionsBody>,
-) -> impl IntoResponse {
-    use std::process::Stdio;
-
-    // Load provider
-    let provider = match providers::get_provider(&infra.db, id).await {
-        Ok(Some(p)) => p,
-        Ok(None) => return (StatusCode::NOT_FOUND, Json(json!({"error": "not found"}))).into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
-    };
-
-    // Validate it's a CLI provider
-    if crate::agent::cli_backend::find_preset(&provider.provider_type).is_none() {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "Not a CLI provider"}))).into_response();
-    }
-
-    // Validate only allowed keys
-    if let Err(msg) = validate_cli_option_keys(&body.options) {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": msg}))).into_response();
-    }
-
-    // If command override is present, validate it exists on system
-    if let Some(cmd_val) = body.options.get("command").and_then(|v| v.as_str()) {
-        #[cfg(target_os = "windows")]
-        let which_cmd = "where.exe";
-        #[cfg(not(target_os = "windows"))]
-        let which_cmd = "which";
-
-        let found = match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            tokio::process::Command::new(which_cmd)
-                .arg(cmd_val)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output(),
-        ).await {
-            Ok(Ok(output)) => output.status.success(),
-            _ => false,
-        };
-
-        if !found {
-            return (StatusCode::BAD_REQUEST, Json(json!({
-                "error": format!("command '{}' not found on system", cmd_val)
-            }))).into_response();
-        }
-    }
-
-    // Merge new options into existing provider.options (shallow merge)
-    let merged_options = {
-        let mut existing = provider.options.as_object().cloned().unwrap_or_default();
-        if let Some(new_obj) = body.options.as_object() {
-            for (k, v) in new_obj {
-                existing.insert(k.clone(), v.clone());
-            }
-        }
-        Value::Object(existing)
-    };
-
-    // Update DB with merged options
-    let input = UpdateProvider {
-        name: None,
-        category: None,
-        provider_type: None,
-        base_url: None,
-        default_model: None,
-        enabled: None,
-        options: Some(merged_options),
-        notes: None,
-    };
-
-    match providers::update_provider(&infra.db, id, input).await {
-        Ok(Some(updated)) => {
-            // Run health-check on the updated provider
-            let health_check = run_cli_health_check(&updated, &auth.secrets).await;
-            let provider_json = provider_json(&auth.secrets, &updated).await;
-            (StatusCode::OK, Json(json!({
-                "provider": provider_json,
-                "health_check": health_check,
-            }))).into_response()
-        }
-        Ok(None) => (StatusCode::NOT_FOUND, Json(json!({"error": "not found"}))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
-    }
-}
-
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1322,65 +1158,6 @@ mod tests {
         let input: crate::db::providers::CreateProvider = serde_json::from_value(json).unwrap();
         assert_eq!(input.category, "text");
         assert_eq!(input.provider_type, "openai");
-    }
-
-    // ── CLI option key validation ─────────────────────────────────────────
-
-    #[test]
-    fn validate_cli_options_valid_keys() {
-        let opts = serde_json::json!({
-            "args": ["--output-format", "json"],
-            "prompt_arg": "-p"
-        });
-        assert!(validate_cli_option_keys(&opts).is_ok());
-    }
-
-    #[test]
-    fn validate_cli_options_all_allowed_keys() {
-        let opts = serde_json::json!({
-            "command": "/usr/bin/gemini",
-            "args": ["--json"],
-            "prompt_arg": "-p",
-            "model_arg": "--model",
-            "env_key": "GEMINI_API_KEY"
-        });
-        assert!(validate_cli_option_keys(&opts).is_ok());
-    }
-
-    #[test]
-    fn validate_cli_options_unknown_key() {
-        let opts = serde_json::json!({
-            "args": ["--json"],
-            "sneaky_field": "bad"
-        });
-        let err = validate_cli_option_keys(&opts).unwrap_err();
-        assert!(err.contains("sneaky_field"), "error should mention the unknown key: {}", err);
-    }
-
-    #[test]
-    fn validate_cli_options_not_object() {
-        let opts = serde_json::json!("not an object");
-        let err = validate_cli_option_keys(&opts).unwrap_err();
-        assert!(err.contains("must be a JSON object"));
-    }
-
-    #[test]
-    fn validate_cli_options_empty_object() {
-        let opts = serde_json::json!({});
-        assert!(validate_cli_option_keys(&opts).is_ok());
-    }
-
-    #[test]
-    fn patch_cli_options_body_deserializes() {
-        let json = serde_json::json!({
-            "options": {
-                "args": ["--output-format", "json"],
-                "prompt_arg": "-p"
-            }
-        });
-        let body: PatchCliOptionsBody = serde_json::from_value(json).unwrap();
-        assert!(body.options.is_object());
-        assert!(body.options.get("args").is_some());
     }
 
     fn is_valid_type(t: &str) -> bool { VALID_TYPES.contains(&t) }

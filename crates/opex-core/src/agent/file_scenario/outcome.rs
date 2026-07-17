@@ -47,6 +47,7 @@ impl ScenarioOutcome {
     /// Failure envelope. The sole production constructor still used after the
     /// legacy-FSE teardown — `gateway/handlers/files.rs` builds it when the
     /// upload read / toolgate call fails.
+    #[allow(dead_code)] // sole caller was the removed POST /api/files/{id}/run.
     pub fn failed(reason: String) -> Self {
         Self { status: ScenarioStatus::Failed, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false, post_action: None }
     }

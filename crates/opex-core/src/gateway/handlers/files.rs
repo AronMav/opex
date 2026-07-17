@@ -21,10 +21,10 @@
 
 use axum::{
     Router,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
-    routing::{get, post},
+    routing::{post},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -33,30 +33,10 @@ use uuid::Uuid;
 use crate::agent::file_scenario::outcome::{ScenarioOutcome, ScenarioStatus};
 use crate::agent::handler_registry::{HandlerRegistry, match_buttons, match_url_handlers};
 use crate::gateway::AppState;
-use crate::gateway::clusters::{ChannelBus, ConfigServices, InfraServices};
+use crate::gateway::clusters::InfraServices;
 use opex_db::handler_jobs;
 
 // ── Process-wide HTTP client ──────────────────────────────────────────────────
-
-/// Process-wide pooled reqwest client for loopback downloads and toolgate calls.
-static FILES_HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-
-fn files_http_client() -> &'static reqwest::Client {
-    // F028: explicit timeouts. This client drives the SYNC handler path — a
-    // loopback upload download plus the multipart POST to single-process
-    // toolgate. Built with reqwest::Client::new() it had NO connect/request
-    // timeout, so a slow/wedged handler made `.send()` await forever, pinning a
-    // tokio task plus the up-to-50MB buffered upload in memory (there is no
-    // global tower TimeoutLayer to cancel it). Mirrors the async worker's
-    // client (file_handler_worker.rs), sized larger to tolerate big uploads.
-    FILES_HTTP_CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .timeout(std::time::Duration::from_secs(300))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
-    })
-}
 
 // ── post_action path-traversal allowlist ──────────────────────────────────────
 
@@ -88,8 +68,6 @@ pub(crate) fn is_safe_path_component(name: &str) -> bool {
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/api/files/{upload_id}/actions", get(get_file_actions))
-        .route("/api/files/{upload_id}/run", post(run_file_handler))
         .route("/api/files/run", post(run_menu_handler))
         .route("/api/files/menu-run", post(run_menu_token_handler))
         .route("/api/commands/menu-run", post(command_menu_run))
@@ -423,31 +401,6 @@ async fn command_menu_run(
     .await
 }
 
-// ── Request / query types ─────────────────────────────────────────────────────
-
-/// Query parameters for the actions endpoint.
-///
-/// Only `lang` is read. `agent` and `session` are intentionally excluded:
-/// action discovery is keyed purely on mime+size+allowlist; including unread
-/// serde fields trips `clippy -D warnings` (`dead_code` on struct fields).
-#[derive(Deserialize)]
-pub(crate) struct ActionsQuery {
-    #[serde(default)]
-    pub lang: Option<String>,
-}
-
-/// Request body for `POST /api/files/{upload_id}/run`.
-#[derive(Deserialize)]
-pub(crate) struct FileRunRequest {
-    pub handler_id: String,
-    #[serde(default)]
-    pub params: Value,
-    pub session_id: Uuid,
-    pub agent: String,
-    #[serde(default)]
-    pub lang: Option<String>,
-}
-
 // ── Owner-gate ────────────────────────────────────────────────────────────────
 
 /// Minimal upload facts the owner-gate proves before any handler runs.
@@ -517,284 +470,6 @@ pub(crate) async fn assert_upload_accessible(
         mime: row.mime,
         size: row.size_bytes.max(0) as u64,
     })
-}
-
-// ── Utility ───────────────────────────────────────────────────────────────────
-
-/// Build the toolgate handler run URL, tolerant of a trailing slash in
-/// `toolgate_url`.
-pub(crate) fn toolgate_run_url(toolgate_url: &str, handler_id: &str) -> String {
-    format!(
-        "{}/handlers/{}/run",
-        toolgate_url.trim_end_matches('/'),
-        handler_id
-    )
-}
-
-// ── Async-enqueue seam (R13) ──────────────────────────────────────────────────
-
-/// Enqueue an async handler run onto the universal `handler_jobs` queue (R13).
-/// Returns the new job id. Upload-based source → `Some(upload_id)`, `source_ref=None`.
-/// This is the surviving enqueue seam that Phase 6 keeps (not the dispatch.rs arm).
-pub(crate) async fn enqueue_async_run(
-    db: &sqlx::PgPool,
-    upload_id: uuid::Uuid,
-    handler_id: &str,
-    agent: &str,
-    session_id: uuid::Uuid,
-    params: &serde_json::Value,
-) -> anyhow::Result<uuid::Uuid> {
-    opex_db::handler_jobs::insert_handler_job(
-        db,
-        Some(upload_id),
-        None,
-        handler_id,
-        agent,
-        session_id,
-        params,
-    )
-    .await
-}
-
-// ── Handlers ──────────────────────────────────────────────────────────────────
-
-/// `GET /api/files/{upload_id}/actions`
-///
-/// Returns the list of composer buttons available for the identified upload.
-/// Calls the owner-gate, reads the enabled allowlist from the DB, refreshes
-/// (conditionally) the handler manifest cache from toolgate, then runs the
-/// tiered trust filter to produce localized `HandlerButton` items.
-async fn get_file_actions(
-    State(infra): State<InfraServices>,
-    State(handlers): State<HandlerRegistry>,
-    Path(upload_id): Path<Uuid>,
-    Query(q): Query<ActionsQuery>,
-) -> impl IntoResponse {
-    let meta = match assert_upload_accessible(&infra.db, upload_id).await {
-        Ok(m) => m,
-        Err((status, body)) => return (status, body).into_response(),
-    };
-
-    handlers.refresh().await;
-    let manifests = handlers.manifests().await;
-    let enabled = crate::agent::fse::allowlist_store::get_enabled_allowlist(&infra.db).await;
-    let lang = q.lang.as_deref().unwrap_or("ru");
-    let buttons = match_buttons(&manifests, &meta.mime, meta.size, &enabled, lang);
-
-    Json(json!({"buttons": buttons})).into_response()
-}
-
-/// `POST /api/files/{upload_id}/run`
-///
-/// Sync path (the only path for sync handlers):
-/// 1. Owner-gate (R3).
-/// 2. Server-side tiered gate re-check (button trust not assumed).
-/// 3. Async-handler branch: enqueue onto `handler_jobs` (R13), return 202 Accepted.
-/// 4. Mint a LOOPBACK signed URL; core downloads the bytes in Rust (R12).
-///    Toolgate never sees the URL — its SSRF guard would reject it.
-/// 5. POST multipart/form-data to `{toolgate_url}/handlers/{id}/run`.
-/// 6. On `ok`: persist a provenance-wrapped `source='file_handler'` message
-///    (no explicit status → table default); broadcast best-effort `ui_event_tx`.
-/// 7. Return the full `ScenarioOutcome` in the POST body (chat-delivery path).
-async fn run_file_handler(
-    State(infra): State<InfraServices>,
-    State(handlers): State<HandlerRegistry>,
-    State(config): State<ConfigServices>,
-    State(channels): State<ChannelBus>,
-    Path(upload_id): Path<Uuid>,
-    Json(req): Json<FileRunRequest>,
-) -> impl IntoResponse {
-    // ── 1. Owner-gate ─────────────────────────────────────────────────────────
-    let meta = match assert_upload_accessible(&infra.db, upload_id).await {
-        Ok(m) => m,
-        Err((status, body)) => return (status, body).into_response(),
-    };
-
-    // ── 2. Server-side tiered gate re-check ───────────────────────────────────
-    let lang = req.lang.as_deref().unwrap_or("ru");
-    handlers.refresh().await;
-    let manifests = handlers.manifests().await;
-    let enabled = crate::agent::fse::allowlist_store::get_enabled_allowlist(&infra.db).await;
-    let allowed = match_buttons(&manifests, &meta.mime, meta.size, &enabled, lang)
-        .iter()
-        .any(|b| b.id == req.handler_id);
-
-    if !allowed {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "handler not permitted for this file"})),
-        )
-            .into_response();
-    }
-
-    // ── 3. Async-handler branch: enqueue onto handler_jobs (R13) ─────────────
-    let is_async = manifests
-        .iter()
-        .find(|m| m.id == req.handler_id)
-        .map(|m| m.execution.as_str() == "async")
-        .unwrap_or(false);
-
-    if is_async {
-        // Enqueue onto handler_jobs (R13) — the file_handler_worker (Task 5)
-        // dispatches it to toolgate; the runner posts back via the callbacks.
-        let job_id = match enqueue_async_run(
-            &infra.db,
-            upload_id,
-            &req.handler_id,
-            &req.agent,
-            req.session_id,
-            &req.params,
-        )
-        .await
-        {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::error!(error = %e, "file_run: async enqueue failed");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "failed to enqueue job"})),
-                )
-                    .into_response();
-            }
-        };
-        return (
-            StatusCode::ACCEPTED,
-            Json(json!({"accepted": true, "job_id": job_id.to_string()})),
-        )
-            .into_response();
-    }
-
-    // ── 4. Mint a loopback signed URL; download bytes in Rust (R12) ───────────
-    //    Toolgate NEVER receives this URL — its SSRF guard rejects loopback.
-    let key = infra.secrets.get_upload_hmac_key();
-    let ttl = config.config.uploads.signed_url_ttl_secs;
-    let web_url =
-        crate::uploads::mint_uploads_url(crate::uploads::web_uploads_base(), upload_id, &key, ttl);
-    let loopback =
-        crate::agent::url_tools::uploads_local_url(&web_url, &config.config.gateway.listen);
-
-    let http = files_http_client();
-    let bytes = match http.get(&loopback).send().await {
-        Ok(r) if r.status().is_success() => match r.bytes().await {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::warn!(error = %e, upload_id = %upload_id, "files::run: failed to read upload bytes");
-                return Json(ScenarioOutcome::failed(format!("upload read error: {e}")))
-                    .into_response();
-            }
-        },
-        Ok(r) => {
-            tracing::warn!(status = %r.status(), upload_id = %upload_id, "files::run: loopback download non-2xx");
-            return Json(ScenarioOutcome::failed(format!(
-                "upload fetch failed: HTTP {}",
-                r.status().as_u16()
-            )))
-            .into_response();
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, upload_id = %upload_id, "files::run: loopback download failed");
-            return Json(ScenarioOutcome::failed(format!("upload fetch error: {e}")))
-                .into_response();
-        }
-    };
-
-    // ── 5. POST multipart/form-data to toolgate /handlers/{id}/run (R12) ──────
-    //    Mirrors dispatch.rs::run_transcribe: bytes in field "file" + text fields.
-    let toolgate_url = config
-        .config
-        .toolgate_url
-        .as_deref()
-        .unwrap_or("http://localhost:9011");
-    let url = toolgate_run_url(toolgate_url, &req.handler_id);
-    let params_str =
-        serde_json::to_string(&req.params).unwrap_or_else(|_| "{}".to_string());
-
-    // Operator-set per-agent settings ("valves") → ctx.config in the handler.
-    let config_str = crate::db::handler_config::get_config(&infra.db, &req.handler_id, &req.agent)
-        .await
-        .ok()
-        .and_then(|v| serde_json::to_string(&v).ok())
-        .unwrap_or_else(|| "{}".to_string());
-
-    let file_part = reqwest::multipart::Part::bytes(bytes.to_vec())
-        .file_name(upload_id.to_string())
-        .mime_str(&meta.mime)
-        .unwrap_or_else(|_| reqwest::multipart::Part::bytes(bytes.to_vec()));
-
-    let form = reqwest::multipart::Form::new()
-        .part("file", file_part)
-        .text("mime", meta.mime.clone())
-        .text("filename", upload_id.to_string())
-        .text("size", meta.size.to_string())
-        .text("params", params_str)
-        .text("config", config_str)
-        .text("language", lang.to_string());
-
-    let outcome: ScenarioOutcome = match http.post(&url).multipart(form).send().await {
-        Ok(resp) if resp.status().is_success() => match resp.json::<ScenarioOutcome>().await {
-            Ok(o) => o,
-            Err(e) => {
-                tracing::warn!(error = %e, handler = %req.handler_id, "files::run: toolgate returned bad JSON");
-                ScenarioOutcome::failed(format!("toolgate bad JSON: {e}"))
-            }
-        },
-        Ok(resp) => {
-            let code = resp.status().as_u16();
-            tracing::warn!(status = code, handler = %req.handler_id, "files::run: toolgate non-2xx");
-            ScenarioOutcome::failed(format!("toolgate HTTP {code}"))
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, handler = %req.handler_id, "files::run: toolgate request failed");
-            ScenarioOutcome::failed(format!("toolgate request error: {e}"))
-        }
-    };
-
-    // ── 6. On ok: persist provenance-wrapped message + best-effort ui_event ───
-    if matches!(outcome.status, ScenarioStatus::Ok) {
-        let content = crate::agent::provenance::wrap_file_output(
-            &req.handler_id,
-            &upload_id.to_string(),
-            &outcome.summary_text,
-        );
-
-        // INSERT without explicit `status`: table default applies (NULL → treated as
-        // complete by the query layer). `source='file_handler'` is the provenance tag
-        // (migration 066). `is_mirror=false` (default) keeps it on the main branch.
-        if let Err(e) = sqlx::query(
-            r#"INSERT INTO messages (session_id, agent_id, role, content, source)
-               VALUES ($1, $2, 'assistant', $3, 'file_handler')"#,
-        )
-        .bind(req.session_id)
-        .bind(&req.agent)
-        .bind(&content)
-        .execute(&infra.db)
-        .await
-        {
-            // Non-fatal: the outcome is still returned to the composer below.
-            tracing::warn!(
-                error = %e,
-                session_id = %req.session_id,
-                handler = %req.handler_id,
-                "files::run: failed to persist file_handler message"
-            );
-        }
-
-        // Best-effort GLOBAL UI-bus notification (NOT the per-session chat SSE stream;
-        // see the Chat-delivery note at the module top). A UI consumer for
-        // `type:"file"` is wired in Phase 4; until then this send is a no-op.
-        for artifact in &outcome.artifact_urls {
-            let _ = channels.ui_event_tx.send(
-                opex_types::ws::WsEvent::File {
-                    url: artifact.clone(),
-                    media_type: meta.mime.clone(),
-                }
-                .to_json(),
-            );
-        }
-    }
-
-    // ── 7. Chat-delivery path: return the full outcome to the composer ─────────
-    Json(outcome).into_response()
 }
 
 // ── Async-job callback types ───────────────────────────────────────────────────
@@ -1279,32 +954,6 @@ mod tests {
     }
 
     #[test]
-    fn run_request_deserializes_from_composer_body() {
-        let raw = serde_json::json!({
-            "handler_id": "transcribe",
-            "params": {"language": "ru"},
-            "session_id": "00000000-0000-0000-0000-000000000001",
-            "agent": "Atlas"
-        });
-        let req: FileRunRequest = serde_json::from_value(raw).unwrap();
-        assert_eq!(req.handler_id, "transcribe");
-        assert_eq!(req.agent, "Atlas");
-        assert_eq!(req.params["language"], "ru");
-    }
-
-    #[test]
-    fn run_toolgate_url_is_built_correctly() {
-        assert_eq!(
-            toolgate_run_url("http://localhost:9011/", "transcribe"),
-            "http://localhost:9011/handlers/transcribe/run"
-        );
-        assert_eq!(
-            toolgate_run_url("http://localhost:9011", "describe"),
-            "http://localhost:9011/handlers/describe/run"
-        );
-    }
-
-    #[test]
     fn persisted_content_carries_file_output_wrapper() {
         // The persist body for an ok outcome is the wrapped summary (R4).
         let upload = "11111111-1111-1111-1111-111111111111";
@@ -1518,31 +1167,5 @@ mod tests {
 
 #[cfg(test)]
 mod async_enqueue_tests {
-    use super::*;
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn enqueue_async_run_inserts_queued_handler_job(pool: sqlx::PgPool) {
-        let upload = uuid::Uuid::new_v4();
-        let sid = uuid::Uuid::new_v4();
-        let job_id = enqueue_async_run(
-            &pool,
-            upload,
-            "summarize_video",
-            "Atlas",
-            sid,
-            &serde_json::json!({ "language": "ru" }),
-        )
-        .await
-        .unwrap();
-
-        let row = opex_db::handler_jobs::get_handler_job(&pool, job_id)
-            .await
-            .unwrap()
-            .expect("job exists");
-        assert_eq!(row.status, "queued");
-        assert_eq!(row.handler_id, "summarize_video");
-        assert_eq!(row.upload_id, Some(upload));
-        assert_eq!(row.session_id, sid);
-        assert_eq!(row.params["language"], "ru");
-    }
 }

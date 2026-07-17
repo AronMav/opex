@@ -18,12 +18,10 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/channels", get(api_list_all_channels))
         .route("/api/channels/active", get(api_channels_active))
         .route("/api/channels/notify", post(api_channel_notify))
-        .route("/api/agents/{name}/hooks", get(super::agents::api_agent_hooks))
         .route("/api/agents/{name}/channels", get(api_channels_list).post(api_channel_create))
         .route("/api/agents/{name}/channels/{id}", delete(api_channel_delete).put(api_channel_update))
         .route("/api/agents/{name}/channels/{id}/restart", post(api_channel_restart))
         .route("/api/agents/{name}/channels/{id}/ack", post(api_channel_ack))
-        .route("/api/agents/{name}/channels/{id}/status", get(api_channel_status))
 }
 
 /// Config keys that contain sensitive credentials — stored in vault, masked in API responses.
@@ -407,34 +405,6 @@ pub(crate) async fn api_channel_update(
     Json(json!({"ok": true})).into_response()
 }
 
-pub(crate) async fn api_channel_status(
-    State(infra): State<InfraServices>,
-    Path((agent_name, id)): Path<(String, String)>,
-) -> impl IntoResponse {
-    let Ok(uuid) = id.parse::<sqlx::types::Uuid>() else {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid id"}))).into_response();
-    };
-
-    let row: Option<AgentChannelRow> = sqlx::query_as(
-        "SELECT id, agent_name, channel_type, display_name, config, status, error_msg
-         FROM agent_channels WHERE id = $1 AND agent_name = $2"
-    )
-    .bind(uuid)
-    .bind(&agent_name)
-    .fetch_optional(&infra.db)
-    .await
-    .unwrap_or(None);
-
-    let Some(row) = row else {
-        return (StatusCode::NOT_FOUND, Json(json!({"error": "channel not found"}))).into_response();
-    };
-
-    Json(json!({"id": uuid, "status": row.status, "error_msg": row.error_msg})).into_response()
-}
-
-// ── Global channel endpoints ─────────────────────────────────────────────────
-
-/// GET /api/channels — list ALL channels across all agents.
 pub(crate) async fn api_list_all_channels(
     State(infra): State<InfraServices>,
     State(auth): State<AuthServices>,

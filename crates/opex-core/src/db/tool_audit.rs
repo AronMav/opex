@@ -34,6 +34,7 @@ pub async fn record_tool_execution(
     Ok(())
 }
 
+#[allow(dead_code)] // sole consumer was the removed GET /api/audit/tools.
 #[derive(Debug, FromRow, Serialize)]
 pub struct ToolAuditEntry {
     pub id: Uuid,
@@ -48,6 +49,7 @@ pub struct ToolAuditEntry {
 }
 
 /// Query tool audit log with optional filters.
+#[allow(dead_code)] // sole caller was the removed GET /api/audit/tools.
 pub async fn query_tool_audit(
     db: &PgPool,
     agent_id: Option<&str>,

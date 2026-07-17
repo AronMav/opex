@@ -14,7 +14,6 @@ use crate::gateway::clusters::InfraServices;
 #[derive(Debug, Deserialize)]
 pub(crate) struct UsageQuery {
     days: Option<u32>,
-    agent: Option<String>,
 }
 
 pub(crate) async fn api_usage(
@@ -54,17 +53,6 @@ pub(crate) async fn api_usage_daily(
     let days = q.days.unwrap_or(30);
     match crate::db::usage::usage_daily(&infra.db, days).await {
         Ok(daily) => Json(json!({"ok": true, "days": days, "daily": daily})),
-        Err(e) => Json(json!({"ok": false, "error": e.to_string()})),
-    }
-}
-
-pub(crate) async fn api_usage_sessions(
-    State(infra): State<InfraServices>,
-    Query(q): Query<UsageQuery>,
-) -> Json<Value> {
-    let days = q.days.unwrap_or(30);
-    match crate::db::usage::usage_by_session(&infra.db, q.agent.as_deref(), days).await {
-        Ok(sessions) => Json(json!({"ok": true, "days": days, "sessions": sessions})),
         Err(e) => Json(json!({"ok": false, "error": e.to_string()})),
     }
 }

@@ -23,10 +23,6 @@ const INFRA_TTL_DAYS: i64 = 7;
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/internal/infra-event", post(api_infra_event))
-        .route(
-            "/api/infra/decisions",
-            post(api_create_decision).get(api_list_decisions),
-        )
         .route("/api/infra/decisions/{id}/resolve", post(api_resolve_decision))
         .route("/api/infra/decisions/{id}", axum::routing::patch(api_patch_decision))
 }
@@ -171,70 +167,6 @@ async fn notify_owner_of_pending(
 
 // ── Decisions API (Task 5) ──────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
-struct CreateDecisionBody {
-    container: String,
-    diagnosis: String,
-    #[serde(default)]
-    proposed_action: String,
-    #[serde(default)]
-    proposed_commands: serde_json::Value,
-    /// pending | done | dismissed — итог диагностики Opex.
-    status: String,
-}
-
-/// POST /api/infra/decisions — Opex создаёт решение (вопрос владельцу либо
-/// молчаливый итог done/dismissed). Для `pending` — UI-уведомление +
-/// Telegram inline-кнопки владельцу.
-async fn api_create_decision(
-    State(infra): State<InfraServices>,
-    State(bus): State<ChannelBus>,
-    State(agents): State<AgentCore>,
-    Json(body): Json<CreateDecisionBody>,
-) -> impl IntoResponse {
-    let cmds = if body.proposed_commands.is_null() {
-        json!([])
-    } else {
-        body.proposed_commands.clone()
-    };
-    let id = match crate::db::infra_decisions::create(
-        &infra.db,
-        &body.container,
-        &body.diagnosis,
-        &body.proposed_action,
-        &cmds,
-        &body.status,
-        INFRA_TTL_DAYS,
-    )
-    .await
-    {
-        Ok(id) => id,
-        Err(e) => {
-            // UNIQUE-нарушение (уже есть pending) трактуем как «принято» — не ошибка сервера.
-            tracing::warn!(error = %e, "create infra decision failed (возможно уже есть pending)");
-            return (
-                axum::http::StatusCode::CONFLICT,
-                Json(json!({"ok": false, "error": e.to_string()})),
-            )
-                .into_response();
-        }
-    };
-
-    // Уведомляем владельца ТОЛЬКО для pending (вопрос). done/dismissed — молча.
-    if body.status == "pending"
-        && let Some(engine) = agents.base_engine().await
-    {
-        notify_owner_of_pending(&infra, &bus, &engine, id, &body.container, &body.proposed_action)
-            .await;
-    }
-    (axum::http::StatusCode::OK, Json(json!({"ok": true, "id": id.to_string()}))).into_response()
-}
-
-/// Отправляет владельцу inline-кнопки «Выполнить/Отклонить» в его DM-канал.
-/// `channel_router` живёт per-agent (`AgentEngine::state().channel_router`,
-/// НЕ в `AppState`/кластерах) — тот же паттерн, что и весь остальной
-/// код доставки (см. `channel_ws/handshake.rs`, `initiative/tick.rs`).
-/// `owner_id` берётся ТОЛЬКО из конфига base-агента (SECURITY, как в initiative H1).
 async fn deliver_infra_buttons(
     db: &sqlx::PgPool,
     engine: &AgentEngine,
@@ -268,17 +200,6 @@ async fn deliver_infra_buttons(
 }
 
 /// GET /api/infra/decisions — список последних решений (для UI-страницы).
-async fn api_list_decisions(State(infra): State<InfraServices>) -> impl IntoResponse {
-    match crate::db::infra_decisions::list(&infra.db, 100).await {
-        Ok(rows) => Json(json!({"decisions": rows})).into_response(),
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
-        )
-            .into_response(),
-    }
-}
-
 #[derive(Debug, Deserialize)]
 struct PatchBody {
     /// done | failed | dismissed. Опционально — можно обновить только содержимое.

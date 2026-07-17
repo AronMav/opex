@@ -1231,20 +1231,6 @@ pub(crate) async fn api_resolve_approval(
 
 // ── Approval Allowlist ──────────────────────────────────
 
-pub(crate) async fn api_list_allowlist(
-    State(infra): State<InfraServices>,
-    Query(params): Query<std::collections::HashMap<String, String>>,
-) -> impl IntoResponse {
-    let agent = params.get("agent").cloned().unwrap_or_default();
-    if agent.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "agent parameter required"}))).into_response();
-    }
-    match crate::db::approvals::list_allowlist(&infra.db, &agent).await {
-        Ok(entries) => Json(json!({"allowlist": entries})).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
-    }
-}
-
 pub(crate) async fn api_add_to_allowlist(
     State(infra): State<InfraServices>,
     Json(body): Json<serde_json::Value>,
@@ -1260,31 +1246,6 @@ pub(crate) async fn api_add_to_allowlist(
     }
 }
 
-pub(crate) async fn api_delete_from_allowlist(
-    State(infra): State<InfraServices>,
-    Path(id): Path<uuid::Uuid>,
-) -> impl IntoResponse {
-    match crate::db::approvals::remove_from_allowlist(&infra.db, id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, Json(json!({"error": "not found"}))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
-    }
-}
-
-// ── Hooks API ───────────────────────────────────────────
-
-pub(crate) async fn api_agent_hooks(
-    State(agents): State<AgentCore>,
-    Path(name): Path<String>,
-) -> impl IntoResponse {
-    if let Some(engine) = agents.get_engine(&name).await {
-        let names = engine.hooks().names();
-        Json(json!({"agent": name, "hooks": names})).into_response()
-    } else {
-        (StatusCode::NOT_FOUND, Json(json!({"error": "agent not found"}))).into_response()
-    }
-}
-/// GET /api/agents/{name}/tasks — return task plans written by this agent to workspace/tasks/
 pub(crate) async fn api_agent_tasks(
     State(agents): State<AgentCore>,
     Path(name): Path<String>,

@@ -7,7 +7,7 @@
 
 use axum::{
     Router,
-    extract::{Path, Query, State},
+    extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::get,
@@ -25,7 +25,6 @@ use crate::gateway::clusters::InfraServices;
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/sessions/failures", get(api_list_failures))
-        .route("/api/sessions/{session_id}/failures", get(api_failures_for_session))
 }
 
 // ── DTO ──────────────────────────────────────────────────────────────────────
@@ -145,80 +144,4 @@ pub(crate) async fn api_list_failures(
         offset,
     })
     .into_response()
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct SessionFailuresQuery {
-    agent: Option<String>,
-}
-
-/// `GET /api/sessions/{session_id}/failures?agent=xxx`
-///
-/// Audit 2026-05-08 (6th pass): `?agent=` is required for the per-session
-/// drill-down. Failure records carry diagnostic detail (error text,
-/// stack-trace excerpts, tool names) that should not be readable by every
-/// token-holder via UUID guessing. Cross-checks ownership through the same
-/// `verify_session_agent` helper used by every other session-read endpoint.
-pub(crate) async fn api_failures_for_session(
-    State(infra): State<InfraServices>,
-    Path(session_id): Path<Uuid>,
-    Query(q): Query<SessionFailuresQuery>,
-) -> impl IntoResponse {
-    let agent = match q.agent.as_deref() {
-        Some(a) if !a.is_empty() => a,
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "agent parameter required"})),
-            )
-                .into_response();
-        }
-    };
-    // Reuse the cross-handler `verify_session_agent` semantics: 403 if the
-    // session belongs to a different agent, 404 if the session is missing.
-    let owner: Option<String> = match sqlx::query_scalar::<_, String>(
-        "SELECT agent_id FROM sessions WHERE id = $1",
-    )
-    .bind(session_id)
-    .fetch_optional(&infra.db)
-    .await
-    {
-        Ok(o) => o,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
-        }
-    };
-    match owner {
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "session not found"})),
-            )
-                .into_response();
-        }
-        Some(actual) if actual != agent => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "session belongs to a different agent"})),
-            )
-                .into_response();
-        }
-        Some(_) => {}
-    }
-
-    match session_failures::get_session_failures_for_session(&infra.db, session_id).await {
-        Ok(rows) => {
-            let dtos: Vec<SessionFailureDto> = rows.into_iter().map(SessionFailureDto::from).collect();
-            Json(dtos).into_response()
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-            .into_response(),
-    }
 }

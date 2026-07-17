@@ -17,9 +17,6 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/yaml-tools/{tool}/disable", post(api_yaml_tool_disable_global))
         .route("/api/yaml-tools/{tool}/enable", post(api_yaml_tool_enable_global))
         .route("/api/yaml-tools/{tool}", get(api_yaml_tool_get_global).put(api_yaml_tool_update_global).delete(api_yaml_tool_delete_global))
-        .route("/api/agents/{name}/yaml-tools", get(api_yaml_tools_list))
-        .route("/api/agents/{name}/yaml-tools/{tool}/verify", post(api_yaml_tool_verify))
-        .route("/api/agents/{name}/yaml-tools/{tool}/disable", post(api_yaml_tool_disable))
 }
 
 /// GET /api/yaml-tools — global, not per-agent.
@@ -263,108 +260,4 @@ pub(crate) async fn api_yaml_tool_delete_global(
     }
     tracing::info!(tool = %tool_name, "YAML tool deleted via UI");
     Json(json!({"ok": true})).into_response()
-}
-
-/// GET /api/agents/{name}/yaml-tools
-/// List all YAML tools for an agent with their status (verified/draft/disabled).
-pub(crate) async fn api_yaml_tools_list(
-    State(_state): State<InfraServices>,
-    axum::extract::Path(agent_name): axum::extract::Path<String>,
-) -> impl IntoResponse {
-    let tools = crate::tools::yaml_tools::load_all_yaml_tools(
-        crate::config::WORKSPACE_DIR,
-    ).await;
-
-    let list: Vec<Value> = tools.iter().map(|t| {
-        json!({
-            "name": t.name,
-            "description": t.description,
-            "endpoint": t.endpoint,
-            "method": t.method,
-            "status": format!("{:?}", t.status).to_lowercase(),
-            "parameters_count": t.parameters.len(),
-            "tags": t.tags,
-        })
-    }).collect();
-
-    Json(json!({ "tools": list, "agent": agent_name }))
-}
-
-/// POST /api/agents/{name}/yaml-tools/{tool}/verify
-/// Promote a draft tool to verified. No Telegram approval required (UI is already authed).
-pub(crate) async fn api_yaml_tool_verify(
-    State(_state): State<InfraServices>,
-    axum::extract::Path((agent_name, tool_name)): axum::extract::Path<(String, String)>,
-) -> impl IntoResponse {
-    if !tool_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid tool name"}))).into_response();
-    }
-    use crate::tools::yaml_tools::{ToolStatus, tool_file_path};
-
-    let draft_path = tool_file_path(crate::config::WORKSPACE_DIR, &ToolStatus::Draft, &tool_name);
-    if !draft_path.exists() {
-        let verified = tool_file_path(crate::config::WORKSPACE_DIR, &ToolStatus::Verified, &tool_name);
-        if verified.exists() {
-            return (StatusCode::CONFLICT, Json(json!({"error": "already verified"}))).into_response();
-        }
-        return (StatusCode::NOT_FOUND, Json(json!({"error": "tool not found in draft"}))).into_response();
-    }
-
-    let content = match tokio::fs::read_to_string(&draft_path).await {
-        Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
-    };
-
-    let updated = content.replace("status: draft", "status: verified");
-    let verified_path = tool_file_path(crate::config::WORKSPACE_DIR, &ToolStatus::Verified, &tool_name);
-
-    if let Err(e) = tokio::fs::write(&verified_path, &updated).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-    }
-    tokio::fs::remove_file(&draft_path).await.ok();
-
-    tracing::info!(agent = %agent_name, tool = %tool_name, "YAML tool verified via UI");
-    Json(json!({"ok": true, "status": "verified"})).into_response()
-}
-
-/// POST /api/agents/{name}/yaml-tools/{tool}/disable
-/// Move a verified or draft tool to disabled.
-pub(crate) async fn api_yaml_tool_disable(
-    State(_state): State<InfraServices>,
-    axum::extract::Path((agent_name, tool_name)): axum::extract::Path<(String, String)>,
-) -> impl IntoResponse {
-    if !tool_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid tool name"}))).into_response();
-    }
-    use crate::tools::yaml_tools::{ToolStatus, tool_file_path};
-
-    let src_path = {
-        let verified = tool_file_path(crate::config::WORKSPACE_DIR, &ToolStatus::Verified, &tool_name);
-        let draft = tool_file_path(crate::config::WORKSPACE_DIR, &ToolStatus::Draft, &tool_name);
-        if verified.exists() { verified } else if draft.exists() { draft } else {
-            return (StatusCode::NOT_FOUND, Json(json!({"error": "tool not found"}))).into_response();
-        }
-    };
-
-    let content = match tokio::fs::read_to_string(&src_path).await {
-        Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
-    };
-
-    let updated = content
-        .replace("status: verified", "status: disabled")
-        .replace("status: draft", "status: disabled");
-
-    let disabled_path = tool_file_path(crate::config::WORKSPACE_DIR, &ToolStatus::Disabled, &tool_name);
-    if let Some(parent) = disabled_path.parent() {
-        tokio::fs::create_dir_all(parent).await.ok();
-    }
-
-    if let Err(e) = tokio::fs::write(&disabled_path, &updated).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-    }
-    tokio::fs::remove_file(&src_path).await.ok();
-
-    tracing::info!(agent = %agent_name, tool = %tool_name, "YAML tool disabled via UI");
-    Json(json!({"ok": true, "status": "disabled"})).into_response()
 }

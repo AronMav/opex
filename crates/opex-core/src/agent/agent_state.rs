@@ -160,6 +160,7 @@ impl AgentState {
 
     /// T17 triage: read the last cached context breakdown, if any turn has
     /// run since process start.
+    #[allow(dead_code)] // diagnostic; sole caller was the removed GET /api/agents/{name}/context-breakdown.
     pub async fn context_breakdown(&self) -> Option<crate::agent::context_builder::ContextBreakdown> {
         self.context_breakdown.read().await.clone()
     }

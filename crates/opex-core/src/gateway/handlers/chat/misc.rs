@@ -48,24 +48,6 @@ pub(crate) async fn set_model_override(
 /// mirrors the existing `system_prompt_size`/`context_size` log estimates in
 /// `context_builder.rs`. `null` breakdown means no turn has run for this
 /// agent since the process started.
-pub(crate) async fn api_context_breakdown(
-    State(agents): State<AgentCore>,
-    Path(agent_name): Path<String>,
-) -> impl IntoResponse {
-    let Some(engine) = agents.get_engine(&agent_name).await else {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"not found"}))).into_response();
-    };
-    let breakdown = engine.state().context_breakdown().await;
-    let total = breakdown.as_ref().map(crate::agent::context_builder::ContextBreakdown::total);
-    Json(serde_json::json!({
-        "ok": true,
-        "estimated": true,
-        "agent": agent_name,
-        "breakdown": breakdown,
-        "total_estimated_tokens": total,
-    })).into_response()
-}
-
 pub(crate) async fn health(
     State(infra): State<InfraServices>,
     State(cfg): State<ConfigServices>,

@@ -79,6 +79,7 @@ impl HookRegistry {
     }
 
     /// List registered hook names.
+    #[allow(dead_code)] // sole caller was the removed GET /api/agents/{name}/hooks.
     pub fn names(&self) -> Vec<&str> {
         self.handlers.iter().map(|(n, _)| n.as_str()).collect()
     }

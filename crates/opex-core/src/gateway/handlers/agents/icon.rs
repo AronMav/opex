@@ -25,7 +25,7 @@ pub(crate) fn routes() -> Router<AppState> {
     let multipart = Router::new()
         .route(
             "/api/agents/{name}/icon",
-            put(api_put_agent_icon).delete(api_delete_agent_icon),
+            put(api_put_agent_icon),
         )
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BYTES));
     let json = Router::new()
@@ -170,15 +170,3 @@ pub(crate) async fn api_post_agent_icon_json(
     store_icon(&infra, &auth, &name, &payload.mime, &data).await
 }
 
-pub(crate) async fn api_delete_agent_icon(
-    State(infra): State<InfraServices>,
-    Path(name): Path<String>,
-) -> axum::response::Response {
-    match crate::db::uploads::delete_agent_icon(&infra.db, &name).await {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            tracing::warn!(error = %e, agent = %name, "icon delete failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
-}

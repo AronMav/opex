@@ -608,6 +608,7 @@ impl OAuthManager {
     // -----------------------------------------------------------------------
 
     /// List connections for an agent (backward-compatible JSON shape).
+    #[allow(dead_code)] // sole caller was the removed GET /api/oauth/providers.
     pub async fn list_connections(
         &self,
         agent_id: Option<&str>,

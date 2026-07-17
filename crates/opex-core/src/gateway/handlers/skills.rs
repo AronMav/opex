@@ -15,12 +15,8 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/skills/repairs/{id}", axum::routing::patch(api_skill_repair_resolve))
         .route("/api/skills/{skill}", get(api_skill_get_global).put(api_skill_upsert_global).delete(api_skill_delete_global))
         .route("/api/skills/{skill}/versions", get(api_skill_versions))
-        .route("/api/skills/{skill}/versions/{vid}", get(api_skill_version_get))
         .route("/api/skills/{skill}/versions/{vid}/restore", axum::routing::post(api_skill_version_restore))
-        .route("/api/skills/{skill}/snapshot", axum::routing::post(api_skill_snapshot))
         .route("/api/skills/{skill}/pin", axum::routing::patch(api_skill_pin_global))
-        .route("/api/agents/{name}/skills", get(api_skills_list))
-        .route("/api/agents/{name}/skills/{skill}", get(api_skill_get).put(api_skill_upsert).delete(api_skill_delete))
 }
 
 /// Sanitize a skill name to a safe filename stem (same logic as `write_skill`).
@@ -291,52 +287,6 @@ pub(crate) async fn api_skill_delete_global(
     }
 }
 
-// ── Per-agent skills endpoints (compat) ──────────────────────────────────────
-
-/// GET /api/agents/{name}/skills
-/// Returns list of all skills, filtered by tools available to the named agent.
-pub(crate) async fn api_skills_list(
-    State(_state): State<InfraServices>,
-    axum::extract::Path(agent_name): axum::extract::Path<String>,
-) -> impl IntoResponse {
-    let mut skills = crate::skills::load_skills(crate::config::WORKSPACE_DIR).await;
-    if let Some(available) = available_tools_for_agent(
-        crate::config::WORKSPACE_DIR,
-        DEFAULT_AGENTS_DIR,
-        &agent_name,
-    ).await {
-        skills = crate::skills::filter_skills_by_available_tools(skills, &available);
-    }
-    let result: Vec<serde_json::Value> = skills.iter().map(skill_to_json).collect();
-    Json(serde_json::json!({"skills": result})).into_response()
-}
-
-/// GET /api/agents/{name}/skills/{skill}
-/// Returns the skill content and parsed structured fields.
-pub(crate) async fn api_skill_get(
-    State(_state): State<InfraServices>,
-    axum::extract::Path((_agent_name, skill_name)): axum::extract::Path<(String, String)>,
-) -> impl IntoResponse {
-    let Some(path) = find_skill_path(crate::config::WORKSPACE_DIR, &skill_name).await else {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "skill not found"}))).into_response();
-    };
-
-    match tokio::fs::read_to_string(&path).await {
-        Ok(content) => {
-            let mut result = serde_json::json!({ "name": skill_name, "content": content });
-            if let Some(skill) = crate::skills::SkillDef::parse(&content) {
-                result["description"] = serde_json::json!(skill.meta.description);
-                result["triggers"] = serde_json::json!(skill.meta.triggers);
-                result["tools_required"] = serde_json::json!(skill.meta.tools_required);
-                result["priority"] = serde_json::json!(skill.meta.priority);
-                result["instructions"] = serde_json::json!(skill.instructions);
-            }
-            Json(result).into_response()
-        }
-        Err(_) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "skill not found"}))).into_response(),
-    }
-}
-
 #[derive(serde::Deserialize)]
 pub(crate) struct SkillUpsertBody {
     description: Option<String>,
@@ -354,62 +304,6 @@ pub(crate) struct SkillUpsertBody {
 #[derive(serde::Deserialize)]
 pub(crate) struct SkillPinBody {
     pinned: bool,
-}
-
-/// PUT /api/agents/{name}/skills/{skill}
-/// Creates or updates a skill file.
-pub(crate) async fn api_skill_upsert(
-    State(_state): State<InfraServices>,
-    axum::extract::Path((agent_name, skill_name)): axum::extract::Path<(String, String)>,
-    axum::extract::Json(body): axum::extract::Json<SkillUpsertBody>,
-) -> impl IntoResponse {
-    // Preserve last_used_at from existing file when updating.
-    let existing_last_used_at = find_skill_path(crate::config::WORKSPACE_DIR, &skill_name).await
-        .and_then(|p| std::fs::read_to_string(&p).ok())
-        .and_then(|c| crate::skills::SkillDef::parse(&c))
-        .and_then(|s| s.meta.last_used_at);
-
-    let frontmatter = crate::skills::SkillFrontmatter {
-        name: skill_name.clone(),
-        description: body.description.unwrap_or_default(),
-        triggers: body.triggers,
-        tools_required: body.tools_required,
-        priority: body.priority,
-        last_used_at: existing_last_used_at,
-        state: body.state.unwrap_or(crate::skills::SkillState::Active),
-        pinned: None,
-    };
-    match crate::skills::write_skill(
-        crate::config::WORKSPACE_DIR,
-        &skill_name,
-        &frontmatter,
-        &body.instructions,
-    ).await {
-        Ok(()) => {
-            tracing::info!(agent = %agent_name, skill = %skill_name, "skill upserted via UI");
-            Json(serde_json::json!({"ok": true})).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
-    }
-}
-
-/// DELETE /api/agents/{name}/skills/{skill}
-/// Deletes a skill file.
-pub(crate) async fn api_skill_delete(
-    State(_state): State<InfraServices>,
-    axum::extract::Path((_agent_name, skill_name)): axum::extract::Path<(String, String)>,
-) -> impl IntoResponse {
-    let Some(path) = find_skill_path(crate::config::WORKSPACE_DIR, &skill_name).await else {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "skill not found"}))).into_response();
-    };
-
-    match tokio::fs::remove_file(&path).await {
-        Ok(()) => {
-            tracing::info!(skill = %skill_name, "skill deleted via UI");
-            Json(serde_json::json!({"ok": true})).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
-    }
 }
 
 // ── Skill version endpoints ───────────────────────────────────────────────────
@@ -430,25 +324,6 @@ pub(crate) async fn api_skill_versions(
 }
 
 /// GET /api/skills/{skill}/versions/{vid}
-pub(crate) async fn api_skill_version_get(
-    State(infra): State<InfraServices>,
-    axum::extract::Path((_skill_name, vid)): axum::extract::Path<(String, uuid::Uuid)>,
-) -> impl IntoResponse {
-    match crate::db::skill_versions::get_version(&infra.db, vid).await {
-        Ok(Some(v)) => Json(v).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND,
-                     Json(serde_json::json!({"error": "not found"}))).into_response(),
-        Err(e) => {
-            tracing::error!(vid = %vid, error = %e, "failed to get skill version");
-            (StatusCode::INTERNAL_SERVER_ERROR,
-             Json(serde_json::json!({"error": e.to_string()}))).into_response()
-        }
-    }
-}
-
-/// POST /api/skills/{skill}/versions/{vid}/restore
-/// Restores a skill to a previous version.
-/// Saves the current content as a pre-restore snapshot before overwriting.
 pub(crate) async fn api_skill_version_restore(
     State(infra): State<InfraServices>,
     axum::extract::Path((skill_name, vid)): axum::extract::Path<(String, uuid::Uuid)>,
@@ -492,32 +367,6 @@ pub(crate) async fn api_skill_version_restore(
     }
 }
 
-/// POST /api/skills/{skill}/snapshot
-/// Saves current skill content to version history (manual snapshot).
-pub(crate) async fn api_skill_snapshot(
-    State(infra): State<InfraServices>,
-    axum::extract::Path(skill_name): axum::extract::Path<String>,
-) -> impl IntoResponse {
-    let safe = crate::curator::sanitize_skill_name(&skill_name);
-    let path = std::path::Path::new(crate::config::WORKSPACE_DIR)
-        .join("skills")
-        .join(format!("{safe}.md"));
-
-    let content = match tokio::fs::read_to_string(&path).await {
-        Ok(c) => c,
-        Err(_) => return (StatusCode::NOT_FOUND,
-                          Json(serde_json::json!({"error": "skill not found"}))).into_response(),
-    };
-
-    match crate::db::skill_versions::save_version(
-        &infra.db, &skill_name, &content, "snapshot", None,
-        Some("manual snapshot"),
-    ).await {
-        Ok(id) => Json(serde_json::json!({"ok": true, "version_id": id})).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
-                   Json(serde_json::json!({"error": e.to_string()}))).into_response(),
-    }
-}
 
 /// PATCH /api/skills/{skill}/pin — set or clear the pinned flag.
 ///

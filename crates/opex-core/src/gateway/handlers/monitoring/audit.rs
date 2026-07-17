@@ -38,29 +38,3 @@ pub(crate) async fn api_audit_events(
         Err(e) => Json(json!({"ok": false, "error": e.to_string()})),
     }
 }
-
-#[derive(Deserialize)]
-pub(crate) struct ToolAuditQuery {
-    agent: Option<String>,
-    tool: Option<String>,
-    days: Option<u32>,
-    limit: Option<i64>,
-}
-
-pub(crate) async fn api_tool_audit(
-    State(infra): State<InfraServices>,
-    Query(q): Query<ToolAuditQuery>,
-) -> Json<Value> {
-    let days = q.days.unwrap_or(7);
-    let limit = q.limit.unwrap_or(100).min(500);
-    match crate::db::tool_audit::query_tool_audit(
-        &infra.db,
-        q.agent.as_deref(),
-        q.tool.as_deref(),
-        days,
-        limit,
-    ).await {
-        Ok(entries) => Json(json!({"ok": true, "entries": entries, "days": days, "limit": limit})),
-        Err(e) => Json(json!({"ok": false, "error": e.to_string()})),
-    }
-}

@@ -17,7 +17,6 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/oauth/accounts/{id}", delete(api_oauth_account_delete))
         .route("/api/oauth/accounts/{id}/connect", post(api_oauth_account_connect))
         .route("/api/oauth/accounts/{id}/revoke", post(api_oauth_account_revoke))
-        .route("/api/oauth/providers", get(api_oauth_providers))
         .route("/api/agents/{name}/oauth/bindings", get(api_oauth_bindings_list).post(api_oauth_binding_create))
         .route("/api/agents/{name}/oauth/bindings/{provider}", delete(api_oauth_binding_delete))
 }
@@ -214,26 +213,6 @@ pub(crate) async fn api_oauth_binding_delete(
 // ---------------------------------------------------------------------------
 
 /// GET /api/oauth/providers — backward compat
-pub(crate) async fn api_oauth_providers(
-    State(auth): State<AuthServices>,
-    Query(params): Query<HashMap<String, String>>,
-) -> impl IntoResponse {
-    let agent_id = params.get("agent").map(String::as_str);
-    match auth.oauth.list_connections(agent_id).await {
-        Ok(connections) => {
-            let supported: Vec<_> = crate::oauth::PROVIDERS.iter().map(|p| p.name).collect();
-            Json(serde_json::json!({
-                "supported": supported,
-                "connected": connections,
-            }))
-            .into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-/// GET /api/oauth/callback — browser redirect from Google/GitHub, no Bearer token.
-/// This endpoint is exempted from auth middleware.
 pub(crate) async fn api_oauth_callback(
     State(infra): State<InfraServices>,
     State(auth): State<AuthServices>,

@@ -40,8 +40,6 @@ mod streaming_db;
 // directly. Keeping the path stable as `super::chat::set_model_override`
 // matches the pre-split visibility.
 pub(crate) use misc::set_model_override;
-// Same rationale, mounted under `/api/agents/{name}/context-breakdown` (T17).
-pub(crate) use misc::api_context_breakdown;
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
