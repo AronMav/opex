@@ -250,8 +250,8 @@ export function MessageList({
   }, [virtuosoRef]);
 
   // Hoist session data
-  const { data: sessionsData } = useSessions(currentAgent ?? "");
-  const activeSession = sessionsData?.sessions.find((s) => s.id === activeSessionId);
+  const { sessions: sessionRows } = useSessions(currentAgent ?? "");
+  const activeSession = sessionRows.find((s) => s.id === activeSessionId);
   const sessionChannel = activeSession?.channel;
   const sessionUserId = activeSession?.user_id;
 

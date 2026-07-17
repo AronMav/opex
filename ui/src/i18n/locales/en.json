@@ -194,6 +194,7 @@
   "chat.sessions_count_few": "{{count}} sessions",
   "chat.sessions_count_many": "{{count}} sessions",
   "chat.sessions_count_other": "{{count}} sessions",
+  "chat.sessions_count_of": "{{loaded}} of {{total}}",
   "chat.delete_all_sessions": "Delete all {{agent}} sessions",
   "chat.new": "New",
   "chat.no_sessions": "No sessions",

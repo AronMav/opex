@@ -170,7 +170,7 @@ vi.mock("@/lib/queries", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/queries")>();
   return {
     ...actual,
-    useSessions: () => ({ data: { sessions: [] }, isLoading: false, error: null, refetch: vi.fn() }),
+    useSessions: () => ({ sessions: [], total: 0, isLoading: false, isFetched: true, fetchNextPage: vi.fn(), hasNextPage: false, isFetchingNextPage: false }),
     useSessionMessages: () => ({ data: { messages: [] }, isLoading: false, error: null, refetch: vi.fn() }),
     useAgents: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
     useProviders: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),

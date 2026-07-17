@@ -194,6 +194,7 @@
   "chat.sessions_count_few": "{{count}} сессии",
   "chat.sessions_count_many": "{{count}} сессий",
   "chat.sessions_count_other": "{{count}} сессии",
+  "chat.sessions_count_of": "{{loaded}} из {{total}}",
   "chat.delete_all_sessions": "Удалить все сессии {{agent}}",
   "chat.new": "Новый",
   "chat.no_sessions": "Нет сессий",

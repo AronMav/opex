@@ -1,5 +1,5 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import { apiGet, apiPost, apiPut, apiDelete, apiPatch, listCheckpoints, restoreCheckpoint, getAgentPlan, approveProposal, dismissProposal, cancelGoal } from "./api"
 import { useNotificationStore } from "@/stores/notification-store"
@@ -496,17 +496,165 @@ export function useCreateBackup() {
 
 // ── Chat Session Hooks (persisted to IDB via PersistQueryClientProvider) ────
 
-export function useSessions(agent: string) {
-  return useQuery({
+/** Page size for the keyset-paginated session list — must match the backend
+ *  default and the `hasNextPage` full-page check below. */
+export const SESSIONS_PAGE_SIZE = 40
+
+/** One page of the keyset-paginated `/api/sessions` response. */
+export interface SessionsPage {
+  sessions: SessionRow[]
+  total: number
+}
+
+/** Keyset cursor for the next (older) page — `(last_message_at, id)` of the
+ *  last row of the page just loaded. `null` = first page (no cursor params). */
+export type SessionsCursor = {
+  before_last_message_at: string
+  before_id: string
+} | null
+
+/** Raw infinite-query cache shape for the session list. */
+export interface SessionsInfiniteData {
+  pages: SessionsPage[]
+  pageParams: unknown[]
+}
+
+/** Flatten the infinite-query cache into the legacy flat `SessionRow[]` shape,
+ *  deduping by id (keyset paging shouldn't repeat rows, but a create/refetch
+ *  race across a page boundary can — dedup keeps the merged list clean).
+ *  First occurrence wins, so newest-first order is preserved. Exported for the
+ *  direct cache reader (stream-processor) that can't go through the hook. */
+export function flatSessionsFromCache(
+  data: { pages: SessionsPage[] } | undefined,
+): SessionRow[] {
+  if (!data?.pages) return []
+  const seen = new Set<string>()
+  const out: SessionRow[] = []
+  for (const page of data.pages) {
+    for (const s of page.sessions) {
+      if (seen.has(s.id)) continue
+      seen.add(s.id)
+      out.push(s)
+    }
+  }
+  return out
+}
+
+/** getNextPageParam for the session list: a full page (=== PAGE_SIZE) yields the
+ *  `(last_message_at, id)` cursor of its last row; a short page means the end
+ *  (`undefined` → `hasNextPage=false`). */
+export function sessionsGetNextPageParam(
+  lastPage: SessionsPage,
+): SessionsCursor | undefined {
+  if (lastPage.sessions.length < SESSIONS_PAGE_SIZE) return undefined
+  const last = lastPage.sessions[lastPage.sessions.length - 1]
+  return { before_last_message_at: last.last_message_at, before_id: last.id }
+}
+
+/** Referentially-minimal title patch across the infinite cache — used by rename
+ *  so the list updates WITHOUT a refetch that would reset the sidebar Virtuoso
+ *  scroll position. Pages whose rows are untouched keep their identity. */
+export function patchSessionTitleInPages(
+  data: SessionsInfiniteData | undefined,
+  sessionId: string,
+  title: string,
+): SessionsInfiniteData | undefined {
+  if (!data?.pages) return data
+  return {
+    ...data,
+    pages: data.pages.map((page) =>
+      page.sessions.some((s) => s.id === sessionId)
+        ? {
+            ...page,
+            sessions: page.sessions.map((s) =>
+              s.id === sessionId ? { ...s, title } : s,
+            ),
+          }
+        : page,
+    ),
+  }
+}
+
+export interface UseSessionsResult {
+  /** Already-flat, deduped, newest-first merge of every loaded page. */
+  sessions: SessionRow[]
+  total: number
+  isLoading: boolean
+  isFetched: boolean
+  fetchNextPage: () => void
+  hasNextPage: boolean
+  isFetchingNextPage: boolean
+}
+
+/**
+ * Keyset-paginated session list. Wraps `useInfiniteQuery` but returns the
+ * PREVIOUS flat shape (`sessions`/`total`) so consumers stay unchanged, plus
+ * the infinite-scroll controls the sidebar needs.
+ */
+export function useSessions(agent: string): UseSessionsResult {
+  const query = useInfiniteQuery({
     queryKey: qk.sessions(agent),
-    queryFn: () =>
-      apiGet<{ sessions: SessionRow[]; total: number }>(
-        `/api/sessions?limit=40&agent=${encodeURIComponent(agent)}`
-      ),
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({
+        limit: String(SESSIONS_PAGE_SIZE),
+        agent,
+      })
+      if (pageParam) {
+        params.set("before_last_message_at", pageParam.before_last_message_at)
+        params.set("before_id", pageParam.before_id)
+      }
+      return apiGet<SessionsPage>(`/api/sessions?${params.toString()}`)
+    },
+    initialPageParam: null as SessionsCursor,
+    getNextPageParam: sessionsGetNextPageParam,
     enabled: !!agent,
     staleTime: 0, // Always refetch on mount for fresh data
     // No polling needed — session status is server-driven via WS agent_processing events
   })
+
+  // Stable identity tied to query.data so consumers' effect deps don't churn.
+  const sessions = useMemo(() => flatSessionsFromCache(query.data), [query.data])
+  const total = query.data?.pages[0]?.total ?? sessions.length
+
+  return {
+    sessions,
+    total,
+    isLoading: query.isLoading,
+    isFetched: query.isFetched,
+    fetchNextPage: query.fetchNextPage,
+    hasNextPage: query.hasNextPage,
+    isFetchingNextPage: query.isFetchingNextPage,
+  }
+}
+
+/** Minimum filtered rows we try to keep visible while a client-side filter is
+ *  active — see {@link useAutoPaginateWhileFiltering}. */
+export const SESSIONS_FILTER_MIN_VISIBLE = 20
+
+/**
+ * Keep pulling older pages while a client-side filter is active but hasn't yet
+ * surfaced enough visible rows. Virtuoso's `endReached` never fires on a short
+ * filtered list, so without this a filter could never reach sessions living
+ * beyond the currently-loaded window. No-op when no filter is active.
+ */
+export function useAutoPaginateWhileFiltering(opts: {
+  filterActive: boolean
+  visibleCount: number
+  hasNextPage: boolean
+  isFetchingNextPage: boolean
+  fetchNextPage: () => void
+}) {
+  const { filterActive, visibleCount, hasNextPage, isFetchingNextPage, fetchNextPage } = opts
+  useEffect(() => {
+    if (
+      filterActive &&
+      hasNextPage &&
+      !isFetchingNextPage &&
+      visibleCount < SESSIONS_FILTER_MIN_VISIBLE
+    ) {
+      fetchNextPage()
+    }
+  }, [filterActive, visibleCount, hasNextPage, isFetchingNextPage, fetchNextPage])
 }
 
 export function useProviders() {

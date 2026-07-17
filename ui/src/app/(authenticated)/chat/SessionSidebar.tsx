@@ -2,6 +2,7 @@
 
 import React, { useMemo } from "react";
 import { useChatStore } from "@/stores/chat-store";
+import { useAutoPaginateWhileFiltering } from "@/lib/queries";
 import { useTranslation } from "@/hooks/use-translation";
 import { relativeTime } from "@/lib/format";
 import { Loader } from "@/components/ui/loader";
@@ -19,9 +20,11 @@ export interface SessionSidebarProps {
   currentAgent: string;
   isStreaming: boolean;
   sessions: SessionRow[];
-  sessionsData: { sessions: SessionRow[]; total: number } | undefined;
   sessionsLoading: boolean;
   sessionsTotal: number;
+  fetchNextPage: () => void;
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
   activeSessionId: string | null;
   activeSessionIds: string[];
   selectedSessions: Set<string>;
@@ -52,9 +55,11 @@ export function SessionSidebar({
   currentAgent,
   isStreaming,
   sessions,
-  sessionsData,
   sessionsLoading,
   sessionsTotal,
+  fetchNextPage,
+  hasNextPage,
+  isFetchingNextPage,
   activeSessionId,
   activeSessionIds,
   selectedSessions,
@@ -92,6 +97,17 @@ export function SessionSidebar({
     [sessions, sessionFilter],
   );
 
+  // While a filter is active, Virtuoso's endReached never fires on a short
+  // filtered list — so proactively pull older pages until the filter has enough
+  // to match against (or the server runs out).
+  useAutoPaginateWhileFiltering({
+    filterActive: !!sessionFilter,
+    visibleCount: filteredSessions.length,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  });
+
   return (
     <div className="flex h-full flex-col bg-sidebar">
       <TaskPlanPanel agentName={currentAgent} isStreaming={isStreaming} />
@@ -101,7 +117,9 @@ export function SessionSidebar({
             {t("chat.sessions")}
           </span>
           <span className="text-xs text-muted-foreground-subtle">
-            {t("chat.sessions_count", { count: sessionsTotal })}
+            {sessionsTotal > sessions.length
+              ? t("chat.sessions_count_of", { loaded: sessions.length, total: sessionsTotal })
+              : t("chat.sessions_count", { count: sessionsTotal })}
           </span>
         </div>
         <div className="flex items-center gap-1.5">
@@ -173,7 +191,19 @@ export function SessionSidebar({
             <Virtuoso
               data={filteredSessions}
               className="!h-full scrollbar-none"
-              components={{ List: VirtuosoList, Item: VirtuosoListItem }}
+              endReached={() => {
+                if (hasNextPage && !isFetchingNextPage) fetchNextPage();
+              }}
+              components={{
+                List: VirtuosoList,
+                Item: VirtuosoListItem,
+                Footer: () =>
+                  isFetchingNextPage ? (
+                    <div className="flex justify-center py-3">
+                      <Loader className="h-4 w-4 animate-spin text-muted-foreground/50" />
+                    </div>
+                  ) : null,
+              }}
               itemContent={(_index, s) => {
                 const isSelected = selectedSessions.has(s.id);
                 const displayTitle = s.title || s.user_id || t("chat.no_title");
@@ -273,7 +303,7 @@ export function SessionSidebar({
                           {s.parent_session_id && (
                             <ParentBadge
                               parentTitle={
-                                sessionsData?.sessions?.find((p) => p.id === s.parent_session_id)?.title ?? null
+                                sessions.find((p) => p.id === s.parent_session_id)?.title ?? null
                               }
                               onNavigate={() =>
                                 useChatStore.getState().selectSession(s.parent_session_id!, currentAgent)

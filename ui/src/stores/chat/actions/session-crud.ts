@@ -7,7 +7,7 @@ import type { ActionDeps } from "../../chat-store";
 import { getLiveMessages } from "../../chat-types";
 import type { AgentState, CompressionDividerPart, ChatMessage } from "../../chat-types";
 import type { CompressionEvent, MessagesResponse } from "@/types/api";
-import { qk } from "@/lib/queries";
+import { qk, patchSessionTitleInPages, type SessionsInfiniteData } from "@/lib/queries";
 import { apiDelete, apiPatch, getToken } from "@/lib/api";
 import { saveLastSession } from "../../chat-persistence";
 import { getCachedHistoryMessages, convertHistory } from "../../chat-history";
@@ -62,7 +62,13 @@ export function createSessionCrudActions(deps: ActionDeps) {
     renameSession: async (sessionId: string, title: string) => {
       const agent = get().currentAgent;
       await apiPatch(`/api/sessions/${sessionId}?agent=${encodeURIComponent(agent)}`, { title });
-      queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
+      // Patch the title in-place across the infinite cache instead of
+      // invalidating: a refetch of all loaded pages would rebuild the array and
+      // reset the sidebar's Virtuoso scroll position. The in-place patch keeps
+      // untouched pages referentially stable, so scroll stays put.
+      queryClient.setQueryData<SessionsInfiniteData>(qk.sessions(agent), (old) =>
+        patchSessionTitleInPages(old, sessionId, title),
+      );
     },
 
     deleteSession: async (sessionId: string, skipInvalidation = false) => {

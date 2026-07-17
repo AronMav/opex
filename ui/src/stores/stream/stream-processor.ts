@@ -9,10 +9,9 @@ import {
   parseSseEvent,
 } from "@/stores/sse-events";
 import { queryClient } from "@/lib/query-client";
-import { qk } from "@/lib/queries";
+import { qk, flatSessionsFromCache, type SessionsInfiniteData } from "@/lib/queries";
 import { useChatStore } from "@/stores/chat-store";
 import { getCachedRawMessages } from "../chat-history";
-import type { SessionRow } from "@/types/api";
 
 import type {
   ChatMessage,
@@ -187,10 +186,9 @@ export async function processSSEStream(
               }
               callbacks.onSessionId(sid);
 
-              const sessionsData = queryClient.getQueryData<{ sessions: SessionRow[] }>(
-                qk.sessions(agent)
-              );
-              const cachedSession = sessionsData?.sessions.find(s => s.id === sid);
+              const cachedSession = flatSessionsFromCache(
+                queryClient.getQueryData<SessionsInfiniteData>(qk.sessions(agent)),
+              ).find(s => s.id === sid);
               if (cachedSession?.participants) {
                 callbacks.updateSessionParticipants(sid, cachedSession.participants);
               }

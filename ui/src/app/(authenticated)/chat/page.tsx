@@ -49,12 +49,10 @@ import { useSessions, useAgents, qk } from "@/lib/queries";
 import { useAgentTextModel } from "@/hooks/use-profiles";
 import { queryClient } from "@/lib/query-client";
 import { shareSession } from "@/lib/api";
-import type { SessionRow } from "@/types/api";
 import { useSessionRestore } from "./hooks/use-session-restore";
 import { useChatWs } from "./hooks/use-chat-ws";
 import { SessionSidebar } from "./SessionSidebar";
 
-const EMPTY_SESSIONS: SessionRow[] = [];
 const EMPTY_ACTIVE: string[] = [];
 
 export default function ChatPage() {
@@ -65,9 +63,15 @@ export default function ChatPage() {
 
   // ── Store (granular selectors to avoid re-renders during streaming) ──
   const currentAgent = useChatStore((s) => s.currentAgent);
-  const { data: sessionsData, isLoading: sessionsLoading } = useSessions(currentAgent ?? "");
-  const sessions = sessionsData?.sessions ?? EMPTY_SESSIONS;
-  const sessionsTotal = sessionsData?.total ?? sessions.length;
+  const {
+    sessions,
+    total: sessionsTotal,
+    isLoading: sessionsLoading,
+    isFetched: sessionsFetched,
+    fetchNextPage: fetchNextSessions,
+    hasNextPage: hasMoreSessions,
+    isFetchingNextPage: isFetchingMoreSessions,
+  } = useSessions(currentAgent ?? "");
   const activeSessionId = useChatStore((s) => s.agents[s.currentAgent]?.activeSessionId ?? null);
   const activeSessionIds = useChatStore((s) => s.agents[s.currentAgent]?.activeSessionIds ?? EMPTY_ACTIVE);
   const streamError = useChatStore((s) => s.agents[s.currentAgent]?.streamError ?? null);
@@ -102,7 +106,7 @@ export default function ChatPage() {
   // Session restore on mount or agent switch.
   // IMPORTANT: Wait until sessions are ACTUALLY loaded (not just isLoading=false with empty data).
   // React Query can report isLoading=false before the first fetch completes (initial state).
-  const sessionsReady = !sessionsLoading && sessionsData !== undefined;
+  const sessionsReady = !sessionsLoading && sessionsFetched;
 
   // Session-restore state machine: override state, cross-agent deep-link resolver,
   // 5-priority restore, and activeSessionId → URL ?s= sync. Extracted verbatim.
@@ -312,9 +316,11 @@ export default function ChatPage() {
     currentAgent,
     isStreaming,
     sessions,
-    sessionsData,
     sessionsLoading,
     sessionsTotal,
+    fetchNextPage: fetchNextSessions,
+    hasNextPage: hasMoreSessions,
+    isFetchingNextPage: isFetchingMoreSessions,
     activeSessionId,
     activeSessionIds,
     selectedSessions,

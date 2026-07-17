@@ -125,7 +125,7 @@ vi.mock("@/stores/chat-store", () => ({
 // ── Mock: @/lib/queries ────────────────────────────────────────────────────
 
 vi.mock("@/lib/queries", () => ({
-  useSessions: () => ({ data: mockSessionsRef.current, isLoading: false, error: null, refetch: vi.fn() }),
+  useSessions: () => ({ sessions: mockSessionsRef.current.sessions, total: mockSessionsRef.current.sessions.length, isLoading: false, isFetched: true, fetchNextPage: vi.fn(), hasNextPage: false, isFetchingNextPage: false }),
   useSessionMessages: () => ({ data: { messages: [] }, isLoading: false, error: null, refetch: vi.fn() }),
   useAgents: () => ({ data: mockAgentsRef.current, isLoading: false, error: null, refetch: vi.fn() }),
   useProviders: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),

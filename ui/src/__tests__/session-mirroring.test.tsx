@@ -23,7 +23,7 @@ vi.mock("@/hooks/use-translation", () => ({
   useTranslation: () => ({ t: (key: string) => key, locale: "en" }),
 }));
 vi.mock("@/lib/queries", () => ({
-  useSessions: () => ({ data: { sessions: [] }, isLoading: false, error: null, refetch: vi.fn() }),
+  useSessions: () => ({ sessions: [], total: 0, isLoading: false, isFetched: true, fetchNextPage: vi.fn(), hasNextPage: false, isFetchingNextPage: false }),
   useSessionMessages: () => ({ data: { messages: [] }, isLoading: false, error: null, refetch: vi.fn() }),
   useProviderActive: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
 }));
