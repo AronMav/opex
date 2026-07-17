@@ -335,7 +335,7 @@ export function ChatThread({
           failed to keep up) — non-intrusive notice that the visible text is
           partial until the turn completes. Hidden once the turn ends. */}
       {replayTruncated && isStreaming && (
-        <div className="mx-auto my-2 rounded-md bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
+        <div className="rounded-lg border border-primary/30 bg-muted/30 px-3 py-2 text-sm">
           {t("chat.replay_truncated")}
         </div>
       )}

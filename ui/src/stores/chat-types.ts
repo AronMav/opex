@@ -300,7 +300,7 @@ export interface AgentState {
    * Single source of truth — replaces the static model-limits.ts table.
    */
   modelContextLimit: number | null;
-  /** sync_begin.truncated — replay неполон (патологическое переполнение буфера); показываем баннер до конца хода. */
+  /** sync_begin.truncated — replay is incomplete (pathological buffer overflow); banner shows until the turn ends. */
   replayTruncated: boolean;
 }
 

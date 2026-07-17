@@ -17,6 +17,7 @@ export type {
 } from "@/types/sse.generated";
 
 import type { SseEvent } from "@/types/sse.generated";
+import { parseContentParts as parseParts, type ParsedContentPart } from "@/lib/message-parser";
 
 // NOTE: `reconnecting` event is server-AND-client emitted with the same
 // shape (server: LLM-retry; client: SSE-reconnect). Both go through the
@@ -58,8 +59,6 @@ export function parseSSELines(chunk: string, buffer: { current: string }): strin
   }
   return lines;
 }
-
-import { parseContentParts as parseParts, type ParsedContentPart } from "@/lib/message-parser";
 
 /** Extract <think> blocks into reasoning parts and clean text parts from raw content */
 export function parseContentParts(raw: string): ParsedContentPart[] {
