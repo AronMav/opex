@@ -49,13 +49,6 @@ pub struct UpdateProvider {
 
 // ── Provider Active (capability → provider) ─────────────────────────────────
 
-/// Capability key for dedicated context-compaction LLM (cheap model for session compaction).
-// Compaction provider now resolved from the profile `compaction` slot
-// (profile_resolver); this legacy provider_active key is retained for the
-// migration/back-compat surface.
-#[allow(dead_code)]
-pub const CAPABILITY_COMPACTION: &str = "compaction";
-
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct ProviderActiveRow {
     pub capability: String,
@@ -212,11 +205,6 @@ pub async fn set_provider_active_list(
 mod tests {
     use super::*;
     use std::collections::HashSet;
-
-    #[test]
-    fn compaction_capability_name() {
-        assert_eq!(CAPABILITY_COMPACTION, "compaction");
-    }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn active_priority_roundtrip(pool: sqlx::PgPool) {

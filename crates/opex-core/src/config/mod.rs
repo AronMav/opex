@@ -2062,24 +2062,6 @@ impl Default for DockerConfig {
 /// agent's own provider (previous behaviour, no change).
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 pub struct VideoConfig {
-    /// Scene-cut sensitivity for key-frame extraction (0..1 ffmpeg scene score).
-    #[serde(default)]
-    pub scene_threshold: Option<f64>,
-    /// High safety ceiling on extracted frames (NOT a product cap).
-    #[serde(default)]
-    pub frame_ceiling: Option<u32>,
-    /// Liveness guard per job (seconds) — fails a wedged job, not a cap on long video.
-    #[serde(default)]
-    pub job_timeout_secs: Option<u32>,
-    /// v1 video-URL download allowlist (yt-dlp).
-    #[serde(default)]
-    pub url_allowlist: Vec<String>,
-    /// Max screenshots embedded per note.
-    #[serde(default)]
-    pub note_max_frames: Option<u32>,
-    /// Obsidian vault name for the obsidian:// deep link.
-    #[serde(default)]
-    pub vault_name: Option<String>,
     /// Named provider (from the `providers` DB table) to use for the LLM
     /// digest step.  When absent, falls back to the job agent's own provider.
     ///
@@ -4121,7 +4103,6 @@ digest_provider = "my-provider"
         let cfg = AppConfig::load(f.path()).expect("video config with all keys must parse");
         assert_eq!(cfg.video.digest_provider.as_deref(), Some("my-provider"));
         assert!(cfg.video.digest_model.is_none());
-        assert_eq!(cfg.video.vault_name.as_deref(), Some("zettelkasten"));
     }
 }
 
