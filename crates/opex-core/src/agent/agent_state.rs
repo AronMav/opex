@@ -179,11 +179,13 @@ impl AgentState {
     }
 
     /// Number of currently tracked active requests.
+    #[cfg(test)]
     pub fn active_request_count(&self) -> usize {
         self.active_requests.lock().unwrap().len()
     }
 
     /// Test alias for [`Self::remove_request`].
+    #[cfg(test)]
     pub fn unregister_request(&self, id: &RequestId) {
         self.remove_request(id);
     }

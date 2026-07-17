@@ -320,6 +320,7 @@ impl HookRegistry {
     }
 
     /// Returns true if the first compiled webhook has a matcher that matches `tool`.
+    #[cfg(test)]
     pub(crate) fn first_matcher_matches(&self, tool: &str) -> bool {
         self.webhooks
             .first()
