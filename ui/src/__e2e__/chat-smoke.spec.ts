@@ -496,12 +496,20 @@ test("F5 reload during streaming resumes via WS snapshot", async ({ page }) => {
 
   await login(page);
   await clickNewChat(page);
-  await sendMessage(page, "напиши длинный ответ на 3 параграфа");
+  await sendMessage(
+    page,
+    "напиши ответ ровно из 3 коротких абзацев, максимум 40 слов каждый, без размышлений",
+  );
 
   // Wait for streaming to begin.
   await page.waitForSelector(STREAM_ENGAGED, {
     timeout: 30_000,
   });
+
+  // The new session's id must reach the URL (and localStorage last-session)
+  // BEFORE the reload — otherwise a post-login restore can land on a stale
+  // previous session and the resume assertion below tests the wrong thread.
+  await page.waitForURL(/[?&]s=/, { timeout: 15_000 });
 
   // F5 reload mid-stream.
   await page.reload();
