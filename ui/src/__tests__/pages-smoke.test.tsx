@@ -398,10 +398,6 @@ vi.mock("@/components/workspace/code-editor", () => ({
   getLangFromFilename: () => "text",
 }));
 
-vi.mock("@/components/workspace/markdown-editor", () => ({
-  MarkdownEditor: () => null,
-}));
-
 // ── Smoke Tests ────────────────────────────────────────────────────────────
 
 describe("Page smoke tests", () => {
