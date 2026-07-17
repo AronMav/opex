@@ -259,9 +259,13 @@ pub enum ChannelOutbound {
     /// Pong response to keepalive.
     #[serde(rename = "pong")]
     Pong,
-    /// Core requests channel adapter to re-discover agents.
-    /// Sent when agent configuration changes (create / update / delete).
-    /// The adapter should re-fetch /api/channel/config and spawn sessions for new agents.
+    /// Forward wire reserve — NOT dead code. No core send site currently
+    /// constructs this, but the consumer half is wired: the channel adapter
+    /// handles it (`channels/src/session.ts` performs a clean session
+    /// teardown; `bridge.ts` acknowledges the type). Intended for "core asks
+    /// the adapter to re-discover agents after a config change (create /
+    /// update / delete)". Kept so a future emitter lights it up without a
+    /// frontend change. Only the producer is pending.
     #[serde(rename = "reload")]
     Reload,
     /// Channel configuration sent by core after adapter Ready.

@@ -124,14 +124,13 @@ pub enum WsEvent {
         message: String,
         timestamp: String,
     },
-    /// NOTE (T7 inventory): no current backend send site constructs this
-    /// event — `ui/src/app/(authenticated)/monitor/page.tsx` already
-    /// subscribes to `"audit_event"` speculatively (a dead wire today, part
-    /// of the pre-existing frontend/backend drift this task exists to fix).
-    /// Kept as a variant (per brief) to preserve the frontend's declared
-    /// contract for a future send site; fields mirror the pre-existing
-    /// hand-typed `ws.ts` declaration since there is no live site to verify
-    /// against.
+    /// Forward wire reserve — NOT dead code. No backend send site constructs
+    /// this event yet, but the consumer half is fully wired:
+    /// `ui/src/app/(authenticated)/monitor/page.tsx` subscribes to
+    /// `"audit_event"` and performs a real live-refresh (`auditRefetch`) on
+    /// receipt. Kept so a future backend emitter (e.g. an `audit_queue` WS
+    /// notify) lights up the monitor's live audit tail without a frontend
+    /// change. Only the producer is pending.
     AuditEvent {
         event_type: String,
         agent: String,
