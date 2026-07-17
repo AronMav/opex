@@ -79,10 +79,14 @@ function EmptyPartView() {
 
 // ── Part renderer dispatch ──────────────────────────────────────────────────
 
-function renderPart(part: MessagePart, index: number, streaming = false) {
+function renderPart(part: MessagePart, index: number, streaming = false, isLastPart = false) {
   switch (part.type) {
     case "text":
-      return <TextPart key={`text-${index}`} text={part.text} streaming={streaming} />;
+      // Caret only on the LAST part of a streaming message: it means "text is
+      // arriving RIGHT HERE". Earlier text parts of a tool-using turn are
+      // already finished (the tool chip after them shows its own running
+      // indicator), so they must not blink.
+      return <TextPart key={`text-${index}`} text={part.text} streaming={streaming && isLastPart} />;
     case "reasoning":
       return <ReasoningPart key={`reasoning-${index}`} text={part.text} streaming={streaming} />;
     case "tool": {
@@ -129,9 +133,10 @@ function renderPart(part: MessagePart, index: number, streaming = false) {
 // ── Parts rendering (no grouping — each part rendered individually) ────────
 
 function renderAllParts(parts: MessagePart[], streaming = false) {
-  return parts
-    .filter(p => !(p.type === "text" && p.text.trim().length === 0))
-    .map((part, i) => renderPart(part, i, streaming));
+  const visible = parts.filter(p => !(p.type === "text" && p.text.trim().length === 0));
+  // isLastPart is computed on the FILTERED list — a trailing empty text part
+  // must not steal "last" from the part the user actually sees.
+  return visible.map((part, i) => renderPart(part, i, streaming, i === visible.length - 1));
 }
 
 // ── User message ────────────────────────────────────────────────────────────

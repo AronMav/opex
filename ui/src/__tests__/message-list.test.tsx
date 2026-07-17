@@ -299,6 +299,54 @@ describe("MessageItem", () => {
     expect(liveLabel).toBeInTheDocument();
   });
 
+  // W4-3 fix: the inline caret means "text is arriving RIGHT HERE" — a
+  // streaming message must show at most ONE caret, and only when its LAST
+  // part is a text part (interleaved tool turns show the tool chip's own
+  // running indicator instead).
+  it("streaming message with [text, tool, text] renders exactly one caret", () => {
+    const msg: ChatMessage = {
+      id: "w43-multi",
+      role: "assistant",
+      status: "streaming",
+      parts: [
+        { type: "text", text: "first chunk" },
+        {
+          type: "tool",
+          toolCallId: "tc-w43",
+          toolName: "web_search",
+          state: "output-available" as const,
+          input: { query: "test" },
+          output: "results",
+        },
+        { type: "text", text: "second chunk" },
+      ],
+      agentId: "Bot",
+    };
+    const { queryAllByTestId } = render(<MessageItem message={msg} />);
+    expect(queryAllByTestId("streaming-cursor")).toHaveLength(1);
+  });
+
+  it("streaming message whose last part is a tool renders zero carets", () => {
+    const msg: ChatMessage = {
+      id: "w43-tool-last",
+      role: "assistant",
+      status: "streaming",
+      parts: [
+        { type: "text", text: "some text" },
+        {
+          type: "tool",
+          toolCallId: "tc-w43b",
+          toolName: "web_search",
+          state: "input-available" as const,
+          input: { query: "test" },
+        },
+      ],
+      agentId: "Bot",
+    };
+    const { queryAllByTestId } = render(<MessageItem message={msg} />);
+    expect(queryAllByTestId("streaming-cursor")).toHaveLength(0);
+  });
+
   it("renders inter-agent user message with agent sender name (REND-03)", () => {
     const msg: ChatMessage = {
       id: "8",
