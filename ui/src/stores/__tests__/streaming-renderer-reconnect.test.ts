@@ -128,6 +128,38 @@ describe("Fix I — bounded reconnect", () => {
     r.dispose();
   });
 
+  it("settles live/finishing \"streaming\" messages to \"complete\" on give-up (Item 2 — no stuck caret)", () => {
+    // Give-up leaves connectionPhase "error" but previously never touched
+    // message status — the drop path deliberately preserves "streaming" so a
+    // reconnect can keep appending text. Once we've truly given up (no more
+    // reconnects will ever be attempted), the caret must stop blinking under
+    // the error banner, same idiom as abortLocalOnly's sweep.
+    const { state, access } = makeStore();
+    state.agents[AGENT].messageSource = {
+      mode: "live",
+      messages: [
+        { id: "a1", role: "assistant", parts: [{ type: "text", text: "partial" }], status: "streaming" },
+      ],
+    };
+    const r = createStreamingRenderer(access);
+
+    r.connect(AGENT, "s1");
+    for (let i = 0; i < 6; i++) {
+      lastCb!.onConnectionLost();
+      vi.advanceTimersByTime(RECONNECT_MAX_DELAY);
+    }
+    // 7th drop → give up.
+    lastCb!.onConnectionLost();
+    vi.advanceTimersByTime(RECONNECT_MAX_DELAY);
+
+    expect(state.agents[AGENT].connectionPhase).toBe("error");
+    const src = state.agents[AGENT].messageSource;
+    const msgs = src.mode === "live" || src.mode === "finishing" ? src.messages : [];
+    expect(msgs.find((m) => m.id === "a1")?.status).toBe("complete");
+
+    r.dispose();
+  });
+
   it("a successful envelope resets the reconnect budget", () => {
     const { state, access } = makeStore();
     const r = createStreamingRenderer(access);

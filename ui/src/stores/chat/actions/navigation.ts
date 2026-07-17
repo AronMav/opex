@@ -227,20 +227,52 @@ export function createNavigationActions(deps: ActionDeps) {
 
     markSessionActive: (agent: string, sessionId: string) => {
       ensure(agent);
+      // Captured before the draft mutation below (not reactive inside it) —
+      // gates the auto-open branch to the agent the user is actually viewing.
+      const isCurrentAgent = agent === get().currentAgent;
       let shouldResume = false;
+      let opened = false;
       set((draft) => {
         const st = draft.agents[agent];
         if (!st) return;
         if (!st.activeSessionIds.includes(sessionId)) {
           st.activeSessionIds.push(sessionId);
         }
-        // Auto-resume trigger: if the session is open in the UI and not
-        // already streaming, kick off a resume. Idempotent — resumeStream
+        if (isActivePhase(st.connectionPhase)) return;
+
+        // Item 1 (2026-07-18): post-login / post-mount restore race. The
+        // WS "agent_processing" snapshot can report a running session for
+        // the current agent while the UI never explicitly opened one — the
+        // welcome screen (messageSource "new-chat") with activeSessionId
+        // either still null OR already set to this session (the global
+        // setThinking handler in layout.tsx can set activeSessionId ahead of
+        // this handler, in either fan-out order, without touching
+        // messageSource). Left unfixed, resumeStream flips connectionPhase to
+        // active over an empty welcome screen, and ChatPage's restore effect
+        // then bails out permanently on its "already streaming — don't
+        // touch" guard. Open the session (activeSessionId + messageSource)
+        // before resuming. Narrow on purpose: only for the currently-viewed
+        // agent, and only when nothing else is already explicitly selected —
+        // never hijacks a different session the user opened themselves.
+        const isWelcome =
+          (st.activeSessionId === null || st.activeSessionId === sessionId) &&
+          st.messageSource?.mode === "new-chat";
+        if (isCurrentAgent && isWelcome) {
+          st.activeSessionId = sessionId;
+          st.messageSource = { mode: "history", sessionId };
+          shouldResume = true;
+          opened = true;
+          return;
+        }
+
+        // Auto-resume trigger: if the session is already open in the UI and
+        // not already streaming, kick off a resume. Idempotent — resumeStream
         // returns 204 if the session is already finalized.
-        if (st.activeSessionId === sessionId && !isActivePhase(st.connectionPhase)) {
+        if (st.activeSessionId === sessionId) {
           shouldResume = true;
         }
       });
+      if (opened) saveLastSession(agent, sessionId);
       if (shouldResume) {
         get().resumeStream(agent, sessionId);
       }

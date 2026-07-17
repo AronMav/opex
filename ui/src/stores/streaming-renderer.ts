@@ -116,7 +116,10 @@ export function createStreamingRenderer(store: StoreAccess) {
    * the new stream's registration on the same session id and cancel it
    * prematurely.
    *
-   * cleanupAgent() delegates to this same path during agent switch.
+   * NOTE: cleanupAgent() (agent switch / unmount teardown, below) does NOT
+   * delegate here — it calls streamSessionManager.disposeCurrent() directly,
+   * since MEM-01 cleanup only needs to free the AbortController/rAF handles
+   * and clear this module's per-agent timers, not settle message statuses.
    *
    * `settleMessages` (default true) controls the streaming-status sweep at
    * the bottom. Intentional teardown — user Stop (abortActiveStream),
@@ -292,6 +295,21 @@ export function createStreamingRenderer(store: StoreAccess) {
         isLlmReconnecting: false,
         connectionError: "reconnect-failed",
         streamError: "Соединение потеряно. Не удалось переподключиться.",
+      });
+      // Item 2: the drop path deliberately preserves "streaming" status so an
+      // in-budget reconnect can keep appending text under a live caret. Once
+      // the budget is exhausted no further reconnect will ever be attempted
+      // for this turn — sweep every live/finishing message still marked
+      // "streaming" to "complete" (same idiom as abortLocalOnly's sweep), or
+      // the caret blinks forever under the error banner.
+      store.set((draft) => {
+        const a = draft.agents[agent];
+        if (!a) return;
+        const src = a.messageSource;
+        const msgs = src.mode === "live" || src.mode === "finishing" ? src.messages : [];
+        for (const m of msgs) {
+          if (m.status === "streaming") m.status = "complete";
+        }
       });
       return;
     }
