@@ -751,6 +751,22 @@ pub(crate) async fn api_update_agent(
         {
             tl.error_break_threshold = a.tool_loop.as_ref().and_then(|t| t.error_break_threshold);
         }
+        // drift.z_fire / drift.z_release are not exposed in AgentDetailDriftDto
+        // (operator-tunable via TOML only, per the canary-calibration workflow) and
+        // will be absent on every round-trip from the UI even when the drift section
+        // itself IS present — restore them from the existing config to avoid silently
+        // resetting a hand-tuned value back to the schema default (2.5 / 1.0). This is
+        // a per-field preserve, unlike the whole-section presence gate in
+        // `merge_soul_sections`: all other drift fields ARE carried by the UI and
+        // should keep replacing as today.
+        if let Some(Some(ref mut d)) = payload.drift {
+            if d.z_fire.is_none() {
+                d.z_fire = Some(a.drift.z_fire);
+            }
+            if d.z_release.is_none() {
+                d.z_release = Some(a.drift.z_release);
+            }
+        }
     }
 
     // Compute before payload is consumed by build_agent_config — after that,
