@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api";
-import { useProviders } from "@/lib/queries";
+import { useAgents, useProviders, useProviderModelsDetailed } from "@/lib/queries";
+import type { ProviderModel } from "@/lib/queries";
 
 /** One provider/model(/voice) binding for a single capability slot. A
  *  capability can have several entries (fallback chain), hence the array. */
@@ -133,4 +134,24 @@ export function useAgentTextModel(agentProfileName: string | undefined): AgentTe
       ? entry.model
       : providersData.find((p) => p.name === providerConnection)?.default_model) ?? "";
   return { providerConnection, defaultModel };
+}
+
+/** Resolved model picker options for an agent's text capability: the model
+ *  list of its active text provider plus the profile's default model. Shared
+ *  by `composer/ModelDropdown.tsx` (persistent override) and the regenerate
+ *  split-button model picker (13a, one-off override) so the fetch/derivation
+ *  logic lives in exactly one place. */
+export interface AgentModelOptions {
+  models: ProviderModel[];
+  defaultModel: string;
+}
+
+export function useAgentModelOptions(agent: string): AgentModelOptions {
+  const { data: allAgents } = useAgents();
+  const { data: allProviders = [] } = useProviders();
+  const agentInfo = allAgents?.find((a) => a.name === agent);
+  const { providerConnection, defaultModel } = useAgentTextModel(agentInfo?.profile);
+  const selectedProvider = allProviders.filter((p) => p.type === "text").find((p) => p.name === providerConnection);
+  const { data: models } = useProviderModelsDetailed(selectedProvider?.id ?? null);
+  return { models: models ?? [], defaultModel };
 }

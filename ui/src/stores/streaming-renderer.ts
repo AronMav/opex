@@ -276,14 +276,18 @@ export function createStreamingRenderer(store: StoreAccess) {
    * Start a new turn: write the optimistic user echo, POST /api/chat via the
    * T6 `startTurn`, then open the GET envelope stream on the session id from the
    * 202 body. This is the single send path used by sendMessage/interruptAndSend.
+   *
+   * `opts.model` (13a) is a ONE-OFF override for this turn only — sent as
+   * `body.model` on the /api/chat POST, never persisted, so the next plain
+   * send reverts to the agent's configured model.
    */
   async function sendTurn(
     agent: string,
     sessionId: string | null,
     userText: string,
-    attachments?: Array<MessageAttachment>,
-    userMessageId?: string,
+    opts?: { attachments?: Array<MessageAttachment>; userMessageId?: string; model?: string },
   ) {
+    const { attachments, userMessageId, model } = opts ?? {};
     // ── Optimistic user echo ──
     const userParts: MessagePart[] = [];
     if (userText) userParts.push({ type: "text", text: userText });
@@ -353,6 +357,7 @@ export function createStreamingRenderer(store: StoreAccess) {
       }
     }
     if (userMessageId) body.user_message_id = userMessageId;
+    if (model) body.model = model;
     if (forceNew) {
       body.force_new_session = true;
       update(agent, { forceNewSession: false });

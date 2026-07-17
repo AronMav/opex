@@ -227,6 +227,7 @@
   "chat.you": "You",
   "chat.assistant": "Assistant",
   "chat.regenerate_tooltip": "Regenerate response",
+  "chat.regenerate_with_model_tooltip": "Regenerate with a different model",
   "chat.reasoning": "Reasoning",
   "chat.drop_to_attach": "Drop file to attach",
   "chat.mentions_label": "Agent mentions",

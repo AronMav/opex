@@ -34,6 +34,7 @@ export function createStreamActions(deps: ActionDeps) {
     sessionId: string,
     branchFromMessageId: string,
     content: string,
+    opts?: { model?: string },
   ) {
     const st = get().agents[agent];
     if (st && isActivePhase(st.connectionPhase)) {
@@ -64,7 +65,10 @@ export function createStreamActions(deps: ActionDeps) {
       // already-persisted branch user message instead of minting a duplicate
       // forward child via /api/chat. sendTurn resolves the branch tip
       // (leaf_message_id) from the freshly-selected branch itself.
-      void renderer.sendTurn(agent, sessionId, content, undefined, resp.message_id);
+      void renderer.sendTurn(agent, sessionId, content, {
+        userMessageId: resp.message_id,
+        model: opts?.model,
+      });
     } catch (e) {
       // F084: surface the failure — a silent console.error leaves the composer
       // looking idle so the user can't tell the regenerate/fork failed.
@@ -108,7 +112,7 @@ export function createStreamActions(deps: ActionDeps) {
 
       // Single send path (T7): sendTurn writes the optimistic echo, POSTs the
       // turn, and opens the GET envelope stream on the session id from the 202.
-      void renderer.sendTurn(agent, st.activeSessionId, text, attachments, uuid());
+      void renderer.sendTurn(agent, st.activeSessionId, text, { attachments, userMessageId: uuid() });
     },
 
     interruptAndSend: async (text: string, attachments?: Array<MessageAttachment>) => {
@@ -136,7 +140,7 @@ export function createStreamActions(deps: ActionDeps) {
         // Send regardless of whether we reached idle (timeout safety). Same
         // single send path as sendMessage.
         const currentSt = get().agents[agent] ?? emptyAgentState();
-        void renderer.sendTurn(agent, currentSt.activeSessionId, text, attachments, uuid());
+        void renderer.sendTurn(agent, currentSt.activeSessionId, text, { attachments, userMessageId: uuid() });
       } finally {
         // sendTurn has (synchronously) written the optimistic echo and flipped
         // the phase to "submitted" before its first await; clearing the flag now
@@ -205,7 +209,7 @@ export function createStreamActions(deps: ActionDeps) {
     // user message (real sibling), not by appending a forward child. Routes
     // through the shared forkAndStream flow — same proven path as
     // forkAndRegenerate, minus the edit.
-    regenerate: () => {
+    regenerate: (opts?: { model?: string }) => {
       const store = get();
       const agent = store.currentAgent;
       const st = store.agents[agent] ?? emptyAgentState();
@@ -226,13 +230,13 @@ export function createStreamActions(deps: ActionDeps) {
         .map((p) => p.text)
         .join("\n");
 
-      void forkAndStream(agent, sessionId, lastUser.id, userText);
+      void forkAndStream(agent, sessionId, lastUser.id, userText, opts);
     },
 
     // B/C/F: branch from the given message. If it's a user message, branch from
     // it directly; if it's an assistant message, branch from its nearest
     // PRECEDING user message (its text). Same forkAndStream flow as regenerate.
-    regenerateFrom: (messageId: string) => {
+    regenerateFrom: (messageId: string, opts?: { model?: string }) => {
       const store = get();
       const agent = store.currentAgent;
       const st = store.agents[agent] ?? emptyAgentState();
@@ -248,7 +252,7 @@ export function createStreamActions(deps: ActionDeps) {
       const targetIdx = messages.findIndex((m) => m.id === messageId);
       if (targetIdx === -1) {
         // Fallback to normal regenerate if message not found.
-        get().regenerate();
+        get().regenerate(opts);
         return;
       }
 
@@ -262,7 +266,7 @@ export function createStreamActions(deps: ActionDeps) {
         }
       }
       if (!userMsg) {
-        get().regenerate();
+        get().regenerate(opts);
         return;
       }
 
@@ -271,7 +275,7 @@ export function createStreamActions(deps: ActionDeps) {
         .map((p) => p.text)
         .join("\n");
 
-      void forkAndStream(agent, sessionId, userMsg.id, userText);
+      void forkAndStream(agent, sessionId, userMsg.id, userText, opts);
     },
 
     forkAndRegenerate: async (messageId: string, newContent: string) => {

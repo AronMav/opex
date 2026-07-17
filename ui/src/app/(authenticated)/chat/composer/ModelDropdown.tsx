@@ -8,18 +8,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useChatStore } from "@/stores/chat-store";
-import { useAgents, useProviders, useProviderModelsDetailed } from "@/lib/queries";
-import { useAgentTextModel } from "@/hooks/use-profiles";
+import { useAgentModelOptions } from "@/hooks/use-profiles";
 import { ModelBadges } from "@/components/model-badges";
 
 export function ModelDropdown({ agent }: { agent: string }) {
   const modelOverride = useChatStore(s => s.agents[agent]?.modelOverride ?? null);
-  const { data: allAgents } = useAgents();
-  const { data: allProviders = [] } = useProviders();
-  const agentInfo = allAgents?.find(a => a.name === agent);
-  const { providerConnection, defaultModel } = useAgentTextModel(agentInfo?.profile);
-  const selectedProvider = allProviders.filter(p => p.type === "text").find(p => p.name === providerConnection);
-  const { data: models } = useProviderModelsDetailed(selectedProvider?.id ?? null);
+  const { models, defaultModel } = useAgentModelOptions(agent);
 
   const currentModel = modelOverride ?? defaultModel;
   const shortModel = currentModel.split("/").pop()?.split(":")[0] ?? currentModel;

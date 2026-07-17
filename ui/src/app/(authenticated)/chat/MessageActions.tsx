@@ -15,6 +15,7 @@ import {
   Copy,
   Download,
   RotateCcw,
+  ChevronDown,
   Volume2,
   VolumeX,
   ThumbsUp,
@@ -26,6 +27,13 @@ import {
   BookmarkCheck,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useAgentModelOptions } from "@/hooks/use-profiles";
 import { toast } from "sonner";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -164,21 +172,56 @@ function ExportMarkdownButton({ message }: { message: ChatMessage }) {
 }
 
 // ── Reload/regenerate button ────────────────────────────────────────────────
-
+// Split button (13a): the main click keeps the EXACT prior behaviour — plain
+// `regenerate()` on the last user message, regardless of which assistant
+// message this button instance is rendered under (ReloadButton has never
+// taken a messageId — MessageItem renders it with no props). The chevron
+// opens a one-off model picker; picking an entry calls the SAME regenerate()
+// action with `{model}`, so it replaces the same answer the main button would.
 function ReloadButton() {
   const { t } = useTranslation();
+  const currentAgent = useChatStore((s) => s.currentAgent);
+  const { models } = useAgentModelOptions(currentAgent);
 
   return (
-    <Button
-      variant="ghost"
-      size="icon-sm"
-      onClick={() => useChatStore.getState().regenerate()}
-      className={`rounded-full text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50 ${TOUCH_ICON}`}
-      title={t("chat.regenerate_tooltip")}
-      aria-label={t("chat.regenerate_tooltip")}
-    >
-      <RotateCcw className="h-3.5 w-3.5" />
-    </Button>
+    <div className="flex items-center rounded-full text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50">
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        onClick={() => useChatStore.getState().regenerate()}
+        className={`rounded-full text-inherit hover:bg-transparent ${TOUCH_ICON}`}
+        title={t("chat.regenerate_tooltip")}
+        aria-label={t("chat.regenerate_tooltip")}
+      >
+        <RotateCcw className="h-3.5 w-3.5" />
+      </Button>
+      {models.length > 1 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className={`rounded-full text-inherit hover:bg-transparent -ml-1.5 w-4 min-w-0 ${TOUCH_ICON}`}
+              title={t("chat.regenerate_with_model_tooltip")}
+              aria-label={t("chat.regenerate_with_model_tooltip")}
+            >
+              <ChevronDown className="h-3 w-3" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="text-xs">
+            {models.map((m) => (
+              <DropdownMenuItem
+                key={m.id}
+                className="font-mono text-xs"
+                onClick={() => useChatStore.getState().regenerate({ model: m.id })}
+              >
+                {m.id}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </div>
   );
 }
 

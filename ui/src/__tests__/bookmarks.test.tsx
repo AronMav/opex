@@ -68,6 +68,13 @@ vi.mock("@/lib/queries", () => ({
   },
 }));
 
+// ── Mock: @/hooks/use-profiles — ReloadButton's model-picker source (13a).
+// Stubbed wholesale (no models) so the showReload branch doesn't need a real
+// QueryClientProvider; these tests only exercise the bookmark star.
+vi.mock("@/hooks/use-profiles", () => ({
+  useAgentModelOptions: () => ({ models: [], defaultModel: "" }),
+}));
+
 // ── Mock: @/lib/api (session-exists probe for palette favourites + assertToken) ──
 // apiFetchRaw is what SearchPalette uses for the probe — Response-like objects
 // let tests distinguish ok / 404 / 5xx / network-reject outcomes.

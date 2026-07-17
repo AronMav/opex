@@ -48,6 +48,12 @@ vi.mock("@/lib/queries", () => ({
   useProviderActive: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
 }));
 
+// ReloadButton's model-picker source (13a) — stubbed wholesale so
+// MessageActions' showReload branch doesn't need a real QueryClientProvider.
+vi.mock("@/hooks/use-profiles", () => ({
+  useAgentModelOptions: () => ({ models: [], defaultModel: "" }),
+}));
+
 // ── Mock: @/lib/api ────────────────────────────────────────────────────────
 
 vi.mock("@/lib/api", () => ({

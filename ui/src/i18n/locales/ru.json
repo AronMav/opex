@@ -227,6 +227,7 @@
   "chat.you": "Вы",
   "chat.assistant": "Ассистент",
   "chat.regenerate_tooltip": "Повторить ответ",
+  "chat.regenerate_with_model_tooltip": "Повторить с другой моделью",
   "chat.reasoning": "Размышление",
   "chat.drop_to_attach": "Отпустите файл для прикрепления",
   "chat.mentions_label": "Упоминания агентов",

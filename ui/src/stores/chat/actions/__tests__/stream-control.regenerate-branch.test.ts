@@ -113,7 +113,7 @@ describe("regenerate — real branch (B/C/F)", () => {
     expect(invOrder).toBeLessThan(sendOrder);
 
     // (d) sendTurn called with resp.message_id (not a random uuid)
-    expect(renderer.sendTurn).toHaveBeenCalledWith(AGENT, "s1", "hi", undefined, "b1");
+    expect(renderer.sendTurn).toHaveBeenCalledWith(AGENT, "s1", "hi", { userMessageId: "b1", model: undefined });
   });
 
   it("uses abortLocalOnly (NOT abortActiveStream) when a stream is active (C)", async () => {
@@ -145,7 +145,7 @@ describe("regenerateFrom — real branch", () => {
       "/api/sessions/s1/fork?agent=main",
       { branch_from_message_id: "u1", content: "hi" },
     );
-    expect(renderer.sendTurn).toHaveBeenCalledWith(AGENT, "s1", "hi", undefined, "b1");
+    expect(renderer.sendTurn).toHaveBeenCalledWith(AGENT, "s1", "hi", { userMessageId: "b1", model: undefined });
   });
 
   it("branches from the nearest PRECEDING user message when target is an assistant message", async () => {
@@ -182,6 +182,6 @@ describe("forkAndRegenerate — shared flow with edited content", () => {
       "/api/sessions/s1/fork?agent=main",
       { branch_from_message_id: "u1", content: "edited text" },
     );
-    expect(renderer.sendTurn).toHaveBeenCalledWith(AGENT, "s1", "edited text", undefined, "b1");
+    expect(renderer.sendTurn).toHaveBeenCalledWith(AGENT, "s1", "edited text", { userMessageId: "b1", model: undefined });
   });
 });

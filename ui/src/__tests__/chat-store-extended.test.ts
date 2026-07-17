@@ -348,9 +348,9 @@ describe("STATE-01: history to live transition", () => {
     // meaningful regression guard here is the absence of the viewMode flip.)
     expect(sendMessageBlock).not.toMatch(/update\(agent,\s*\{\s*viewMode:\s*["']live["']\s*\}/);
 
-    // regenerate block — from "regenerate: () =>" to "regenerateFrom:"
+    // regenerate block — from "regenerate: (opts" to "regenerateFrom:"
     const regenerateBlock = src.slice(
-      src.indexOf("regenerate: ()"),
+      src.indexOf("regenerate: (opts"),
       src.indexOf("regenerateFrom:")
     );
     expect(regenerateBlock).not.toMatch(/update\(agent,\s*\{\s*viewMode:\s*["']live["']\s*\}/);

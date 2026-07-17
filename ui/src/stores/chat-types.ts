@@ -326,8 +326,8 @@ export interface ChatStore {
   clearPending: (agent?: string) => void;
   setVoiceTurnPending: (pending: boolean, agent?: string) => void;
   stopStream: () => void;
-  regenerate: () => void;
-  regenerateFrom: (messageId: string) => void;
+  regenerate: (opts?: { model?: string }) => void;
+  regenerateFrom: (messageId: string, opts?: { model?: string }) => void;
   switchBranch: (parentMessageId: string, selectedChildId: string) => void;
   forkAndRegenerate: (messageId: string, newContent: string) => void;
 
