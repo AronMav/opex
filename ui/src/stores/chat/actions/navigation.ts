@@ -254,9 +254,15 @@ export function createNavigationActions(deps: ActionDeps) {
         // before resuming. Narrow on purpose: only for the currently-viewed
         // agent, and only when nothing else is already explicitly selected —
         // never hijacks a different session the user opened themselves.
+        // `!forceNewSession` excludes an EXPLICIT New Chat (newChat() sets it
+        // true alongside the same null/"new-chat" shape): a WS reconnect
+        // snapshot (network blip, mobile wake) re-reporting the abandoned
+        // still-running session must not pull the user back into it. Mirrors
+        // the setThinking guard in composer.ts.
         const isWelcome =
           (st.activeSessionId === null || st.activeSessionId === sessionId) &&
-          st.messageSource?.mode === "new-chat";
+          st.messageSource?.mode === "new-chat" &&
+          !st.forceNewSession;
         if (isCurrentAgent && isWelcome) {
           st.activeSessionId = sessionId;
           st.messageSource = { mode: "history", sessionId };

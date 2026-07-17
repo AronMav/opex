@@ -126,6 +126,37 @@ describe("markSessionActive auto-open (welcome-state restore)", () => {
     expect(st.messageSource).toEqual({ mode: "new-chat" });
   });
 
+  it("does NOT re-open after an explicit New Chat (forceNewSession set)", () => {
+    // newChat() leaves {activeSessionId: null, mode: "new-chat",
+    // forceNewSession: true} — the user explicitly abandoned the old
+    // session. A WS reconnect snapshot (network blip, mobile wake — ws.ts
+    // force-reconnect) re-fires markSessionActive for the still-running-
+    // server-side old session; it must NOT pull the user back into it.
+    // Mirrors the setThinking guard in composer.ts (`!st?.forceNewSession`).
+    useChatStore.setState({
+      currentAgent: "alpha",
+      agents: {
+        alpha: {
+          activeSessionId: null,
+          connectionPhase: "idle",
+          activeSessionIds: [],
+          messageSource: { mode: "new-chat" },
+          forceNewSession: true,
+        } as any,
+      },
+      resumeStream: resumeStreamSpy,
+    } as any);
+
+    useChatStore.getState().markSessionActive("alpha", "old_running");
+
+    expect(resumeStreamSpy).not.toHaveBeenCalled();
+    const st = useChatStore.getState().agents.alpha;
+    expect(st.activeSessionId).toBe(null);
+    expect(st.messageSource).toEqual({ mode: "new-chat" });
+    // The running-session bookkeeping itself must still be recorded.
+    expect(st.activeSessionIds).toContain("old_running");
+  });
+
   it("fixes messageSource even when activeSessionId was already set to the running session (setThinking race)", () => {
     // Simulates the ordering where layout.tsx's global setThinking handler ran
     // BEFORE this per-page markSessionActive handler for the same WS event:
