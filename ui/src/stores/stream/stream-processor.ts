@@ -419,6 +419,11 @@ export async function processSSEStream(
               isErrorLike ? "error" :
                 syncStatus === "finished" ? "idle" : "streaming";
             const errorText = isErrorLike ? (event.error ?? null) : null;
+            // Message status mirrors "is the turn still live" — only "running"
+            // keeps the caret going; finished/error/interrupted all settle to
+            // "complete" so a dead or done turn never keeps blinking.
+            const msgStatus: "streaming" | "complete" =
+              syncStatus === "running" ? "streaming" : "complete";
 
             // Single writeDraft — message + connectionPhase + error fields are atomic (fixes bugs b and c)
             session.writeDraft((agentDraft: AgentState) => {
@@ -467,7 +472,7 @@ export async function processSSEStream(
                   sseLog(agent, "sync-noop", { localLen: localTextLen, syncLen: syncTextLen });
                 }
                 if (existingMsg.status !== "complete") {
-                  existingMsg.status = syncStatus === "finished" ? "complete" : "streaming";
+                  existingMsg.status = msgStatus;
                 }
               } else {
                 liveMessages.push({
@@ -476,7 +481,7 @@ export async function processSSEStream(
                   parts: syncParts,
                   createdAt: session.buffer.assistantCreatedAt,
                   agentId: session.buffer.currentRespondingAgent ?? undefined,
-                  status: syncStatus === "finished" ? "complete" : "streaming",
+                  status: msgStatus,
                 });
               }
 
@@ -566,8 +571,22 @@ export async function processSSEStream(
             receivedFinishEvent = true;
             session.cancelScheduledCommit();
             session.buffer.flushText();
+            // Capture the id BEFORE reset() below regenerates buffer.assistantId,
+            // so the status settle after reset can still find the right message.
+            const finishedId = session.buffer.assistantId;
             session.commit("streaming");  // final snapshot of all parts; "error" guard in commit() prevents overwrite
             session.buffer.reset();       // clean buffer for next LLM iteration
+
+            // Settle the just-finished assistant message's status to "complete"
+            // so the inline caret (TextPart, keyed on status === "streaming")
+            // stops blinking. Unconditional — not gated on receivedSessionId.
+            session.writeDraft((agentDraft: AgentState) => {
+              const src = agentDraft.messageSource;
+              const liveMessages: ChatMessage[] =
+                src.mode === "live" || src.mode === "finishing" ? src.messages : [];
+              const idx = liveMessages.findIndex((m) => m.id === finishedId);
+              if (idx >= 0) liveMessages[idx].status = "complete";
+            });
 
             if (receivedSessionId) {
               const sid = receivedSessionId;
@@ -584,7 +603,20 @@ export async function processSSEStream(
             if (errText.includes("turn limit") || errText.includes("cycle detected")) {
               session.write({ turnLimitMessage: errText });
             } else {
-              session.write({ streamError: errText, connectionPhase: "error", connectionError: errText, isLlmReconnecting: false });
+              const erroredId = session.buffer.assistantId;
+              session.writeDraft((agentDraft: AgentState) => {
+                agentDraft.streamError = errText;
+                agentDraft.connectionError = errText;
+                agentDraft.isLlmReconnecting = false;
+                agentDraft.connectionPhase = "error";
+                // Settle the current live message so the inline caret stops —
+                // an errored turn must not keep rendering as "streaming".
+                const src = agentDraft.messageSource;
+                const liveMessages: ChatMessage[] =
+                  src.mode === "live" || src.mode === "finishing" ? src.messages : [];
+                const idx = liveMessages.findIndex((m) => m.id === erroredId);
+                if (idx >= 0) liveMessages[idx].status = "complete";
+              });
             }
             break;
           }

@@ -217,6 +217,123 @@ describe("processSSEStream", () => {
     expect(state.pendingMessage?.sessionId).toBe("S0");
   });
 
+  it("finish event leaves the finished assistant message with status \"complete\" (caret must not render)", async () => {
+    const session = streamSessionManager.start("Arty");
+    const frames = [
+      `data: ${JSON.stringify({ type: "data-session-id", data: { sessionId: "s1" } })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-start", id: "t1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-delta", delta: "hi", id: "t1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-end", id: "t1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "finish" })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      callbacks: makeCallbacks(),
+    });
+    const state = useChatStore.getState().agents.Arty;
+    // messageSource may have already handed off to "finishing"/"history" by the
+    // time the stream settles — read whichever mode still carries the message.
+    const msgs =
+      state.messageSource.mode === "live" || state.messageSource.mode === "finishing"
+        ? state.messageSource.messages
+        : [];
+    const assistantMsg = msgs.find((m) => m.role === "assistant");
+    expect(assistantMsg).toBeDefined();
+    expect(assistantMsg?.status).toBe("complete");
+    expect(assistantMsg?.status).not.toBe("streaming");
+  });
+
+  it("sync status \"running\" yields live message status \"streaming\"", async () => {
+    const session = streamSessionManager.start("Arty");
+    const frames = [
+      `data: ${JSON.stringify({ type: "data-session-id", data: { sessionId: "s1" } })}\n\n`,
+      `data: ${JSON.stringify({ type: "sync", content: "partial", status: "running", error: null })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      callbacks: makeCallbacks(),
+    });
+    const msgs = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
+    const assistantMsg = msgs.find((m) => m.role === "assistant");
+    expect(assistantMsg?.status).toBe("streaming");
+  });
+
+  it("sync status \"finished\" yields live message status \"complete\"", async () => {
+    const session = streamSessionManager.start("Arty");
+    const frames = [
+      `data: ${JSON.stringify({ type: "data-session-id", data: { sessionId: "s1" } })}\n\n`,
+      `data: ${JSON.stringify({ type: "sync", content: "done", status: "finished", error: null })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      callbacks: makeCallbacks(),
+    });
+    const msgs = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
+    const assistantMsg = msgs.find((m) => m.role === "assistant");
+    expect(assistantMsg?.status).toBe("complete");
+  });
+
+  it("sync status \"interrupted\" yields live message status \"complete\" (no blinking caret on a dead turn)", async () => {
+    const session = streamSessionManager.start("Arty");
+    const frames = [
+      `data: ${JSON.stringify({ type: "data-session-id", data: { sessionId: "s1" } })}\n\n`,
+      `data: ${JSON.stringify({ type: "sync", content: "cut off", status: "interrupted", error: "restarted mid-stream" })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      callbacks: makeCallbacks(),
+    });
+    const msgs = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
+    const assistantMsg = msgs.find((m) => m.role === "assistant");
+    expect(assistantMsg?.status).toBe("complete");
+  });
+
+  it("sync status \"error\" yields live message status \"complete\"", async () => {
+    const session = streamSessionManager.start("Arty");
+    const frames = [
+      `data: ${JSON.stringify({ type: "data-session-id", data: { sessionId: "s1" } })}\n\n`,
+      `data: ${JSON.stringify({ type: "sync", content: "oops", status: "error", error: "fail" })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      callbacks: makeCallbacks(),
+    });
+    const msgs = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
+    const assistantMsg = msgs.find((m) => m.role === "assistant");
+    expect(assistantMsg?.status).toBe("complete");
+  });
+
+  it("error event settles the current live message status to \"complete\" (caret stops on error)", async () => {
+    // Seed a pre-existing live message (as if earlier throttled commits had
+    // already landed it in the store) and a "start" frame carrying the SAME
+    // id as messageId — this is how the real wire re-anchors
+    // session.buffer.assistantId after processSSEStream's leading
+    // buffer.reset() regenerates it to a fresh random uuid.
+    const session = streamSessionManager.start("Arty");
+    useChatStore.setState((draft: any) => {
+      draft.agents.Arty.messageSource = {
+        mode: "live",
+        messages: [{
+          id: "m-err",
+          role: "assistant",
+          parts: [{ type: "text", text: "partial" }],
+          status: "streaming",
+        }],
+      };
+    });
+    const frames = [
+      `data: ${JSON.stringify({ type: "start", messageId: "m-err" })}\n\n`,
+      `data: ${JSON.stringify({ type: "error", errorText: "boom" })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      callbacks: makeCallbacks(),
+    });
+    const msgs = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
+    const assistantMsg = msgs.find((m) => m.id === "m-err");
+    expect(assistantMsg?.status).toBe("complete");
+  });
+
   it("BUG-C: connectionPhase stays error after finish when sync error preceded it", async () => {
     const session = streamSessionManager.start("Arty");
     const frames = [

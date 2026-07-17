@@ -88,6 +88,9 @@ export class StreamSession {
         liveMessages[existingIdx].parts = allParts;
         liveMessages[existingIdx].agentId =
           this.buffer.currentRespondingAgent ?? undefined;
+        if (liveMessages[existingIdx].status !== "complete") {
+          liveMessages[existingIdx].status = "streaming";
+        }
       } else {
         liveMessages.push({
           id: this.buffer.assistantId,
@@ -95,6 +98,7 @@ export class StreamSession {
           parts: allParts,
           createdAt: this.buffer.assistantCreatedAt,
           agentId: this.buffer.currentRespondingAgent ?? undefined,
+          status: "streaming",
         });
       }
       agentDraft.messageSource = liveSrc;

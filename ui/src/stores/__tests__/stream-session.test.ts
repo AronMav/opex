@@ -160,6 +160,52 @@ describe("StreamSession", () => {
       s.commit("error");
       expect(useChatStore.getState().agents.Arty.connectionPhase).toBe("error");
     });
+
+    it("commit() sets status \"streaming\" on the newly-pushed live message (caret can render)", () => {
+      const s = streamSessionManager.start("Arty");
+      useChatStore.setState((draft: any) => {
+        draft.agents.Arty.messageSource = { mode: "live", messages: [] };
+      });
+      s.buffer.parser.processDelta("hello");
+      s.commit();
+      const msgs = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].status).toBe("streaming");
+    });
+
+    it("commit() sets status \"streaming\" on the update path (existing live message)", () => {
+      const s = streamSessionManager.start("Arty");
+      useChatStore.setState((draft: any) => {
+        draft.agents.Arty.messageSource = { mode: "live", messages: [] };
+      });
+      s.buffer.parser.processDelta("hello");
+      s.commit();
+      s.buffer.parser.processDelta(" world");
+      s.commit();
+      const msgs = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].status).toBe("streaming");
+    });
+
+    it("commit() does not downgrade a message already marked \"complete\"", () => {
+      const s = streamSessionManager.start("Arty");
+      useChatStore.setState((draft: any) => {
+        draft.agents.Arty.messageSource = {
+          mode: "live",
+          messages: [{
+            id: s.buffer.assistantId,
+            role: "assistant",
+            parts: [],
+            status: "complete",
+          }],
+        };
+      });
+      s.buffer.parser.processDelta("more text after finish");
+      s.commit();
+      const msgs = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].status).toBe("complete");
+    });
   });
 
   describe("StreamSession.scheduleCommit() / cancelScheduledCommit()", () => {
