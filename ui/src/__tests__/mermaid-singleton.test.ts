@@ -25,4 +25,18 @@ describe("mermaid singleton", () => {
     await Promise.all([getMermaid("light"), getMermaid("light"), getMermaid("light")])
     expect(initialize).toHaveBeenCalledTimes(1)
   })
+
+  it("failed init is not cached: next call retries and can succeed", async () => {
+    const { getMermaid } = await import("@/lib/mermaid-singleton")
+    initialize.mockImplementationOnce(() => {
+      throw new Error("init boom")
+    })
+    await expect(getMermaid("light")).rejects.toThrow("init boom")
+    // Rejection must not stay cached — a retry must call initialize again and resolve.
+    await expect(getMermaid("light")).resolves.toBeDefined()
+    expect(initialize).toHaveBeenCalledTimes(2)
+    // And the successful init IS cached afterwards.
+    await getMermaid("light")
+    expect(initialize).toHaveBeenCalledTimes(2)
+  })
 })

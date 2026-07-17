@@ -16,7 +16,7 @@ export function getMermaid(resolvedTheme: "light" | "dark"): Promise<typeof merm
   if (inflight && activeTheme === resolvedTheme) return inflight
 
   activeTheme = resolvedTheme
-  inflight = (async () => {
+  const attempt = (async () => {
     const mermaid = (await import("mermaid")).default
     mermaid.initialize({
       startOnLoad: false,
@@ -34,6 +34,20 @@ export function getMermaid(resolvedTheme: "light" | "dark"): Promise<typeof merm
     })
     return mermaid
   })()
+  inflight = attempt
 
-  return inflight
+  // Don't cache a failed init: the old per-render pattern self-healed on the
+  // next render, so a transient import/initialize failure must not brick
+  // mermaid until reload. On rejection, clear the cache so the next call
+  // retries — but only if `attempt` is still the current in-flight promise
+  // (a theme switch may have started a newer one; don't clobber it). The
+  // caller still gets the rejection via the returned `attempt`.
+  attempt.catch(() => {
+    if (inflight === attempt) {
+      inflight = null
+      activeTheme = null
+    }
+  })
+
+  return attempt
 }
