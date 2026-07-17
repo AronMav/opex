@@ -59,6 +59,7 @@ function ThinkingMessage() {
       role="status"
       aria-live="polite"
       aria-label={t("chat.thinking")}
+      data-testid="thinking-indicator"
       className="pt-1 pb-2 pl-12 animate-in fade-in slide-in-from-bottom-2 duration-300 ease-out"
     >
       <CometLoader />

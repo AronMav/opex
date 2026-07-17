@@ -12,8 +12,17 @@ import { test, expect, type Page } from "@playwright/test";
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
+// Auth token: pass via OPEX_E2E_TOKEN (e.g. from .auth-token); the fallback is
+// the retired Pi token kept for historical local setups.
 const TOKEN =
+  process.env.OPEX_E2E_TOKEN ||
   "25378f5154228e4f8f196007171e338f063ed89fc03bf1394c0233dffbb8f0e0";
+
+/** Wave-4 semantic shift: the inline caret (`streaming-cursor`) now renders
+ *  only while TEXT is arriving; during the reasoning/tool phase the comet
+ *  (`thinking-indicator`) shows instead. "Stream engaged" = either of them. */
+const STREAM_ENGAGED =
+  "[data-testid='streaming-cursor'], [data-testid='thinking-indicator']";
 
 /** Run serially — avoids session list contamination between tests. */
 test.describe.configure({ mode: "serial" });
@@ -490,7 +499,7 @@ test("F5 reload during streaming resumes via WS snapshot", async ({ page }) => {
   await sendMessage(page, "напиши длинный ответ на 3 параграфа");
 
   // Wait for streaming to begin.
-  await page.waitForSelector("[data-testid='streaming-cursor']", {
+  await page.waitForSelector(STREAM_ENGAGED, {
     timeout: 30_000,
   });
 
@@ -502,11 +511,11 @@ test("F5 reload during streaming resumes via WS snapshot", async ({ page }) => {
     await login(page);
   }
 
-  // After reload, streaming-cursor must re-appear within a short window —
-  // proves resumeStream was triggered (either by markSessionActive on the WS
-  // snapshot, or by the one-shot bootstrap effect when WS arrives before
-  // localStorage restore).
-  await page.waitForSelector("[data-testid='streaming-cursor']", {
+  // After reload, the stream indicator (caret while text arrives, comet while
+  // reasoning) must re-appear within a short window — proves resumeStream was
+  // triggered (either by markSessionActive on the WS snapshot, or by the
+  // one-shot bootstrap effect when WS arrives before localStorage restore).
+  await page.waitForSelector(STREAM_ENGAGED, {
     timeout: 10_000,
   });
 
@@ -545,7 +554,7 @@ test.describe("long-running scenarios", () => {
     await sendMessage(page, "тест");
 
     // Wait for streaming to begin then NOT send any further activity.
-    await page.waitForSelector("[data-testid='streaming-cursor']", {
+    await page.waitForSelector(STREAM_ENGAGED, {
       timeout: 30_000,
     });
 
@@ -573,7 +582,7 @@ test("Stuck-session recovery banner never renders", async ({ page }) => {
   await clickNewChat(page);
   await sendMessage(page, "тест");
 
-  await page.waitForSelector("[data-testid='streaming-cursor']", {
+  await page.waitForSelector(STREAM_ENGAGED, {
     timeout: 30_000,
   });
   await page.reload();
