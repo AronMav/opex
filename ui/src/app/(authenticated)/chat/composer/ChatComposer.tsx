@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { MentionAutocomplete } from "./MentionAutocomplete";
 import { CommandAutocomplete } from "@/components/chat/command-autocomplete";
 import { ModelDropdown } from "./ModelDropdown";
+import { ImageLightbox } from "@/components/chat/ImageLightbox";
 import { useVoiceInput } from "../hooks/use-voice-input";
 import { useVoiceReply } from "../hooks/use-voice-reply";
 import { useAgents } from "@/lib/queries";
@@ -542,23 +543,30 @@ export function ChatComposer() {
               listboxId={mentionListboxId}
             />
           )}
-          {attachments.length > 0 && attachments.map((att) => (
-            <div key={att.id} className="flex flex-col">
-              <div data-upload-id={att.uploadId} className="flex items-center gap-2 px-3 pt-2 text-xs text-muted-foreground">
-                <Paperclip className="h-4 w-4" />
-                <span className="truncate max-w-50">{att.name}</span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={t("chat.remove_attachment")}
-                  onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
-                >
-                  <X size={12} />
-                </Button>
+          {attachments.length > 0 && attachments.map((att) => {
+            const imageContent = att.content.find((c) => c.mimeType.startsWith("image/"));
+            return (
+              <div key={att.id} className="flex flex-col">
+                <div data-upload-id={att.uploadId} className="flex items-center gap-2 px-3 pt-2 text-xs text-muted-foreground">
+                  {imageContent ? (
+                    <ImageLightbox src={imageContent.data} alt={att.name} className="h-12 w-12 rounded object-cover" />
+                  ) : (
+                    <Paperclip className="h-4 w-4" />
+                  )}
+                  <span className="truncate max-w-50">{att.name}</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={t("chat.remove_attachment")}
+                    onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
+                  >
+                    <X size={12} />
+                  </Button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           {pendingMessage && (
             <div className="flex items-center gap-2 px-4 pt-2 pb-1 text-xs text-muted-foreground border-b border-border/30">
               <span className="flex-1 min-w-0 truncate">
