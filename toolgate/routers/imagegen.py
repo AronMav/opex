@@ -1,5 +1,6 @@
 """Image Generation endpoint."""
 
+import inspect
 import logging
 import os
 import re
@@ -32,6 +33,7 @@ class ImageGenRequest(BaseModel):
     size: Optional[str] = "1024x1024"
     model: Optional[str] = None
     quality: Optional[str] = "standard"
+    negative_prompt: Optional[str] = None
 
 
 @router.post("/generate-image")
@@ -72,11 +74,18 @@ async def generate_image(
 
     _rate_limit_count += 1
 
+    # Pass negative_prompt only to providers that accept it (e.g. ComfyUI) —
+    # the other imagegen drivers keep their 5-arg generate() signature.
+    extra = {}
+    if body.negative_prompt and "negative_prompt" in inspect.signature(provider.generate).parameters:
+        extra["negative_prompt"] = body.negative_prompt
+
     try:
         image_bytes = await provider.generate(
             request.app.state.http_client, body.prompt,
             size, body.model,
             body.quality or "standard",
+            **extra,
         )
         return Response(content=image_bytes, media_type="image/png")
     except httpx.HTTPStatusError as e:

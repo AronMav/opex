@@ -111,13 +111,34 @@ class ComfyUIImageGen:
                 return node_id
         return None
 
-    def _build_graph(self, prompt: str, size: str, model: str | None) -> dict:
+    def _find_negative_node(self, graph: dict, prompt_node: str) -> str | None:
+        """Locate the negative-prompt CLIPTextEncode: an explicit
+        options.nodes.negative override, else the single OTHER CLIPTextEncode
+        besides the positive one. Returns None when there is no distinct
+        negative text node (e.g. a graph that zeroes out the negative, or an
+        ambiguous multi-encoder graph) — negative_prompt is then a no-op."""
+        explicit = self._nodes.get("negative")
+        if isinstance(explicit, str) and explicit in graph:
+            return explicit
+        others = [nid for nid, n in graph.items()
+                  if isinstance(n, dict) and n.get("class_type") in _PROMPT_CLASSES and nid != prompt_node]
+        return others[0] if len(others) == 1 else None
+
+    def _build_graph(self, prompt: str, size: str, model: str | None,
+                     negative: str = "") -> dict:
         graph = copy.deepcopy(self._workflow)
 
         prompt_node = self._find_node(graph, "prompt", _PROMPT_CLASSES)
         if prompt_node is None:
             raise ValueError("ComfyUI workflow has no CLIPTextEncode node to carry the prompt")
         graph[prompt_node].setdefault("inputs", {})["text"] = prompt
+
+        # Negative prompt (only for graphs with a real negative encoder — e.g.
+        # Chroma at cfg>1). Overwrites the workflow's baked-in negative text.
+        if negative:
+            neg_node = self._find_negative_node(graph, prompt_node)
+            if neg_node is not None:
+                graph[neg_node].setdefault("inputs", {})["text"] = negative
 
         size_node = self._find_node(graph, "size", _SIZE_CLASSES)
         if size_node is not None:
@@ -184,8 +205,8 @@ class ComfyUIImageGen:
 
     async def generate(self, http: httpx.AsyncClient, prompt: str,
                        size: str = "1024x1024", model: str | None = None,
-                       quality: str = "standard") -> bytes:
-        graph = self._build_graph(prompt, size, model)
+                       quality: str = "standard", negative_prompt: str = "") -> bytes:
+        graph = self._build_graph(prompt, size, model, negative_prompt or "")
         client_id = uuid.uuid4().hex
 
         submit = await http.post(

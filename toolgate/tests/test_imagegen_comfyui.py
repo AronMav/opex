@@ -100,6 +100,36 @@ def test_default_workflow_has_no_lora_node():
     assert not any(n.get("class_type") == "LoraLoaderModelOnly" for n in DEFAULT_WORKFLOW.values())
 
 
+def test_negative_prompt_sets_second_encoder():
+    # Chroma-style: two CLIPTextEncode (4=positive pinned, 5=negative).
+    wf = {
+        "4": {"class_type": "CLIPTextEncode", "inputs": {"text": ""}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"text": "baked default"}},
+    }
+    drv = ComfyUIImageGen(base_url=BASE, options={"workflow": wf, "nodes": {"prompt": "4"}})
+    graph = drv._build_graph("a cat", "512x512", None, negative="ugly, blurry")
+    assert graph["4"]["inputs"]["text"] == "a cat"       # positive
+    assert graph["5"]["inputs"]["text"] == "ugly, blurry"  # negative overwritten
+
+
+def test_negative_prompt_noop_when_no_second_encoder():
+    # Single CLIPTextEncode (Flux/ZeroOut style) — negative has nowhere to go.
+    wf = {"5": {"class_type": "CLIPTextEncode", "inputs": {"text": ""}}}
+    drv = ComfyUIImageGen(base_url=BASE, options={"workflow": wf})
+    graph = drv._build_graph("x", "512x512", None, negative="ugly")
+    assert graph["5"]["inputs"]["text"] == "x"  # only the positive got set
+
+
+def test_negative_prompt_ignored_when_empty():
+    wf = {
+        "4": {"class_type": "CLIPTextEncode", "inputs": {"text": ""}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"text": "keep me"}},
+    }
+    drv = ComfyUIImageGen(base_url=BASE, options={"workflow": wf, "nodes": {"prompt": "4"}})
+    graph = drv._build_graph("x", "512x512", None, negative="")
+    assert graph["5"]["inputs"]["text"] == "keep me"  # untouched
+
+
 def test_missing_prompt_node_raises():
     drv = ComfyUIImageGen(base_url=BASE, options={"workflow": {
         "1": {"class_type": "UNETLoader", "inputs": {}},

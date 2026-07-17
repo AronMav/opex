@@ -47,14 +47,15 @@ state: active
 ## Tool
 
 ```
-generate_image(prompt, size?, quality?, model?)
+generate_image(prompt, negative_prompt?, size?, quality?, model?)
 ```
 
 | Parameter | Values | Default |
 |-----------|--------|---------|
-| `prompt` | Text description — always in English | required |
+| `prompt` | English description of **what you want** — never "no X" phrases | required |
+| `negative_prompt` | Optional — **what to avoid** (`blurry, extra fingers, deformed hands, watermark`). Honored by the local Chroma model; empty keeps its built-in quality negative. | — |
 | `size` | Any `WxH` up to **2048×2048** (2K). Each side 512–2048, multiples of 64. **You choose** the best fit for the content. | `1024x1024` |
-| `quality` | **No effect on this instance** — the local model runs fixed fast steps. Leave default. | `standard` |
+| `quality` | **No effect** — the model pipeline is fixed. Leave default. | `standard` |
 | `model` | Leave empty — single local model (see below). | auto |
 
 ### Model Parameter
@@ -159,7 +160,7 @@ Tell the user you're generating a draft and offer to refine after they see it.
 2. **Select size** (see table above) — pick the `WxH` that fits the content, up to 2K.
 3. **Generate**:
 ```
-generate_image(prompt="[adapted English prompt]", size="1024x1024")
+generate_image(prompt="[adapted English prompt]", negative_prompt="blurry, deformed hands, extra fingers, watermark", size="1024x1024")
 ```
 
 ### Step 6 — Iterate
@@ -177,7 +178,7 @@ After showing the result:
 - **Specific > abstract** — "a red sports car parked in front of a modern glass building at dusk" beats "beautiful car".
 - **Always specify style** — without an explicit style the result is unpredictable. If the user didn't specify, pick one (photorealistic for realistic scenes, digital art for game/fantasy content).
 - **50–100 words optimal** — longer prompts get partially ignored.
-- **No negative phrases** — this model runs at **cfg 1.0 with a zeroed-out negative**, so it *ignores* negative prompts entirely. Worse, naming an unwanted thing in the prompt (`no text`, `no watermark`) tends to make it *appear*. Describe only what you WANT. To suppress clutter, phrase it positively: `clean minimal background`, `sharp focus`, `smooth skin` — never `no clutter` / `no blur`.
+- **Split positive vs negative** — put ONLY what you want in `prompt`; put what to AVOID in the separate `negative_prompt` param (`blurry, extra fingers, deformed hands, watermark`). Never cram `no X` into `prompt` — naming a thing in the positive prompt tends to *draw* it. The active local model (Chroma) honors `negative_prompt`; even if a model doesn't, its built-in quality negative still applies, so positive-only prompts stay safe.
 
 ### Prompt Structure
 
