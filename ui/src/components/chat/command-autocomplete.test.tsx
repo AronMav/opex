@@ -126,6 +126,37 @@ it("prompt rows render without the leading slash", () => {
   expect(screen.queryByText("/compact")).not.toBeInTheDocument();
 });
 
+it("renders the Prompts header label when the query matches ONLY prompts (no commands)", () => {
+  render(
+    <CommandAutocomplete
+      input="/weekly"
+      commands={cmds}
+      prompts={promptEntries}
+      onPick={() => {}}
+      onClose={() => {}}
+    />,
+  );
+  // No command matches "/weekly" — the prompt section must still be labeled
+  // (regression: the header used to be suppressed when commandMatches was empty).
+  expect(screen.queryAllByText(/^\//)).toHaveLength(0);
+  expect(screen.getByText("Prompts")).toBeInTheDocument();
+  expect(screen.getByText("weekly_report")).toBeInTheDocument();
+});
+
+it("renders the Prompts header label when commands AND prompts both match", () => {
+  render(
+    <CommandAutocomplete
+      input="/"
+      commands={cmds}
+      prompts={promptEntries}
+      onPick={() => {}}
+      onClose={() => {}}
+    />,
+  );
+  expect(screen.getByText("/status")).toBeInTheDocument();
+  expect(screen.getByText("Prompts")).toBeInTheDocument();
+});
+
 it("a prompt named like a real command does NOT shadow it — both rows are shown and each picks its own kind", () => {
   const onPick = vi.fn();
   const commandsWithCompact = [

@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CommandInfo } from "@/types/api";
 import type { PromptEntry } from "@/lib/prompts";
 import { useTranslation } from "@/hooks/use-translation";
@@ -137,7 +137,10 @@ export function CommandAutocomplete({ input, commands, prompts = [], onPick, onC
     >
       {matches.map((row, i) => {
         const active = i === activeIdx;
-        const showPromptsHeader = row.kind === "prompt" && commandMatches.length > 0 && i === commandMatches.length;
+        // The header precedes the FIRST prompt row. `i === commandMatches.length`
+        // alone is correct in both layouts: with command matches the first prompt
+        // sits right after them; with zero command matches it sits at i === 0.
+        const showPromptsHeader = row.kind === "prompt" && i === commandMatches.length;
         if (row.kind === "command") {
           const c = row.command;
           return (
@@ -168,8 +171,10 @@ export function CommandAutocomplete({ input, commands, prompts = [], onPick, onC
           );
         }
         const p = row.prompt;
+        // Fragment (not a wrapper div) keeps prompt rows direct children of the
+        // listbox, same as command rows — the header div is just a sibling.
         return (
-          <div key={`prompt-group-${p.title}`}>
+          <Fragment key={`prompt-${p.title}`}>
             {showPromptsHeader && (
               <div className="border-t border-border/50 px-3 pt-1.5 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 {t("chat.prompts_section")}
@@ -193,7 +198,7 @@ export function CommandAutocomplete({ input, commands, prompts = [], onPick, onC
                 {p.body}
               </span>
             </button>
-          </div>
+          </Fragment>
         );
       })}
     </div>
