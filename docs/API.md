@@ -495,6 +495,8 @@
 | `GET` | `/api/sessions/{id}/failures` | Записи об ошибках для одной сессии |
 | `DELETE` | `/api/messages/{id}` | Удалить одно сообщение (требует `?agent=`) |
 | `POST` | `/api/messages/{id}/feedback` | Установить обратную связь по сообщению (требует `?agent=`) |
+| `PATCH` | `/api/messages/{id}/bookmark` | Установить/снять закладку на сообщении (требует `?agent=`) |
+| `GET` | `/api/messages/bookmarked` | Список сообщений с закладками (`?agent=` или `?all=true`) |
 
 ### GET /api/sessions
 
@@ -503,6 +505,12 @@
 | `agent` | string | Да | Фильтр по имени агента (владение, не участие) |
 | `channel` | string | Нет | Фильтр по каналу (через запятую) |
 | `limit` | integer | Нет | Максимум результатов (по умолчанию 20, max 100) |
+| `before_last_message_at` | timestamp | Нет | Keyset-курсор: `last_message_at` последней строки предыдущей страницы |
+| `before_id` | uuid | Нет | Keyset-курсор (tie-break): `id` последней строки предыдущей страницы |
+
+Keyset-пагинация по `(last_message_at, id)` DESC: `before_last_message_at` и
+`before_id` передаются вместе (только один — `400 Bad Request`). Пропуск обоих
+возвращает первую страницу.
 
 **Ответ:**
 ```json
@@ -540,29 +548,92 @@
 
 ### GET /api/sessions/search
 
+Полнотекстовый поиск по истории сообщений + секция заголовков сессий.
+`plainto_tsquery('russian')` по FTS-индексу; сниппет строится через
+`ts_headline` с маркерами `<b>…</b>` вокруг совпадений (клиент рендерит их как
+`<mark>`, не как HTML).
+
 | Параметр | Тип | По умолчанию | Описание |
 |----------|-----|--------------|----------|
-| `q` | string | Обязательно | Поисковый запрос |
-| `agent` | string | `"main"` | Фильтр по агенту |
-| `limit` | integer | 50 | Максимум результатов (max 200) |
+| `q` | string | Обязательно | Поисковый запрос (пустой → `400`) |
+| `agent` | string | — | Обязателен, если не задан `all=true` (иначе `400`) |
+| `all` | bool | `false` | Искать по всем агентам (escape-hatch для Ctrl+K «по всем») |
+| `limit` | integer | 30 | Максимум сообщений (max 100) |
 
-**Ответ:**
+Требуется **либо** `agent`, **либо** `all=true`. Заголовки сессий ограничены 10
+результатами независимо от `limit`.
+
+**Ответ:** (`count` = число сообщений в `messages`)
 ```json
 {
-  "results": [
+  "messages": [
     {
-      "content": "...",
+      "message_id": "uuid",
       "session_id": "uuid",
+      "session_title": "Discussion about X",
+      "agent_id": "main",
+      "snippet": "…нашёл <b>ответ</b> здесь…",
+      "content": "полный текст сообщения",
+      "role": "user",
       "user_id": "...",
       "channel": "ui",
-      "role": "user",
-      "created_at": "...",
+      "created_at": "2026-07-16T00:00:00Z",
       "rank": 0.95
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "uuid",
+      "title": "Discussion about X",
+      "agent_id": "main",
+      "last_message_at": "2026-07-16T00:00:00Z"
     }
   ],
   "count": 3
 }
 ```
+
+### GET /api/messages/bookmarked
+
+Список сообщений, отмеченных закладкой (секция «Избранное» в Ctrl+K).
+
+| Параметр | Тип | По умолчанию | Описание |
+|----------|-----|--------------|----------|
+| `agent` | string | — | Обязателен, если не задан `all=true` (иначе `400`) |
+| `all` | bool | `false` | По всем агентам (escape-hatch, как в `/api/sessions/search`) |
+| `limit` | integer | 50 | Максимум результатов (max 200) |
+
+**Ответ:** (`preview` — усечение `content` до 160 символов)
+```json
+{
+  "items": [
+    {
+      "message_id": "uuid",
+      "session_id": "uuid",
+      "session_title": "Discussion about X",
+      "agent_id": "main",
+      "preview": "первые ~160 символов сообщения…",
+      "role": "assistant",
+      "bookmarked_at": "2026-07-17T10:00:00Z"
+    }
+  ]
+}
+```
+
+### PATCH /api/messages/{id}/bookmark
+
+Установить/снять закладку. Требует `?agent=<владелец>` — JOIN через
+`sessions.agent_id` защищает от межагентной записи (IDOR-guard, как у
+`/api/messages/{id}/feedback`).
+
+| Параметр | Тип | Обязательно | Описание |
+|----------|-----|-------------|----------|
+| `agent` | string | Да | Владелец сообщения |
+
+**Тело:** `{ "bookmarked": true }`
+
+**Ответ:** `204 No Content` при успехе; `404`, если сообщение не найдено или
+принадлежит другому агенту.
 
 ### GET /api/sessions/stuck
 
