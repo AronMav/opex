@@ -53,7 +53,7 @@ generate_image(prompt, negative_prompt?, size?, quality?, model?)
 | Parameter | Values | Default |
 |-----------|--------|---------|
 | `prompt` | English description of **what you want** — never "no X" phrases | required |
-| `negative_prompt` | Optional — **what to avoid** (`blurry, extra fingers, deformed hands, watermark`). Honored by the local Chroma model; empty keeps its built-in quality negative. | — |
+| `negative_prompt` | Optional — **what to avoid** (`blurry, extra fingers, deformed hands, watermark`). Best-effort: some local pipelines apply it, others ignore it — a bonus, not a guarantee. | — |
 | `size` | Any `WxH` up to **2048×2048** (2K). Each side 512–2048, multiples of 64. **You choose** the best fit for the content. | `1024x1024` |
 | `quality` | **No effect** — the model pipeline is fixed. Leave default. | `standard` |
 | `model` | Leave empty — single local model (see below). | auto |
@@ -178,7 +178,7 @@ After showing the result:
 - **Specific > abstract** — "a red sports car parked in front of a modern glass building at dusk" beats "beautiful car".
 - **Always specify style** — without an explicit style the result is unpredictable. If the user didn't specify, pick one (photorealistic for realistic scenes, digital art for game/fantasy content).
 - **50–100 words optimal** — longer prompts get partially ignored.
-- **Split positive vs negative** — put ONLY what you want in `prompt`; put what to AVOID in the separate `negative_prompt` param (`blurry, extra fingers, deformed hands, watermark`). Never cram `no X` into `prompt` — naming a thing in the positive prompt tends to *draw* it. The active local model (Chroma) honors `negative_prompt`; even if a model doesn't, its built-in quality negative still applies, so positive-only prompts stay safe.
+- **Split positive vs negative** — put ONLY what you want in `prompt`; put what to AVOID in the separate `negative_prompt` param (`blurry, extra fingers, deformed hands, watermark`). Never cram `no X` into `prompt` — naming a thing in the positive prompt tends to *draw* it. `negative_prompt` is **best-effort**: some local pipelines apply it, others ignore it — so make the positive prompt stand on its own and treat the negative as a bonus, not a guarantee.
 
 ### Prompt Structure
 

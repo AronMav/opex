@@ -29,7 +29,7 @@ endpoint: "http://localhost:9011/generate-image"
 method: POST
 parameters:
   prompt: { type: string, required: true, location: body, description: "Image description in English — ONLY what you want to see" }
-  negative_prompt: { type: string, required: false, location: body, description: "Optional — what to AVOID (e.g. 'blurry, extra fingers, watermark, deformed hands'). Honored only by models with a real negative prompt (the local Chroma model does). Leave empty to keep the model's built-in quality negative. Never put 'no X' phrases in prompt — put them here." }
+  negative_prompt: { type: string, required: false, location: body, description: "Optional — what to AVOID (e.g. 'blurry, extra fingers, watermark, deformed hands'). Best-effort: some local pipelines apply a real negative, others ignore it — so it's a bonus, not a guarantee. Always keep 'no X' phrases OUT of prompt and put them here instead. Safe to leave empty." }
   size: { type: string, required: false, location: body, description: "Image size as WxH in pixels — YOU pick the best size for the content. Each side 512-2048 (2K max), multiples of 64. Examples: 1024x1024 (square), 1344x768 (landscape), 768x1344 (portrait), 1536x1536 / 2048x2048 (high detail). Default 1024x1024.", default: "1024x1024" }
   quality: { type: string, required: false, location: body, description: "Optional quality hint (standard/high). Ignored by providers that run a fixed pipeline (e.g. the local ComfyUI model) — leave default; control detail via size and prompt instead.", default: "standard" }
 channel_action: { action: send_photo, data_field: "_binary" }
