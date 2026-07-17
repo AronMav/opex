@@ -18,17 +18,21 @@ const SHARED_ROOT_PROMPT_FILES: &[&str] = &["TOOLS.md", "AGENTS.md", "USER.md"];
 /// Directories excluded from memory indexing — system/binary/config dirs not meant for knowledge base.
 pub const MEMORY_INDEX_EXCLUDE_DIRS: &[&str] = &["tools", "skills", "mcp", "uploads", "agents"];
 
-/// Root-level files excluded from memory indexing. Two reasons to exclude:
+/// Root-level files excluded from memory indexing. Reasons to exclude:
 ///   1. Governance / reference docs (AGENTS.md, TOOLS.md, AUTHORITY.md) describe
 ///      how the system is organized — not user knowledge.
 ///   2. USER.md is already injected verbatim into every system prompt via
 ///      SHARED_ROOT_PROMPT_FILES; indexing it into memory would duplicate
 ///      the same content the agent already sees every turn.
+///   3. prompts.md is a user-authored library of reusable prompt templates
+///      surfaced in the web UI (slash autocomplete + welcome screen) — it is
+///      read directly by the client, not meant to be searchable knowledge.
 pub const MEMORY_INDEX_EXCLUDE_FILES: &[&str] = &[
     "AGENTS.md",
     "TOOLS.md",
     "AUTHORITY.md",
     "USER.md",
+    "prompts.md",
 ];
 
 /// Filename suffixes excluded from indexing (composite extensions).
