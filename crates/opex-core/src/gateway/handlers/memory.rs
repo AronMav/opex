@@ -5,7 +5,7 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Json},
-    routing::{delete, get, post},
+    routing::{get, post},
 };
 use opex_db::memory_queries;
 use serde::Deserialize;
@@ -19,115 +19,14 @@ include!("memory_dto_structs.rs");
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/api/memory", get(api_list_memory).post(api_create_memory))
         .route("/api/memory/stats", get(api_memory_stats))
-        .route("/api/memory/export", get(api_export_memory))
         .route("/api/memory/reindex", post(api_reindex_memory))
         .route("/api/memory/fts-language", get(api_get_fts_language).put(api_set_fts_language))
-        .route("/api/memory/{id}", delete(api_delete_memory).patch(api_patch_memory))
-        .route("/api/memory/tasks", get(api_memory_tasks))
         .route("/api/memory/documents", get(api_list_documents))
         .route("/api/memory/documents/{id}", get(api_get_document).patch(api_patch_document).delete(api_delete_memory))
 }
 
 // ── Memory API ──
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct MemoryQuery {
-    query: Option<String>,
-    limit: Option<i64>,
-    offset: Option<i64>,
-}
-
-pub(crate) async fn api_list_memory(
-    State(state): State<InfraServices>,
-    Query(q): Query<MemoryQuery>,
-) -> impl IntoResponse {
-    let limit = q.limit.unwrap_or(20).min(100) as usize;
-    let offset = q.offset.unwrap_or(0).max(0);
-
-    // Search with query: semantic → FTS fallback (handled inside MemoryStore::search)
-    if let Some(ref search) = q.query
-        && !search.trim().is_empty() {
-            match state.memory_store.search(search, limit, &[], "").await {
-                Ok((results, mode)) => {
-                    let chunks: Vec<Value> = results
-                        .iter()
-                        .map(|r| {
-                            json!({
-                                "id": r.id,
-                                "content": r.content,
-                                "source": r.source,
-                                "relevance_score": r.relevance_score,
-                                "similarity": r.similarity,
-                                "pinned": r.pinned,
-                            })
-                        })
-                        .collect();
-                    return Json(json!({ "chunks": chunks, "search_mode": mode })).into_response();
-                }
-                Err(e) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({"error": e.to_string()})),
-                    ).into_response();
-                }
-            }
-        }
-
-    // Admin endpoint: shows all chunks (no agent_id filter). Protected by auth middleware.
-    // No query: list all chunks by relevance
-    let result = sqlx::query_as::<_, MemoryChunkRow>(
-        "SELECT id, content, source, relevance_score, pinned, created_at, accessed_at, scope, agent_id \
-         FROM memory_chunks ORDER BY relevance_score DESC LIMIT $1 OFFSET $2",
-    )
-    .bind(limit as i64)
-    .bind(offset)
-    .fetch_all(&state.db)
-    .await;
-
-    match result {
-        Ok(rows) => {
-            let chunks: Vec<Value> = rows
-                .iter()
-                .map(|c| {
-                    json!({
-                        "id": c.id,
-                        "content": c.content,
-                        "source": c.source,
-                        "relevance_score": c.relevance_score,
-                        "pinned": c.pinned,
-                        "created_at": c.created_at.to_rfc3339(),
-                        "accessed_at": c.accessed_at.to_rfc3339(),
-                        "scope": c.scope,
-                        "agent_id": c.agent_id,
-                    })
-                })
-                .collect();
-            Json(json!({ "chunks": chunks })).into_response()
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
-        )
-            .into_response(),
-    }
-}
-
-#[derive(Debug, sqlx::FromRow)]
-pub(crate) struct MemoryChunkRow {
-    id: uuid::Uuid,
-    content: String,
-    source: Option<String>,
-    relevance_score: f64,
-    pinned: bool,
-    created_at: chrono::DateTime<chrono::Utc>,
-    accessed_at: chrono::DateTime<chrono::Utc>,
-    #[sqlx(default)]
-    scope: String,
-    #[sqlx(default)]
-    agent_id: String,
-}
 
 pub(crate) async fn api_memory_stats(State(state): State<InfraServices>) -> Json<MemoryStatsDto> {
     // Post-m033: every chunk is its own document — `total` and `documents` are equal.
@@ -175,18 +74,6 @@ pub(crate) async fn api_memory_stats(State(state): State<InfraServices>) -> Json
 }
 
 
-/// GET /api/memory/tasks — list memory worker tasks
-pub(crate) async fn api_memory_tasks(State(state): State<InfraServices>) -> Json<Value> {
-    let rows = sqlx::query_as::<_, (uuid::Uuid, String, String, serde_json::Value, Option<String>, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, task_type, status, params, error, created_at FROM memory_tasks ORDER BY created_at DESC LIMIT 50"
-    ).fetch_all(&state.db).await.unwrap_or_default();
-    let tasks: Vec<Value> = rows.iter().map(|(id, tt, st, p, e, ca)| json!({
-        "id": id, "task_type": tt, "status": st, "params": p, "error": e, "created_at": ca.to_rfc3339()
-    })).collect();
-    Json(json!({"tasks": tasks}))
-}
-
-// ── Documents API (document-level view) ──
 
 #[derive(Debug, sqlx::FromRow)]
 struct DocumentRow {
@@ -384,53 +271,6 @@ pub(crate) async fn api_patch_document(
     Json(json!({"ok": true})).into_response()
 }
 
-// POST /api/memory — create a new memory chunk
-#[derive(Debug, Deserialize)]
-pub(crate) struct CreateMemoryRequest {
-    content: String,
-    source: Option<String>,
-    pinned: Option<bool>,
-}
-
-pub(crate) async fn api_create_memory(
-    State(state): State<InfraServices>,
-    Json(req): Json<CreateMemoryRequest>,
-) -> impl IntoResponse {
-    if req.content.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "content must not be empty"})),
-        )
-            .into_response();
-    }
-    let source = req.source.as_deref().unwrap_or("ui");
-    if crate::agent::pipeline::memory::is_reserved_soul_source(source) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "source namespace 'soul_*' is reserved"})),
-        )
-            .into_response();
-    }
-    let pinned = req.pinned.unwrap_or(false);
-    // Admin-created chunks are shared so all agents can see them
-    match state.memory_store.index(&req.content, source, pinned, "shared", "").await {
-        Ok(id) => Json(json!({"id": id, "ok": true})).into_response(),
-        Err(e) if e.to_string().contains("dim_mismatch") => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "error": "dim_mismatch",
-                "hint": "POST /api/memory/reindex to rebuild embeddings"
-            })),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
-        )
-            .into_response(),
-    }
-}
-
 pub(crate) async fn api_delete_memory(
     State(state): State<InfraServices>,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
@@ -462,89 +302,6 @@ pub(crate) async fn api_delete_memory(
 #[derive(Debug, Deserialize)]
 pub(crate) struct PatchMemoryRequest {
     pinned: Option<bool>,
-    content: Option<String>,
-}
-
-pub(crate) async fn api_patch_memory(
-    State(state): State<InfraServices>,
-    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
-    Json(req): Json<PatchMemoryRequest>,
-) -> impl IntoResponse {
-    if req.pinned.is_none() && req.content.is_none() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "nothing to update"})),
-        )
-            .into_response();
-    }
-
-    // Validate content early — before any DB writes
-    if let Some(ref content) = req.content
-        && content.trim().is_empty() {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error": "content must not be empty"}))).into_response();
-        }
-
-    // Spec §5.2: biography chunks (event/reflection) are immutable via the API.
-    // FAIL-CLOSED shared guard (also covers api_patch_document / api_delete_memory).
-    if let Some(refusal) = refuse_if_biography(&state.db, id).await {
-        return refusal;
-    }
-
-    // Update pinned flag if provided
-    if let Some(pinned) = req.pinned {
-        let result = sqlx::query("UPDATE memory_chunks SET pinned = $2 WHERE id = $1")
-            .bind(id)
-            .bind(pinned)
-            .execute(&state.db)
-            .await;
-        match result {
-            Ok(r) if r.rows_affected() > 0 => {
-                crate::db::audit::audit_spawn(state.db.clone(), String::new(), crate::db::audit::event_types::MEMORY_PINNED, None, json!({"chunk_id": id.to_string(), "pinned": pinned}));
-            }
-            Ok(_) => {
-                return (StatusCode::NOT_FOUND, Json(json!({"error": "chunk not found"}))).into_response();
-            }
-            Err(e) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-            }
-        }
-    }
-
-    // Update content if provided — re-embed and rebuild tsvector
-    if let Some(ref content) = req.content {
-        let embedding = match state.embedder.embed(content).await {
-            Ok(e) => e,
-            Err(e) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("embedding failed: {e}")}))).into_response();
-            }
-        };
-        let vec_str = crate::memory::fmt_vec(&embedding);
-        let lang = match state.memory_store.validated_fts_language() {
-            Ok(l) => l,
-            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "invalid FTS language configuration"}))).into_response(),
-        };
-        // SAFETY: `lang` comes from `validated_fts_language()` which allowlists lowercase ASCII identifiers only.
-        let sql = format!(
-            "UPDATE memory_chunks SET content = $2, embedding = $3::halfvec, tsv = to_tsvector('{lang}', $2) WHERE id = $1"
-        );
-        let result = sqlx::query(&sql)
-            .bind(id)
-            .bind(content)
-            .bind(&vec_str)
-            .execute(&state.db)
-            .await;
-        match result {
-            Ok(r) if r.rows_affected() > 0 => {}
-            Ok(_) => {
-                return (StatusCode::NOT_FOUND, Json(json!({"error": "chunk not found"}))).into_response();
-            }
-            Err(e) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-            }
-        }
-    }
-
-    Json(json!({"ok": true})).into_response()
 }
 
 // ── FTS Language API ──
@@ -607,51 +364,6 @@ pub(crate) async fn api_set_fts_language(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": e.to_string()})),
         ).into_response(),
-    }
-}
-
-// ── Memory Export ──
-
-/// GET /api/memory/export — bulk export all memory chunks (without embeddings).
-/// Limited to 100k chunks to prevent OOM.
-pub(crate) async fn api_export_memory(
-    State(state): State<InfraServices>,
-) -> impl IntoResponse {
-    const EXPORT_LIMIT: i64 = 100_000;
-    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memory_chunks")
-        .fetch_one(&state.db).await.unwrap_or(0);
-    if total > EXPORT_LIMIT {
-        tracing::warn!(total, limit = EXPORT_LIMIT, "memory export truncated");
-    }
-    match sqlx::query_as::<_, (uuid::Uuid, String, Option<String>, bool, f64, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, content, source, pinned, relevance_score, created_at \
-         FROM memory_chunks ORDER BY created_at LIMIT $1",
-    )
-    .bind(EXPORT_LIMIT)
-    .fetch_all(&state.db)
-    .await
-    {
-        Ok(rows) => {
-            let chunks: Vec<Value> = rows
-                .iter()
-                .map(|r| {
-                    json!({
-                        "id": r.0,
-                        "content": r.1,
-                        "source": r.2,
-                        "pinned": r.3,
-                        "relevance_score": r.4,
-                        "created_at": r.5.to_rfc3339(),
-                    })
-                })
-                .collect();
-            Json(json!({ "chunks": chunks, "total": chunks.len() })).into_response()
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
-        )
-            .into_response(),
     }
 }
 

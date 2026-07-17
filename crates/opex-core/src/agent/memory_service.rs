@@ -89,6 +89,7 @@ pub trait MemoryService: Send + Sync {
     fn fts_language(&self) -> String { "english".to_string() }
 
     /// FTS language validated against `pg_catalog.pg_ts_config`.
+    #[allow(dead_code)] // FTS-interface reserve; sole caller was the removed /api/memory/{id} PATCH route.
     fn validated_fts_language(&self) -> anyhow::Result<String> { Ok("english".to_string()) }
 
     /// Update the in-memory FTS language (does NOT write to DB).

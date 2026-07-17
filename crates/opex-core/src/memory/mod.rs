@@ -11,7 +11,7 @@ pub mod soul;
 pub mod store;
 pub mod watcher;
 
-pub use embedding::{fmt_vec, EmbeddingService, ToolgateEmbedder};
+pub use embedding::{EmbeddingService, ToolgateEmbedder};
 // CountingEmbedder используется напрямую через crate::memory::embedding::CountingEmbedder
 // в тестах tools/embedding.rs и memory/store.rs — re-export не нужен.
 pub use store::MemoryStore;
