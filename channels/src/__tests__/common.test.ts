@@ -3,7 +3,6 @@ import {
   splitText,
   toolEmoji,
   parseDirectives,
-  decodeBase64Param,
   parseUserCommand,
   emojiToSlackShortcode,
   classifyMediaType,
@@ -250,34 +249,6 @@ describe("parseUserCommand", () => {
 
   test("slash only returns null", () => {
     expect(parseUserCommand("/")).toBeNull();
-  });
-});
-
-// ── decodeBase64Param ───────────────────────────────────────────────────
-
-describe("decodeBase64Param", () => {
-  test("decodes valid base64", () => {
-    const buf = decodeBase64Param({ audio: btoa("hello") }, "audio");
-    expect(buf).not.toBeNull();
-    expect(new TextDecoder().decode(buf!)).toBe("hello");
-  });
-
-  test("returns null for missing key", () => {
-    expect(decodeBase64Param({}, "audio")).toBeNull();
-  });
-
-  test("decodes empty base64", () => {
-    const buf = decodeBase64Param({ data: "" }, "data");
-    expect(buf).not.toBeNull();
-    expect(buf!.byteLength).toBe(0);
-  });
-
-  test("returns null for non-string value", () => {
-    expect(decodeBase64Param({ data: 12345 }, "data")).toBeNull();
-  });
-
-  test("returns null for null value", () => {
-    expect(decodeBase64Param({ data: null }, "data")).toBeNull();
   });
 });
 

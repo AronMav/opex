@@ -50,8 +50,3 @@ const PROMPTS: Record<string, string> = loadPrompts();
 export function getFormattingPrompt(channelType: string): string | undefined {
   return PROMPTS[channelType];
 }
-
-/** Test/diagnostic: list channels that loaded successfully. */
-export function loadedChannels(): string[] {
-  return Object.keys(PROMPTS);
-}

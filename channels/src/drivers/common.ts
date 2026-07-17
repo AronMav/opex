@@ -165,22 +165,6 @@ export function parseUserCommand(text: string): UserCommand | null {
   }
 }
 
-// ── decodeBase64Param ───────────────────────────────────────────────────
-
-/** Extract and decode a base64 value from params object. Returns null if missing or not a string. */
-export function decodeBase64Param(
-  params: Record<string, unknown>,
-  key: string,
-): Uint8Array | null {
-  const val = params[key];
-  if (typeof val !== "string") return null;
-  try {
-    return Buffer.from(val, "base64");
-  } catch {
-    return null;
-  }
-}
-
 // ── classifyMediaType ───────────────────────────────────────────────────
 
 /** Classify MIME type into media category. */
