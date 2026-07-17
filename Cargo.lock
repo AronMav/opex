@@ -2233,14 +2233,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "opex-migrate-checksums"
-version = "0.34.1"
-dependencies = [
- "sqlx",
- "tokio",
-]
-
-[[package]]
 name = "opex-types"
 version = "0.34.1"
 dependencies = [
