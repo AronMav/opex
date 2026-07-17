@@ -104,6 +104,49 @@ describe("abortLocalOnly — settle streaming message status (no stuck caret)", 
     }
   });
 
+  it("connect() pre-open cleanup does NOT sweep — reconnect keeps the caret alive", () => {
+    // Important (re-review): connection-drop → onConnectionLost →
+    // scheduleReconnect → connect(), whose FIRST statement is the
+    // abortLocalOnly cleanup. If that cleanup sweeps, the still-streaming
+    // message is marked "complete" and the no-downgrade guards (sync's
+    // `status !== "complete"` and commit()'s guard) make it PERMANENT: after
+    // any transient drop / visibility-stale recovery, text keeps appending
+    // but the caret never returns. The pre-open cleanup is a reconnect
+    // CONTINUATION, not a teardown — status must stay "streaming" until the
+    // envelope settles it.
+    const { state, access } = makeStore();
+    state.agents[AGENT].connectionPhase = "streaming";
+    state.agents[AGENT].messageSource = {
+      mode: "live",
+      messages: [
+        { id: "a1", role: "assistant", parts: [{ type: "text", text: "partial" }], status: "streaming" },
+      ],
+    };
+    const r = createStreamingRenderer(access);
+    r.connect(AGENT, "s1");
+    r.dispose();
+
+    const msgs = liveMessagesOf(state);
+    expect(msgs.find((m) => m.id === "a1")?.status).toBe("streaming");
+  });
+
+  it("abortActiveStream (user Stop) still sweeps — intentional teardown", () => {
+    const { state, access } = makeStore();
+    state.agents[AGENT].connectionPhase = "streaming";
+    state.agents[AGENT].activeSessionId = "s1";
+    state.agents[AGENT].messageSource = {
+      mode: "live",
+      messages: [
+        { id: "a1", role: "assistant", parts: [{ type: "text", text: "partial" }], status: "streaming" },
+      ],
+    };
+    const r = createStreamingRenderer(access);
+    r.abortActiveStream(AGENT);
+    r.dispose();
+
+    expect(liveMessagesOf(state).find((m) => m.id === "a1")?.status).toBe("complete");
+  });
+
   it("abort sweep also runs when connectionPhase is already idle (dispose landed first)", () => {
     // disposeCurrent → dispose() writes connectionPhase "idle" BEFORE the
     // defensive phase-reset check in abortLocalOnly — the sweep must not be

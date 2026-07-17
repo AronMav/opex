@@ -117,8 +117,20 @@ export function createStreamingRenderer(store: StoreAccess) {
    * prematurely.
    *
    * cleanupAgent() delegates to this same path during agent switch.
+   *
+   * `settleMessages` (default true) controls the streaming-status sweep at
+   * the bottom. Intentional teardown — user Stop (abortActiveStream),
+   * session/agent switch (navigation actions), regenerate (stream-control) —
+   * keeps the default: the turn is being abandoned, so its caret must stop.
+   * The reconnect-CONTINUATION path (connect()'s pre-open cleanup — same
+   * turn, new envelope) passes false: sweeping there would mark the
+   * still-streaming message "complete", and the no-downgrade guards (sync's
+   * `status !== "complete"` check and commit()'s guard) make that permanent —
+   * after any transient drop or visibility-stale recovery the text would
+   * keep appending but the caret would never return.
    */
-  function abortLocalOnly(agent: string) {
+  function abortLocalOnly(agent: string, opts?: { settleMessages?: boolean }) {
+    const settleMessages = opts?.settleMessages ?? true;
     // Fix I: cancel any pending backoff reconnect. (Attempts counter is NOT
     // reset here — a retry re-enters via connect(), which clears it on the
     // non-retry path; a user Stop / nav is followed by a fresh non-retry
@@ -143,25 +155,28 @@ export function createStreamingRenderer(store: StoreAccess) {
         a.isLlmReconnecting = false;
       });
     }
-    // Settle streaming message statuses. On abort the stream-processor's
+    // Settle streaming message statuses (intentional teardown only — see the
+    // `settleMessages` doc above). On abort the stream-processor's
     // finally-block commit is a no-op (disposeCurrent above bumped the
     // generation → isCurrent false) and its post-finally handoff is gated on
     // `!signal.aborted` — so nothing else stops the inline caret. Sweep every
     // live/finishing message still marked "streaming" to "complete".
-    // Unconditional (NOT gated on an active connectionPhase): dispose() lands
-    // its own `connectionPhase: "idle"` write before we read the phase above,
+    // NOT gated on an active connectionPhase: dispose() lands its own
+    // `connectionPhase: "idle"` write before we read the phase above,
     // so gating the sweep on an active phase would skip the common Stop flow.
     // Runs AFTER the generation bump — must be a direct store write, not a
     // session.commit (which would silently drop as stale).
-    store.set((draft) => {
-      const a = draft.agents[agent];
-      if (!a) return;
-      const src = a.messageSource;
-      const msgs = src.mode === "live" || src.mode === "finishing" ? src.messages : [];
-      for (const m of msgs) {
-        if (m.status === "streaming") m.status = "complete";
-      }
-    });
+    if (settleMessages) {
+      store.set((draft) => {
+        const a = draft.agents[agent];
+        if (!a) return;
+        const src = a.messageSource;
+        const msgs = src.mode === "live" || src.mode === "finishing" ? src.messages : [];
+        for (const m of msgs) {
+          if (m.status === "streaming") m.status = "complete";
+        }
+      });
+    }
   }
 
   /** Public: abort active stream AND notify backend (user Stop).
@@ -211,7 +226,12 @@ export function createStreamingRenderer(store: StoreAccess) {
     // Dispose the previous session (generation bump) before creating a new one,
     // mirroring sendTurn. abortLocalOnly is local-only — it never POSTs
     // /abort, so re-opening the same session id can't cancel it.
-    abortLocalOnly(agent);
+    // settleMessages: false — this cleanup is a reconnect CONTINUATION of the
+    // same turn (drop-recovery, visibility-stale, resume, post-POST open),
+    // not a teardown: the still-streaming message must keep status
+    // "streaming" until the envelope settles it, or the no-downgrade guards
+    // would freeze it "complete" while text keeps appending.
+    abortLocalOnly(agent, { settleMessages: false });
     // Fix I: a fresh (non-retry) connect — new send, resume, or visibility
     // recovery — starts with a clean reconnect budget. Retries preserve the
     // running count so the cap is actually reached under persistent failure.
