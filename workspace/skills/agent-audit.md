@@ -124,7 +124,7 @@ parent: discovery-protocol
 1. agents_list → текущий статус
 2. agent(action="status", target="имя_агента") → состояние экземпляра
 3. Проверить Core API: GET /api/agents/{name}/channels
-4. Проверить: provider активен? (GET /api/provider-active)
+4. Проверить: provider назначен? (GET /api/profiles — слоты капабилити; GET /api/provider-active показывает только embedding)
 ```
 
 ### Шаг 3 — Анализ

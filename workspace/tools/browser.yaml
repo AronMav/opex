@@ -1,6 +1,6 @@
 name: browser
 description: "Full browser automation with stateful sessions. Allows navigating, clicking, typing, filling forms, executing JS, taking screenshots. First call create_session, then use the returned session_id for subsequent actions. Session auto-closes after 5 minutes of inactivity."
-endpoint: "http://browser-renderer:9020/automation"
+endpoint: "http://localhost:9020/automation"
 method: POST
 
 parameters:

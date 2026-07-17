@@ -58,14 +58,28 @@ curl -sf -X POST http://localhost:18789/api/providers \
 
 ## Activate media provider
 
-After creating a media provider, set it as active for its capability:
+Media provider selection is per-**Profile** now (since m084), NOT a global
+active flag. A Profile's `slots` map each capability to an ordered list of
+providers, e.g. `{"imagegen": [{"provider": "fal-flux"}]}`. Add the new
+provider to the relevant capability slot of the profile(s) that should use it.
+`PUT /api/profiles/{id}` REPLACES the whole `slots` object, so fetch the
+current slots first, add/modify the capability, then send the full object back:
 
 ```bash
-curl -sf -X PUT http://localhost:18789/api/provider-active \
+# 1. List profiles → find the id and current slots
+curl -sf http://localhost:18789/api/profiles \
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN"
+
+# 2. Send the FULL slots back with the new provider added for the capability
+curl -sf -X PUT http://localhost:18789/api/profiles/PROFILE_ID \
   -H "Authorization: Bearer $OPEX_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"capability": "imagegen", "provider_name": "fal-flux"}'
+  -d '{"slots": {"imagegen": [{"provider": "fal-flux"}]}}'
 ```
+
+> `PUT /api/provider-active` now accepts **only** `capability: embedding`
+> (everything else returns 400 — media capabilities are managed through
+> Profiles). Use it solely for the embedding provider.
 
 Then reload toolgate so it picks up the new config:
 
@@ -164,7 +178,9 @@ curl -sf http://localhost:18789/api/provider-types \
 ## Checklist
 
 1. Create provider via `POST /api/providers`
-2. For media: activate via `PUT /api/provider-active` + restart toolgate
+2. For media: add the provider to the target Profile's capability slot
+   (`PUT /api/profiles/{id}`) + restart toolgate. `PUT /api/provider-active`
+   is embedding-only now.
 3. For LLM: assign to agent via `provider_connection` field
 4. Verify: `GET /api/providers` shows the new record
-5. For CLI providers: update options via `PATCH /api/providers/{id}`
+5. For CLI providers: update options via `PUT /api/providers/{id}`
