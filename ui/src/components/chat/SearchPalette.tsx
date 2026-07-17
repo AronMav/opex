@@ -131,6 +131,11 @@ export function SearchPalette() {
       // the PREVIOUS agent's/scope's favourites until the refetch lands.
       setBookmarks([]);
       setActiveIdx(0);
+      // I2: opening the palette invalidates any stale pending jump target
+      // (a failed navigation, or a target the user never reached). Left
+      // dangling, it would suppress silent scroll-restores and could fire a
+      // surprise delayed jump when its session is later opened manually.
+      usePaletteStore.getState().setTarget(null);
     } else if (timerRef.current) {
       clearTimeout(timerRef.current);
     }

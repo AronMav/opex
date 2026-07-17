@@ -335,7 +335,14 @@ export function MessageList({
           // custom scroll math. Acceptable imprecision: the restored position
           // may land up to ~500px above the exact first visible row.
           const item = virtualItems[range.startIndex];
-          recordVisibleMessage(item && item.id !== THINKING_ID ? item.id : null);
+          // Skip synthetic rows (the thinking placeholder and compression
+          // dividers, id `compression-divider-{n}`) so scroll memory never
+          // stores an id that has no real message to jump back to.
+          const realId =
+            item && item.id !== THINKING_ID && !item.id.startsWith("compression-divider-")
+              ? item.id
+              : null;
+          recordVisibleMessage(realId);
         }}
         startReached={guardedLoadEarlier}
         components={virtuosoComponents}

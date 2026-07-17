@@ -154,7 +154,9 @@ export function ChatThread({
 
   // Branch-aware jump-to-message (search palette / bookmarks / scroll-restore).
   // Consumes palette-store.target and scrolls the SAME array Virtuoso renders.
-  useScrollToMessage(currentAgent, activeSessionId, allMessages);
+  // `!!sessionMessagesData` gates resolution on first-page readiness so a
+  // cold-cache jump doesn't falsely exhaust before page 1 lands (C1).
+  useScrollToMessage(currentAgent, activeSessionId, allMessages, !!sessionMessagesData);
 
   const msgCount = sourceMessages.length;
   // hiddenCount is based on filteredMessages (not raw sourceMessages) so inter-agent

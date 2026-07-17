@@ -28,6 +28,8 @@ import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { useChatStore, isActivePhase } from "@/stores/chat-store";
 import { getCachedRawMessages, prependOlderRawMessages, resolveActivePath } from "@/stores/chat-history";
+import { queryClient } from "@/lib/query-client";
+import { qk } from "@/lib/queries";
 import { usePaletteStore } from "@/stores/palette-store";
 import { useTranslation } from "@/hooks/use-translation";
 import { apiGet } from "@/lib/api";
@@ -38,6 +40,11 @@ import { scrollToMessageIndex } from "../message-list-handle";
 const HIGHLIGHT_MS = 2000;
 const MAX_BACKFILL_PAGES = 20;
 const BACKFILL_PAGE_SIZE = 100;
+// Bounded window after a resolution to let the resolved target enter the
+// rendered window (branch-switch / renderLimit re-render). If the row never
+// appears — e.g. a concurrent refetch dropped it from the render array — the
+// still-set pendingRef is cleared so no surprise delayed scroll fires later.
+const SETTLE_MS = 3000;
 
 /**
  * Walk from `id` up to the root, recording the parentId → childId choice at each
@@ -65,6 +72,14 @@ export function useScrollToMessage(
   /** The array Virtuoso actually renders (ChatThread's `allMessages`) — the
    *  scroll index MUST be computed against this, not the raw row order. */
   messages: ChatMessage[],
+  /** Whether the active session's first history page has landed in the RQ
+   *  cache (ChatThread passes `!!sessionMessagesData`). On a cold cache
+   *  selectSession flips `activeSessionId` synchronously, so this effect would
+   *  otherwise fire before page 1 is fetched — `getCachedRawMessages` returns
+   *  `[]`, there is no anchor row to backfill from, and the target would be
+   *  falsely exhausted. While `!historyReady` the resolution is deferred
+   *  WITHOUT consuming the target or counting an attempt. */
+  historyReady: boolean,
 ): void {
   const { t } = useTranslation();
   const target = usePaletteStore((s) => s.target);
@@ -79,6 +94,7 @@ export function useScrollToMessage(
   const genRef = useRef(0);
   const pendingRef = useRef<Pending | null>(null);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Scroll to the pending target if it is present in the CURRENT rendered array
   // (either already visible, or newly visible after a branch switch / renderLimit
@@ -97,12 +113,24 @@ export function useScrollToMessage(
       highlightTimerRef.current = setTimeout(() => setHighlighted(null), HIGHLIGHT_MS);
     }
     pendingRef.current = null;
+    // The deferred scroll landed — cancel the resilience timer armed by finish().
+    if (settleTimerRef.current) {
+      clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = null;
+    }
   }, [setHighlighted]);
 
   // ── Resolution: react to a newly-set target ────────────────────────────────
   useEffect(() => {
     if (!target?.messageId) return;
     if (activeSessionId == null || target.sessionId !== activeSessionId) return;
+    // C1: defer until the session's first history page is in the cache. On a
+    // cold cache selectSession sets activeSessionId synchronously and this
+    // effect fires before useSessionMessages fetched page 1, so
+    // getCachedRawMessages() would be [] — no anchor to page older history
+    // from — falsely exhausting the target. `historyReady` is a dep, so this
+    // re-runs (target still set, no attempt spent) once page 1 lands.
+    if (!historyReady) return;
 
     const messageId = target.messageId;
     const silent = target.silent ?? false;
@@ -146,6 +174,19 @@ export function useScrollToMessage(
       resolveInPlace(agent, rows, messageId);
       setTarget(null);
       tryScroll();
+      // If the immediate scroll didn't land, the target is deferred to the
+      // `messages`-effect (fires after the branch-switch/renderLimit re-render).
+      // Arm a bounded backstop: should the row never enter the render array
+      // (e.g. a concurrent refetch dropped it), clear the stale pendingRef so a
+      // later unrelated re-render can't fire a surprise jump.
+      if (pendingRef.current) {
+        if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = setTimeout(() => {
+          settleTimerRef.current = null;
+          const p = pendingRef.current;
+          if (p && p.messageId === messageId) pendingRef.current = null;
+        }, SETTLE_MS);
+      }
     };
 
     // Fast path: target already loaded.
@@ -167,6 +208,13 @@ export function useScrollToMessage(
     const stale = () => cancelled || genRef.current !== gen;
     void (async () => {
       let current = rows;
+      let fetchFailed = false;
+      // I3: navigation.ts::selectSession invalidates this same query on every
+      // selection; the refetch it triggers would land mid-backfill and replace
+      // our prepended cache entry with a single fresh page, orphaning the
+      // pending scroll. Cancel any in-flight/queued refetch before starting and
+      // again after each prepend so the backfilled rows survive to resolution.
+      void queryClient.cancelQueries({ queryKey: qk.sessionMessages(activeSessionId) });
       for (let i = 0; i < MAX_BACKFILL_PAGES; i++) {
         if (stale()) return;
         const beforeId = current[0]?.id;
@@ -184,9 +232,11 @@ export function useScrollToMessage(
           );
           page = res.messages ?? [];
         } catch {
-          break; // fetch failed — treat as exhausted, fall through to the toast
+          fetchFailed = true; // transient failure — distinct from genuine exhaustion
+          break;
         }
         if (stale()) return;
+        void queryClient.cancelQueries({ queryKey: qk.sessionMessages(activeSessionId) });
 
         if (page.length > 0) {
           prependOlderRawMessages(activeSessionId, agent, page);
@@ -200,9 +250,11 @@ export function useScrollToMessage(
         if (page.length < BACKFILL_PAGE_SIZE) break;
       }
       if (stale()) return;
-      // Exhausted: too far back, or the message was deleted.
       settled = true;
-      if (!silent) toast.error(t("palette.too_deep"));
+      // A fetch failure is a transient/generic error, not proof the message is
+      // too far back — surface the generic error copy; `too_deep` stays for the
+      // genuine exhausted-history case (a short page / no anchor).
+      if (!silent) toast.error(t(fetchFailed ? "palette.open_error" : "palette.too_deep"));
       setTarget(null);
       pendingRef.current = null;
     })();
@@ -220,17 +272,18 @@ export function useScrollToMessage(
     // messagesRef/tryScroll are refs/stable; `messages` is intentionally NOT a
     // dep — the scroll effect below owns the post-re-render scroll.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target, activeSessionId, agent, setTarget, t]);
+  }, [target, activeSessionId, agent, setTarget, t, historyReady]);
 
   // ── Scroll once the resolved target enters the rendered window ──────────────
   useEffect(() => {
     tryScroll();
   }, [messages, tryScroll]);
 
-  // Clean up a dangling highlight timer on unmount.
+  // Clean up dangling timers on unmount.
   useEffect(
     () => () => {
       if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+      if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
     },
     [],
   );

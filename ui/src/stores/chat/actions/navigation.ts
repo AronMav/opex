@@ -10,6 +10,7 @@ import { isActivePhase } from "../../chat-types";
 import { selectIsReplayingHistory } from "../../chat-selectors";
 import { getTranslations } from "@/i18n";
 import { useLanguageStore } from "@/stores/language-store";
+import { usePaletteStore } from "@/stores/palette-store";
 import { makeUpdate, makeEnsure } from "./_shared";
 
 export function createNavigationActions(deps: ActionDeps) {
@@ -130,6 +131,17 @@ export function createNavigationActions(deps: ActionDeps) {
         queryClient.invalidateQueries({ queryKey: qk.sessionMessages(previousSessionId) });
       }
       queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sessionId) });
+
+      // I2: a manual jump to a DIFFERENT session than a pending palette/scroll
+      // target means that target can never resolve here — clear it so it can't
+      // fire a surprise delayed jump when its own session is later opened, and
+      // so scroll-restore stops yielding to a dead target. The palette's own
+      // setTarget→selectSession handoff points at THIS session (same id) and is
+      // preserved.
+      const pendingTarget = usePaletteStore.getState().target;
+      if (pendingTarget && pendingTarget.sessionId !== sessionId) {
+        usePaletteStore.getState().setTarget(null);
+      }
 
       // Local-only abort: tear down the UI fetch so the new session can
       // render, but DO NOT POST /abort to the backend. A POST here would

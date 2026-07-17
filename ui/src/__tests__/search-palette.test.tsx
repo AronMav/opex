@@ -278,6 +278,26 @@ describe("SearchPalette (Ctrl+K)", () => {
     expect(toggle2).toHaveAttribute("aria-checked", "true");
   });
 
+  // I2: opening the palette clears any stale pending jump target — a dangling
+  // target (failed nav / never-reached jump) would otherwise suppress silent
+  // scroll-restores and could fire a surprise delayed jump later.
+  it("clears a stale pending jump target when the palette opens", async () => {
+    usePaletteStore.setState({
+      open: false,
+      target: { sessionId: "s9", messageId: "m9" },
+      highlightedMessageId: null,
+    });
+    render(<SearchPalette />);
+    // Palette closed on mount → target untouched.
+    expect(usePaletteStore.getState().target).toEqual({ sessionId: "s9", messageId: "m9" });
+
+    await act(async () => {
+      usePaletteStore.setState({ open: true });
+      await Promise.resolve();
+    });
+    expect(usePaletteStore.getState().target).toBeNull();
+  });
+
   // (ж) Ctrl+K opens the palette even while a textarea elsewhere has focus —
   // the palette owns Ctrl+K globally (allowInInput), it must not be
   // swallowed by the composer's own input handling.

@@ -101,9 +101,16 @@ export function useSessionRestore({
       .then((data: { agent_id?: string } | null) => {
         if (!data?.agent_id) return;
         const targetAgent = data.agent_id;
-        if (!agents.includes(targetAgent) || targetAgent === currentAgent) return;
+        if (!agents.includes(targetAgent)) return;
         restoredAgents.current.add(targetAgent);
-        useChatStore.getState().setCurrentAgent(targetAgent);
+        // Same-agent deep-link (I1): e.g. Ctrl+K from /workspace to a session
+        // outside currentAgent's loaded window. This resolver only runs when the
+        // session is NOT in the current list (guarded above), so the restore
+        // effect's "already viewing a real session" branch would strand the user
+        // on the OLD session. Select the URL session in place — no agent switch.
+        if (targetAgent !== currentAgent) {
+          useChatStore.getState().setCurrentAgent(targetAgent);
+        }
         useChatStore.getState().selectSession(effectiveUrlSessionId, targetAgent);
       })
       .catch(() => {});

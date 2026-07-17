@@ -53,6 +53,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { useChatStore } from "@/stores/chat-store";
+import { usePaletteStore } from "@/stores/palette-store";
 
 // Match the shape returned by qk.sessionMessages(sid) → ["sessions", sid, "messages"].
 // The sessionId sits at index 1; we extract it by position to avoid magic-number
@@ -212,6 +213,44 @@ describe("session switch invalidates React Query cache", () => {
     store.setCurrentAgent("Agent2");
 
     expect(invalidatedSessionIds()).toContain("multi-session");
+  });
+});
+
+// ── I2: selectSession clears a stale palette jump target ─────────────────────
+
+describe("selectSession clears a stale palette jump target (I2)", () => {
+  beforeEach(() => {
+    usePaletteStore.setState({ target: null, open: false, highlightedMessageId: null });
+  });
+
+  it("clears the target when jumping to a DIFFERENT session than the pending target", async () => {
+    useChatStore.setState({
+      currentAgent: "Agent1",
+      agents: {
+        Agent1: { ...defaultAgentState(), activeSessionId: "session-A", connectionPhase: "idle" },
+      },
+    });
+    usePaletteStore.setState({ target: { sessionId: "other-sess", messageId: "m1" } });
+
+    await useChatStore.getState().selectSession("session-B", "Agent1");
+
+    // The pending jump can never resolve in session-B — cleared so it can't
+    // fire a surprise delayed jump nor block scroll-restore.
+    expect(usePaletteStore.getState().target).toBeNull();
+  });
+
+  it("preserves a target pointing at the SAME session (palette setTarget→selectSession handoff)", async () => {
+    useChatStore.setState({
+      currentAgent: "Agent1",
+      agents: {
+        Agent1: { ...defaultAgentState(), activeSessionId: "session-A", connectionPhase: "idle" },
+      },
+    });
+    usePaletteStore.setState({ target: { sessionId: "session-B", messageId: "m1" } });
+
+    await useChatStore.getState().selectSession("session-B", "Agent1");
+
+    expect(usePaletteStore.getState().target).toEqual({ sessionId: "session-B", messageId: "m1" });
   });
 });
 

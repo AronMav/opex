@@ -20,6 +20,13 @@ const h = vi.hoisted(() => ({
   toastError: vi.fn(),
   toastInfo: vi.fn(),
   apiGet: vi.fn(),
+  cancelQueries: vi.fn((_opts?: { queryKey: unknown }) => Promise.resolve()),
+}));
+
+// t() → key identity so toast-copy assertions can key off i18n ids directly
+// (open_error vs too_deep). The real hook otherwise resolves live translations.
+vi.mock("@/hooks/use-translation", () => ({
+  useTranslation: () => ({ t: (k: string) => k, locale: "en" }),
 }));
 
 // ── Controllable raw-message cache ────────────────────────────────────────────
@@ -40,6 +47,7 @@ vi.mock("@/lib/query-client", () => ({
       if (next) h.cachedRows = next.messages;
     }),
     invalidateQueries: vi.fn(),
+    cancelQueries: h.cancelQueries,
   },
 }));
 
@@ -129,6 +137,7 @@ beforeEach(() => {
   h.toastError.mockClear();
   h.toastInfo.mockClear();
   h.apiGet.mockReset().mockResolvedValue({});
+  h.cancelQueries.mockClear();
   usePaletteStore.setState({ target: null, highlightedMessageId: null });
 });
 
@@ -145,7 +154,7 @@ describe("useScrollToMessage", () => {
     usePaletteStore.getState().setTarget({ sessionId: SID, messageId: "a1" });
 
     const { rerender } = renderHook(
-      ({ msgs }: { msgs: ChatMessage[] }) => useScrollToMessage(AGENT, SID, msgs),
+      ({ msgs }: { msgs: ChatMessage[] }) => useScrollToMessage(AGENT, SID, msgs, true),
       { initialProps: { msgs: [chatMsg("u1", "user"), chatMsg("a2")] } },
     );
 
@@ -169,10 +178,29 @@ describe("useScrollToMessage", () => {
     usePaletteStore.getState().setTarget({ sessionId: SID, messageId: "gone" });
 
     await act(async () => {
-      renderHook(() => useScrollToMessage(AGENT, SID, [chatMsg("x1", "user")]));
+      renderHook(() => useScrollToMessage(AGENT, SID, [chatMsg("x1", "user")], true));
     });
 
-    expect(h.toastError).toHaveBeenCalledTimes(1);
+    // Genuine exhaustion (short page) → the "too far back" copy.
+    expect(h.toastError).toHaveBeenCalledWith("palette.too_deep");
+    expect(usePaletteStore.getState().target).toBeNull();
+    expect(h.scrollSpy).not.toHaveBeenCalled();
+  });
+
+  // T3: a backfill FETCH FAILURE is transient, not proof the message is too far
+  // back — it must surface the generic error copy, not too_deep.
+  it("shows the generic error (not too_deep) when a backfill fetch fails", async () => {
+    h.cachedRows = [row({ id: "a1", parent_message_id: "u1", created_at: "2026-04-21T00:00:01Z" })];
+    h.apiGet.mockReset().mockRejectedValueOnce(new Error("network"));
+    seed("idle", false);
+    usePaletteStore.getState().setTarget({ sessionId: SID, messageId: "u1" });
+
+    await act(async () => {
+      renderHook(() => useScrollToMessage(AGENT, SID, [chatMsg("a1")], true));
+    });
+
+    expect(h.toastError).toHaveBeenCalledWith("palette.open_error");
+    expect(h.toastError).not.toHaveBeenCalledWith("palette.too_deep");
     expect(usePaletteStore.getState().target).toBeNull();
     expect(h.scrollSpy).not.toHaveBeenCalled();
   });
@@ -183,7 +211,7 @@ describe("useScrollToMessage", () => {
     usePaletteStore.getState().setTarget({ sessionId: SID, messageId: "gone", silent: true });
 
     await act(async () => {
-      renderHook(() => useScrollToMessage(AGENT, SID, [chatMsg("x1", "user")]));
+      renderHook(() => useScrollToMessage(AGENT, SID, [chatMsg("x1", "user")], true));
     });
 
     expect(h.toastError).not.toHaveBeenCalled();
@@ -198,7 +226,7 @@ describe("useScrollToMessage", () => {
     usePaletteStore.getState().setTarget({ sessionId: SID, messageId: "a1" });
 
     await act(async () => {
-      renderHook(() => useScrollToMessage(AGENT, SID, [chatMsg("a1")]));
+      renderHook(() => useScrollToMessage(AGENT, SID, [chatMsg("a1")], true));
     });
 
     expect(h.toastError).toHaveBeenCalledTimes(1);
@@ -231,7 +259,7 @@ describe("useScrollToMessage", () => {
     let rerender!: (props: { msgs: ChatMessage[] }) => void;
     await act(async () => {
       const result = renderHook(
-        ({ msgs }: { msgs: ChatMessage[] }) => useScrollToMessage(AGENT, SID, msgs),
+        ({ msgs }: { msgs: ChatMessage[] }) => useScrollToMessage(AGENT, SID, msgs, true),
         { initialProps: { msgs: [chatMsg("a1")] } },
       );
       rerender = result.rerender;
@@ -265,7 +293,7 @@ describe("useScrollToMessage", () => {
     usePaletteStore.getState().setTarget({ sessionId: SID, messageId: "u1" });
 
     await act(async () => {
-      renderHook(() => useScrollToMessage(AGENT, SID, [chatMsg("a1")]));
+      renderHook(() => useScrollToMessage(AGENT, SID, [chatMsg("a1")], true));
     });
 
     // A turn starts while the backfill fetch is still in flight.
@@ -290,5 +318,82 @@ describe("useScrollToMessage", () => {
     expect(usePaletteStore.getState().target).toBeNull();
     // No branch picks applied — the resolution was refused, not completed.
     expect(useChatStore.getState().agents[AGENT]?.selectedBranches).toEqual({});
+  });
+
+  // C1 regression test: on a cold RQ cache selectSession flips activeSessionId
+  // synchronously, so the resolution effect can fire BEFORE the session's first
+  // history page is fetched. Without the historyReady gate, getCachedRawMessages
+  // is [] → no anchor row → false "too_deep" toast + target consumed. The gate
+  // must defer resolution (target intact, no attempt spent) until page 1 lands.
+  it("does not consume the target on a cold cache; resolves once the first page lands (historyReady)", async () => {
+    h.cachedRows = []; // first page not fetched yet
+    seed("idle", false);
+    usePaletteStore.getState().setTarget({ sessionId: SID, messageId: "a1" });
+
+    let rerender!: (props: { ready: boolean; msgs: ChatMessage[] }) => void;
+    await act(async () => {
+      const result = renderHook(
+        ({ ready, msgs }: { ready: boolean; msgs: ChatMessage[] }) =>
+          useScrollToMessage(AGENT, SID, msgs, ready),
+        { initialProps: { ready: false, msgs: [] as ChatMessage[] } },
+      );
+      rerender = result.rerender;
+    });
+
+    // Not ready → nothing consumed, no fetch, no toast, no scroll.
+    expect(usePaletteStore.getState().target).not.toBeNull();
+    expect(h.apiGet).not.toHaveBeenCalled();
+    expect(h.toastError).not.toHaveBeenCalled();
+    expect(h.scrollSpy).not.toHaveBeenCalled();
+
+    // First page arrives: cache populated + historyReady flips true.
+    h.cachedRows = [row({ id: "a1", parent_message_id: null })];
+    await act(async () => {
+      rerender({ ready: true, msgs: [chatMsg("a1")] });
+    });
+
+    expect(h.scrollSpy).toHaveBeenCalledWith(0);
+    expect(usePaletteStore.getState().highlightedMessageId).toBe("a1");
+    expect(usePaletteStore.getState().target).toBeNull();
+    expect(h.toastError).not.toHaveBeenCalled();
+  });
+
+  // I3 regression test: navigation.ts invalidates sessionMessages on every
+  // selectSession; a refetch landing mid-backfill would replace the prepended
+  // cache with one fresh page and orphan the pending scroll. The hook cancels
+  // in-flight refetches before/after each page so the backfill survives to
+  // resolution — assert cancelQueries is wired and the scroll still lands.
+  it("cancels concurrent refetches during backfill so the prepend survives (invalidate race)", async () => {
+    h.cachedRows = [row({ id: "a1", parent_message_id: "u1", created_at: "2026-04-21T00:00:01Z" })];
+    h.apiGet.mockResolvedValueOnce({
+      messages: [
+        row({ id: "u1", role: "user", content: "hi", parent_message_id: null, created_at: "2026-04-21T00:00:00Z" }),
+      ],
+      has_more: false,
+    });
+    seed("idle", false);
+    usePaletteStore.getState().setTarget({ sessionId: SID, messageId: "u1" });
+
+    let rerender!: (props: { msgs: ChatMessage[] }) => void;
+    await act(async () => {
+      const result = renderHook(
+        ({ msgs }: { msgs: ChatMessage[] }) => useScrollToMessage(AGENT, SID, msgs, true),
+        { initialProps: { msgs: [chatMsg("a1")] } },
+      );
+      rerender = result.rerender;
+    });
+
+    // Guard wired: refetches for this session's messages were cancelled.
+    expect(h.cancelQueries).toHaveBeenCalled();
+    expect(h.cancelQueries.mock.calls[0][0]).toEqual({ queryKey: ["sessions", SID, "messages"] });
+    // The backfilled page survived and the resolution completed deterministically.
+    expect(h.cachedRows.map((r) => r.id)).toEqual(["u1", "a1"]);
+    expect(usePaletteStore.getState().target).toBeNull();
+    expect(h.toastError).not.toHaveBeenCalled();
+
+    await act(async () => {
+      rerender({ msgs: [chatMsg("u1", "user"), chatMsg("a1")] });
+    });
+    expect(h.scrollSpy).toHaveBeenCalledWith(0);
   });
 });
