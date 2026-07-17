@@ -227,7 +227,11 @@ impl LlmProvider for AnthropicProvider {
             anyhow::anyhow!("anthropic response parse error: {e}")
         })?;
 
-        let effective_model = self.model.effective();
+        // Read back the model actually sent in the request body (honors a
+        // per-turn `CallOptions.model_override` — `opts` was already moved
+        // into `build_request_body` above, so this is the source of truth,
+        // not `self.model.effective()`).
+        let effective_model = body["model"].as_str().unwrap_or_default().to_string();
         let response = parse_anthropic_response(api_resp, &effective_model);
 
         tracing::info!(
@@ -264,6 +268,10 @@ impl LlmProvider for AnthropicProvider {
 
         let (_, mut body) = self.build_request_body(messages, tools, opts);
         body["stream"] = serde_json::Value::Bool(true);
+        // Same rationale as the non-streaming path above: read the model back
+        // from the request body so a `model_override` is reflected in the
+        // response, since `opts` was already moved into `build_request_body`.
+        let effective_model = body["model"].as_str().unwrap_or_default().to_string();
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
 
         tracing::info!(provider = "anthropic", model = %self.model, "calling Anthropic API (streaming)");
@@ -404,7 +412,7 @@ impl LlmProvider for AnthropicProvider {
             tool_calls: vec![],
             usage: usage_buffer.into_token_usage(),
             finish_reason: None,
-            model: Some(self.model.effective()),
+            model: Some(effective_model),
             provider: Some("anthropic".to_string()),
             fallback_notice: None,
             tools_used: vec![],

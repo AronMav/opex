@@ -42,6 +42,15 @@ pub struct BootstrapOutcome {
     /// breakpoint. Forwarded from `ContextSnapshot.claude_md_content`.
     /// `None` for non-base agents and agents without prompt_cache.
     pub claude_md_content: Option<String>,
+    /// Wave-2 Task 12: one-shot per-turn model override, sourced from
+    /// `POST /api/chat`'s `ChatSseRequest.model`. `bootstrap()` itself never
+    /// sets this (always `None` here) — `bootstrap_sse` (the only caller that
+    /// can receive a per-turn override from a client request) stamps it onto
+    /// the returned `BootstrapOutcome` afterward. Threaded by `pipeline::execute`
+    /// into every iteration's `CallOptions.model_override`. NEVER written to
+    /// `provider.set_model_override()` — scoped to this turn only, never
+    /// leaks into a concurrent or subsequent turn on the shared engine.
+    pub turn_model_override: Option<String>,
 }
 
 /// Input context for the bootstrap phase.
@@ -398,6 +407,7 @@ pub async fn bootstrap<S: EventSink>(
         channel: ctx.msg.channel.clone(),
         compressor,
         claude_md_content,
+        turn_model_override: None,
     })
 }
 

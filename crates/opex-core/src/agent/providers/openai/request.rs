@@ -19,8 +19,15 @@ impl OpenAiCompatibleProvider {
         messages: &[Message],
         tools: &[ToolDefinition],
         stream: bool,
+        opts: &super::super::CallOptions,
     ) -> serde_json::Value {
-        let effective_model = self.model.effective();
+        // Wave-2 Task 12: a per-turn override (from CallOptions) wins over the
+        // provider's configured/runtime-override model. Never mutates
+        // `self.model` — the override is scoped to this single request body.
+        let effective_model = opts
+            .model_override
+            .clone()
+            .unwrap_or_else(|| self.model.effective());
         let mut body = if stream {
             serde_json::json!({
                 "model": effective_model,
@@ -97,5 +104,92 @@ impl OpenAiCompatibleProvider {
         }
 
         body
+    }
+}
+
+// ── Wave-2 Task 12: per-turn model override tests ────────────────────────────
+
+#[cfg(test)]
+mod model_override_tests {
+    use super::*;
+    use crate::agent::providers::LlmProvider;
+    use crate::secrets::SecretsManager;
+    use std::sync::Arc;
+
+    fn test_provider(default_model: &str) -> OpenAiCompatibleProvider {
+        let row = crate::db::providers::ProviderRow {
+            id: uuid::Uuid::nil(),
+            name: "test-openai".into(),
+            category: "text".into(),
+            provider_type: "openai".into(),
+            base_url: Some("https://api.openai.com".into()),
+            default_model: Some(default_model.into()),
+            enabled: true,
+            options: serde_json::json!({}),
+            notes: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        OpenAiCompatibleProvider::new_from_row(
+            &row,
+            Arc::new(SecretsManager::new_noop()),
+            crate::agent::providers::TimeoutsConfig::default(),
+            tokio_util::sync::CancellationToken::new(),
+            crate::agent::providers::timeouts::ProviderOptions::default(),
+            crate::agent::providers::ProviderOverrides::default(),
+        )
+        .expect("provider builds")
+    }
+
+    fn user_msg(content: &str) -> Message {
+        Message {
+            role: opex_types::MessageRole::User,
+            content: content.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }
+    }
+
+    // NOTE: `#[tokio::test]` (not plain `#[test]`) — `new_from_row` builds a
+    // lazy sqlx pool via `SecretsManager::new_noop()`, which requires an
+    // active Tokio runtime context to construct even though nothing here
+    // actually awaits.
+
+    #[tokio::test]
+    async fn model_override_replaces_configured_model_in_body() {
+        let provider = test_provider("gpt-4o-mini");
+        let opts = crate::agent::providers::CallOptions {
+            model_override: Some("test-override-model".to_string()),
+            ..Default::default()
+        };
+        let body = provider.build_chat_body(&[user_msg("hi")], &[], false, &opts);
+        assert_eq!(body["model"], "test-override-model");
+    }
+
+    #[tokio::test]
+    async fn no_override_uses_configured_model() {
+        let provider = test_provider("gpt-4o-mini");
+        let body = provider.build_chat_body(
+            &[user_msg("hi")],
+            &[],
+            false,
+            &crate::agent::providers::CallOptions::default(),
+        );
+        assert_eq!(body["model"], "gpt-4o-mini");
+    }
+
+    #[tokio::test]
+    async fn model_override_does_not_mutate_provider_state() {
+        // Non-persistence guarantee: building a request with an override must
+        // NOT touch the provider's own ModelOverride RwLock.
+        let provider = test_provider("gpt-4o-mini");
+        let opts = crate::agent::providers::CallOptions {
+            model_override: Some("test-override-model".to_string()),
+            ..Default::default()
+        };
+        let _ = provider.build_chat_body(&[user_msg("hi")], &[], false, &opts);
+        assert_eq!(provider.current_model(), "gpt-4o-mini");
     }
 }

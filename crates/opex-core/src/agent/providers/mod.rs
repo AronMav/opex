@@ -195,6 +195,26 @@ pub struct CallOptions {
     /// passthrough. `Arc` so per-iteration `CallOptions` construction is cheap.
     /// All providers except the OpenAI-compatible streaming path ignore it.
     pub known_extension_tools: std::sync::Arc<Vec<String>>,
+
+    /// One-shot per-turn model override (Wave-2 Task 12): when `Some(m)`,
+    /// providers substitute `m` for their configured/`current_model()` value
+    /// at the point the model string enters the request (JSON body field,
+    /// URL path segment, or CLI `--model` flag). Sourced from `POST /api/chat`
+    /// `ChatSseRequest.model` and threaded through `BootstrapOutcome` →
+    /// `pipeline::execute`'s per-iteration `CallOptions` construction —
+    /// NEVER written to `provider.set_model_override()` / the shared
+    /// `ModelOverride` RwLock, so it cannot leak into a concurrent or
+    /// subsequent turn on the same `Arc<AgentEngine>`. It is also never
+    /// persisted (not stored in the `model_overrides` table nor on the
+    /// engine) — a fresh turn without this field reverts to the agent's
+    /// configured model exactly as before this field existed.
+    ///
+    /// Provider coverage: honored by `AnthropicProvider`, the OpenAI-compatible
+    /// provider, `GoogleProvider`, and `CliLlmProvider` (passed as the CLI's
+    /// `--model`-equivalent argument). `providers/http.rs` carries no model
+    /// field of its own (shared retry/backoff transport, not a request
+    /// builder) so there is nothing to override there.
+    pub model_override: Option<String>,
 }
 
 /// Pluggable LLM provider trait.

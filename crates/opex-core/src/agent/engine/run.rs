@@ -100,7 +100,7 @@ impl AgentEngine {
         force_new_session: bool,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Result<Uuid> {
-        let boot = self.bootstrap_sse(msg, resume_session_id, force_new_session).await?;
+        let boot = self.bootstrap_sse(msg, resume_session_id, force_new_session, None).await?;
         let session_id = boot.session_id;
         self.execute_sse(boot, event_tx, cancel).await?;
         Ok(session_id)
@@ -118,11 +118,19 @@ impl AgentEngine {
     /// no "events emitted before registration" hazard: bootstrap is DELIBERATELY
     /// not connected to the live SSE converter. The live `SseSink` is built later
     /// in `execute_sse`, after the POST handler has registered the stream.
+    ///
+    /// `model_override` — one-shot per-turn model override (Wave-2 Task 12),
+    /// sourced from `POST /api/chat`'s `ChatSseRequest.model` (already
+    /// normalized: trimmed, empty string → `None`). Stamped onto the
+    /// returned `BootstrapOutcome.turn_model_override` AFTER `bootstrap()`
+    /// runs — `bootstrap()` itself has no notion of it — so it never touches
+    /// session/provider state, only this turn's `execute()` call.
     pub async fn bootstrap_sse(
         &self,
         msg: &IncomingMessage,
         resume_session_id: Option<Uuid>,
         force_new_session: bool,
+        model_override: Option<String>,
     ) -> Result<BootstrapOutcome> {
         let hook_event = crate::agent::hooks::HookEvent::BeforeMessage;
         let action = self.hooks().fire(&hook_event);
@@ -132,7 +140,7 @@ impl AgentEngine {
         }
 
         let mut s = sink::NoopSink::new();
-        let boot = bootstrap::bootstrap(
+        let mut boot = bootstrap::bootstrap(
             self,
             BootstrapContext {
                 msg,
@@ -142,6 +150,7 @@ impl AgentEngine {
             &mut s,
         )
         .await?;
+        boot.turn_model_override = model_override;
         Ok(boot)
     }
 
@@ -191,6 +200,7 @@ impl AgentEngine {
             channel,
             compressor,
             claude_md_content,
+            turn_model_override,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("bootstrap always sets lifecycle_guard");
         let mut compressor = compressor;
@@ -234,6 +244,7 @@ impl AgentEngine {
             channel,
             compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
             claude_md_content,
+            turn_model_override,
         };
 
         // Slash-command early exit
@@ -487,6 +498,7 @@ impl AgentEngine {
             channel,
             compressor,
             claude_md_content,
+            turn_model_override,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("set by bootstrap");
         let mut compressor = compressor;
@@ -504,6 +516,7 @@ impl AgentEngine {
             channel,
             compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
             claude_md_content,
+            turn_model_override,
         };
 
         // Channel adapters render slash commands as plain TextDelta (Text)
@@ -755,6 +768,7 @@ impl AgentEngine {
             channel,
             compressor,
             claude_md_content,
+            turn_model_override,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("set by bootstrap");
         let mut compressor = compressor;
@@ -772,6 +786,7 @@ impl AgentEngine {
             channel,
             compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
             claude_md_content,
+            turn_model_override,
         };
 
         if let Some(outcome) = command_output.take() {
@@ -1018,6 +1033,7 @@ impl AgentEngine {
             channel,
             compressor,
             claude_md_content,
+            turn_model_override,
             // Cron/goal RPC turns run the LLM loop unconditionally — the async-video
             // short-circuit is a live-user-turn affordance only.
         } = boot;
@@ -1059,6 +1075,7 @@ impl AgentEngine {
             channel,
             compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
             claude_md_content,
+            turn_model_override,
         };
 
         let outcome = match execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &layers).await {

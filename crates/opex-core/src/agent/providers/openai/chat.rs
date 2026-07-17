@@ -16,10 +16,12 @@ impl OpenAiCompatibleProvider {
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
-        _opts: super::super::CallOptions,
+        opts: super::super::CallOptions,
     ) -> Result<LlmResponse> {
-        let effective_model = self.model.effective();
-        let body = self.build_chat_body(messages, tools, false);
+        // Read back after build_chat_body so the reported model matches
+        // exactly what was sent (honors CallOptions.model_override).
+        let body = self.build_chat_body(messages, tools, false, &opts);
+        let effective_model = body["model"].as_str().unwrap_or_default().to_string();
 
         let msg_count = messages.len();
         let tool_count = tools.len();

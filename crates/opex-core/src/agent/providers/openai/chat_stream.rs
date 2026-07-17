@@ -19,8 +19,10 @@ impl OpenAiCompatibleProvider {
         chunk_tx: mpsc::Sender<String>,
         opts: super::super::CallOptions,
     ) -> Result<LlmResponse> {
-        let effective_model = self.model.effective();
-        let body = self.build_chat_body(messages, tools, true);
+        // Read back after build_chat_body so the reported model matches
+        // exactly what was sent (honors CallOptions.model_override).
+        let body = self.build_chat_body(messages, tools, true, &opts);
+        let effective_model = body["model"].as_str().unwrap_or_default().to_string();
 
         tracing::info!(
             provider = %self.provider_name,

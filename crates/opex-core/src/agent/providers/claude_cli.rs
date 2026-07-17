@@ -79,6 +79,15 @@ impl CliLlmProvider {
             api_key,
         ))
     }
+
+    /// Wave-2 Task 12: resolve the model to pass as the CLI's model
+    /// argument for this turn — a per-turn `CallOptions.model_override` wins
+    /// over the provider's configured model. Never mutates `self.model`.
+    /// Extracted as a pure method (no `&self.runner` spawn) so the
+    /// precedence is unit-testable without running a real CLI subprocess.
+    fn effective_model<'a>(&'a self, opts: &'a super::CallOptions) -> &'a str {
+        opts.model_override.as_deref().unwrap_or(&self.model)
+    }
 }
 
 #[async_trait]
@@ -87,9 +96,14 @@ impl LlmProvider for CliLlmProvider {
         &self,
         messages: &[Message],
         _tools: &[ToolDefinition],
-        _opts: super::CallOptions,
+        opts: super::CallOptions,
     ) -> Result<LlmResponse> {
         let (prompt, system) = format_messages_for_cli(messages);
+
+        // Honored here (unlike a pure HTTP body) because the model is just a
+        // `&str` argument passed to the CLI runner, not baked into a fixed
+        // request — see `effective_model()` doc comment.
+        let effective_model = self.effective_model(&opts);
 
         // Resolve API key: provider record → vault → parent env (inherited)
         let mut extra_env = std::collections::HashMap::new();
@@ -125,7 +139,7 @@ impl LlmProvider for CliLlmProvider {
             &self.agent_name,
             &prompt,
             system.as_deref(),
-            &self.model,
+            effective_model,
             self.sandbox.as_deref(),
             &self.workspace_dir,
             self.base,
@@ -137,7 +151,7 @@ impl LlmProvider for CliLlmProvider {
             tool_calls: vec![],
             usage: result.usage,
             finish_reason: None,
-            model: Some(format!("{}/{}", self.provider_name, self.model)),
+            model: Some(format!("{}/{}", self.provider_name, effective_model)),
             provider: Some(self.provider_name.clone()),
             fallback_notice: None,
             tools_used: vec![],
@@ -152,3 +166,65 @@ impl LlmProvider for CliLlmProvider {
 
 // Type aliases for backward compatibility
 pub type ClaudeCliProvider = CliLlmProvider;
+
+// ── Wave-2 Task 12: per-turn model override tests ────────────────────────────
+
+#[cfg(test)]
+mod model_override_tests {
+    use super::*;
+
+    fn test_provider(default_model: &str) -> CliLlmProvider {
+        // Minimal config — only `command` is required, everything else has
+        // a serde default. `chat()` is never invoked by these tests, so no
+        // real CLI subprocess is spawned.
+        let config: CliBackendConfig =
+            serde_json::from_value(serde_json::json!({"command": "true"})).unwrap();
+        CliLlmProvider::new(
+            "claude-cli",
+            config,
+            default_model.to_string(),
+            None,
+            "test-agent".to_string(),
+            "/tmp/workspace".to_string(),
+            false,
+            Arc::new(crate::secrets::SecretsManager::new_noop()),
+            None,
+        )
+    }
+
+    // NOTE: `#[tokio::test]` (not plain `#[test]`) — `SecretsManager::new_noop()`
+    // builds a lazy sqlx pool that requires an active Tokio runtime context to
+    // construct, even though nothing here actually awaits.
+
+    #[tokio::test]
+    async fn model_override_replaces_configured_model() {
+        let provider = test_provider("claude-opus-4-6");
+        let opts = super::super::CallOptions {
+            model_override: Some("test-override-model".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(provider.effective_model(&opts), "test-override-model");
+    }
+
+    #[tokio::test]
+    async fn no_override_uses_configured_model() {
+        let provider = test_provider("claude-opus-4-6");
+        assert_eq!(
+            provider.effective_model(&super::super::CallOptions::default()),
+            "claude-opus-4-6"
+        );
+    }
+
+    #[tokio::test]
+    async fn model_override_does_not_mutate_provider_state() {
+        // Non-persistence guarantee: resolving an override must not touch
+        // `self.model` — `current_model()` must be unaffected.
+        let provider = test_provider("claude-opus-4-6");
+        let opts = super::super::CallOptions {
+            model_override: Some("test-override-model".to_string()),
+            ..Default::default()
+        };
+        let _ = provider.effective_model(&opts);
+        assert_eq!(provider.current_model(), "claude-opus-4-6");
+    }
+}

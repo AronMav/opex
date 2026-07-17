@@ -104,6 +104,17 @@ impl GoogleProvider {
     }
 }
 
+/// Wave-2 Task 12: resolve the model to send for this turn — the per-turn
+/// `CallOptions.model_override` wins over the provider's configured/
+/// runtime-override model. Extracted as a small pure function (both `chat`
+/// and `chat_stream` build their request inline, unlike the other providers'
+/// separable request-builders) so the override precedence is unit-testable
+/// without a live HTTP call. Never mutates `model` — the override is scoped
+/// to the single request that reads this value.
+fn effective_model_for(opts: &super::CallOptions, model: &ModelOverride) -> String {
+    opts.model_override.clone().unwrap_or_else(|| model.effective())
+}
+
 #[async_trait]
 impl LlmProvider for GoogleProvider {
     // reviewed: floor_char_boundary-bounded error preview — char boundary
@@ -112,12 +123,12 @@ impl LlmProvider for GoogleProvider {
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
-        _opts: super::CallOptions,
+        opts: super::CallOptions,
     ) -> Result<LlmResponse> {
         let api_key = self.resolve_api_key().await
             .ok_or_else(|| anyhow::anyhow!("Google API key not found ({})", self.api_key_name))?;
 
-        let effective_model = self.model.effective();
+        let effective_model = effective_model_for(&opts, &self.model);
         let url = format!(
             "{}/v1beta/models/{}:generateContent?key={}",
             self.base_url.trim_end_matches('/'),
@@ -267,10 +278,10 @@ impl LlmProvider for GoogleProvider {
         messages: &[Message],
         tools: &[ToolDefinition],
         chunk_tx: mpsc::Sender<String>,
-        _opts: super::CallOptions,
+        opts: super::CallOptions,
     ) -> Result<LlmResponse> {
         if !tools.is_empty() {
-            let response = self.chat(messages, tools, _opts).await?;
+            let response = self.chat(messages, tools, opts).await?;
             if response.tool_calls.is_empty() {
                 let filtered = crate::agent::thinking::strip_thinking(&response.content);
                 if !filtered.is_empty() {
@@ -283,7 +294,8 @@ impl LlmProvider for GoogleProvider {
         let api_key = self.resolve_api_key().await
             .ok_or_else(|| anyhow::anyhow!("Google API key not found ({})", self.api_key_name))?;
 
-        let effective_model = self.model.effective();
+        // Same per-turn override precedence as the non-streaming path.
+        let effective_model = effective_model_for(&opts, &self.model);
         let url = format!(
             "{}/v1beta/models/{}:streamGenerateContent?alt=sse&key={}",
             self.base_url.trim_end_matches('/'),
@@ -520,6 +532,41 @@ mod tests {
         assert_eq!(u.candidates_token_count, Some(500));
         assert_eq!(u.thoughts_token_count, Some(200));
         assert_eq!(u.cached_content_token_count, Some(600));
+    }
+
+    // ── Wave-2 Task 12: per-turn model override ──────────────────────────────
+
+    #[test]
+    fn model_override_replaces_configured_model() {
+        let model = ModelOverride::new("gemini-2.5-pro".to_string());
+        let opts = super::super::CallOptions {
+            model_override: Some("test-override-model".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(effective_model_for(&opts, &model), "test-override-model");
+    }
+
+    #[test]
+    fn no_override_uses_configured_model() {
+        let model = ModelOverride::new("gemini-2.5-pro".to_string());
+        assert_eq!(
+            effective_model_for(&super::super::CallOptions::default(), &model),
+            "gemini-2.5-pro"
+        );
+    }
+
+    #[test]
+    fn model_override_does_not_mutate_provider_state() {
+        // Non-persistence guarantee: resolving an override must not touch
+        // the shared `ModelOverride` RwLock — `model.effective()` (what
+        // `current_model()` reports) must be unaffected.
+        let model = ModelOverride::new("gemini-2.5-pro".to_string());
+        let opts = super::super::CallOptions {
+            model_override: Some("test-override-model".to_string()),
+            ..Default::default()
+        };
+        let _ = effective_model_for(&opts, &model);
+        assert_eq!(model.effective(), "gemini-2.5-pro");
     }
 }
 

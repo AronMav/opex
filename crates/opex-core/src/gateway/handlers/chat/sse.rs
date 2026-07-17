@@ -61,6 +61,15 @@ pub(crate) struct ChatSseRequest {
     /// File attachments uploaded via /api/media/upload (images, audio, documents).
     #[serde(default)]
     attachments: Vec<opex_types::MediaAttachment>,
+    /// Wave-2 Task 12: one-shot per-turn model override — applies to every
+    /// LLM call in THIS turn only, via `CallOptions.model_override`. Never
+    /// mutates the agent's configured model or the shared
+    /// `provider.set_model_override()` state, so it cannot leak into a
+    /// concurrent or subsequent turn. Absence (or an empty/whitespace-only
+    /// string, normalized to `None` in `api_chat_sse`) preserves prior
+    /// behaviour exactly.
+    #[serde(default)]
+    model: Option<String>,
 }
 
 pub(crate) async fn api_chat_sse(
@@ -195,7 +204,17 @@ pub(crate) async fn api_chat_sse(
     //    and `compact_messages`, so a POST carrying attachments or URLs can take
     //    seconds before this returns 202. Accepted by design: the UI's
     //    optimistic echo covers the pause; reordering bootstrap is out of scope.
-    let boot = match engine.bootstrap_sse(&msg, session_id, force_new_session).await {
+    // Wave-2 Task 12: normalize the per-turn model override at the wire
+    // boundary — trim + empty string ⇒ None, so a client sending `"model": ""`
+    // (or all-whitespace) behaves identically to omitting the field.
+    let model_override = req
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    let boot = match engine.bootstrap_sse(&msg, session_id, force_new_session, model_override).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!(error = %e, "SSE bootstrap error (agent: {agent_name})");

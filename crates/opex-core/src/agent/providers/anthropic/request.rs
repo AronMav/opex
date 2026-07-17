@@ -76,7 +76,13 @@ impl AnthropicProvider {
             .collect();
 
         let effective_max_tokens = self.max_tokens.unwrap_or(8_192);
-        let effective_model = self.model.effective();
+        // Wave-2 Task 12: a per-turn override (from CallOptions) wins over the
+        // provider's configured/runtime-override model. Never mutates
+        // `self.model` — the override is scoped to this single request body.
+        let effective_model = opts
+            .model_override
+            .clone()
+            .unwrap_or_else(|| self.model.effective());
         let temperature = if opts.thinking_level > 0 {
             self.temperature.max(1.0)
         } else {
@@ -179,5 +185,79 @@ impl AnthropicProvider {
         }
 
         (system_text, body)
+    }
+}
+
+// ── Wave-2 Task 12: per-turn model override tests ────────────────────────────
+
+#[cfg(test)]
+mod model_override_tests {
+    use super::*;
+    use crate::agent::providers::LlmProvider;
+    use crate::secrets::SecretsManager;
+    use std::sync::Arc;
+
+    fn test_provider(default_model: &str) -> AnthropicProvider {
+        AnthropicProvider::for_tests(
+            default_model.to_string(),
+            0.7,
+            Some(1024),
+            Arc::new(SecretsManager::new_noop()),
+        )
+    }
+
+    fn user_msg(content: &str) -> Message {
+        Message {
+            role: MessageRole::User,
+            content: content.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }
+    }
+
+    // NOTE: `#[tokio::test]` (not plain `#[test]`) — `SecretsManager::new_noop()`
+    // builds a lazy sqlx pool that requires an active Tokio runtime context to
+    // construct, even though nothing here actually awaits. Matches the
+    // pre-existing pattern in `anthropic::mod::tests`.
+
+    #[tokio::test]
+    async fn model_override_replaces_configured_model_in_body() {
+        let provider = test_provider("claude-opus-4-6");
+        let opts = CallOptions {
+            model_override: Some("test-override-model".to_string()),
+            ..Default::default()
+        };
+        let (_, body) = provider.build_request_body(&[user_msg("hi")], &[], opts);
+        assert_eq!(body["model"], "test-override-model");
+    }
+
+    #[tokio::test]
+    async fn no_override_uses_configured_model() {
+        let provider = test_provider("claude-opus-4-6");
+        let (_, body) =
+            provider.build_request_body(&[user_msg("hi")], &[], CallOptions::default());
+        assert_eq!(body["model"], "claude-opus-4-6");
+    }
+
+    #[tokio::test]
+    async fn model_override_does_not_mutate_provider_state() {
+        // Non-persistence guarantee: building a request with an override must
+        // NOT touch the provider's own ModelOverride RwLock — a subsequent
+        // call (same turn or a different one) without an override must see
+        // the original configured model, never the leaked override.
+        let provider = test_provider("claude-opus-4-6");
+        let opts = CallOptions {
+            model_override: Some("test-override-model".to_string()),
+            ..Default::default()
+        };
+        let _ = provider.build_request_body(&[user_msg("hi")], &[], opts);
+        assert_eq!(provider.current_model(), "claude-opus-4-6");
+
+        // A subsequent call with no override must go back to the configured model.
+        let (_, body) =
+            provider.build_request_body(&[user_msg("hi")], &[], CallOptions::default());
+        assert_eq!(body["model"], "claude-opus-4-6");
     }
 }

@@ -137,6 +137,12 @@ pub async fn execute<S: EventSink>(
         // cloned into each CallOptions site below so the value lives long enough
         // for both the main-loop call and the two forced-final-call paths.
         claude_md_content,
+        // Wave-2 Task 12: one-shot per-turn model override. Same treatment as
+        // claude_md_content above — invariant for the whole turn, cloned into
+        // every CallOptions construction site (main loop + both forced-final
+        // paths) so the override applies uniformly regardless of which
+        // provider (primary or fallback) ends up live for a given iteration.
+        turn_model_override,
     } = bootstrap_outcome;
 
     // last_msg_id threads the DB parent chain through intermediate assistant
@@ -387,6 +393,11 @@ pub async fn execute<S: EventSink>(
             claude_md_content: claude_md_content.clone(),
             // R5: extension-tool names for the hallucinated-call suppressor.
             known_extension_tools: known_extension_tools.clone(),
+            // Wave-2 Task 12: per-turn override applies to every iteration of
+            // this turn — including a fallback-provider retry (`live_provider`
+            // above may already point at the fallback Arc; the override is
+            // provider-agnostic and threads through unchanged).
+            model_override: turn_model_override.clone(),
         };
         let llm_fut = crate::agent::pipeline::llm_call::chat_stream_with_deadline_retry(
             live_provider,
@@ -1070,6 +1081,10 @@ pub async fn execute<S: EventSink>(
                             // this code path (cost regression on loop-break
                             // sessions). Reuse the bootstrap-bound value.
                             claude_md_content: claude_md_content.clone(),
+                            // Wave-2 Task 12: same per-turn override as the main
+                            // loop — this extra call is still part of the same
+                            // turn.
+                            model_override: turn_model_override.clone(),
                             ..Default::default()
                         },
                     )
@@ -1143,6 +1158,8 @@ pub async fn execute<S: EventSink>(
                     // call to engine.cfg().provider so cache hits cover this
                     // code path too.
                     claude_md_content: claude_md_content.clone(),
+                    // Wave-2 Task 12: same per-turn override as the main loop.
+                    model_override: turn_model_override.clone(),
                     ..Default::default()
                 },
             )
