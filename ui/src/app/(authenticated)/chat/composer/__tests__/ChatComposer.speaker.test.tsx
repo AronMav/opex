@@ -46,6 +46,10 @@ vi.mock("@/hooks/use-commands", () => ({
   useCommands: () => ({ data: [] }),
 }));
 
+vi.mock("@/lib/prompts", () => ({
+  usePrompts: () => ({ prompts: [], isLoading: false }),
+}));
+
 vi.mock("@/stores/auth-store", () => ({
   useAuthStore: Object.assign(
     (selector?: (s: Record<string, unknown>) => unknown) => {

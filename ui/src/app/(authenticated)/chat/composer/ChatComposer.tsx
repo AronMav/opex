@@ -9,13 +9,14 @@ import { useTranslation } from "@/hooks/use-translation";
 import { useAuthStore } from "@/stores/auth-store";
 import { Button } from "@/components/ui/button";
 import { MentionAutocomplete } from "./MentionAutocomplete";
-import { CommandAutocomplete } from "@/components/chat/command-autocomplete";
+import { CommandAutocomplete, type AutocompleteItem } from "@/components/chat/command-autocomplete";
 import { ModelDropdown } from "./ModelDropdown";
 import { ImageLightbox } from "@/components/chat/ImageLightbox";
 import { useVoiceInput } from "../hooks/use-voice-input";
 import { useVoiceReply } from "../hooks/use-voice-reply";
 import { useAgents } from "@/lib/queries";
 import { useCommands } from "@/hooks/use-commands";
+import { usePrompts } from "@/lib/prompts";
 import {
   Send,
   Square,
@@ -80,6 +81,12 @@ export function ChatComposer() {
   // CommandAutocomplete is the single slash menu, driven entirely by the
   // /api/commands registry — no hardcoded command list.
   const { data: registryCommands } = useCommands(currentAgent);
+
+  // ── Workspace prompt library (workspace/prompts.md) ───────────────────────
+  // Renders as a "Prompts" section below matching commands in the same slash
+  // menu — picking one replaces the composer text with the prompt body
+  // (a starting template) instead of running/inserting a command.
+  const { prompts } = usePrompts();
 
   // ── Voice recorder ───────────────────────────────────────────────────────
   // Gate voice controls on the CURRENT AGENT's capabilities (not provider_active,
@@ -289,19 +296,32 @@ export function ChatComposer() {
   // Registry-backed pick. No-arg commands (e.g. /new, /status) execute
   // immediately via dispatchSlashCommand — the same one-click UX the old
   // hardcoded menu gave for its fixed no-arg commands. Commands with args
-  // insert "/name " and leave it for the user to fill in + Enter.
-  const handleCommandPick = useCallback((name: string) => {
+  // insert "/name " and leave it for the user to fill in + Enter. Prompt
+  // picks are a different kind entirely: they REPLACE the whole composer
+  // text with the prompt body (a starting template) and never auto-send —
+  // the user edits/sends it like anything else they typed.
+  const handleAutocompletePick = useCallback((item: AutocompleteItem) => {
     setSlashQuery(null);
-    const cmd = registryCommands?.find((c) => c.name === name);
+    if (item.kind === "prompt") {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      setter?.call(ta, item.body);
+      ta.dispatchEvent(new Event("input", { bubbles: true }));
+      ta.focus();
+      ta.setSelectionRange(item.body.length, item.body.length);
+      return;
+    }
+    const cmd = registryCommands?.find((c) => c.name === item.name);
     if (cmd && cmd.args.length === 0) {
       clearComposerText();
-      dispatchSlashCommand(`/${name}`);
+      dispatchSlashCommand(`/${item.name}`);
       return;
     }
     const ta = textareaRef.current;
     if (!ta) return;
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
-    setter?.call(ta, `/${name} `);
+    setter?.call(ta, `/${item.name} `);
     ta.dispatchEvent(new Event("input", { bubbles: true }));
     ta.focus();
   }, [registryCommands, dispatchSlashCommand, clearComposerText]);
@@ -527,7 +547,8 @@ export function ChatComposer() {
             <CommandAutocomplete
               input={slashQuery}
               commands={registryCommands ?? []}
-              onPick={handleCommandPick}
+              prompts={prompts}
+              onPick={handleAutocompletePick}
               onClose={handleSlashClose}
               onActiveChange={setActiveCommandId}
               listboxId={commandListboxId}

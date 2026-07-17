@@ -221,6 +221,7 @@
   "chat.suggestion_news": "Что нового в мире?",
   "chat.suggestion_search": "Найди информацию",
   "chat.suggestion_tool": "Создай новый инструмент",
+  "chat.prompts_section": "Промпты",
   "chat.show_earlier": "Показать {{count}} ранних сообщений",
   "chat.continue_dialog": "Продолжить диалог...",
   "chat.message_placeholder": "Сообщение...",

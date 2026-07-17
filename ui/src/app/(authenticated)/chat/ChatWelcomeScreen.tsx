@@ -5,12 +5,30 @@ import { useTranslation } from "@/hooks/use-translation";
 import { useChatStore } from "@/stores/chat-store";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/stores/auth-store";
+import { usePrompts } from "@/lib/prompts";
+
+// Static so Tailwind's content scanner (regex over source text) always finds
+// these literal class names, even though they're applied by array index.
+const SUGGESTION_DELAYS = ["delay-0", "delay-75", "delay-150"] as const;
 
 export function ChatWelcomeScreen() {
   const { t } = useTranslation();
   const currentAgent = useChatStore((s) => s.currentAgent);
   const agentIcons = useAuthStore((s) => s.agentIcons);
   const agentIconUrl = currentAgent ? agentIcons[currentAgent] || null : null;
+
+  // First 3 entries of the workspace prompt library (workspace/prompts.md)
+  // replace the hardcoded suggestion chips when available — same click
+  // mechanic (sends immediately), just sourced text. Falls back to the
+  // static suggestions when the file is missing/empty (fail-soft).
+  const { prompts } = usePrompts();
+  const suggestions = prompts.length > 0
+    ? prompts.slice(0, 3).map((p) => ({ key: p.title, label: p.title, prompt: p.body }))
+    : [
+        { key: "chat.suggestion_news", label: t("chat.suggestion_news"), prompt: t("chat.suggestion_news") },
+        { key: "chat.suggestion_search", label: t("chat.suggestion_search"), prompt: t("chat.suggestion_search") },
+        { key: "chat.suggestion_tool", label: t("chat.suggestion_tool"), prompt: t("chat.suggestion_tool") },
+      ];
 
   return (
     <div className="flex h-full flex-col items-center justify-center p-6 text-center">
@@ -33,19 +51,15 @@ export function ChatWelcomeScreen() {
         {t("chat.write_message_to_start")}
       </p>
       <div className="mt-6 flex flex-wrap gap-2 justify-center max-w-md">
-        {[
-          { key: "chat.suggestion_news", prompt: t("chat.suggestion_news"), delay: "delay-0" },
-          { key: "chat.suggestion_search", prompt: t("chat.suggestion_search"), delay: "delay-75" },
-          { key: "chat.suggestion_tool", prompt: t("chat.suggestion_tool"), delay: "delay-150" },
-        ].map((s) => (
+        {suggestions.map((s, i) => (
           <Button
             key={s.key}
             variant="outline"
             size="sm"
             onClick={() => useChatStore.getState().sendMessage(s.prompt)}
-            className={`animate-in fade-in slide-in-from-bottom-1 duration-300 hover:bg-primary/10 hover:border-primary/30 hover:text-foreground ${s.delay}`}
+            className={`animate-in fade-in slide-in-from-bottom-1 duration-300 hover:bg-primary/10 hover:border-primary/30 hover:text-foreground ${SUGGESTION_DELAYS[i] ?? ""}`}
           >
-            {s.prompt}
+            {s.label}
           </Button>
         ))}
       </div>
