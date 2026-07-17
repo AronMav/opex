@@ -1,85 +1,86 @@
 # Волна 4: визуальная полировка чат-UI
 
-Дата: 2026-07-17
-Статус: одобрено (дизайн-ревью с владельцем)
-Источник: архитектурный аудит чат-UI от 2026-07-16, «волна 4» (пп. 13-16 + arbitrary-размеры из визуальной секции) + визуальные миноры из ledger'ов волн 1-3 и 2. Волны 1+3 и 2 — на проде (`2026-07-16-chat-stream-stabilization-cleanup-design.md`, `2026-07-16-chat-ux-wave2-design.md`).
+Дата: 2026-07-17 (ревизия 2 — после адверсариального тех-ревью спеки против кода: 8 поправок внесено)
+Статус: одобрено (дизайн-ревью с владельцем; правки ревью внесены)
+Источник: архитектурный аудит чат-UI от 2026-07-16, «волна 4» + визуальные миноры ledger'ов волн 1-3/2.
 
 ## Контекст
 
-Дизайн-система трёхслойная (`@theme` → `:root`-vars → hex, ESLint `no-raw-design-values`), но в чате накопилась неконсистентность: «оттенок серого» задаётся 4-5 способами (`text-muted-foreground/30|/50|/60|/80` вперемешку с семантическим `--color-muted-foreground-subtle`); объявленные в globals.css шкалы (`--sidebar-w:280px`, `--toolbar-h:3.5rem`, `--z-dropdown..toast:40..60`, `--elevation-1..4` в обеих темах) не подключены — код использует `w-70`, `h-14`, литеральные `z-10/20/40/50`, arbitrary-тени `shadow-black/8`; `CometLoader` играет три роли (thinking, streaming-курсор, пустой assistant-парт); `mermaid.initialize` вызывается на каждый рендер блока (`mermaid-block.tsx:22-59`).
+Дизайн-система трёхслойная (`@theme` → `:root`-vars → hex, ESLint `no-raw-design-values`), но в чате: «оттенок серого» задаётся смесью alpha-модификаторов (`/30`×2, `/50`×30, `/60`×8 в охвате — инвентаризация ревью) и семантического токена; объявленные шкалы (`--sidebar-w`, `--toolbar-h`, `--z-30..60`, `--elevation-1..4` + **уже существующие** `@utility shadow-elev-1..4`, globals.css:259, под защитой tokens.test.ts) подключены не везде; `CometLoader` играет три роли; `mermaid.initialize` — на каждый рендер блока (mermaid-block.tsx:22-59, mapping **light→"neutral"**, dark→"dark").
 
 ## Цели
 
-1. Два семантических уровня вторичного текста вместо зоопарка прозрачностей (чат-поверхности).
-2. Подключить объявленные layout/z/elevation-шкалы в чате/шелле; убрать arbitrary-размеры и тени.
-3. Разделить три роли CometLoader на различимые визуальные состояния.
+1. Два семантических уровня вторичного текста вместо alpha-зоопарка (чат-поверхности) — **осознанный re-leveling**, не zero-delta.
+2. Подключить объявленные шкалы; убрать arbitrary-тени и px-размеры (точными v4-утилитами, без дрейфа).
+3. Разделить три роли CometLoader.
 4. Mermaid-инициализация — синглтон на тему.
-5. Закрыть визуальные миноры прошлых волн (баннер replayTruncated, RU-комментарий, mid-file import).
+5. Визуальные хвосты прошлых волн.
 
 ## Не-цели
 
-- Страницы вне чат-поверхностей (agents/providers/monitor/… — отдельная итерация при желании).
-- Редизайн компонентов, изменение поведения/layout'а, новые фичи.
-- Новые размерные токены (arbitrary-высоты сводятся к СТАНДАРТНОЙ шкале Tailwind).
-- Пиксель-перфект скриншот-дифф (верификация глазами по Playwright-скриншотам).
+- Страницы вне охвата; редизайн; изменение поведения; новые размерные токены.
+- Автоматический скриншот-дифф (инфра Playwright есть — `ui/playwright.config.ts`, `src/__e2e__/` — но baseline'ов `toHaveScreenshot` нет; проверка = ручные скриншоты, глазами).
+- Гард alpha-модификаторов в ESLint (осознанный пропуск: правило их не флагает; дисциплина — ревью).
 
 ## Охват файлов
 
-«Чат-поверхности» = `ui/src/components/chat/**`, `ui/src/app/(authenticated)/chat/**`, `ui/src/components/ui/{markdown,code-block,mermaid-block,message,citation-tooltip,card-registry,rich-card}.tsx`, `SearchPalette.tsx`, плюс шелл-места подключения layout-токенов (`page.tsx` сайдбар-ширина, хедеры чата/workspace c `h-14`). ui-примитивы общего пользования (`dialog.tsx`, `button.tsx`, …) НЕ трогаются, кроме случаев, где токен подключается без изменения визуала (z-шкала оверлеев — см. W4-2).
+`ui/src/components/chat/**`, `ui/src/app/(authenticated)/chat/**`, `ui/src/components/ui/{markdown,code-block,mermaid-block,message,citation-tooltip,card-registry,rich-card,loader}.tsx`, `SearchPalette.tsx`; шелл-точки подключения шкал: `app/(authenticated)/chat/page.tsx` (w-70:351, h-14:358), `app/(authenticated)/layout.tsx:150` (h-14 мобильного хедера — добавлен в охват по ревью), `app/(authenticated)/workspace/page.tsx` (h-14:398, md:w-70:407). Общие ui-примитивы (dialog, button, …) не трогаются.
 
 ## W4-1. Нормализация серых прозрачностей
 
-Политика маппинга (механическая, применяется ко всем чат-файлам охвата):
+**Это re-leveling, не zero-delta:** маппинг alpha→solid делает третичный текст немного читаемее (в этом смысл полировки). Гейт приемлемости — скриншоты 4 конфигураций (light/dark × desktop/mobile) до/после, глазами.
 
-| Было | Становится |
+| Было (инвентаризация: только эти варианты в охвате) | Становится |
 | --- | --- |
-| `text-muted-foreground/30`, `/40`, `/50` | `text-muted-foreground-subtle` |
-| `text-muted-foreground/60`, `/70`, `/80` | `text-muted-foreground` |
-| hover-пары (`text-muted-foreground/50 hover:text-muted-foreground`) | `text-muted-foreground-subtle hover:text-muted-foreground` (направление сохранено) |
-| `bg-muted/*`-вариации чисто оттеночного назначения | свести к `bg-muted/50` (существующая доминанта) или `bg-muted`; НЕ трогать случаи, где прозрачность несёт слоистость (оверлеи поверх контента) |
+| `text-muted-foreground/30` (×2), `/50` (×30) | `text-muted-foreground-subtle` |
+| `text-muted-foreground/60` (×8) | `text-muted-foreground` |
+| hover-пары | `…-subtle hover:text-muted-foreground` (направление сохранено) |
 
-Исключения фиксируются в коде комментарием `/* tone-exception: <причина> */` — ожидается ≤5 мест (например, timestamp'ы, где /50 сознательно слабее subtle). Playwright-скриншоты чата (light+dark, desktop+mobile) до/после — глазная проверка, что иерархия текста не сломалась.
+Исключения — комментарий `/* tone-exception: <причина> */`, бюджет **до ~10** (ревью: /50→solid заметно плотнее; исключения ожидаются среди timestamp'ов и глубоко-третичных мест).
+
+**`bg-muted/*` — СУЖЕНО по ревью:** `/20` и `/30` НЕ сводятся к `/50` (видимое потемнение поверхностей mermaid/approval/checkpoint). Сводятся только точные дубликаты одного намерения в соседних элементах (если найдутся); иначе bg-слой не трогается.
 
 ## W4-2. Подключение объявленных шкал
 
-- `w-70` (сайдбар сессий, 280px) → `w-[var(--sidebar-w)]`; `h-14` (чат/workspace тулбары, 56px) → `h-[var(--toolbar-h)]`. Значения токенов совпадают с текущими — визуальных изменений ноль.
-- Z-index в чат-поверхностях: литеральные `z-10/20/30/40/50` → семантические `z-[var(--z-*)]` по роли элемента (sticky-заголовки → `--z-sticky:30`, дропдауны/автокомплиты → `--z-dropdown:40`, оверлеи → `--z-overlay:45`, модалки → `--z-modal:50`, попапы → `--z-popover:55`, тосты → `--z-toast:60`). Где текущий литерал НЕ совпадает со шкалой (например z-10 у элемента-«просто выше соседа») — оставить литерал с комментарием `/* local stacking, not layered UI */`; шкала — для слоёв UI, не для микро-стекинга.
-- Тени: `shadow-black/8`, `shadow-primary/8` (композер) → `shadow-[var(--elevation-2)]`; прочие arbitrary-тени чата — в ближайший `--elevation-*`. Elevation-переменные уже имеют dark-варианты — тёмная тема выигрывает автоматически.
-- Arbitrary-размеры: `max-h-[300px]`→`max-h-72` (288px), `max-h-[150px]`→`max-h-36` (144px), `max-h-[200px]`→`max-h-48` (192px), `min-h-[120px]`→`min-h-28` (112px) — допуск ±8px принят сознательно; `min-h-[44px]`/`min-w-[3rem]` тач-таргетов → существующий класс `tap-target`/`min-w-12`. Инлайн `maxHeight:"400px"` в mermaid-block → `max-h-96` классом. Каждая замена — с глазной проверкой соответствующего элемента на скриншоте.
+- `w-70`→`w-[var(--sidebar-w)]` (page.tsx:351, workspace/page.tsx:407), `h-14`→`h-[var(--toolbar-h)]` (page.tsx:358, workspace/page.tsx:398, layout.tsx:150). Значения идентичны (280px/56px, v4 dynamic spacing) — визуально ноль. Синтаксис `x-[var(--…)]` проверен прецедентами (select.tsx, AgentEditDialog:978) и проходит ESLint-правило (не матчит `\d+(px|rem)`).
+- **Z-index — ЯВНЫЕ ИСКЛЮЧЕНИЯ (по ревью):** триада sticky-хедеров `page.tsx:358 z-10` / `:382 z-20` / `layout.tsx:150 z-30` — намеренный sibling-порядок 10<20<30, НЕ трогать (комментарий `/* local stacking */`); `MentionAutocomplete:71 z-50` — локальный стек над композером, НЕ понижать до z-dropdown:40. Шкала `z-[var(--z-*)]` применяется только к однозначным слоям UI: drag-оверлей композера (`ChatComposer:539` → `--z-overlay`), лайтбокс/mermaid-фуллскрин (→ `--z-modal`), прочие по месту с обоснованием. Сомнение = оставить литерал с комментарием.
+- **Тени:** `shadow-black/8` + `focus-within:shadow-primary/8` (ChatComposer:528) → **`shadow-elev-2`** (существующая @utility, НЕ `shadow-[var(...)]` — у той нулевой прецедент; elev-тени имеют dark-варианты). `ClarifyCard:78 shadow-primary/30` — glow по смыслу, остаётся.
+- **Размеры — точные v4-утилиты, нулевой дрейф (по ревью, v4 dynamic spacing принимает любые множители):** `max-h-[300px]`→`max-h-75` (ToolCallPartView:81,86,219; ApprovalArgsEditor:61), `max-h-[200px]`→`max-h-50` (ApprovalCard:179), `max-h-[150px]`→`max-h-37.5` (ToolCallPartView:194), `min-h-[120px]`→`min-h-30` (ApprovalArgsEditor:61, mermaid-block:151), inline `maxHeight:"400px"`→класс `max-h-100` (mermaid-block:142), `min-w-[3rem]`→`min-w-12` (mermaid-block:104), `min-h-[44px]`→`tap-target` (code-block:37), `min-w-[24px]`→`min-w-6` (ShortcutHelp:38). НЕ трогать: `dvh`/`ch`/`min(...)`-значения (вьюпорт-относительные: SearchPalette:310, CheckpointPanel:155, ImageLightbox:111,146, MentionAutocomplete:71).
+- **ESLint-охват (по ревью):** правило `no-raw-design-values` сейчас покрывает только `src/app/**`; расширить его scope в `eslint.config.mjs` на `src/components/chat/**` и исправить всё, что оно там подсветит (это наша полируемая поверхность). `components/ui/**` — не расширять (будущая итерация).
 
 ## W4-3. Разделение ролей CometLoader
 
-Текущие потребители: `MessageItem.tsx`, `MessageList.tsx`, `components/ui/loader.tsx`.
+Потребители (подтверждено ревью): thinking — `MessageList.tsx:55-67` (ThinkingMessage); streaming-cursor — `MessageList.tsx:405-409` (`data-testid="streaming-cursor"`, отдельный блок `pb-1 pl-12` ПОД сообщением); empty-part — `MessageItem.tsx:76-77` (EmptyPartView при `!hasParts`).
 
-- **Thinking** («агент думает», до первого текста): остаётся `CometLoader` — единственная роль, где комета уместна.
-- **Streaming-курсор** (в конце стримящегося текста): новый `StreamingCaret` в `components/ui/loader.tsx` — вертикальный блок-каретка `▍` (`inline-block w-[2px] h-[1em] bg-primary/70 animate-pulse rounded-sm` — токены; точная форма на усмотрение реализации, но НЕ комета), выровнен по базовой линии текста.
-- **Пустой assistant-парт** (EmptyPartView): по результату осмотра использования — если это плейсхолдер части, которая вот-вот наполнится, рендерить НИЧЕГО (пустой блок не требует индикатора: thinking уже показан выше); если выяснится иная семантика — минимальный skeleton-бар. Решение зафиксировать комментарием на месте.
-- Тесты: рендер-тест StreamingCaret; тест, что thinking-путь рендерит CometLoader, а стриминг-текст — caret (по data-testid/классам); существующие message-list тесты обновить.
+- **Thinking:** остаётся CometLoader.
+- **StreamingCaret — монтируется ВНУТРИ текстовой части** (по ревью: текущий курсор — отдельная строка под сообщением; каретка на своей строке была бы хуже). Реализация: `TextPart` (parts/TextPart.tsx) при `streaming` рендерит caret инлайн в конце текста (`inline-block w-[2px] h-[1em] bg-primary/70 animate-pulse rounded-sm align-baseline`, компонент в loader.tsx). Отдельный блок-курсор в MessageList:405-409 удаляется. `data-testid="streaming-cursor"` переносится на caret (сохранить контракт e2e/тестов).
+- **EmptyPartView:** НЕ «ничего» (по ревью: `message-list.test.tsx:287` — изолированный empty-assistant без ThinkingMessage-соседа остался бы без индикатора). Заменяется на минимальный skeleton-бар (`h-3 w-24 rounded bg-muted/50 animate-pulse` + прежний sr-only «Loading»-лейбл — тест :287 продолжает проходить по лейблу, ассерты по комете обновить). Комета уходит из этой роли.
+- Тесты: рендер StreamingCaret в TextPart при streaming и отсутствие при complete; ThinkingMessage → CometLoader; EmptyPartView → skeleton + sr-only label; обновить `message-list.test.tsx` (:287 и стриминг-курсор-ассерты); `streaming-perf.test.ts:252` (мок CometLoader) не ломается.
 
 ## W4-4. Mermaid-синглтон
 
-- Новый `ui/src/lib/mermaid-singleton.ts`: `getMermaid(theme: "light" | "dark"): Promise<Mermaid>` — ленивый импорт + `initialize({ securityLevel: "strict", theme: ... })` РОВНО один раз на значение темы; смена `resolvedTheme` → одна повторная инициализация (хранить текущую инициализированную тему в модульной переменной). Все опции текущего `initialize`-вызова переносятся как есть.
-- `mermaid-block.tsx`: эффект вместо собственного initialize вызывает `getMermaid(resolvedTheme)` и рендерит; пер-блочный рендер и DOMPurify не меняются.
-- Тест (vitest, mock mermaid): два блока → `initialize` вызван 1 раз; смена темы → ровно второй вызов.
+- `ui/src/lib/mermaid-singleton.ts`: `getMermaid(resolvedTheme: "light" | "dark")` — ленивый импорт + `initialize` один раз на тему, single-flight промис; повторная инициализация только при смене темы. **Маппинг темы сохраняется: light→"neutral", dark→"dark"** (по ревью — НЕ передавать "light" в mermaid). Полный набор опций переносится как есть: `startOnLoad:false`, `securityLevel:"strict"`, `theme`, весь блок `flowchart{...}`.
+- `mermaid-block.tsx`: эффект → `await getMermaid(resolvedTheme)` → рендер; пер-блочный render + DOMPurify без изменений. Известный residual: гонка theme-flip мид-рендер существует и сейчас — не ухудшаем, не чиним (не-цель).
+- Тест (mock mermaid): 2 блока → initialize ×1; смена темы → ровно второй вызов; опции содержат neutral/dark соответственно.
 
-## W4-5. Визуальные хвосты прошлых волн
+## W4-5. Визуальные хвосты
 
-- Баннер `replayTruncated` (ChatThread) приводится к весу `ReconnectingIndicator`: border, `rounded-lg`, `py-2`, `text-sm` (сейчас borderless `rounded-md py-1.5 text-xs` — два соседних уведомления читаются разным весом).
-- `chat-types.ts`: русский doc-комментарий у `replayTruncated` → английский (единственный RU в EN-комментируемом интерфейсе).
-- `sse-events.ts`: mid-file `import` подняться к остальным импортам (минор T2 волны 1+3).
+- Баннер replayTruncated (ChatThread:337-340) → вес ReconnectingIndicator, включая цвета: `rounded-lg border border-primary/30 bg-muted/30 px-3 py-2 text-sm` (цветовая пара уточнена по ревью).
+- `chat-types.ts:303` RU-комментарий → EN.
+- `sse-events.ts:62` mid-file import → к остальным импортам.
 
 ## Тестирование и деплой
 
-- Процесс прежний: TDD где тестируемо (W4-3, W4-4 — тесты обязательны; W4-1/W4-2 — механические замены под существующим ESLint-гейтом + полный vitest), ревью на задачу, финальное короткое ревью волны.
-- Гейт: `cd ui && npx eslint . && npx tsc --noEmit && npx vitest run && npm run build`. Rust не затрагивается — серверный гейт не нужен; деплой ТОЛЬКО `deploy-ui.sh` (один батч). При смене формы персистируемых query — бампать buster (в этой волне НЕ ожидается).
-- Playwright-скриншоты чата (light/dark × desktop/mobile) до и после — приложить к финальному ревью волны; глазная проверка иерархии текста, теней, лоадеров.
-- E2E-смоук после деплоя: чат стримит (caret виден при стриминге, комета — при thinking), mermaid-диаграмма рендерится в обеих темах, сайдбар/тулбар без сдвигов.
+- TDD для W4-3/W4-4; W4-1/W4-2 — механические замены + полный vitest + расширенный ESLint; гейт `cd ui && npx eslint . && npx tsc --noEmit && npx vitest run && npm run build`.
+- Rust не затрагивается; деплой только `deploy-ui.sh`, один батч. Форма персистируемых query не меняется — buster не бампается.
+- Ручные Playwright-скриншоты (light/dark × desktop/mobile) до/после — в финальное ревью волны; E2E-смоук: стрим (caret инлайн, комета на thinking, skeleton на пустом парте), mermaid в обеих темах, сайдбар/тулбары без сдвигов.
 
 ## Риски
 
 | Риск | Митигация |
 | --- | --- |
-| Массовая замена прозрачностей ломает визуальную иерархию где-то точечно | Политика маппинга + tone-exception комментарии + скриншоты до/после в 4 конфигурациях |
-| Подключение z-шкалы меняет стекинг там, где литерал был «микро-стекингом» | Правило: шкала только для слоёв UI; локальный стекинг остаётся литералом с комментарием |
-| Mermaid-синглтон и параллельный рендер двух блоков при смене темы | Инициализация промисом (single-flight); рендер после await getMermaid |
-| StreamingCaret ломает layout последней строки текста | inline-block с h-[1em] по базовой линии; рендер-тест + глазная проверка стрима |
+| Re-leveling серых ломает иерархию точечно | Политика + tone-exception (бюджет ~10) + скриншоты ×4 |
+| Расширение ESLint-scope на components/chat подсветит старые нарушения | Это и есть цель — чинится в этой же волне (поверхность наша) |
+| Инлайн-caret ломает layout последней строки | `h-[1em] align-baseline` + рендер-тест + глазная проверка стрима |
+| Mermaid-гонка при смене темы | Single-flight промис; residual-гонка не ухудшается (задокументировано) |
+| Z-замены меняют стекинг | Явный список исключений (sticky-триада, MentionAutocomplete); сомнение = литерал+комментарий |
