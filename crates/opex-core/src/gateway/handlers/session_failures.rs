@@ -2,8 +2,7 @@
 //!
 //! Backed by `db::session_failures` (see migration 034). Exposes:
 //!
-//! - `GET /api/sessions/failures` — paginated list, optional `agent` filter.
-//! - `GET /api/sessions/{session_id}/failures` — drill-down for one session.
+//! - `GET /api/sessions/failures` — paginated list, mandatory `agent` filter.
 
 use axum::{
     Router,

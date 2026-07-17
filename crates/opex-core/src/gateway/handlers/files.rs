@@ -1,12 +1,13 @@
 //! File Handler Hub — core orchestration routes (sync path).
 //!
-//! `GET /api/files/{upload_id}/actions` returns the per-file button list;
-//! `POST /api/files/{upload_id}/run` re-checks the tiered gate server-side,
-//! downloads the upload bytes over LOOPBACK (in Rust), POSTs them as
-//! multipart/form-data to toolgate `/handlers/{id}/run`, then persists the
-//! result as a provenance-wrapped `source='file_handler'` message and returns
-//! the outcome in the POST body (the chat-delivery path). Produced artifacts
-//! are also broadcast best-effort on the GLOBAL `ui_event_tx` bus.
+//! `POST /api/files/run` (and its token-scoped sibling `/api/files/menu-run`,
+//! plus `/api/commands/menu-run`) re-check the tiered gate server-side,
+//! download the upload bytes over LOOPBACK (in Rust), POST them as
+//! multipart/form-data to toolgate `/handlers/{id}/run`, then persist the
+//! result as a provenance-wrapped `source='file_handler'` message and return
+//! the outcome in the POST body (the chat-delivery path). Async jobs report
+//! back via `/api/files/jobs/{job_id}/progress` + `/complete`. Produced
+//! artifacts are also broadcast best-effort on the GLOBAL `ui_event_tx` bus.
 //!
 //! Toolgate never receives a loopback URL (its SSRF guard would reject it) —
 //! mirrors `dispatch.rs::run_transcribe` (R12, SSRF×loopback note).
@@ -36,9 +37,7 @@ use crate::gateway::AppState;
 use crate::gateway::clusters::InfraServices;
 use opex_db::handler_jobs;
 
-// ── Process-wide HTTP client ──────────────────────────────────────────────────
-
-// ── post_action path-traversal allowlist ──────────────────────────────────────
+// ── path-traversal allowlist ──────────────────────────────────────────────────
 
 /// Compiled once. Allows filenames and folder names that contain only
 /// `A-Za-z0-9 _.-` (1–128 chars). No slashes, no backslashes, no `..`.
