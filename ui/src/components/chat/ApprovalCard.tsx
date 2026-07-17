@@ -149,7 +149,7 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
           <CollapsibleTrigger asChild>
             <button
               type="button"
-              className="p-0.5 text-muted-foreground/50 hover:text-foreground transition-colors group rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="p-0.5 text-muted-foreground-subtle hover:text-foreground transition-colors group rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               aria-label={t("common.expand")}
             >
               <ChevronRight className="h-4 w-4 transition-transform duration-300 group-data-[state=open]:rotate-90" />

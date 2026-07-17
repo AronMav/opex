@@ -59,7 +59,7 @@ export function SearchBar({ search }: SearchBarProps) {
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder={t("chat.search_messages")}
-        className="flex-1 min-w-0 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/50"
+        className="flex-1 min-w-0 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground-subtle"
         aria-label={t("chat.search_messages")}
       />
       {counterText && (

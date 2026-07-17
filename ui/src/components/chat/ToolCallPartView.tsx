@@ -143,7 +143,7 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
           className="flex w-full min-w-0 items-center gap-2 rounded-xl border border-border/50 bg-card/50 px-2.5 py-1.5 text-left transition-colors hover:border-border disabled:cursor-default dark:bg-card/30 dark:hover:bg-card/50"
         >
           {/* tool type icon */}
-          <span className="text-muted-foreground/50"><ToolIcon toolName={toolName} /></span>
+          <span className="text-muted-foreground-subtle"><ToolIcon toolName={toolName} /></span>
 
           {/* tool name */}
           <span className="font-mono text-2xs font-semibold min-w-0 truncate text-foreground/80">
@@ -173,10 +173,10 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
             ) : (hasError || isDenied) ? (
               <X className="h-4 w-4 text-destructive" />
             ) : (
-              <Clock className="h-4 w-4 text-muted-foreground/50" />
+              <Clock className="h-4 w-4 text-muted-foreground-subtle" />
             )}
             {canExpand && (
-              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 transition-transform duration-200 group-data-[state=open]:rotate-90" />
+              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground-subtle transition-transform duration-200 group-data-[state=open]:rotate-90" />
             )}
           </span>
         </button>

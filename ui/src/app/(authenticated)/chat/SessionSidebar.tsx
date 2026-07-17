@@ -130,7 +130,7 @@ export function SessionSidebar({
               className={`h-8 px-2 text-xs transition-colors ${
                 selectedSessions.size > 0
                   ? "text-destructive bg-destructive/10 hover:bg-destructive/30"
-                  : "text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10"
+                  : "text-muted-foreground hover:text-destructive hover:bg-destructive/10"
               }`}
               onClick={onDeleteSessions}
               disabled={deletingSelected}
@@ -161,12 +161,12 @@ export function SessionSidebar({
 
       <div className="shrink-0 px-3 py-2 border-b border-border/30">
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground-subtle" />
           <Input
             value={sessionFilter}
             onChange={(e) => setSessionFilter(e.target.value)}
             placeholder={t("chat.search_sessions")}
-            className="h-8 pl-8 text-xs bg-muted/30 border-border/50 placeholder:text-muted-foreground/30"
+            className="h-8 pl-8 text-xs bg-muted/30 border-border/50 placeholder:text-muted-foreground-subtle"
           />
         </div>
       </div>
@@ -200,7 +200,7 @@ export function SessionSidebar({
                 Footer: () =>
                   isFetchingNextPage ? (
                     <div className="flex justify-center py-3">
-                      <Loader className="h-4 w-4 animate-spin text-muted-foreground/50" />
+                      <Loader className="h-4 w-4 animate-spin text-muted-foreground-subtle" />
                     </div>
                   ) : null,
               }}
@@ -240,7 +240,7 @@ export function SessionSidebar({
                             className={`font-display text-xs font-bold uppercase tracking-tight shrink-0 ${
                               activeSessionId === s.id
                                 ? "text-primary"
-                                : "text-muted-foreground/60 group-hover:text-muted-foreground"
+                                : "text-muted-foreground-subtle group-hover:text-muted-foreground"
                             }`}
                           >
                             {s.channel}
@@ -281,7 +281,7 @@ export function SessionSidebar({
                             }
                             setRenamingSessionId(null);
                           }}
-                          className="w-full truncate text-sm bg-transparent border-b border-primary outline-none focus-visible:ring-1 focus-visible:ring-ring text-foreground placeholder:text-muted-foreground/50"
+                          className="w-full truncate text-sm bg-transparent border-b border-primary outline-none focus-visible:ring-1 focus-visible:ring-ring text-foreground placeholder:text-muted-foreground-subtle"
                           placeholder={t("chat.rename_session")}
                         />
                       ) : (
@@ -290,12 +290,12 @@ export function SessionSidebar({
                             className={`text-sm transition-colors break-words line-clamp-2 ${
                               activeSessionId === s.id
                                 ? "text-foreground"
-                                : "text-muted-foreground/60 group-hover:text-muted-foreground/60"
-                            } ${!s.title && !s.user_id ? "italic text-muted-foreground/50" : ""}`}
+                                : "text-muted-foreground group-hover:text-muted-foreground"
+                            } ${!s.title && !s.user_id ? "italic text-muted-foreground-subtle" : ""}`}
                           >
                             {displayTitle}
                             {s.segment_count != null && s.segment_count > 1 && (
-                              <span className="ml-1.5 text-xs text-muted-foreground/50 tabular-nums not-italic whitespace-nowrap">
+                              <span className="ml-1.5 text-xs text-muted-foreground-subtle tabular-nums not-italic whitespace-nowrap">
                                 ◈{s.segment_count}
                               </span>
                             )}
@@ -325,7 +325,7 @@ export function SessionSidebar({
                             setRenamingSessionId(s.id);
                             setRenameValue(s.title || "");
                           }}
-                          className="text-muted-foreground/50 hover:text-foreground"
+                          className="text-muted-foreground-subtle hover:text-foreground"
                           title={t("chat.rename_hint")}
                         >
                           <Pencil className="h-4 w-4" />
@@ -335,7 +335,7 @@ export function SessionSidebar({
                           size="icon-sm"
                           onClick={(e) => onShareSession(e, s.id)}
                           disabled={sharingSessionId === s.id}
-                          className="text-muted-foreground/50 hover:text-foreground"
+                          className="text-muted-foreground-subtle hover:text-foreground"
                           title={t("chat.share_session")}
                         >
                           <Share2 className="h-3.5 w-3.5" />
@@ -345,7 +345,7 @@ export function SessionSidebar({
                           size="icon-sm"
                           onClick={(e) => onDeleteSession(e, s.id)}
                           disabled={deletingSessionId === s.id}
-                          className="text-muted-foreground/50 hover:bg-destructive/10 hover:text-destructive"
+                          className="text-muted-foreground-subtle hover:bg-destructive/10 hover:text-destructive"
                           title={t("chat.delete_session")}
                         >
                           <Trash2 className="h-3.5 w-3.5" />

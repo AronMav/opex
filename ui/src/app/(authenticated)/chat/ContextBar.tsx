@@ -164,7 +164,7 @@ export function ContextBar({
 
               {/* Model badge */}
               {model && (
-                <span className="rounded-md border border-border/30 bg-muted/30 px-2 py-0.5 font-mono text-2xs text-muted-foreground/60 whitespace-nowrap">
+                <span className="rounded-md border border-border/30 bg-muted/30 px-2 py-0.5 font-mono text-2xs text-muted-foreground whitespace-nowrap">
                   {shortModel(model)}
                 </span>
               )}
@@ -172,7 +172,7 @@ export function ContextBar({
               {/* Token count + progress bar */}
               {hasUsage && (
                 <>
-                  <span className={`text-2xs tabular-nums whitespace-nowrap transition-opacity ${isGenerating ? "text-muted-foreground/50" : "text-muted-foreground/60"}`}>
+                  <span className={`text-2xs tabular-nums whitespace-nowrap transition-opacity ${isGenerating ? "text-muted-foreground-subtle" : "text-muted-foreground"}`}>
                     {formatK(tokens!)} / {formatK(limit!)}
                   </span>
                   <div className="relative h-1 w-14 rounded-full bg-muted/30 overflow-hidden">

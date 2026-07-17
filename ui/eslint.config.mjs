@@ -66,6 +66,7 @@ const eslintConfig = defineConfig([
       "src/app/(authenticated)/chat/**/*.{ts,tsx}",
       "src/app/(authenticated)/workspace/**/*.{ts,tsx}",
       "src/app/(authenticated)/canvas/**/*.{ts,tsx}",
+      "src/components/chat/**/*.{ts,tsx}",
     ],
     rules: { "local/no-raw-design-values": "error" },
   },

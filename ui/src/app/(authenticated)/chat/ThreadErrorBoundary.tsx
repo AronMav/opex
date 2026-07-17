@@ -35,7 +35,7 @@ export class ThreadErrorBoundary extends Component<ThreadErrorBoundaryProps, Thr
     if (this.state.error) {
       return (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-          <p role="alert" className="text-sm text-muted-foreground/60 font-mono">{this.state.error}</p>
+          <p role="alert" className="text-sm text-muted-foreground font-mono">{this.state.error}</p>
           <Button variant="outline" size="sm" onClick={this.handleRetry}>
             {this.props.retryLabel}
           </Button>

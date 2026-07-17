@@ -621,7 +621,7 @@ export function ChatComposer() {
                 ? t("chat.continue_dialog")
                 : t("chat.message_placeholder")
             }
-            className="min-h-11 max-h-30 md:max-h-60 resize-none bg-transparent px-4 py-3 text-message text-foreground outline-none placeholder:text-muted-foreground/60"
+            className="min-h-11 max-h-30 md:max-h-60 resize-none bg-transparent px-4 py-3 text-message text-foreground outline-none placeholder:text-muted-foreground"
             onKeyDown={handleKeyDown}
           />
           {resolvedMention && (
@@ -685,8 +685,8 @@ export function ChatComposer() {
                     voice.state === "recording"
                       ? "text-destructive ring-2 ring-destructive/40 rounded-full"
                       : voice.state === "transcribing"
-                        ? "text-muted-foreground/30 cursor-not-allowed"
-                        : "text-muted-foreground/50 hover:text-muted-foreground",
+                        ? "text-muted-foreground-subtle cursor-not-allowed"
+                        : "text-muted-foreground-subtle hover:text-muted-foreground",
                   )}
                 >
                   {voice.state === "recording" && (
@@ -722,7 +722,7 @@ export function ChatComposer() {
                   className={cn(
                     continuous
                       ? "text-primary bg-primary/10"
-                      : "text-muted-foreground/50 hover:text-muted-foreground",
+                      : "text-muted-foreground-subtle hover:text-muted-foreground",
                   )}
                 >
                   <Repeat className="h-4 w-4" />
@@ -742,7 +742,7 @@ export function ChatComposer() {
                     className={cn(
                       voiceSettingsOpen
                         ? "text-primary bg-primary/10"
-                        : "text-muted-foreground/50 hover:text-muted-foreground",
+                        : "text-muted-foreground-subtle hover:text-muted-foreground",
                     )}
                   >
                     <SlidersHorizontal className="h-4 w-4" />
