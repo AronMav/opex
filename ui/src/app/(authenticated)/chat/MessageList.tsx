@@ -9,6 +9,7 @@ import { CometLoader, CircularLoader } from "@/components/ui/loader";
 
 import { MessageItem } from "./MessageItem";
 import { useChatAutoscroll } from "./use-chat-autoscroll";
+import { useScrollMemoryWrite } from "./hooks/use-scroll-memory";
 import { setVirtuosoHandle } from "./message-list-handle";
 import { AgentTransitionDivider } from "@/components/chat/AgentTransitionDivider";
 import { VirtuosoList, VirtuosoListItem } from "@/components/chat/virtuoso-list-roles";
@@ -241,6 +242,10 @@ export function MessageList({
     }
   }, [messages, trackNewTokens]);
 
+  // Scroll-position memory (13c): persists the first-visible message id
+  // while the user is detached from the tail; cleared on return-to-bottom.
+  const recordVisibleMessage = useScrollMemoryWrite(activeSessionId, shouldFollow);
+
   // Publish the Virtuoso handle to the module-level registry so the
   // jump-to-message hook (useScrollToMessage) can scroll imperatively without
   // prop-drilling. virtuosoRef is a stable ref object; register on mount.
@@ -323,6 +328,10 @@ export function MessageList({
         atBottomThreshold={100}
         initialTopMostItemIndex={messages.length > 0 ? messages.length - 1 : 0}
         increaseViewportBy={{ top: 500, bottom: 200 }}
+        rangeChanged={(range) => {
+          const item = virtualItems[range.startIndex];
+          recordVisibleMessage(item && item.id !== THINKING_ID ? item.id : null);
+        }}
         startReached={guardedLoadEarlier}
         components={virtuosoComponents}
         itemContent={(index, msg) => {

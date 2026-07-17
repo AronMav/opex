@@ -22,6 +22,7 @@ import { VideoProgressIndicator } from "@/components/chat/VideoProgressIndicator
 import { useEngineRunning } from "./hooks/use-engine-running";
 import { useRenderMessages } from "./hooks/use-render-messages";
 import { useScrollToMessage } from "./hooks/use-scroll-to-message";
+import { useScrollMemoryRestore } from "./hooks/use-scroll-memory";
 import { selectIsLive, selectIsReplayingHistory, selectLiveHasContent, selectLiveAssistantText } from "@/stores/chat-selectors";
 import { useMessageSearch } from "./hooks/use-message-search";
 
@@ -165,6 +166,11 @@ export function ChatThread({
   // Only true during active text emission ("streaming") — the "submitted"
   // pre-first-byte window shows the thinking indicator instead of the cursor.
   const isTextStreaming = connectionPhase === "streaming";
+
+  // Scroll-position memory (13c): on opening a non-streaming session with a
+  // previously stored position, silently jumps there (same mechanism as
+  // useScrollToMessage above — palette-store target, silent: true).
+  useScrollMemoryRestore(activeSessionId, isStreaming);
 
   // ── Pending message queue drain ────────────────────────────────────────────
   // When connectionPhase transitions to 'idle' (clean success), drain the
