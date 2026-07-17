@@ -86,7 +86,7 @@ pub struct DefaultToolExecutor {
 
     /// Code execution sandbox (Docker). None when sandbox disabled or Docker unavailable.
     pub(crate) sandbox: Option<Arc<crate::containers::sandbox::CodeSandbox>>,
-    /// Background processes started by `process_start` tool (base agents only).
+    /// Background processes started by the `process` tool (action=start, base agents only).
     pub(crate) bg_processes: Arc<tokio::sync::Mutex<std::collections::HashMap<String, crate::agent::engine::BgProcess>>>,
     /// Cached YAML tool definitions with TTL (avoids per-batch disk reads in parallel execution).
     pub(crate) yaml_tools_cache: tokio::sync::RwLock<(std::time::Instant, std::sync::Arc<std::collections::HashMap<String, crate::tools::yaml_tools::YamlToolDef>>)>,

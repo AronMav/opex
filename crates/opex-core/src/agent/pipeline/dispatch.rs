@@ -126,6 +126,7 @@ pub const SYSTEM_TOOL_NAMES: &[&str] = &[
     "web_fetch", "file_handler", "agent", "message", "cron", "code_exec", "browser_action",
     "git", "session", "skill", "skill_use", "canvas", "rich_card",
     "agents_list", "secret_set", "process",
+    "apply_patch", "todo", "clarify", "code_orchestrate", "lsp",
 ];
 
 /// Filter tools based on per-agent allow/deny policy.

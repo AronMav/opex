@@ -220,7 +220,7 @@ async fn check_security_audit(_infra: &InfraServices) -> CheckResult {
     // Tool deny-list audit
     let config_dir = std::path::Path::new("config/agents");
     let mut deny_list_issues: Vec<serde_json::Value> = Vec::new();
-    let dangerous_tools = ["code_exec", "process_start"];
+    let dangerous_tools = ["code_exec", "process"];
 
     if let Ok(entries) = std::fs::read_dir(config_dir) {
         for entry in entries.flatten() {

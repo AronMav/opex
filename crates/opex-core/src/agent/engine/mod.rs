@@ -28,7 +28,7 @@ pub(crate) use self::yaml_tool_runner::SecretsEnvResolver;
 pub(super) use self::yaml_tool_runner::CACHEABLE_SEARCH_TOOLS;
 pub use self::tool_executor::all_system_tool_names;
 
-/// A background process started by the `process_start` tool (base agents only).
+/// A background process started by the `process` tool (action=start, base agents only).
 #[allow(dead_code)] // process_id/command/started_at are diagnostic metadata
                     // surfaced via tool result strings, not Rust field reads.
 pub struct BgProcess {
@@ -290,6 +290,7 @@ impl AgentEngine {
             default_timezone: &cfg.default_timezone,
             has_sandbox: self.sandbox().is_some(),
             browser_renderer_url: &browser_url,
+            lsp_enabled: crate::agent::lsp::lsp_enabled(),
         };
         let defs = crate::agent::pipeline::tool_defs::build_internal_tool_definitions(&ctx);
         crate::agent::pipeline::dispatch::filter_tools_by_policy(
@@ -314,6 +315,7 @@ impl AgentEngine {
             default_timezone: &cfg.default_timezone,
             has_sandbox: self.sandbox().is_some(),
             browser_renderer_url: &browser_url,
+            lsp_enabled: crate::agent::lsp::lsp_enabled(),
         };
         let defs = crate::agent::pipeline::tool_defs::build_internal_tool_definitions(&ctx);
         crate::agent::pipeline::dispatch::filter_tools_by_policy(

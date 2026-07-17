@@ -1017,7 +1017,7 @@ impl Scheduler {
                         // a cron task can invoke a tool that echoes a secret back
                         // in its result text (e.g. a custom YAML tool printing an
                         // env var). Run the same terminal-output redaction used
-                        // for process_start/code_exec stdout before this text is
+                        // for process/code_exec stdout before this text is
                         // previewed, saved to disk, or announced to a channel.
                         let reply = crate::redact::redact_terminal_output(&reply);
                         if let Some(rid) = run_id {

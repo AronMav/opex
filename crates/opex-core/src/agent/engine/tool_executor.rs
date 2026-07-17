@@ -30,6 +30,7 @@ impl AgentEngine {
             default_timezone: &self.cfg().default_timezone,
             has_sandbox: self.sandbox().is_some(),
             browser_renderer_url: &browser_url,
+            lsp_enabled: crate::agent::lsp::lsp_enabled(),
         };
         crate::agent::pipeline::tool_defs::build_internal_tool_definitions(&ctx)
     }

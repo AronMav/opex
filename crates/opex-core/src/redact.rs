@@ -247,7 +247,7 @@ pub(crate) fn redact_token_in_url(url: &str) -> String {
 /// Redact secrets from subprocess/container-exec terminal output before it
 /// reaches the model or an API response.
 ///
-/// Background host processes (`process_start`) and container `exec` run
+/// Background host processes (`process` tool, action=start) and container `exec` run
 /// arbitrary commands (including `env`/`printenv`) whose stdout was
 /// previously returned to the model verbatim. Rather than trying to detect
 /// "is this an env-dump command" (fragile — command chaining, aliases,

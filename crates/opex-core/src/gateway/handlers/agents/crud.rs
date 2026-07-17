@@ -484,7 +484,7 @@ pub(crate) async fn api_create_agent(
                 allow: vec![],
                 deny: vec![
                     "code_exec".into(),
-                    "process_start".into(),
+                    "process".into(),
                     "workspace_delete".into(),
                     "workspace_rename".into(),
                 ],
@@ -874,7 +874,9 @@ pub(crate) async fn api_update_agent(
         // Table catalogue + UPDATE loop live in `rename_agent_id_in_tables`;
         // see TABLES_WITH_AGENT_ID_NOT_NULL / TABLES_WITH_AGENT_ID_NULLABLE.
         // Rename transaction covers all `agent_id` tables plus:
-        //   - agent_channels (agent_name column)
+        //   - agent_channels / agent_model_overrides (agent_name column)
+        //   - handler_config / tool_quality / handler_jobs / pending_skill_repairs
+        //     (agent_name column, outside the agent_id catalogue)
         //   - sessions.participants (TEXT[] array_replace)
         // All updates share a single sqlx::Transaction — failure at any point
         // triggers automatic rollback (via explicit rollback or Transaction::Drop).
@@ -908,6 +910,24 @@ pub(crate) async fn api_update_agent(
             tracing::warn!(error = %e, "failed to update agent_model_overrides.agent_name on rename");
             tx.rollback().await.ok();
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("rename failed at table agent_model_overrides: {}", e)}))).into_response();
+        }
+        // Additional agent_name-keyed tables outside the agent_id catalogue.
+        // handler_config carries per-agent handler valve values (most sensitive —
+        // orphaned rows would silently fall back to defaults); the rest are
+        // transient but cheap to keep consistent. Table names are compile-time
+        // constants (no injection). (Audit A7.)
+        for table in ["handler_config", "tool_quality", "handler_jobs", "pending_skill_repairs"] {
+            let sql = format!("UPDATE {table} SET agent_name = $1 WHERE agent_name = $2");
+            if let Err(e) = sqlx::query(&sql)
+                .bind(&new_name)
+                .bind(&name)
+                .execute(&mut *tx)
+                .await
+            {
+                tracing::warn!(error = %e, table, "failed to update agent_name on rename");
+                tx.rollback().await.ok();
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("rename failed at table {}: {}", table, e)}))).into_response();
+            }
         }
         // sessions.participants is a TEXT[] array — replace old name with new
         if let Err(e) = sqlx::query("UPDATE sessions SET participants = array_replace(participants, $2, $1) WHERE $2 = ANY(participants)")

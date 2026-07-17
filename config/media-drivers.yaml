@@ -42,6 +42,7 @@ drivers:
     - { driver: fish-audio,    label: "Fish Audio (Russian voices)",   requires_key: true }
     - { driver: murf,          label: "Murf AI",                       requires_key: true }
     - { driver: mimo,          label: "Xiaomi MiMo TTS",               requires_key: true }
+    - { driver: minimax,       label: "MiniMax TTS",                   requires_key: true }
 
   imagegen:
     - { driver: openai,        label: "OpenAI (DALL-E / GPT Image)",   requires_key: true }

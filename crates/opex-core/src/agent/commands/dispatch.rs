@@ -11,7 +11,7 @@
 //! allowlist the composer/menu paths use) → `insert_handler_job`.
 //!
 //! Only async handlers are ever dispatched here (F070 parity): sync handlers
-//! (describe/extract_document/save) run inline via `/api/files/{id}/run` and
+//! (describe/extract_document/save) run inline via `/api/files/run` and
 //! would strand on this queue (no `/complete` callback is ever posted for
 //! them).
 

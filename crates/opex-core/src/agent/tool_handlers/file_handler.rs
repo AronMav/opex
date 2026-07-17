@@ -61,7 +61,7 @@ async fn handle_file_handler(deps: ToolDeps<'_>, args: &Value) -> String {
         // F070: the model-driven menu's `run` action enqueues onto the async-only
         // handler_jobs queue. Drop sync handlers here so they are neither offered
         // (list) nor enqueued+stranded (run); sync handlers run inline via the
-        // composer's /api/files/{id}/run path. Mirrors match_url_handlers.
+        // composer's /api/files/run path. Mirrors match_url_handlers.
         let mut b = match_buttons(&manifests, &row.mime, size, &enabled, lang);
         crate::agent::handler_registry::retain_async_handlers(&mut b, &manifests);
         (b, Some(uuid))

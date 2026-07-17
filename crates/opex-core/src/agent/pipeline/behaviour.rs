@@ -57,7 +57,7 @@ pub const INTERRUPTED_VERIFY_BLOCK_RESULT: &str =
 /// Committed tool results are already replay-safe via the cache; this list only
 /// matters for the narrow window where a result was lost before persistence.
 pub const NON_IDEMPOTENT_TOOLS: &[&str] =
-    &["code_exec", "process_start", "workspace_delete", "workspace_rename"];
+    &["code_exec", "process", "workspace_delete", "workspace_rename"];
 
 /// Whether `name` is a non-idempotent system tool — see [`NON_IDEMPOTENT_TOOLS`].
 pub fn is_non_idempotent_tool(name: &str) -> bool {
@@ -415,6 +415,20 @@ mod tests {
         assert!(a.tool_policy_override.is_none() && b.tool_policy_override.is_none());
         assert!(a.forced_final_call.is_none() && b.forced_final_call.is_none());
         assert!(a.interrupted_verify_guard.is_none() && b.interrupted_verify_guard.is_none());
+    }
+
+    /// A1 regression: the real tool is `process` (action=start), NOT the
+    /// phantom `process_start`. The interrupted-verify guard matches on the
+    /// tool-call name, so it must treat `process` as non-idempotent — otherwise
+    /// a crash-interrupted `process(action="start")` can double-start.
+    #[test]
+    fn process_tool_is_non_idempotent() {
+        assert!(is_non_idempotent_tool("process"));
+        assert!(is_non_idempotent_tool("code_exec"));
+        assert!(is_non_idempotent_tool("workspace_rename"));
+        // The old phantom name is not a real tool and must not match.
+        assert!(!is_non_idempotent_tool("process_start"));
+        assert!(!is_non_idempotent_tool("workspace_read"));
     }
 
     /// `LayerRuntimeState::default()` is the zero state every iteration

@@ -610,6 +610,7 @@ async fn main() -> Result<()> {
         cfg.checkpoint.clone(),
     ));
 
+    crate::agent::lsp::set_lsp_enabled(cfg.lsp.enabled);
     let lsp_manager: Option<Arc<crate::agent::lsp::LspManager>> = if cfg.lsp.enabled {
         use std::time::Duration;
         let mgr = crate::agent::lsp::LspManager::with_host_factory(

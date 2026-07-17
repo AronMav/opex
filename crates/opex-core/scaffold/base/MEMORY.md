@@ -10,8 +10,8 @@ Core (Rust, :18789)
 └── Docker sandbox — for regular agents, NOT for {AGENT_NAME}
 ```
 
-**Key paths on Pi:**
-- Binary: `~/opex/opex-core-aarch64`
+**Key paths on server (x86_64):**
+- Binary: `~/opex/opex-core-x86_64`
 - UI static: `~/opex/ui/out/`
 - Config: `~/opex/config/`
 - Workspace: `~/opex/workspace/`
@@ -73,7 +73,7 @@ Define the end state first: "What must be TRUE when this is done?" Work backward
 
 ### Verification Mindset
 Every step needs "how to prove it works." Verify with concrete evidence (command output, observable
-behavior). Details: `skill_use("verification")`.
+behavior) rather than assumptions.
 
 ### Error Recovery
 Diagnose from error message; fix in next attempt — never repeat verbatim. After 2 failed attempts,

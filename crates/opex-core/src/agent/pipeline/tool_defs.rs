@@ -36,6 +36,7 @@ pub fn all_system_tool_names() -> &'static [&'static str] {
             default_timezone: "UTC",
             has_sandbox: true,
             browser_renderer_url: "",
+            lsp_enabled: true,
         };
         build_internal_tool_definitions(&ctx)
             .into_iter()
@@ -72,6 +73,10 @@ pub struct ToolDefsContext<'a> {
     pub default_timezone: &'a str,
     pub has_sandbox: bool,
     pub browser_renderer_url: &'a str,
+    /// Whether the `lsp` tool is emitted (gated on `[lsp] enabled`, like
+    /// `browser_action` is gated on browser-renderer availability). The
+    /// authoritative catalogue `all_system_tool_names()` forces this `true`.
+    pub lsp_enabled: bool,
 }
 
 // ── Helper: resolve groups with default fallback ────────────────────────
@@ -176,37 +181,6 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
                     }
                 },
                 "required": ["patch"]
-            }),
-        },
-        ToolDefinition {
-            name: "lsp".to_string(),
-            description: "IDE intelligence for the agent's Python project files via an in-process language-server pool (Pyright).\n\nActions:\n• diagnostics — report type errors and warnings in `file` (no cursor needed)\n• definition  — go to definition of the symbol at `file:line:character`\n• references  — find all references to the symbol at `file:line:character`\n• hover       — show type/doc hover for the symbol at `file:line:character`\n• symbols     — list all top-level symbols (classes, functions, variables) in `file`\n• rename      — rename the symbol at `file:line:character` to `new_name`; applies the resulting WorkspaceEdit to all affected files atomically and returns a summary\n\nPositions are 0-based (LSP convention). `file` is a workspace-relative path (e.g. `myproject/app.py`).".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["diagnostics", "definition", "references", "hover", "symbols", "rename"],
-                        "description": "LSP operation to perform."
-                    },
-                    "file": {
-                        "type": "string",
-                        "description": "Workspace-relative path to the source file (e.g. 'myproject/main.py')."
-                    },
-                    "line": {
-                        "type": "integer",
-                        "description": "0-based line number. Required for definition, references, hover, rename."
-                    },
-                    "character": {
-                        "type": "integer",
-                        "description": "0-based byte offset within the line (utf-8). Required for definition, references, hover, rename."
-                    },
-                    "new_name": {
-                        "type": "string",
-                        "description": "Replacement identifier. Required for rename."
-                    }
-                },
-                "required": ["action", "file"]
             }),
         },
         ToolDefinition {
@@ -317,13 +291,13 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         },
         ToolDefinition {
             name: "memory".to_string(),
-            description: "Long-term memory: action=search/index/get/delete/update/compress. Use pinned=true for permanent facts.".to_string(),
+            description: "Long-term memory: action=search/index/reindex/get/delete/update. Use pinned=true for permanent facts.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["search", "index", "get", "delete", "update", "compress"],
+                        "enum": ["search", "index", "reindex", "get", "delete", "update"],
                         "description": "Memory action to perform"
                     },
                     "query": {
@@ -965,6 +939,42 @@ Only available in interactive contexts (web UI or Telegram); returns an error in
         }),
     });
 
+    // LSP tooling (conditional on `[lsp] enabled`; execution separately gated
+    // by the LspManager in AgentDeps). `all_system_tool_names()` forces this on.
+    if ctx.lsp_enabled {
+        tools.push(ToolDefinition {
+            name: "lsp".to_string(),
+            description: "IDE intelligence for the agent's Python project files via an in-process language-server pool (Pyright).\n\nActions:\n• diagnostics — report type errors and warnings in `file` (no cursor needed)\n• definition  — go to definition of the symbol at `file:line:character`\n• references  — find all references to the symbol at `file:line:character`\n• hover       — show type/doc hover for the symbol at `file:line:character`\n• symbols     — list all top-level symbols (classes, functions, variables) in `file`\n• rename      — rename the symbol at `file:line:character` to `new_name`; applies the resulting WorkspaceEdit to all affected files atomically and returns a summary\n\nPositions are 0-based (LSP convention). `file` is a workspace-relative path (e.g. `myproject/app.py`).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["diagnostics", "definition", "references", "hover", "symbols", "rename"],
+                        "description": "LSP operation to perform."
+                    },
+                    "file": {
+                        "type": "string",
+                        "description": "Workspace-relative path to the source file (e.g. 'myproject/main.py')."
+                    },
+                    "line": {
+                        "type": "integer",
+                        "description": "0-based line number. Required for definition, references, hover, rename."
+                    },
+                    "character": {
+                        "type": "integer",
+                        "description": "0-based byte offset within the line (utf-8). Required for definition, references, hover, rename."
+                    },
+                    "new_name": {
+                        "type": "string",
+                        "description": "Replacement identifier. Required for rename."
+                    }
+                },
+                "required": ["action", "file"]
+            }),
+        });
+    }
+
     // Browser automation (conditional on browser-renderer availability)
     if ctx.browser_renderer_url != "disabled" {
         tools.push(ToolDefinition {
@@ -1193,6 +1203,7 @@ mod tests {
             default_timezone: "UTC",
             has_sandbox: false,
             browser_renderer_url: "http://localhost:9020",
+            lsp_enabled: false,
         };
         let tools = build_internal_tool_definitions(&ctx);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -1218,6 +1229,7 @@ mod tests {
             default_timezone: "UTC",
             has_sandbox: true,
             browser_renderer_url: "disabled",
+            lsp_enabled: false,
         };
         let tools = build_internal_tool_definitions(&ctx);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -1292,6 +1304,7 @@ mod tests {
             default_timezone: "UTC",
             has_sandbox: true,
             browser_renderer_url: "disabled",
+            lsp_enabled: false,
         };
         let tools = build_internal_tool_definitions(&ctx);
         let agent = tools

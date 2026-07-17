@@ -166,6 +166,44 @@ pub(crate) fn classify_failure_kind(reason: &str) -> &'static str {
 /// Persist a structured `session_failures` row in the background. Logs and
 /// swallows any error — failure logging must never break finalize.
 #[allow(clippy::too_many_arguments)]
+/// Record a status-tagged aborted usage row (m025). An interrupted turn
+/// (cancel_token / sink_closed) aborts the final LLM call before its usage
+/// headers arrive, so `record_usage` never fires for it. **Only the Interrupted
+/// outcome qualifies** — `Failed` outcomes had their LLM calls complete (usage
+/// already recorded via `record_usage`), so recording here would double-count.
+/// Input tokens are unknown at abort time (the helper writes 0); output is
+/// estimated from the partial text length. Skipped when provider/model weren't
+/// captured (can't attribute the row).
+pub(crate) fn spawn_record_aborted_usage(
+    db: PgPool,
+    session_id: Uuid,
+    agent_name: String,
+    llm_provider: Option<String>,
+    llm_model: Option<String>,
+    partial_len: usize,
+    tracker: &TaskTracker,
+) {
+    let (Some(provider), Some(model)) = (llm_provider, llm_model) else {
+        return;
+    };
+    let out_est = (partial_len / 4) as u32;
+    tracker.spawn(async move {
+        if let Err(e) = crate::db::usage::insert_aborted_row(
+            &db,
+            &agent_name,
+            &provider,
+            &model,
+            session_id,
+            out_est,
+            crate::db::usage::STATUS_ABORTED,
+        )
+        .await
+        {
+            tracing::warn!(error = %e, "failed to record aborted usage row");
+        }
+    });
+}
+
 pub(crate) fn spawn_record_failure(
     db: PgPool,
     session_id: Uuid,
@@ -648,6 +686,19 @@ pub async fn finalize<S: EventSink>(
                 }
             }
             lifecycle_guard.interrupt(reason).await;
+            // Abort-usage accounting (m025): the interrupted final LLM call never
+            // emitted usage headers, so record a status-tagged row so aborted
+            // token spend isn't silently lost. See helper docstring for why only
+            // this arm (not Failed) qualifies.
+            spawn_record_aborted_usage(
+                ctx.db.clone(),
+                ctx.session_id,
+                ctx.agent_name.clone(),
+                ctx.llm_provider.clone(),
+                ctx.llm_model.clone(),
+                partial.len(),
+                &ctx.bg_tasks,
+            );
             // Close SSE stream cleanly. Without Finish the frontend would keep
             // the loader running and trigger reconnect attempts even though the
             // turn is fully finalized in DB.

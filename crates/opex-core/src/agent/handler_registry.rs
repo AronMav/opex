@@ -156,7 +156,7 @@ pub fn match_buttons(
 /// The model-driven menu (`file_handler` tool) and the menu-click endpoints
 /// (`/api/files/run`, `/api/files/menu-run`) enqueue the chosen handler onto the
 /// async-only `handler_jobs` queue. Sync handlers (describe / extract_document /
-/// save) run INLINE via the composer's `/api/files/{id}/run` path instead;
+/// save) run INLINE via the composer's `/api/files/run` path instead;
 /// offering or enqueuing one through the async menu path strands the job (no
 /// `/complete` callback is ever posted). `match_url_handlers` already filters
 /// this way — this applies the same guard to the upload path, which shares the

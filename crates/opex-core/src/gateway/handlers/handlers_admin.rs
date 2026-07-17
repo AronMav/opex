@@ -1,7 +1,7 @@
 //! Admin surface for the File Handler Hub — the "File Handlers" (Обработчики
 //! файлов) tab under Tools. Read-only manifest listing + the builtin allowlist
-//! toggle. The allowlist is the SAME single store the composer's
-//! `/api/files/{id}/actions` reads (`system_flags['fse.allowlist.enabled']`
+//! toggle. The allowlist is the SAME single store the composer's file-handler
+//! menu reads (`system_flags['fse.allowlist.enabled']`
 //! via `get_enabled_allowlist`), so toggling here changes which builtin
 //! buttons appear per-file. Behind bearer auth (merged in `gateway/mod.rs`);
 //! not loopback-exempt.
