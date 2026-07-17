@@ -9,7 +9,6 @@ members = [
     "crates/opex-db",
     "crates/opex-embedding",
     "crates/opex-gateway-util",
-    "crates/opex-migrate-checksums",
 ]
 
 [workspace.package]
