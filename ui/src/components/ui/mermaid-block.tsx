@@ -6,6 +6,7 @@ import { useTheme } from "next-themes"
 import { useTranslation } from "@/hooks/use-translation"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from "@/components/ui/button";
+import { getMermaid } from "@/lib/mermaid-singleton"
 
 const MIN_ZOOM = 0.5
 const MAX_ZOOM = 3
@@ -23,22 +24,7 @@ export function MermaidBlock({ code }: { code: string }) {
     let cancelled = false
     ;(async () => {
       try {
-        const mermaid = (await import("mermaid")).default
-        const isDark = resolvedTheme === "dark"
-        mermaid.initialize({
-          startOnLoad: false,
-          theme: isDark ? "dark" : "neutral",
-          securityLevel: "strict",
-          flowchart: {
-            htmlLabels: true,
-            curve: "basis",
-            nodeSpacing: 30,
-            rankSpacing: 30,
-            diagramPadding: 8,
-            useMaxWidth: true,
-            padding: 15,
-          },
-        })
+        const mermaid = await getMermaid(resolvedTheme === "dark" ? "dark" : "light")
         const id = `mermaid-${typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)}`
         const { svg } = await mermaid.render(id, code)
         // Sanitize with DOMPurify — allow foreignObject + style for htmlLabels
