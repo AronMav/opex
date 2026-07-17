@@ -235,31 +235,61 @@ mod tests {
 
     #[test]
     fn baseline_stats_loo_is_unbiased_on_no_drift() {
-        // 8 baseline turns iid around a direction + one "recent" from the SAME
-        // distribution. With LOO, the recent z must be ≈ 0 (not systematically
-        // positive) — this is the regression test for the in-sample bias.
+        // 6 baseline turns iid around a (weak) shared direction + one "recent"
+        // turn from the SAME distribution. With LOO, the recent z must stay
+        // near 0 (not systematically positive) — this is the regression test
+        // for the in-sample bias: a naive in-sample (full-centroid) estimator
+        // makes every baseline turn look artificially close to μ (it's part
+        // of the centroid it's measured against), understating σ and μ and
+        // pushing the held-out `recent` turn's z positive even though nothing
+        // drifted.
+        //
+        // Noise amplitude is large (2.0) and the shared axis small (0.3) so
+        // the no-drift distances sit well above SIGMA_FLOOR_ABS (0.05) — on a
+        // tightly clustered baseline the σ-floor swallows the bias and both
+        // estimators pass, which is why the old version of this test
+        // (amplitude 0.6, shared axis 1.0, n=8) didn't discriminate.
         let dim = 64usize;
         let mk = |seed: u64| -> Vec<f32> {
-            // deterministic pseudo-random unit-ish vector around e0 with noise
+            // deterministic pseudo-random vector around a weak e0 bias with noise
             let mut v = vec![0.0f32; dim];
-            v[0] = 1.0;
+            v[0] = 0.3;
             let mut s = seed.wrapping_mul(2654435761);
             for x in v.iter_mut() {
                 s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
-                *x += ((s >> 33) as f32 / u32::MAX as f32 - 0.5) * 0.6;
+                *x += ((s >> 33) as f32 / u32::MAX as f32 - 0.5) * 2.0;
             }
             v
         };
-        let base: Vec<Vec<f32>> = (0..8).map(mk).collect();
-        let (_c, mu, sigma) = baseline_stats(&base).expect("stats");
+        let base: Vec<Vec<f32>> = (0..6).map(mk).collect();
+        let (c, mu, sigma) = baseline_stats(&base).expect("stats");
         assert!(sigma > 0.0, "sigma must be positive on varied baseline");
-        // A held-out turn from the same distribution:
+
+        // Held-out no-drift turn from the same distribution.
         let recent = mk(999);
-        let (c, _, _) = baseline_stats(&base).unwrap();
         let d_r = drift_score(&c, &recent);
-        let z = drift_zscore(mu, sigma, d_r);
-        // Unbiased: |z| should be small (well under z_fire=2.5), NOT ~+1..2.5.
-        assert!(z.abs() < 2.0, "no-drift z should be near 0, got {z} (bias?)");
+        let z_loo = drift_zscore(mu, sigma, d_r);
+
+        // Inline in-sample (buggy-alternative) estimator on the SAME data:
+        // each baseline turn's distance to the FULL centroid instead of the
+        // leave-one-out centroid of the other turns.
+        let dists_in: Vec<f32> = base.iter().map(|b| 1.0 - cosine(b, &c)).collect();
+        let nf = base.len() as f32;
+        let mu_in = dists_in.iter().sum::<f32>() / nf;
+        let var_in = dists_in.iter().map(|d| (d - mu_in).powi(2)).sum::<f32>() / (nf - 1.0);
+        let sigma_in = var_in.sqrt();
+        let z_in = drift_zscore(mu_in, sigma_in, d_r);
+
+        // LOO is (near-)unbiased: no-drift z stays close to 0.
+        assert!(z_loo.abs() < 1.0, "LOO no-drift z should be near 0, got {z_loo}");
+        // The real regression guard: LOO must sit meaningfully BELOW the
+        // in-sample estimate on identical data. If `baseline_stats` were
+        // reverted to an in-sample (full-centroid) estimator, z_loo would
+        // equal z_in and this assert would fail.
+        assert!(
+            z_loo < z_in - 0.5,
+            "LOO must remove the in-sample bias: z_loo={z_loo} z_in={z_in}"
+        );
     }
 
     #[test]
