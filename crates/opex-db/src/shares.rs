@@ -44,16 +44,6 @@ pub async fn session_for_token(db: &PgPool, token: &str) -> Result<Option<Uuid>>
     Ok(row.map(|r| r.0))
 }
 
-/// The current share token for a session, if shared.
-pub async fn token_for_session(db: &PgPool, session_id: Uuid) -> Result<Option<String>> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT token FROM session_shares WHERE session_id = $1")
-            .bind(session_id)
-            .fetch_optional(db)
-            .await?;
-    Ok(row.map(|r| r.0))
-}
-
 /// Revoke (delete) a session's share. Returns true if a row was removed.
 pub async fn delete_share_for_session(db: &PgPool, session_id: Uuid) -> Result<bool> {
     let res = sqlx::query("DELETE FROM session_shares WHERE session_id = $1")

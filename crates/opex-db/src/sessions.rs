@@ -447,27 +447,6 @@ pub async fn get_session_chain(
     Ok(rows)
 }
 
-/// Create a brand-new isolated session (no history reuse).
-/// Used by cron dynamic jobs so each run starts with a clean context.
-pub async fn create_isolated_session_with_user(
-    db: &PgPool,
-    agent_id: &str,
-    user_id: &str,
-    channel: &str,
-) -> Result<Uuid> {
-    let row = sqlx::query(
-        "INSERT INTO sessions (agent_id, user_id, channel, participants) \
-         VALUES ($1, $2, $3, ARRAY[$1]) RETURNING id",
-    )
-    .bind(agent_id)
-    .bind(user_id)
-    .bind(channel)
-    .fetch_one(db)
-    .await?;
-
-    Ok(row.get("id"))
-}
-
 /// Set session title from user's first message if not already titled.
 /// Truncates to ~60 chars on a word boundary.
 pub async fn auto_title_session(db: &PgPool, session_id: Uuid, user_text: &str) -> Result<()> {
@@ -830,7 +809,7 @@ pub async fn get_session_run_status(db: &PgPool, session_id: Uuid) -> Result<Opt
 ///
 /// Only allows transitions from `running` or `NULL` (new session). This blocks
 /// all terminal→terminal jumps (e.g. failed→done, interrupted→failed) at the
-/// SQL level. `claim_session_running` keeps its own looser guard because it
+/// SQL level. `claim_session_running_with_mode` keeps its own looser guard because it
 /// must allow soft-terminal → running re-entry.
 pub async fn set_session_run_status(db: &PgPool, session_id: Uuid, status: &str) -> Result<()> {
     // Match the doc-comment semantics in SQL: only `running` or NULL may
@@ -863,26 +842,7 @@ pub fn warn_invalid_transition(from: Option<SessionStatus>, to: SessionStatus, s
     }
 }
 
-/// Try to atomically claim a session as `'running'`. Returns `true` when the
-/// session exists and was claimed (regardless of previous status), `false` when
-/// the session was not found. Allows re-entry from any status including `'done'`
-/// so that users can continue completed conversations. The guard-drop race is
-/// safe: `cleanup_session_terminated` (used by `SessionLifecycleGuard`)
-/// performs its step-1 claim with `WHERE run_status = 'running'`, so a
-/// completed-then-reclaimed session cannot be accidentally set to `'failed'`
-/// by a stale guard.
-pub async fn claim_session_running(db: &PgPool, session_id: Uuid) -> Result<bool> {
-    let rows = sqlx::query(
-        "UPDATE sessions SET run_status = 'running' WHERE id = $1"
-    )
-        .bind(session_id)
-        .execute(db)
-        .await?
-        .rows_affected();
-    Ok(rows > 0)
-}
-
-/// Mode-aware variant of `claim_session_running`. Sets `run_status = 'running'`
+/// Claims a session as `'running'`, mode-aware. Sets `run_status = 'running'`
 /// only when the transition is consistent with `mode`:
 ///
 /// - `NewSession`: row was just inserted; allow `NULL → running`.
@@ -946,7 +906,7 @@ pub async fn claim_session_with_retry(
 
 /// Mark any `status='streaming'` messages in `session_id` as `'interrupted'`.
 ///
-/// Called in bootstrap just after `claim_session_running` so that a streaming
+/// Called in bootstrap just after `claim_session_running_with_mode` so that a streaming
 /// message left by a previous crashed run does not pollute the context of the
 /// new run. Returns the number of rows updated (0 if none were streaming).
 pub async fn cleanup_session_streaming_messages(
@@ -1224,20 +1184,7 @@ pub async fn mark_session_failed(db: &PgPool, session_id: Uuid) -> Result<()> {
     Ok(())
 }
 
-/// Get the last user message text from a session (for retry).
-pub async fn get_last_user_message(db: &PgPool, session_id: Uuid) -> Result<Option<String>> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT content FROM messages \
-         WHERE session_id = $1 AND role = 'user' \
-         ORDER BY created_at DESC LIMIT 1"
-    )
-    .bind(session_id)
-    .fetch_optional(db)
-    .await?;
-    Ok(row.map(|(c,)| c))
-}
-
-/// Like [`get_last_user_message`] but also returns the row id, so the retry
+/// Returns the last user message text and its row id, so the retry
 /// path can scope its DELETE to the EXACT captured message instead of a
 /// re-evaluated `ORDER BY created_at DESC LIMIT 1` subquery — which, if two
 /// retries raced, could resolve to (and delete) an OLDER user turn (F031).
