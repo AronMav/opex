@@ -137,6 +137,27 @@ export function useSessionRestore({
       return;
     }
 
+    // I1-b: an explicit ?s= deep-link to a DIFFERENT session that IS in the
+    // loaded window beats the "already viewing" branch below. Without this,
+    // that branch marks restored + returns before Priority 1 is ever reached,
+    // and the URL-sync effect then rewrites ?s= back to the old session —
+    // stranding a same-agent palette jump to a recent session (Ctrl+K from a
+    // non-chat page). Same-id keeps current behavior (falls through).
+    if (
+      effectiveUrlSessionId &&
+      effectiveUrlSessionId !== agentState?.activeSessionId &&
+      sessions.some((s) => s.id === effectiveUrlSessionId)
+    ) {
+      restoredAgents.current.add(currentAgent);
+      const urlSession = sessions.find((s) => s.id === effectiveUrlSessionId);
+      useChatStore.getState().selectSession(effectiveUrlSessionId, currentAgent);
+      // If session is still running, mark it so ChatThread's auto-resume effect picks it up
+      if (urlSession?.run_status === "running") {
+        useChatStore.getState().markSessionActive(currentAgent, effectiveUrlSessionId);
+      }
+      return;
+    }
+
     // If already viewing a real session (live or history) — validate it still
     // exists in the current sessions list. Pre-populated last session IDs may
     // be stale (deleted or outside the top-40 window); fall through to re-select

@@ -110,4 +110,46 @@ describe("useSessionRestore — same-agent deep-link (I1)", () => {
     );
     expect(selectSession).toHaveBeenCalledWith("url-sess", "Agent2");
   });
+
+  // I1-b: ?s= points at a session PRESENT in the loaded window while the agent
+  // is already viewing a DIFFERENT session. The resolver defers ("restore
+  // effect handles this"), so the restore effect's explicit-deep-link branch
+  // must beat "already viewing" — previously that branch marked restored +
+  // returned before Priority 1 was reached and URL-sync rewrote ?s= back to
+  // the old session.
+  it("selects the ?s= session over an already-viewed one when it IS in the loaded window (I1-b)", async () => {
+    renderHook(() =>
+      useSessionRestore({
+        currentAgent: "Agent1",
+        sessions: [sess("old-sess"), sess("url-sess")], // url-sess IS in the window
+        sessionsReady: true,
+        activeSessionId: "old-sess",
+        agents: ["Agent1", "Agent2"],
+      }),
+    );
+
+    await waitFor(() =>
+      expect(selectSession).toHaveBeenCalledWith("url-sess", "Agent1"),
+    );
+    // In-window deep-link — the cross-agent resolver never needed to fetch.
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(setCurrentAgent).not.toHaveBeenCalled();
+  });
+
+  it("keeps current behavior when ?s= equals the already-active session (no extra selectSession)", () => {
+    mockSearch = "s=old-sess";
+    renderHook(() =>
+      useSessionRestore({
+        currentAgent: "Agent1",
+        sessions: [sess("old-sess")],
+        sessionsReady: true,
+        activeSessionId: "old-sess",
+        agents: ["Agent1", "Agent2"],
+      }),
+    );
+
+    // Same id → falls through to "already viewing" (marks restored, no re-select).
+    expect(selectSession).not.toHaveBeenCalled();
+    expect(setCurrentAgent).not.toHaveBeenCalled();
+  });
 });
