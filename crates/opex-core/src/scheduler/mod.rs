@@ -540,28 +540,6 @@ impl Scheduler {
         Ok(())
     }
 
-    /// Add `pending_messages` cleanup job (daily at 6:30 UTC — delete rows older than 7 days).
-    pub async fn add_pending_messages_cleanup(&self, db: PgPool) -> Result<()> {
-        tracing::info!("scheduling pending_messages cleanup (daily 06:30 UTC)");
-
-        let job = Job::new_async("0 30 6 * * *", move |_uuid, _lock| {
-            let db = db.clone();
-            Box::pin(async move {
-                match crate::db::pending::cleanup_old(&db, 7 * 24).await {
-                    Ok(deleted) => {
-                        if deleted > 0 {
-                            tracing::info!(deleted, "pending_messages cleanup completed");
-                        }
-                    }
-                    Err(e) => tracing::error!(error = %e, "pending_messages cleanup failed"),
-                }
-            })
-        })?;
-
-        self.scheduler.add(job).await?;
-        Ok(())
-    }
-
     /// Add outbound queue cleanup job (daily at 06:45 UTC).
     /// Deletes acked items older than 7 days.
     pub async fn add_outbound_queue_cleanup(&self, db: PgPool) -> Result<()> {

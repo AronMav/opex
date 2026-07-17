@@ -161,73 +161,11 @@ pub(super) async fn handle_ready(
         });
     }
 
-    // Replay any pending messages from the previous disconnection.
-    replay_pending_messages(ctx, agent_name, &state.channel_type, out_tx).await;
-
-    // Replay unacked outbound queue actions for this channel.
+    // Replay unacked outbound queue actions for this channel. This also carries
+    // any final replies that couldn't be delivered live before a disconnect —
+    // the engine enqueues them as `send_message` actions (A5 durable delivery),
+    // superseding the never-wired pending_messages mechanism.
     replay_outbound_queue(ctx, agent_name, &state.channel_type, out_tx, outbound_ids).await;
-}
-
-/// Take pending `done`/`error` frames the previous WS lifetime couldn't
-/// deliver and re-emit them. If the writer rejects (channel closed), we
-/// re-save the rest as pending so the next reconnect can pick them up.
-async fn replay_pending_messages(
-    ctx: &CwsCtx,
-    agent_name: &str,
-    channel_type: &str,
-    out_tx: &mpsc::Sender<OutboundMsg>,
-) {
-    let pending = match crate::db::pending::take_pending(&ctx.infra.db, agent_name).await {
-        Ok(p) if !p.is_empty() => p,
-        Ok(_) => return,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to fetch pending messages");
-            return;
-        }
-    };
-
-    tracing::info!(%agent_name, count = pending.len(), "delivering pending messages after reconnect");
-    let mut failed = false;
-    for pm in pending {
-        if failed {
-            // Writer is gone — re-save remaining messages.
-            crate::db::pending::save_pending(
-                &ctx.infra.db,
-                agent_name,
-                &pm.request_id,
-                &pm.channel,
-                &pm.message_type,
-                &pm.text,
-            )
-            .await
-            .ok();
-            continue;
-        }
-        let outbound = if pm.message_type == "done" {
-            ChannelOutbound::Done {
-                request_id: pm.request_id.clone(),
-                text: pm.text.clone(),
-            }
-        } else {
-            ChannelOutbound::Error {
-                request_id: pm.request_id.clone(),
-                message: pm.text.clone(),
-            }
-        };
-        if out_tx.send(OutboundMsg::Wire(outbound)).await.is_err() {
-            failed = true;
-            crate::db::pending::save_pending(
-                &ctx.infra.db,
-                agent_name,
-                &pm.request_id,
-                channel_type,
-                &pm.message_type,
-                &pm.text,
-            )
-            .await
-            .ok();
-        }
-    }
 }
 
 /// Replay channel actions that were queued but never acked (max 50 oldest).

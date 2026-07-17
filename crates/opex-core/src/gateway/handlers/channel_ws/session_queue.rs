@@ -154,6 +154,10 @@ async fn run_turn_body(turn: QueuedTurn) {
         request_id, msg, timeout_secs, out_tx, inflight: _, cancel_token,
     } = turn;
 
+    // Capture the adapter's opaque routing context (carries chat_id) BEFORE
+    // `into_incoming` consumes `msg` — needed for the durable-delivery fallback
+    // at the end of the turn if the live final frame can't be sent. (A5)
+    let routing_context = msg.context.clone();
     let incoming = msg.into_incoming(
         engine.cfg().agent.name.clone(),
         channel_type.clone(),
@@ -211,12 +215,46 @@ async fn run_turn_body(turn: QueuedTurn) {
     let _ = chunk_forwarder.await;
     let _ = phase_forwarder.await;
 
-    let final_msg = match result {
-        Ok(text) => ChannelOutbound::Done { request_id: request_id.clone(), text },
-        Err(e) => ChannelOutbound::Error { request_id: request_id.clone(), message: e.to_string() },
+    let (final_msg, reply_text) = match result {
+        Ok(text) => (
+            ChannelOutbound::Done { request_id: request_id.clone(), text: text.clone() },
+            text,
+        ),
+        Err(e) => {
+            let message = e.to_string();
+            (
+                ChannelOutbound::Error { request_id: request_id.clone(), message: message.clone() },
+                message,
+            )
+        }
     };
     if out_tx.send(OutboundMsg::Wire(final_msg)).await.is_err() {
-        tracing::debug!(agent = %agent_name, %request_id, "out_tx closed before final frame");
+        // The adapter/WS is gone before the final frame landed. Done/Error are
+        // request-response (they resolve an in-memory promise in the adapter);
+        // after an adapter restart there is no awaiting promise, so a replayed
+        // frame can't be routed. Instead enqueue a push-model `send_message`
+        // action into the durable outbound queue — `replay_outbound_queue`
+        // re-delivers it (fresh action_id, routed by context.chat_id) on the
+        // next reconnect, surviving restarts. (A5 durable-delivery redesign;
+        // replaces the never-wired pending_messages mechanism.)
+        tracing::debug!(agent = %agent_name, %request_id, "out_tx closed before final frame — enqueuing durable reply");
+        if !reply_text.is_empty() {
+            let payload = serde_json::json!({
+                "params": { "text": reply_text },
+                "context": routing_context,
+            });
+            if let Err(e) = crate::db::outbound::enqueue_action(
+                engine.db_pool(),
+                &agent_name,
+                &channel_type,
+                "send_message",
+                &payload,
+            )
+            .await
+            {
+                tracing::warn!(agent = %agent_name, %request_id, error = %e, "failed to enqueue durable reply");
+            }
+        }
     }
 }
 

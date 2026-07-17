@@ -1450,9 +1450,6 @@ async fn schedule_periodic_jobs(
     if let Err(e) = sched.add_tool_audit_cleanup(db.clone(), 90).await {
         tracing::warn!(error = %e, job = "tool_audit_cleanup", "failed to register cron job");
     }
-    if let Err(e) = sched.add_pending_messages_cleanup(db.clone()).await {
-        tracing::warn!(error = %e, job = "pending_messages_cleanup", "failed to register cron job");
-    }
     if let Err(e) = sched.add_outbound_queue_cleanup(db.clone()).await {
         tracing::warn!(error = %e, job = "outbound_queue_cleanup", "failed to register cron job");
     }
