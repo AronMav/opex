@@ -287,64 +287,90 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
             return None;
         }
         let agent = self.agent_name();
-        let texts = crate::agent::drift::own_assistant_texts(history, agent);
-        // нужно ≥ baseline_turns эталонных + ≥1 свежий
-        if texts.len() < cfg.baseline_turns + 1 {
+        // Length-gated own-turns eligible for the baseline (drops trivial turns).
+        let all_texts = crate::agent::drift::own_assistant_texts(history, agent);
+        let eligible: Vec<&String> = all_texts
+            .iter()
+            .filter(|t| t.chars().count() >= crate::agent::drift::MIN_BASELINE_CHARS)
+            .collect();
+        // Need ≥ baseline_turns eligible + ≥1 recent (the latest own-turn).
+        if eligible.len() < cfg.baseline_turns + 1 {
             return None;
         }
         let embedder = &self.cfg().embedder;
-
-        // baseline: центроид первых baseline_turns собственных ответов (кэш пер-сессия)
         let baselines = &self.cfg().drift_baselines;
-        let baseline = if let Some(b) = baselines.get(&session_id) {
-            b.clone()
-        } else {
-            let base_texts: Vec<&str> = texts.iter().take(cfg.baseline_turns).map(|s| s.as_str()).collect();
+
+        // 1. Establish (once) via or_insert — never a blind insert that could
+        //    clobber a concurrently-updated anchor_active (spec §4.1). We compute
+        //    the CachedDrift OUTSIDE the map first (embed is async), then insert
+        //    only if still absent.
+        if !baselines.contains_key(&session_id) {
+            let base_texts: Vec<&str> =
+                eligible.iter().take(cfg.baseline_turns).map(|s| s.as_str()).collect();
             let embs = match embedder.embed_batch(&base_texts).await {
                 Ok(e) => e,
                 Err(e) => { tracing::warn!(agent, error = %e, "drift baseline embed failed"); return None; }
             };
-            let Some(c) = crate::agent::drift::centroid(&embs) else {
-                tracing::warn!(agent, "drift baseline centroid degenerate"); return None;
+            let Some((centroid, mu, sigma)) = crate::agent::drift::baseline_stats(&embs) else {
+                tracing::warn!(agent, "drift baseline degenerate"); return None;
             };
-            let arc = std::sync::Arc::new(c);
-            // soft-cap backstop: не даём кэшу расти безгранично (спека §3; основная
-            // эвикция — на finalize, Task 3 Step 3). ВАЖНО: ключ извлекаем в
+            // soft-cap backstop: не даём кэшу расти безгранично (спека §4.4,
+            // accepted debt — non-LRU eviction). ВАЖНО: ключ извлекаем в
             // отдельный `let`, чтобы временный DashMap `Iter` (держит shard read-guard)
             // ДРОПНУЛСЯ на `;` ДО `remove` — иначе self-deadlock (remove на том же шарде).
             const MAX_BASELINES: usize = 2000;
             if baselines.len() >= MAX_BASELINES {
                 let victim = baselines.iter().next().map(|e| *e.key());
-                if let Some(k) = victim {
-                    baselines.remove(&k);
-                }
+                if let Some(k) = victim { baselines.remove(&k); }
             }
-            baselines.insert(session_id, arc.clone());
-            arc
-        };
+            baselines
+                .entry(session_id)
+                .or_insert(crate::agent::drift::CachedDrift { centroid, mu, sigma, anchor_active: false });
+        }
 
-        // recent: последний собственный ответ
-        let recent_text = texts.last()?;
+        // 2. Recent turn embed → z. Fail-soft: return without touching state.
+        let recent_text = eligible.last()?;
         let recent = match embedder.embed(recent_text).await {
             Ok(v) => v,
             Err(e) => { tracing::warn!(agent, error = %e, "drift recent embed failed"); return None; }
         };
-        let score = crate::agent::drift::drift_score(&baseline, &recent);
-        let over = score > cfg.threshold;
-        let anchor = crate::agent::drift::correction_anchor(
-            score, cfg.threshold, cfg.correct, cfg.anchor.as_deref(), agent,
-        );
+        // Read frozen μ/σ/centroid (clone the small parts) to compute z, then do
+        // the hysteresis RMW under a SEPARATE single get_mut (steps 2+3 split so
+        // no async await is held across the shard lock).
+        let (mu, sigma, dist) = {
+            let entry = baselines.get(&session_id)?; // evicted mid-flight
+            let dist = crate::agent::drift::drift_score(&entry.centroid, &recent);
+            (entry.mu, entry.sigma, dist)
+        };
+        let z = crate::agent::drift::drift_zscore(mu, sigma, dist);
 
-        // cos напрямую для наблюдаемости (декомпозиция — ревью F13)
-        let cos = 1.0 - score;
+        // 3. Hysteresis RMW under a single get_mut critical section (spec §4.2).
+        let (active, fired) = {
+            let mut entry = baselines.get_mut(&session_id)?;
+            let prev = entry.anchor_active;
+            let new_active = crate::agent::drift::hysteresis_decision(z, prev, cfg.z_fire, cfg.z_release);
+            entry.anchor_active = new_active;
+            (new_active, new_active && !prev)
+        };
+
+        // 4. Inject iff correct && active.
+        let anchor = if cfg.correct && active {
+            Some(crate::agent::drift::build_anchor_block(cfg.anchor.as_deref(), agent))
+        } else {
+            None
+        };
+
+        // 5. Log (regardless of correct).
         let payload = serde_json::json!({
-            "drift_score": score,
-            "cos_recent_baseline": cos,
-            "own_assistant_turns": texts.len(),
+            "z": z,
+            "dist": dist,
+            "mu": mu,
+            "sigma": sigma,
+            "active": active,
+            "fired": fired,
+            "own_assistant_turns": all_texts.len(),
             "baseline_turns_used": cfg.baseline_turns,
             "history_len": history.len(),
-            "over_threshold": over,
-            "corrected": anchor.is_some(),
         });
         if let Err(e) = opex_db::session_timeline::log_event(
             &self.cfg().db, session_id, "drift_probe", Some(&payload),
@@ -352,11 +378,9 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
             tracing::warn!(agent, error = %e, "drift timeline write failed");
         }
         if anchor.is_some() {
-            tracing::info!(agent, drift_score = score, "drift anchor injected");
-        } else if over {
-            tracing::warn!(agent, drift_score = score, "persona drift over threshold");
+            tracing::info!(agent, z, "drift anchor active");
         } else {
-            tracing::debug!(agent, drift_score = score, "drift probe");
+            tracing::debug!(agent, z, active, "drift probe");
         }
         anchor
     }

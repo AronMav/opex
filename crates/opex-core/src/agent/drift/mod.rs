@@ -301,7 +301,7 @@ mod tests {
         let d_r = mu + 0.30; // a "modest" shift equal to mu
         let z = drift_zscore(mu, sigma, d_r);
         // sigma_eff = max(0.001, 0.05, 0.2*0.30=0.06) = 0.06 → z = 0.30/0.06 = 5, clamped ok, but NOT 300.
-        assert!(z <= Z_CAP && z < 6.0, "relative floor must cap sensitivity, got {z}");
+        assert!(z < 6.0, "relative floor must cap sensitivity, got {z}");
     }
 
     #[test]
