@@ -86,17 +86,6 @@ async def validate_handler(payload: dict = Body(...)):
     return validate_source(source, expected_id)
 
 
-@router.get("/handlers/{handler_id}")
-async def get_handler(handler_id: str, request: Request):
-    registry = request.app.state.handlers
-    if registry.get(handler_id) is None:
-        return JSONResponse(status_code=404, content={"error": "handler_not_found"})
-    for m in await _manifests_with_provider(request):
-        if m["id"] == handler_id:
-            return m
-    return JSONResponse(status_code=404, content={"error": "handler_not_found"})
-
-
 @router.post("/handlers/{handler_id}/run")
 async def run_handler(
     handler_id: str,

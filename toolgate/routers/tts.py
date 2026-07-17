@@ -59,35 +59,6 @@ async def list_voices(
     return {"voices": [], "note": "This provider does not support voice listing"}
 
 
-class TTSRequest(BaseModel):
-    text: str
-    voice: Optional[str] = None
-    model: Optional[str] = None
-    response_format: Optional[str] = "mp3"
-
-
-@router.post("/tts")
-async def tts(
-    body: TTSRequest,
-    request: Request,
-    provider=Depends(require_provider("tts")),
-):
-    log_provider(log, provider)
-    fmt = body.response_format or "mp3"
-    try:
-        audio_bytes = await provider.synthesize(
-            request.app.state.http_client, body.text,
-            body.voice or "", body.model, fmt,
-            registry=request.app.state.registry,
-        )
-        return Response(content=audio_bytes, media_type=_audio_media_type(fmt))
-    except httpx.HTTPStatusError as e:
-        return JSONResponse(status_code=e.response.status_code,
-                            content={"error": f"TTS error: {e.response.text}"})
-    except Exception as e:
-        return JSONResponse(status_code=502, content={"error": f"TTS error: {e}"})
-
-
 class OpenAISpeechRequest(BaseModel):
     model: Optional[str] = None
     input: str

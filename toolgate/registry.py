@@ -148,13 +148,6 @@ def get_driver_map() -> dict[tuple[str, str], type]:
 # capability names internally; do NOT mirror driver metadata here.
 CAPABILITIES = ["stt", "vision", "tts", "imagegen", "embedding", "websearch"]
 
-# Utility services (no provider abstraction, always available)
-UTILITY_SERVICES = [
-    {"id": "documents", "endpoint": "/extract-text-url", "label": "Documents", "sub": "Text Extraction"},
-    {"id": "fetch", "endpoint": "/fetch", "label": "Fetch", "sub": "URL Content"},
-]
-
-
 class ProviderRegistry:
     def __init__(self) -> None:
         self.config: ProvidersConfig = ProvidersConfig()

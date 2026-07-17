@@ -134,12 +134,6 @@ def test_get_handlers_304_on_if_none_match(tmp_path):
     assert r.status_code == 304
 
 
-def test_get_single_handler(tmp_path):
-    client = _build_client(tmp_path)
-    r = client.get("/handlers/echo")
-    assert r.status_code == 200
-    assert r.json()["id"] == "echo"
-    assert client.get("/handlers/missing").status_code == 404
 
 
 def test_run_sync_multipart_returns_scenario_outcome(tmp_path):
