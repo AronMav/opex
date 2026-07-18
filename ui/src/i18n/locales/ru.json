@@ -1342,7 +1342,7 @@
   "profiles.delete_title": "Удалить профиль?",
   "profiles.in_use_hint": "Нельзя удалить: используется одним или несколькими агентами",
   "profiles.default_hint": "Профиль Default нельзя удалить",
-  "profiles.add_reserve": "+ Резерв",
+  "profiles.add_reserve": "Резерв",
   "profiles.model_placeholder": "Модель",
   "profiles.model_default_placeholder": "По умолчанию провайдера",
   "profiles.voice_placeholder": "Голос",
@@ -1360,7 +1360,6 @@
   "profiles.slot_vision": "Зрение",
   "profiles.slot_imagegen": "Генерация изображений",
   "profiles.slot_websearch": "Веб-поиск",
-
   "palette.placeholder": "Поиск по сообщениям и сессиям...",
   "palette.sessions": "Сессии",
   "palette.messages": "Сообщения",
@@ -1372,7 +1371,6 @@
   "palette.favourites": "Избранное",
   "palette.session_deleted": "Эта сессия больше не существует",
   "palette.open_error": "Не удалось открыть сессию — попробуйте ещё раз",
-
   "fields.model_loading": "Загрузка моделей…",
   "fields.model_list_unavailable": "Список недоступен — введите id модели вручную",
   "fields.model_no_match": "Совпадений нет — значение будет использовано как есть",
