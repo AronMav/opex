@@ -202,7 +202,7 @@ describe("detailToForm — webhooks init", () => {
       max_history_messages: null, daily_budget_tokens: 0,
       max_failover_attempts: 0, is_running: false, config_dirty: false,
       soul: { enabled: false, reflection_threshold: 150, reflection_cooldown_minutes: 60, context_top_k: 6, context_budget_tokens: 800, max_events_per_session: 10 },
-      drift: { enabled: false, threshold: 0.15, min_history: 6, baseline_turns: 3, correct: false },
+      drift: { enabled: false, threshold: 0.15, min_history: 6, baseline_turns: 3, z_fire: 2.5, z_release: 1.0, correct: false },
       initiative: { enabled: false, daily_proposal_cap: 1, decompose: false, daily_plan: false, auto_approve_day_plan: false, daily_token_budget: 0 },
       emotion: { enabled: false, intensity_importance_k: 3, blend_rate: 0.3, decay_half_life_hours: 12 },
     });
@@ -224,7 +224,7 @@ describe("detailToForm — webhooks init", () => {
       max_history_messages: null, daily_budget_tokens: 0,
       max_failover_attempts: 0, is_running: false, config_dirty: false,
       soul: { enabled: false, reflection_threshold: 150, reflection_cooldown_minutes: 60, context_top_k: 6, context_budget_tokens: 800, max_events_per_session: 10 },
-      drift: { enabled: false, threshold: 0.15, min_history: 6, baseline_turns: 3, correct: false },
+      drift: { enabled: false, threshold: 0.15, min_history: 6, baseline_turns: 3, z_fire: 2.5, z_release: 1.0, correct: false },
       initiative: { enabled: false, daily_proposal_cap: 1, decompose: false, daily_plan: false, auto_approve_day_plan: false, daily_token_budget: 0 },
       emotion: { enabled: false, intensity_importance_k: 3, blend_rate: 0.3, decay_half_life_hours: 12 },
     });

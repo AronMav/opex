@@ -123,6 +123,9 @@ pub struct AgentDetailDriftDto {
     pub threshold: f32,
     pub min_history: usize,
     pub baseline_turns: usize,
+    /// Schmitt hysteresis fire/release z-thresholds (v2 self-calibrating metric).
+    pub z_fire: f32,
+    pub z_release: f32,
     pub correct: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-gen", ts(optional))]

@@ -138,6 +138,8 @@ impl AgentDetailDto {
                 threshold: a.drift.threshold,
                 min_history: a.drift.min_history,
                 baseline_turns: a.drift.baseline_turns,
+                z_fire: a.drift.z_fire,
+                z_release: a.drift.z_release,
                 correct: a.drift.correct,
                 anchor: a.drift.anchor.clone(),
             },

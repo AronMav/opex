@@ -12,7 +12,7 @@ export type AgentDetailApprovalDto = { enabled: boolean, require_for: Array<stri
 
 export type AgentDetailCompactionDto = { enabled: boolean, threshold: number, preserve_tool_calls: boolean, preserve_last_n: number, max_context_tokens: number | null, };
 
-export type AgentDetailDriftDto = { enabled: boolean, threshold: number, min_history: number, baseline_turns: number, correct: boolean, anchor?: string, };
+export type AgentDetailDriftDto = { enabled: boolean, threshold: number, min_history: number, baseline_turns: number, z_fire: number, z_release: number, correct: boolean, anchor?: string, };
 
 export type AgentDetailDto = { name: string, language: string, 
 /**

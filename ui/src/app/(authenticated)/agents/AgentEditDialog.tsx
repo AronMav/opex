@@ -144,6 +144,8 @@ export interface FormState {
   driftThreshold: string;
   driftMinHistory: string;
   driftBaselineTurns: string;
+  driftZFire: string;
+  driftZRelease: string;
   driftCorrect: boolean;
   driftAnchor: string;
   // Initiative
@@ -709,6 +711,12 @@ export function AgentEditDialog({
                         </Field>
                         <Field label={t("agents.drift_baseline_turns")} labelClassName="text-xs">
                           <Input type="number" min={1} max={10} className="bg-background border-border font-mono text-sm h-8" value={form.driftBaselineTurns} onChange={(e) => upd({ driftBaselineTurns: e.target.value })} />
+                        </Field>
+                        <Field label={t("agents.drift_z_fire")} labelClassName="text-xs" hint={t("agents.drift_z_fire_hint")}>
+                          <Input type="number" step="0.1" min={0} max={20} className="bg-background border-border font-mono text-sm h-8" value={form.driftZFire} onChange={(e) => upd({ driftZFire: e.target.value })} />
+                        </Field>
+                        <Field label={t("agents.drift_z_release")} labelClassName="text-xs" hint={t("agents.drift_z_release_hint")}>
+                          <Input type="number" step="0.1" min={0} max={20} className="bg-background border-border font-mono text-sm h-8" value={form.driftZRelease} onChange={(e) => upd({ driftZRelease: e.target.value })} />
                         </Field>
                       </AdvancedSection>
                     </SwitchSection>
