@@ -123,7 +123,8 @@ pub struct AgentDetailDriftDto {
     pub threshold: f32,
     pub min_history: usize,
     pub baseline_turns: usize,
-    /// Schmitt hysteresis fire/release z-thresholds (v2 self-calibrating metric).
+    // Schmitt hysteresis fire/release z-thresholds (v2 self-calibrating metric).
+    // (non-doc comment: keep out of the ts-rs-generated TS to avoid JSDoc drift)
     pub z_fire: f32,
     pub z_release: f32,
     pub correct: bool,
