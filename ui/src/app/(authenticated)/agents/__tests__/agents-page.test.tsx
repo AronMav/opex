@@ -38,6 +38,17 @@ vi.mock("../AgentEditDialog", () => ({
 
 vi.mock("../RoutingRulesEditor", () => ({}));
 
+// The card grid now surfaces a per-agent model summary sourced from profiles +
+// providers. Neither is relevant to the StatusBadge assertions; stub both so the
+// page doesn't need a QueryClientProvider.
+vi.mock("@/hooks/use-profiles", () => ({
+  useProfiles: () => ({ data: { profiles: [] } }),
+  PROFILE_CAPABILITIES: ["text", "compaction", "stt", "tts", "vision", "imagegen", "websearch"],
+}));
+vi.mock("@/lib/queries", () => ({
+  useProviders: () => ({ data: [] }),
+}));
+
 // Only `apiGet("/api/agents")` matters for the initial render.
 const { apiGet } = vi.hoisted(() => ({ apiGet: vi.fn() }));
 vi.mock("@/lib/api", () => ({

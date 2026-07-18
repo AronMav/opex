@@ -99,6 +99,13 @@ export default function ChatPage() {
   // Refresh agent icons if stale (>60s since last fetch)
   useEffect(() => { refreshIfStale(); }, [refreshIfStale]);
 
+  // Reflect the connected agent in the browser tab title; restore "OPEX" on
+  // leave (unmount or when no agent is selected).
+  useEffect(() => {
+    document.title = currentAgent ? `${currentAgent} · OPEX` : "OPEX";
+    return () => { document.title = "OPEX"; };
+  }, [currentAgent]);
+
   // Detect read-only sessions (heartbeat, cron, inter-agent)
   const activeSession = sessions.find((s) => s.id === activeSessionId);
   const isReadOnly = activeSession?.channel === "heartbeat" || activeSession?.channel === "cron" || activeSession?.channel === "inter-agent";

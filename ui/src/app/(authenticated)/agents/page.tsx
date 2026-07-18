@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { useTranslation } from "@/hooks/use-translation";
 import type { TranslationKey } from "@/i18n/types";
@@ -8,8 +8,17 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { PageHeader } from "@/components/ui/page-header";
 import { SearchInput } from "@/components/ui/search-input";
 import { useAuthStore } from "@/stores/auth-store";
+import { useProviders } from "@/lib/queries";
+import type { Provider } from "@/types/api";
+import {
+  useProfiles,
+  PROFILE_CAPABILITIES,
+  type ProfileRow,
+  type ProfileCapability,
+} from "@/hooks/use-profiles";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { PageContainer } from "@/components/ui/page-container";
 import { IconTile } from "@/components/ui/icon-tile";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -376,6 +385,18 @@ export default function AgentsPage() {
   const [editName, setEditName] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  // Avatar lightbox: which agent's icon is enlarged (null = closed).
+  const [enlargedAvatar, setEnlargedAvatar] = useState<{ url: string; name: string } | null>(null);
+
+  // Profiles + providers power the per-card "main models" summary. Both are
+  // cached react-query reads shared with the rest of the app.
+  const { data: profilesData } = useProfiles();
+  const { data: providersData = [] } = useProviders();
+  const profilesByName = useMemo(() => {
+    const m = new Map<string, ProfileRow>();
+    for (const p of profilesData?.profiles ?? []) m.set(p.name, p);
+    return m;
+  }, [profilesData]);
 
   // Channels
   const [channels, setChannels] = useState<ChannelRow[]>([]);
@@ -626,19 +647,26 @@ export default function AgentsPage() {
             <Card key={a.name} interactive className="group p-4 md:p-5 transition-all duration-300 overflow-hidden flex flex-col min-w-0">
               <div className="flex items-start gap-3 mb-4 min-w-0">
                 <div className="relative shrink-0">
-                  <IconTile tone="muted" size="lg" className="border-primary/30 shadow-inner group-hover:border-primary/50 transition-colors overflow-hidden">
-                    {a.icon_url ? (
-                      <>
+                  {a.icon_url ? (
+                    <button
+                      type="button"
+                      onClick={() => setEnlargedAvatar({ url: a.icon_url!, name: a.name })}
+                      aria-label={t("agents.enlarge_avatar", { name: a.name })}
+                      className="block cursor-zoom-in rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                    >
+                      <IconTile tone="muted" size="lg" className="border-primary/30 shadow-inner group-hover:border-primary/50 transition-colors overflow-hidden">
                         {/* eslint-disable-next-line @next/next/no-img-element -- agent icons are tiny avatars from arbitrary sources (uploads, data URIs, external); next/Image's optimisation pipeline adds no value at this size */}
                         <img src={a.icon_url} alt={a.name} loading="lazy" className="h-full w-full object-cover" />
-                      </>
-                    ) : (
+                      </IconTile>
+                    </button>
+                  ) : (
+                    <IconTile tone="muted" size="lg" className="border-primary/30 shadow-inner group-hover:border-primary/50 transition-colors overflow-hidden">
                       <span className="font-mono text-lg font-black text-primary/80 group-hover:text-primary transition-colors">
                         {a.name.charAt(0).toUpperCase()}
                       </span>
-                    )}
-                  </IconTile>
-                  <div className={`absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full border-2 border-background ${a.is_running ? "bg-success" : "bg-muted-foreground/50"}`} />
+                    </IconTile>
+                  )}
+                  <div className={`pointer-events-none absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full border-2 border-background ${a.is_running ? "bg-success" : "bg-muted-foreground/50"}`} />
                 </div>
                 <div className="flex flex-col gap-0.5 min-w-0 flex-1">
                   <div className="flex items-center gap-2 min-w-0">
@@ -654,6 +682,11 @@ export default function AgentsPage() {
 
               <div className="space-y-3 mb-4 flex-1">
                 <InfoRow label={t("agents.profile")} value={a.profile} />
+                <AgentModelSummary
+                  profile={profilesByName.get(a.profile)}
+                  providers={providersData}
+                  label={t("agents.models")}
+                />
                 {a.routing_count > 0 && (
                   <InfoRow label={t("agents.routing")} value={t("agents.routing_rules_count", { count: a.routing_count })} />
                 )}
@@ -694,6 +727,24 @@ export default function AgentsPage() {
           ))}
         </div>
       )}
+
+      {/* Avatar lightbox */}
+      <Dialog open={!!enlargedAvatar} onOpenChange={(o) => { if (!o) setEnlargedAvatar(null); }}>
+        <DialogContent size="md" className="p-3">
+          <DialogTitle className="sr-only">{enlargedAvatar?.name ?? ""}</DialogTitle>
+          {enlargedAvatar && (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element -- arbitrary-source agent avatar; next/Image adds no value here */}
+              <img
+                src={enlargedAvatar.url}
+                alt={enlargedAvatar.name}
+                className="mx-auto max-h-[70dvh] w-auto max-w-full rounded-lg object-contain"
+              />
+              <p className="mt-3 text-center font-mono text-sm font-bold text-foreground">{enlargedAvatar.name}</p>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Create / Edit Dialog */}
       <AgentEditDialog
@@ -756,6 +807,75 @@ export default function AgentsPage() {
         </AlertDialogContent>
       </AlertDialog>
     </PageContainer>
+  );
+}
+
+// Short display labels for the non-text capability badges on an agent card.
+const CAP_BADGE_LABELS: Partial<Record<ProfileCapability, string>> = {
+  vision: "vision",
+  tts: "tts",
+  imagegen: "image",
+  stt: "stt",
+  websearch: "search",
+  compaction: "compact",
+};
+
+/** Resolve a slot's displayed model: explicit slot model → provider default →
+ *  provider name. Returns null when the slot is empty. */
+function slotModel(
+  profile: ProfileRow | undefined,
+  cap: ProfileCapability,
+  providers: Provider[],
+): string | null {
+  const entry = profile?.slots?.[cap]?.[0];
+  if (!entry) return null;
+  if (entry.model && entry.model.length > 0) return entry.model;
+  const prov = providers.find((p) => p.name === entry.provider);
+  return prov?.default_model || entry.provider || null;
+}
+
+/** Per-card "main models" summary: the text/LLM model prominently, then compact
+ *  badges for every other configured capability slot in the agent's profile. */
+function AgentModelSummary({
+  profile,
+  providers,
+  label,
+}: {
+  profile: ProfileRow | undefined;
+  providers: Provider[];
+  label: string;
+}) {
+  const textModel = slotModel(profile, "text", providers);
+  const others = PROFILE_CAPABILITIES.flatMap((cap) => {
+    if (cap === "text") return [];
+    const value = slotModel(profile, cap, providers);
+    return value ? [{ cap, value }] : [];
+  });
+
+  // Nothing configured at all — skip the block entirely to avoid an empty row.
+  if (!textModel && others.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-1.5 border-b border-border/50 py-2 overflow-hidden">
+      <span className="font-mono text-2xs uppercase tracking-widest text-muted-foreground-subtle">{label}</span>
+      {textModel && (
+        <span className="font-mono text-xs font-bold text-primary truncate" title={textModel}>{textModel}</span>
+      )}
+      {others.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {others.map(({ cap, value }) => (
+            <span
+              key={cap}
+              className="inline-flex min-w-0 items-center gap-1 rounded bg-muted/60 px-1.5 py-0.5 text-2xs text-muted-foreground"
+              title={`${CAP_BADGE_LABELS[cap] ?? cap}: ${value}`}
+            >
+              <span className="uppercase tracking-wide text-muted-foreground-subtle">{CAP_BADGE_LABELS[cap] ?? cap}</span>
+              <span className="max-w-32 truncate font-mono">{value}</span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

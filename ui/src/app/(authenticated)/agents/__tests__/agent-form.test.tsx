@@ -57,6 +57,17 @@ vi.mock("./RoutingRulesEditor", () => ({
   RoutingRulesEditor: () => null,
 }));
 
+// AgentPromptsEditor (Prompts tab) reads the workspace prompt file via
+// react-query — stub the prompt-library module so no QueryClient is needed.
+vi.mock("@/lib/prompts", () => ({
+  useAgentPrompts: () => ({ prompts: [], isLoading: false }),
+  usePrompts: () => ({ prompts: [], isLoading: false }),
+  agentPromptsKey: (n: string) => ["agent-prompts", n],
+  agentPromptsPath: (n: string) => `agents/${n}/prompts.md`,
+  serializePrompts: () => "",
+  parsePrompts: () => [],
+}));
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Build a minimal AgentDetail-shaped object. Fills required fields with

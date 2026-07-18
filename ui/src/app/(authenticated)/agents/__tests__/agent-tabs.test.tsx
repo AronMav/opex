@@ -61,6 +61,18 @@ vi.mock("./RoutingRulesEditor", () => ({
   RoutingRulesEditor: () => null,
 }));
 
+// AgentPromptsEditor (Prompts tab) reads the workspace prompt file via
+// react-query — irrelevant to tab-switching assertions and would otherwise need
+// a QueryClient. Stub the prompt-library module it depends on.
+vi.mock("@/lib/prompts", () => ({
+  useAgentPrompts: () => ({ prompts: [], isLoading: false }),
+  usePrompts: () => ({ prompts: [], isLoading: false }),
+  agentPromptsKey: (n: string) => ["agent-prompts", n],
+  agentPromptsPath: (n: string) => `agents/${n}/prompts.md`,
+  serializePrompts: () => "",
+  parsePrompts: () => [],
+}));
+
 // ── Helper ───────────────────────────────────────────────────────────────────
 
 function makeProps(formOverride: Partial<FormState> = {}, updFn = vi.fn()): AgentEditDialogProps {

@@ -38,9 +38,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { ChannelRow, RoutingRule } from "@/types/api";
 import type { WebhookDto } from "@/types/api.generated";
-import { ChevronDown, Bot, ExternalLink, Camera, Settings, Wrench, Zap, Archive, Clock, Radio, Sparkles } from "lucide-react";
+import { ChevronDown, Bot, ExternalLink, Camera, Settings, Wrench, Zap, Archive, Clock, Radio, Sparkles, MessageSquareText } from "lucide-react";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { RoutingRulesEditor } from "./RoutingRulesEditor";
+import { AgentPromptsEditor } from "./AgentPromptsEditor";
 import { useProviders } from "@/lib/queries";
 import { useProfiles } from "@/hooks/use-profiles";
 
@@ -182,16 +183,17 @@ export interface AgentEditDialogProps {
   editingBase?: boolean;
 }
 
-type AgentTab = "general" | "tools" | "behavior" | "soul" | "session" | "schedule" | "channels";
+type AgentTab = "general" | "tools" | "behavior" | "soul" | "session" | "schedule" | "channels" | "prompts";
 
 const AGENT_TABS: { id: AgentTab; icon: React.ComponentType<{ className?: string }>; labelKey: TranslationKey }[] = [
-  { id: "general",  icon: Settings,  labelKey: "agents.tab_general"  },
-  { id: "tools",    icon: Wrench,    labelKey: "agents.tab_tools"    },
-  { id: "behavior", icon: Zap,       labelKey: "agents.tab_behavior" },
-  { id: "soul",     icon: Sparkles,  labelKey: "agents.tab_soul"     },
-  { id: "session",  icon: Archive,   labelKey: "agents.tab_session"  },
-  { id: "schedule", icon: Clock,     labelKey: "agents.tab_schedule" },
-  { id: "channels", icon: Radio,     labelKey: "agents.tab_channels" },
+  { id: "general",  icon: Settings,          labelKey: "agents.tab_general"  },
+  { id: "tools",    icon: Wrench,            labelKey: "agents.tab_tools"    },
+  { id: "behavior", icon: Zap,               labelKey: "agents.tab_behavior" },
+  { id: "soul",     icon: Sparkles,          labelKey: "agents.tab_soul"     },
+  { id: "session",  icon: Archive,           labelKey: "agents.tab_session"  },
+  { id: "schedule", icon: Clock,             labelKey: "agents.tab_schedule" },
+  { id: "channels", icon: Radio,             labelKey: "agents.tab_channels" },
+  { id: "prompts",  icon: MessageSquareText, labelKey: "agents.tab_prompts"  },
 ];
 
 /** Cross-field gating for the Soul tab — mirrors the server-side `validate()`
@@ -646,6 +648,11 @@ export function AgentEditDialog({
                     )}
                   </div>
                 )}
+            </div>
+
+            {/* ── Prompts tab ── (starter-prompt chips for the chat welcome screen) */}
+            <div className={`col-start-1 row-start-1 space-y-3 transition-none ${activeTab === "prompts" ? "" : "opacity-0 pointer-events-none select-none"}`}>
+                <AgentPromptsEditor agentName={editName} />
             </div>
 
             {/* ── Soul tab ──

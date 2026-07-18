@@ -5,7 +5,7 @@ import { useTranslation } from "@/hooks/use-translation";
 import { useChatStore } from "@/stores/chat-store";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/stores/auth-store";
-import { usePrompts } from "@/lib/prompts";
+import { usePrompts, useAgentPrompts } from "@/lib/prompts";
 
 // Static so Tailwind's content scanner (regex over source text) always finds
 // these literal class names, even though they're applied by array index.
@@ -17,11 +17,14 @@ export function ChatWelcomeScreen() {
   const agentIcons = useAuthStore((s) => s.agentIcons);
   const agentIconUrl = currentAgent ? agentIcons[currentAgent] || null : null;
 
-  // First 3 entries of the workspace prompt library (workspace/prompts.md)
-  // replace the hardcoded suggestion chips when available — same click
-  // mechanic (sends immediately), just sourced text. Falls back to the
-  // static suggestions when the file is missing/empty (fail-soft).
-  const { prompts } = usePrompts();
+  // First 3 entries of the prompt library replace the hardcoded suggestion
+  // chips when available — same click mechanic (sends immediately), just
+  // sourced text. Resolution: the agent's own prompt library
+  // (workspace/agents/{agent}/prompts.md) wins; else the shared
+  // workspace/prompts.md; else the static suggestions (fail-soft).
+  const { prompts: agentPrompts } = useAgentPrompts(currentAgent);
+  const { prompts: sharedPrompts } = usePrompts();
+  const prompts = agentPrompts.length > 0 ? agentPrompts : sharedPrompts;
   const suggestions = prompts.length > 0
     ? prompts.slice(0, 3).map((p) => ({ key: p.title, label: p.title, prompt: p.body }))
     : [
