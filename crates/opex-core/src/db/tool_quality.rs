@@ -197,7 +197,9 @@ async fn get_all_penalties(db: &PgPool) -> Result<HashMap<(String, String), f32>
 /// Returns tools whose `penalty_score` is below 0.8.
 /// Used by `GET /api/doctor` to surface degraded tools.
 pub async fn get_degraded_tools(db: &PgPool) -> Result<Vec<serde_json::Value>> {
-    let rows = sqlx::query_as::<_, (String, String, f32, i64, i64, Option<String>)>(
+    // total_calls / fail_calls are INT4 (i32); penalty_score is REAL (f32).
+    // (Was i64 — latent decode error whenever a degraded tool existed.)
+    let rows = sqlx::query_as::<_, (String, String, f32, i32, i32, Option<String>)>(
         r"
         SELECT agent_name, tool_name, penalty_score, total_calls, fail_calls, last_error
         FROM tool_quality
@@ -234,7 +236,8 @@ pub async fn get_degraded_tools(db: &PgPool) -> Result<Vec<serde_json::Value>> {
 /// counters an operator needs to see WHAT is failing and how often. Feeds
 /// `GET /api/tools/health`.
 pub async fn get_tool_health(db: &PgPool) -> Result<Vec<serde_json::Value>> {
-    let rows = sqlx::query_as::<_, (String, String, f32, i64, i64, Option<String>)>(
+    // total_calls / fail_calls are INT4 (i32); penalty_score is REAL (f32).
+    let rows = sqlx::query_as::<_, (String, String, f32, i32, i32, Option<String>)>(
         r"
         SELECT agent_name, tool_name, penalty_score, total_calls, fail_calls, last_error
         FROM tool_quality
