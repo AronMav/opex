@@ -217,6 +217,36 @@ pub async fn execute<S: EventSink>(
     // / "no auto-continue" / "no recovery" semantics are preserved exactly.
     let mut layer_state = LayerRuntimeState::default();
 
+    // Turn-start self-heal check (Task 4 / WS4, brief step 4b): if the
+    // PRIMARY is currently cooled from a recent failover-worthy failure and
+    // a non-cooled reserve exists, start THIS turn there directly instead of
+    // paying for a call to a provider we already know is in cooldown. No
+    // timer, no background task: the check simply re-runs every turn, so
+    // once the cooldown naturally expires `is_cooled` flips back to `false`
+    // and the very next turn resolves to the primary again on its own.
+    if layers.fallback_provider.is_some()
+        && engine.cfg().cooldowns.is_cooled(engine.cfg().provider.name())
+        && let Some((p, resolved_idx)) = engine.create_fallback_provider(0).await
+    {
+        let primary_name = engine.cfg().provider.name().to_string();
+        let adopted_name = p.name().to_string();
+        layer_state.fallback_chain_idx = resolved_idx;
+        layer_state.adopt_fallback(p);
+        tracing::warn!(
+            agent = %engine.cfg().agent.name,
+            primary = %primary_name,
+            adopted = %adopted_name,
+            "provider_cooldown_skip: primary cooled, starting turn on reserve"
+        );
+        let _ = crate::db::session_timeline::log_event(
+            &engine.cfg().db,
+            session_id,
+            "provider_cooldown_skip",
+            Some(&serde_json::json!({ "primary": primary_name, "adopted": adopted_name })),
+        )
+        .await;
+    }
+
     // ── Turn loop ────────────────────────────────────────────────────────────
     for iteration in 0..loop_config.effective_max_iterations() {
         // 1. Check cancellation (graceful shutdown / SIGHUP drain)
@@ -434,6 +464,12 @@ pub async fn execute<S: EventSink>(
                 // a temporary blip on the primary doesn't permanently push us
                 // toward the fallback. No-op when the fallback layer is off.
                 layer_state.consecutive_failures = 0;
+                // Task 4 / WS4: the live provider healed — clear any cooldown
+                // recorded against it (e.g. primary was cooled from an earlier
+                // failure, self-heal check adopted a reserve, and now this
+                // call succeeded on the reserve; or the primary itself just
+                // succeeded after its cooldown lapsed).
+                engine.cfg().cooldowns.record_success(live_provider.name());
                 r
             }
             Err(e) => {
@@ -493,15 +529,29 @@ pub async fn execute<S: EventSink>(
                     layer_state.consecutive_failures += 1;
                     let failover_worthy =
                         crate::agent::error_classify::is_failover_worthy(&err_class);
+                    // Cooldown registry (Task 4 / WS4): a failover-worthy error
+                    // on the currently-live provider cools it for
+                    // `error_classify::cooldown_duration(&err_class)` so the
+                    // NEXT turn's chain resolution (and the turn-start
+                    // self-heal check above) skips it instead of retrying a
+                    // provider we already know just failed.
+                    if failover_worthy {
+                        engine
+                            .cfg()
+                            .cooldowns
+                            .record_failure(live_provider.name(), &err_class);
+                    }
                     if failover_worthy
                         || layer_state.consecutive_failures
                             >= fb_policy.consecutive_failure_threshold
                     {
-                        // Next reserve in the text chain (first swap → text[1]).
+                        // Next reserve in the text chain (first swap → text[1]),
+                        // skipping any cooled entries along the way.
                         let next = engine
                             .create_fallback_provider(layer_state.fallback_chain_idx)
                             .await;
-                        if let Some(p) = next {
+                        if let Some((p, resolved_idx)) = next {
+                            layer_state.fallback_chain_idx = resolved_idx;
                             layer_state.adopt_fallback(p);
                             tracing::warn!(
                                 agent = %engine.cfg().agent.name,

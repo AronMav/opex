@@ -127,6 +127,9 @@ pub struct AgentDeps {
     pub checkpoint_mgr: Arc<crate::agent::checkpoint_manager::CheckpointManager>,
     /// Shared LSP manager (process-wide singleton). `None` when LSP is disabled.
     pub lsp_manager: Option<Arc<crate::agent::lsp::LspManager>>,
+    /// Process-wide provider cooldown registry (Session Resilience Task 4 /
+    /// WS4, same singleton precedent as `tool_exec_ctx` / `checkpoint_mgr`).
+    pub cooldowns: Arc<crate::agent::provider_cooldown::ProviderCooldowns>,
 }
 
 #[cfg(test)]
@@ -148,6 +151,7 @@ impl AgentDeps {
                 crate::config::CheckpointConfig::default(),
             )),
             lsp_manager: None,
+            cooldowns: Arc::new(crate::agent::provider_cooldown::ProviderCooldowns::new()),
         }
     }
 }

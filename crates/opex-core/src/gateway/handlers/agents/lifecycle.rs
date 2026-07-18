@@ -239,6 +239,7 @@ pub async fn start_agent_from_config(
         soul_runtime: std::sync::Arc::default(),
         drift_baselines: std::sync::Arc::default(),
         lsp_manager: deps.lsp_manager.clone(),
+        cooldowns: deps.cooldowns.clone(),
     });
 
     let engine = Arc::new(AgentEngine {

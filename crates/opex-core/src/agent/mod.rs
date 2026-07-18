@@ -20,6 +20,7 @@ pub mod goal;
 // everything else never dropped per CONTEXT.md locked decisions).
 pub mod engine_event_sender;
 pub(crate) mod error_classify;
+pub mod provider_cooldown;
 pub(crate) mod localization;
 pub mod handle;
 pub mod history;

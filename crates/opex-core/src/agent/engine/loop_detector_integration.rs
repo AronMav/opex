@@ -19,9 +19,18 @@ impl AgentEngine {
             .unwrap_or_default()
     }
 
-    /// Build fallback provider #`chain_idx` from the profile's `text` chain
-    /// (`chain_idx=0` → `text[1]`, `chain_idx=1` → `text[2]`, …).
-    /// `None` = the chain is exhausted (no reserve at that position).
+    /// Build the next usable fallback provider starting the chain-walk at
+    /// `chain_idx` (`chain_idx=0` → `text[1]`, `chain_idx=1` → `text[2]`, …),
+    /// SKIPPING any reserve currently cooled (Session Resilience Task 4 /
+    /// WS4 — `crate::agent::provider_cooldown::resolve_next_uncooled`).
+    /// Returns `(provider, resolved_idx)` — `resolved_idx` is the chain
+    /// position actually adopted, which the caller must feed back into
+    /// `LayerRuntimeState::fallback_chain_idx` BEFORE its own `adopt_fallback`
+    /// `+1` bump, so the next failover resumes past this entry rather than
+    /// re-examining it.
+    ///
+    /// `None` when the chain is exhausted, or every remaining reserve from
+    /// `chain_idx` onward is cooled.
     ///
     /// The primary provider is `text[0]`, already live as `cfg().provider`, so
     /// reserves start at index `1 + chain_idx`. The reserve's per-slot `model`
@@ -35,10 +44,23 @@ impl AgentEngine {
     pub(crate) async fn create_fallback_provider(
         &self,
         chain_idx: usize,
-    ) -> Option<Arc<dyn crate::agent::providers::LlmProvider>> {
+    ) -> Option<(Arc<dyn crate::agent::providers::LlmProvider>, usize)> {
         let chain = self.cfg().profile_slots.get("text")?;
-        let entry = chain.get(1 + chain_idx)?;
-        crate::agent::pipeline::llm_call::create_fallback_provider(
+        let (entry, resolved_idx) = crate::agent::provider_cooldown::resolve_next_uncooled(
+            chain,
+            &self.cfg().cooldowns,
+            chain_idx,
+        )?;
+        if resolved_idx != chain_idx {
+            tracing::info!(
+                agent = %self.cfg().agent.name,
+                from_idx = chain_idx,
+                to_idx = resolved_idx,
+                provider = %entry.provider,
+                "provider_cooldown_skip: skipped cooled reserve(s) walking the fallback chain"
+            );
+        }
+        let provider = crate::agent::pipeline::llm_call::create_fallback_provider(
             &self.cfg().db,
             Some(entry.provider.as_str()),
             entry.model.as_deref(),
@@ -50,7 +72,8 @@ impl AgentEngine {
             &self.cfg().workspace_dir,
             self.cfg().agent.base,
         )
-        .await
+        .await;
+        provider.map(|p| (p, resolved_idx))
     }
 
     /// Check daily token budget before LLM call.

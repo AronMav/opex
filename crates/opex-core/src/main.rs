@@ -610,6 +610,10 @@ async fn main() -> Result<()> {
         cfg.checkpoint.clone(),
     ));
 
+    // Process-wide provider cooldown registry (Session Resilience Task 4 /
+    // WS4) — one instance shared by every agent for the life of the process.
+    let cooldowns = Arc::new(crate::agent::provider_cooldown::ProviderCooldowns::new());
+
     crate::agent::workspace::set_shared_writable_dirs(cfg.agent_tool.shared_writable_dirs.clone());
 
     crate::agent::lsp::set_lsp_enabled(cfg.lsp.enabled);
@@ -652,6 +656,7 @@ async fn main() -> Result<()> {
         tool_exec_ctx,
         checkpoint_mgr,
         lsp_manager,
+        cooldowns,
     }));
 
     let agents_map: gateway::AgentMap = Arc::new(tokio::sync::RwLock::new(HashMap::new()));

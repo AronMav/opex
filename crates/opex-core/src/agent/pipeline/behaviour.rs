@@ -529,6 +529,67 @@ mod tests {
         assert!(resolve(st.fallback_chain_idx).is_none(), "chain exhausted at index 2");
     }
 
+    /// Session Resilience Task 4 (WS4) — brief step 5: chain `[P0, P1, P2]`,
+    /// `P0` (primary) cooled → the turn-start self-heal check resolves `P1`
+    /// first; `P1` fails failover-worthy → records `P1`'s cooldown →
+    /// resolves `P2`; after `P0`'s cooldown expires, `P0` is selected again.
+    /// Exercises `provider_cooldown::{ProviderCooldowns, resolve_next_uncooled}`
+    /// against the same `text`-chain shape as `fallback_walks_text_chain_to_second_reserve`
+    /// above, without touching a live engine or DB (pure — mirrors that test's style).
+    #[test]
+    fn cooled_primary_skips_to_first_uncooled_reserve_and_self_heals() {
+        use crate::agent::error_classify::LlmErrorClass;
+        use crate::agent::provider_cooldown::{resolve_next_uncooled, ProviderCooldowns};
+        use crate::db::profiles::{SlotEntry, Slots};
+        use std::time::Duration;
+
+        let mut slots: Slots = Slots::new();
+        slots.insert(
+            "text".to_string(),
+            vec![
+                SlotEntry { provider: "P0".into(), model: None, voice: None },
+                SlotEntry { provider: "P1".into(), model: None, voice: None },
+                SlotEntry { provider: "P2".into(), model: None, voice: None },
+            ],
+        );
+        let chain = slots.get("text").unwrap();
+        let cooldowns = ProviderCooldowns::new();
+
+        // Short-lived cooldown so the test doesn't sleep through the real
+        // 60s RateLimit window.
+        cooldowns.record_failure_for("P0", Duration::from_millis(30));
+        assert!(cooldowns.is_cooled("P0"), "P0 must be cooled before the turn starts");
+
+        // Turn-start check (execute.rs step 4b mirror): primary cooled →
+        // resolve the reserve chain from chain_idx=0 → first uncooled entry
+        // is P1 (nothing to skip).
+        let (entry, idx) =
+            resolve_next_uncooled(chain, &cooldowns, 0).expect("P1 must be available");
+        assert_eq!(entry.provider, "P1", "turn resolves P1 first, not P0");
+        assert_eq!(idx, 0);
+
+        let mut st = LayerRuntimeState { fallback_chain_idx: idx, ..Default::default() };
+        st.adopt_fallback(Arc::new(FakeReserve("P1")));
+        assert_eq!(st.fallback_chain_idx, 1);
+        assert!(st.using_fallback);
+
+        // P1 fails failover-worthy mid-turn → cooldown recorded against P1,
+        // walking the chain from fallback_chain_idx=1 must land on P2.
+        cooldowns.record_failure("P1", &LlmErrorClass::RateLimit);
+        assert!(cooldowns.is_cooled("P1"));
+        let (entry, idx) = resolve_next_uncooled(chain, &cooldowns, st.fallback_chain_idx)
+            .expect("P2 must be available");
+        assert_eq!(entry.provider, "P2", "cooled P1 must be skipped in favor of P2");
+        st.fallback_chain_idx = idx;
+        st.adopt_fallback(Arc::new(FakeReserve("P2")));
+        assert_eq!(st.fallback_provider.as_ref().unwrap().name(), "P2");
+
+        // P0's cooldown expires → the next turn's self-heal check sees the
+        // primary as usable again, with zero timers or background sweeps.
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(!cooldowns.is_cooled("P0"), "primary must self-heal once its cooldown lapses");
+    }
+
     /// Build a minimal `IncomingMessage` for layer-construction tests.
     /// Centralises the boilerplate so future field additions touch one
     /// place; the layer code only reads `text` and `tool_policy_override`.

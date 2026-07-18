@@ -103,6 +103,13 @@ pub struct AgentConfig {
     // Task 10 wires the `lsp` tool handler that reads this field.
     #[allow(dead_code)]
     pub lsp_manager: Option<Arc<crate::agent::lsp::LspManager>>,
+    /// Process-wide provider cooldown registry (Session Resilience Task 4 /
+    /// WS4). Cloned from `AgentDeps.cooldowns` at engine construction time —
+    /// same singleton precedent as `tool_exec_ctx` / `checkpoint_manager`, so
+    /// every agent observes the same cooldown state for a shared provider
+    /// name, not a per-agent copy (unlike `drift_baselines`, which is
+    /// deliberately per-engine-construction/`Arc::default()`).
+    pub cooldowns: Arc<crate::agent::provider_cooldown::ProviderCooldowns>,
 }
 
 #[cfg(test)]
