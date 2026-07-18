@@ -292,13 +292,15 @@ impl LlmProvider for OpenAiCompatibleProvider {
         self.timeouts.run_max_duration_secs
     }
 
+    fn operator_context_override(&self, model: &str) -> Option<u32> {
+        // `providers.options.context_windows` — a deliberate manual pin, surfaced
+        // as the highest-priority source in `resolve_context_limit` (above the
+        // catalog and the API probe). Used for models whose API doesn't expose the
+        // window (e.g. MiMo) or that an operator wants to serve at a custom cap.
+        self.context_windows.as_ref().and_then(|m| m.get(model)).copied()
+    }
+
     async fn context_limit_hint(&self, model: &str) -> Option<u32> {
-        // Operator-configured per-model window wins — for providers whose API
-        // doesn't expose it (e.g. MiMo's /v1/models returns no context field,
-        // leaving the model on the 128k name-heuristic fallback).
-        if let Some(w) = self.context_windows.as_ref().and_then(|m| m.get(model)) {
-            return Some(*w);
-        }
         if self.provider_name == "ollama" {
             self.ollama_context_limit(model).await
         } else {

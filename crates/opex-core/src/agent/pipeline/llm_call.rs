@@ -158,8 +158,13 @@ pub fn default_context_for_model(model: &str) -> usize {
     } else if m.contains("minimax") {
         // m2 = 196_608, m3 = 524_288 — provider hint refines for Ollama.
         200_000
+    } else if m.contains("glm-5.2") {
+        1_048_576
+    } else if m.contains("glm-5") {
+        202_752
     } else if m.contains("glm") {
-        // glm-5/5.1 = 202_752, glm-5.2 = 1_000_000 — provider hint refines.
+        // Older glm-4.x families vary by version — conservative default; the
+        // catalog (consulted first) carries the exact window for known models.
         200_000
     } else if m.contains("deepseek") {
         128_000
@@ -218,14 +223,28 @@ pub async fn resolve_context_limit(
             return c.value;
         }
 
-    // Priority: native self-report > external catalog (models.dev/…) > heuristic.
-    // The catalog value is authoritative (not a fallback), so it caches
-    // permanently like a native hint.
-    let (value, is_fallback) = match provider.context_limit_hint(model).await {
+    // Priority: operator override > external catalog (models.dev/openrouter — the
+    // single source that already carries every cloud model's real window) > native
+    // API probe > heuristic.
+    //
+    // The catalog is the authoritative source of context sizes: it is consulted
+    // before the API probe so the UI (`model_discovery`) and this runtime path
+    // resolve the SAME window, and a gateway whose `/v1/models` reports a
+    // wrong/absent context can no longer pin the wrong value permanently. An
+    // explicit operator pin still wins over the catalog (a model deliberately
+    // served at a reduced/custom cap). The native probe stays a fallback ONLY for
+    // models the catalog doesn't know (locally-served Ollama/vLLM/SGLang, where
+    // `/api/show` is the real ground truth). Override/catalog/probe values are all
+    // authoritative (not fallbacks) so they cache permanently; only the heuristic
+    // expires (see [`FALLBACK_TTL`]).
+    let (value, is_fallback) = match provider.operator_context_override(model) {
         Some(v) => (v, false),
         None => match opex_catalog::global_context(provider.name(), model) {
             Some(v) => (v, false),
-            None => (default_context_for_model(model) as u32, true),
+            None => match provider.context_limit_hint(model).await {
+                Some(v) => (v, false),
+                None => (default_context_for_model(model) as u32, true),
+            },
         },
     };
 
@@ -280,7 +299,10 @@ mod context_window_tests {
     fn heuristic_covers_current_families() {
         assert_eq!(default_context_for_model("kimi-k2.6"), 262_144);
         assert_eq!(default_context_for_model("kimi-k1.5"), 131_072);
-        assert_eq!(default_context_for_model("glm-5.2:cloud"), 200_000); // hint refines to 1M for ollama
+        assert_eq!(default_context_for_model("glm-5.2:cloud"), 1_048_576);
+        assert_eq!(default_context_for_model("glm-5.1"), 202_752);
+        assert_eq!(default_context_for_model("glm-5"), 202_752);
+        assert_eq!(default_context_for_model("glm-4.6"), 200_000);
         assert_eq!(default_context_for_model("gpt-4.1"), 1_047_576);
         assert_eq!(default_context_for_model("gpt-4o"), 128_000);
         assert_eq!(default_context_for_model("claude-opus-4-8"), 200_000);
@@ -297,6 +319,87 @@ mod context_window_tests {
         assert_eq!(
             context_limit_tokens("zzz-uncached-model-xyz"),
             default_context_for_model("zzz-uncached-model-xyz") as u32
+        );
+    }
+}
+
+#[cfg(test)]
+mod resolve_order_tests {
+    use super::resolve_context_limit;
+    use crate::agent::providers::{CallOptions, LlmProvider};
+    use async_trait::async_trait;
+    use opex_catalog::{CatalogSource, ModelCatalog, ModelMeta};
+
+    /// Provider whose `/v1/models`-style probe reports `probe`; `override_` mimics
+    /// an operator `context_windows` pin; `name()` is the provider_type used as the
+    /// catalog lookup key.
+    struct ProbeProvider {
+        provider_type: &'static str,
+        probe: Option<u32>,
+        override_: Option<u32>,
+    }
+
+    #[async_trait]
+    impl LlmProvider for ProbeProvider {
+        async fn chat(
+            &self,
+            _messages: &[opex_types::Message],
+            _tools: &[opex_types::ToolDefinition],
+            _opts: CallOptions,
+        ) -> anyhow::Result<opex_types::LlmResponse> {
+            panic!("chat not called in context-limit resolution tests")
+        }
+        fn name(&self) -> &str {
+            self.provider_type
+        }
+        fn operator_context_override(&self, _model: &str) -> Option<u32> {
+            self.override_
+        }
+        async fn context_limit_hint(&self, _model: &str) -> Option<u32> {
+            self.probe
+        }
+    }
+
+    fn meta(context: u32) -> ModelMeta {
+        ModelMeta { context, output: None, cost: None, caps: None, source: CatalogSource::ModelsDev }
+    }
+
+    // Both assertions share ONE installed catalog in a single test so they can't
+    // race on the process-global catalog with each other (cargo runs tests in
+    // the same module concurrently). Unique model ids keep the process-global
+    // CONTEXT_LIMIT_CACHE from aliasing values across runs.
+    #[tokio::test]
+    async fn catalog_is_authoritative_probe_is_fallback() {
+        let mut c = ModelCatalog::new();
+        c.insert("glm", "glm-catalogwins-xyz", meta(1_048_576));
+        c.insert("glm", "glm-pinned-xyz", meta(1_048_576));
+        opex_catalog::install(c);
+
+        // 1. Catalog knows the model → its window wins even though the provider's
+        //    own probe reports a smaller/stale cap.
+        let gateway = ProbeProvider { provider_type: "openai_compat", probe: Some(128_000), override_: None };
+        assert_eq!(
+            resolve_context_limit(&gateway, "glm-catalogwins-xyz").await,
+            1_048_576,
+            "catalog value must win over the native probe"
+        );
+
+        // 2. Catalog doesn't carry the model (local-only) → native probe is the
+        //    fallback ground truth (`/api/show` num_ctx).
+        let local = ProbeProvider { provider_type: "ollama", probe: Some(32_768), override_: None };
+        assert_eq!(
+            resolve_context_limit(&local, "local-only-model-abc").await,
+            32_768,
+            "native probe must be used when the catalog doesn't know the model"
+        );
+
+        // 3. An explicit operator pin wins over the catalog — a model served at a
+        //    deliberately reduced/custom window.
+        let pinned = ProbeProvider { provider_type: "openai_compat", probe: Some(128_000), override_: Some(200_000) };
+        assert_eq!(
+            resolve_context_limit(&pinned, "glm-pinned-xyz").await,
+            200_000,
+            "operator override must win over the catalog"
         );
     }
 }

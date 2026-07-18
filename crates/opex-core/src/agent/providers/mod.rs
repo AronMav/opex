@@ -271,6 +271,16 @@ pub trait LlmProvider: Send + Sync {
         false
     }
 
+    /// Explicit operator-configured per-model context window (tokens), e.g. from
+    /// `providers.options.context_windows`. This is a deliberate manual pin and
+    /// is the **highest-priority** source in `resolve_context_limit` — it wins
+    /// over the catalog and the API probe alike (an operator serving a model with
+    /// a reduced/custom window must be able to override the catalog's spec value).
+    /// `None` when no override is configured for `model`.
+    fn operator_context_override(&self, _model: &str) -> Option<u32> {
+        None
+    }
+
     /// Probe the provider's API to discover the real context-window size for `model`.
     /// Returns `None` when the provider doesn't expose this information — callers fall
     /// back to the name-based heuristic in `default_context_for_model`.
