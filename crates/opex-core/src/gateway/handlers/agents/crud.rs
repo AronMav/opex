@@ -168,10 +168,14 @@ pub(super) const TABLES_TO_DELETE_BY_AGENT_ID: &[&str] = &[
     "webhooks",
 ];
 
-/// Tables keyed by `agent_name` (no agent_id column). All Ephemeral: both
-/// rename and delete iterate this list. Unifies the previous ad-hoc handling
-/// (agent_channels/agent_model_overrides separate UPDATEs + an inline list in
-/// the rename transaction).
+/// Tables keyed by `agent_name` (no agent_id column). All Ephemeral. RENAME
+/// iterates this list today (unifies the previous ad-hoc handling —
+/// agent_channels/agent_model_overrides separate UPDATEs + an inline list in
+/// the rename transaction). DELETE-path coverage for the four non-channel
+/// tables (`handler_config`/`handler_jobs`/`pending_skill_repairs`/
+/// `tool_quality`) is wired in Task 4 — do NOT assume `cleanup_agent_data`
+/// already deletes them (the orphaned `tool_quality` rows are the exact
+/// incident that triggered this plan; see plan §4 item 3).
 pub(super) const TABLES_WITH_AGENT_NAME: &[&str] = &[
     "agent_channels",
     "agent_model_overrides",
