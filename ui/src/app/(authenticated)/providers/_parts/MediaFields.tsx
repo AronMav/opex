@@ -16,13 +16,7 @@ import {
 import type { CreateProviderInput, Provider, MediaDriverInfo } from "@/types/api";
 import { TimeoutsSection } from "./TimeoutsSection";
 import { getOpts } from "./helpers";
-
-interface TtsVoice {
-  id: string;
-  name: string;
-  description?: string;
-  language?: string;
-}
+import { ModelCombobox, VoiceSelect } from "@/components/provider-fields";
 
 interface MediaFieldsProps {
   form: CreateProviderInput;
@@ -32,8 +26,6 @@ interface MediaFieldsProps {
   isEditing: boolean;
   editing: Provider | null;
   availableDrivers: MediaDriverInfo[];
-  ttsVoices: TtsVoice[];
-  ttsVoicesLoading: boolean;
   driverId: string;
   voiceId: string;
   mediaKeyId: string;
@@ -48,8 +40,6 @@ export function MediaFields({
   isEditing,
   editing,
   availableDrivers,
-  ttsVoices,
-  ttsVoicesLoading,
   driverId,
   voiceId,
   mediaKeyId,
@@ -57,6 +47,7 @@ export function MediaFields({
 }: MediaFieldsProps) {
   const { t } = useTranslation();
   const dialogCategory = form.type;
+  const mediaModelIdLabel = React.useId();
 
   return (
     <>
@@ -114,14 +105,19 @@ export function MediaFields({
       </Field>
 
       {/* Model */}
-      <Field label={`${t("providers.field_model_short")} (${t("providers.optional")})`} labelClassName="text-xs">
-        <Input
-          placeholder="Systran/faster-whisper-large-v3"
+      <div className="space-y-1.5">
+        <label htmlFor={mediaModelIdLabel} className="text-xs font-medium text-muted-foreground">
+          {t("providers.field_model_short")}{" "}
+          <span className="text-muted-foreground-subtle font-normal">({t("providers.optional")})</span>
+        </label>
+        <ModelCombobox
+          id={mediaModelIdLabel}
           value={form.default_model ?? ""}
-          onChange={(e) => setForm((f) => ({ ...f, default_model: e.target.value }))}
-          className="font-mono text-sm"
+          onChange={(v) => setForm((f) => ({ ...f, default_model: v }))}
+          providerId={isEditing ? editing?.id ?? null : null}
+          placeholder="Systran/faster-whisper-large-v3"
         />
-      </Field>
+      </div>
 
       {/* Voice (TTS only) */}
       {dialogCategory === "tts" && (
@@ -130,51 +126,16 @@ export function MediaFields({
             {t("providers.field_voice")}{" "}
             <span className="text-muted-foreground-subtle font-normal">({t("providers.optional")})</span>
           </label>
-          {ttsVoices.length > 0 ? (
-            <Select
-              value={getOpts(form).voice as string | undefined ?? "__default__"}
-              onValueChange={(v) =>
-                setForm((f) => ({
-                  ...f,
-                  options: { ...getOpts(f), voice: v === "__default__" ? undefined : v },
-                }))
-              }
-            >
-              <SelectTrigger id={voiceId} className="text-sm font-mono">
-                <SelectValue placeholder={t("providers.field_voice_placeholder")} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__default__" className="text-sm text-muted-foreground">
-                  <span className="text-muted-foreground">&mdash; {t("providers.voice_server_default")}</span>
-                </SelectItem>
-                {ttsVoices.map((v) => (
-                  <SelectItem key={v.id} value={v.id} className="text-sm font-mono">
-                    <span className="flex flex-col">
-                      <span>{v.name || v.id}</span>
-                      {(v.language || v.description) && (
-                        <span className="text-muted-foreground-subtle text-3xs">
-                          {[v.language, v.description].filter(Boolean).join(" · ")}
-                        </span>
-                      )}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : (
-            <Input
-              id={voiceId}
-              placeholder={ttsVoicesLoading ? t("providers.loading_voices") : t("providers.field_voice_placeholder")}
-              value={getOpts(form).voice as string | undefined ?? ""}
-              onChange={(e) =>
-                setForm((f) => ({
-                  ...f,
-                  options: { ...getOpts(f), voice: e.target.value || undefined },
-                }))
-              }
-              className="font-mono text-sm"
-            />
-          )}
+          <VoiceSelect
+            id={voiceId}
+            value={(getOpts(form).voice as string | undefined) ?? ""}
+            onChange={(v) =>
+              setForm((f) => ({ ...f, options: { ...getOpts(f), voice: v || undefined } }))
+            }
+            providerName={form.name}
+            allowServerDefault
+            className="text-sm font-mono"
+          />
           <p className="text-2xs text-muted-foreground-subtle">{t("providers.field_voice_hint")}</p>
         </div>
       )}

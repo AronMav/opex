@@ -48,13 +48,6 @@ interface TestResult {
   error?: string;
 }
 
-interface TtsVoice {
-  id: string;
-  name: string;
-  description?: string;
-  language?: string;
-}
-
 interface ProviderDialogProps {
   open: boolean;
   editing: Provider | null;
@@ -74,15 +67,10 @@ interface ProviderDialogProps {
   onClose: () => void;
   onSetCategory: (c: ProviderCategory) => void;
   onSetProviderType: (v: string) => void;
-  discoveredModels: string[];
-  modelsLoading: boolean;
-  onDiscoverModels: () => void;
   testResult: TestResult | null;
   testLoading: boolean;
   onTestConnection: () => void;
   defaultUrlFor: (id: string) => string;
-  ttsVoices: TtsVoice[];
-  ttsVoicesLoading: boolean;
 }
 
 export function ProviderDialog(props: ProviderDialogProps) {
@@ -106,15 +94,10 @@ export function ProviderDialog(props: ProviderDialogProps) {
     onClose,
     onSetCategory,
     onSetProviderType,
-    discoveredModels,
-    modelsLoading,
-    onDiscoverModels,
     testResult,
     testLoading,
     onTestConnection,
     defaultUrlFor,
-    ttsVoices,
-    ttsVoicesLoading,
   } = props;
 
   const isEditing = editing !== null;
@@ -204,9 +187,6 @@ export function ProviderDialog(props: ProviderDialogProps) {
                 isCli={isCli}
                 isEditing={isEditing}
                 editing={editing}
-                discoveredModels={discoveredModels}
-                modelsLoading={modelsLoading}
-                onDiscoverModels={onDiscoverModels}
                 onSetProviderType={onSetProviderType}
                 testResult={testResult}
                 testLoading={testLoading}
@@ -228,8 +208,6 @@ export function ProviderDialog(props: ProviderDialogProps) {
                 isEditing={isEditing}
                 editing={editing}
                 availableDrivers={availableDrivers}
-                ttsVoices={ttsVoices}
-                ttsVoicesLoading={ttsVoicesLoading}
                 driverId={driverId}
                 voiceId={voiceId}
                 mediaKeyId={mediaKeyId}

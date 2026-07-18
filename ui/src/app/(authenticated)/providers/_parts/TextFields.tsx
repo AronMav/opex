@@ -18,6 +18,7 @@ import type { CreateProviderInput, Provider, ProviderType } from "@/types/api";
 import { TimeoutsSection } from "./TimeoutsSection";
 import { ProviderPresetPicker, type CatalogProvider } from "./ProviderPresetPicker";
 import { getOpts } from "./helpers";
+import { ModelCombobox } from "@/components/provider-fields";
 
 interface TestResult {
   cli_found?: boolean;
@@ -39,9 +40,6 @@ interface TextFieldsProps {
   isCli: boolean;
   isEditing: boolean;
   editing: Provider | null;
-  discoveredModels: string[];
-  modelsLoading: boolean;
-  onDiscoverModels: () => void;
   onSetProviderType: (v: string) => void;
   testResult: TestResult | null;
   testLoading: boolean;
@@ -62,9 +60,6 @@ export function TextFields({
   isCli,
   isEditing,
   editing,
-  discoveredModels,
-  modelsLoading,
-  onDiscoverModels,
   onSetProviderType,
   testResult,
   testLoading,
@@ -76,11 +71,16 @@ export function TextFields({
 }: TextFieldsProps) {
   const { t } = useTranslation();
 
+  // Model suggestions from the picked catalog preset — the create flow has no
+  // saved provider id to discover from, but the catalog already ships a list.
+  const [presetModels, setPresetModels] = React.useState<string[]>([]);
+
   // Apply a catalog preset (models.dev/…) onto the form — the way to add the
   // hundreds of providers OPEX doesn't ship natively. Most are OpenAI-compatible
   // → provider_type `openai_compat` + the catalog base_url; natively-supported
   // ids (openai/anthropic/google/…) use their own type.
   const applyPreset = (p: CatalogProvider) => {
+    setPresetModels(p.models ?? []);
     setForm((f) => ({
       ...f,
       name: f.name?.trim() ? f.name : p.id,
@@ -137,48 +137,16 @@ export function TextFields({
         <label htmlFor={modelId} className="text-xs font-medium text-muted-foreground">
           {t("providers.field_model")} <span className="text-destructive">*</span>
         </label>
-        {discoveredModels.length > 0 ? (
-          <div className="flex gap-2">
-            <Select
-              value={form.default_model ?? ""}
-              onValueChange={(v) => setForm((f) => ({ ...f, default_model: v }))}
-            >
-              <SelectTrigger id={modelId} className="font-mono text-sm">
-                <SelectValue placeholder={t("providers.select_model")} />
-              </SelectTrigger>
-              <SelectContent>
-                {discoveredModels.map((m) => (
-                  <SelectItem key={m} value={m} className="font-mono text-sm">
-                    {m}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button variant="outline" size="icon" className="shrink-0 h-9 w-9" onClick={onDiscoverModels} disabled={modelsLoading} aria-label={t("providers.discover")} title={t("providers.discover")}>
-              <RefreshCw className={`h-3.5 w-3.5 ${modelsLoading ? "animate-spin" : ""}`} />
-            </Button>
-          </div>
-        ) : (
-          <div className="flex gap-2">
-            <Input
-              id={modelId}
-              placeholder="MiniMax-Text-01"
-              value={form.default_model ?? ""}
-              onChange={(e) => setForm((f) => ({ ...f, default_model: e.target.value }))}
-              className="font-mono text-sm"
-            />
-            {selectedType?.supports_model_listing && form.provider_type && (
-              <Button variant="outline" size="icon" className="shrink-0 h-9 w-9" onClick={onDiscoverModels} disabled={modelsLoading} aria-label={t("providers.discover")} title={t("providers.discover")}>
-                <RefreshCw className={`h-3.5 w-3.5 ${modelsLoading ? "animate-spin" : ""}`} />
-              </Button>
-            )}
-          </div>
-        )}
+        <ModelCombobox
+          id={modelId}
+          value={form.default_model ?? ""}
+          onChange={(v) => setForm((f) => ({ ...f, default_model: v }))}
+          providerId={isEditing ? editing?.id ?? null : null}
+          staticOptions={!isEditing ? presetModels : undefined}
+          placeholder="MiniMax-Text-01"
+        />
         {selectedType?.supports_model_listing === false && (
           <p className="text-2xs text-warning">{t("providers.no_model_discovery")}</p>
-        )}
-        {!isEditing && selectedType?.requires_api_key !== false && selectedType?.supports_model_listing && (
-          <p className="text-2xs text-muted-foreground-subtle">{t("providers.save_first_to_discover")}</p>
         )}
       </div>
 
