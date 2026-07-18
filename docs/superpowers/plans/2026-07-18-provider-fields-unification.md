@@ -99,6 +99,7 @@ export function ModelCombobox(props: ModelComboboxProps): JSX.Element
 `ui/src/components/provider-fields/__tests__/ModelCombobox.test.tsx`:
 
 ```tsx
+import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
@@ -116,6 +117,14 @@ import { ModelCombobox } from "../ModelCombobox";
 function wrap(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+}
+
+// Stateful harness for behaviours that depend on `value` updating after
+// onChange (the component is CONTROLLED — it filters by its `value` prop, so a
+// static vi.fn() mock would leave value="" and the filter would never engage).
+function Controlled({ providerId, initial = "" }: { providerId?: string | null; initial?: string }) {
+  const [v, setV] = React.useState(initial);
+  return <ModelCombobox value={v} onChange={setV} providerId={providerId} data-testid="cb" />;
 }
 
 describe("ModelCombobox", () => {
@@ -146,20 +155,31 @@ describe("ModelCombobox", () => {
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
-  it("typing filters the list case-insensitively; reopening shows the full list", async () => {
+  it("typing filters the list case-insensitively", async () => {
+    // Controlled harness: value must update after onChange for the filter (which
+    // reads `value`) to engage — a static mock would leave value="".
     apiGet.mockResolvedValue({ models: [{ id: "glm-5.2" }, { id: "MiniMax-M2.5" }] });
-    const onChange = vi.fn();
-    wrap(<ModelCombobox value="" onChange={onChange} providerId="p1" data-testid="cb" />);
+    wrap(<Controlled providerId="p1" />);
 
     const input = screen.getByTestId("cb");
     fireEvent.focus(input);
     await screen.findByRole("option", { name: /glm-5\.2/ });
     fireEvent.change(input, { target: { value: "minimax" } });
-    // onChange проброшен наружу — свободный ввод легален
-    expect(onChange).toHaveBeenCalledWith("minimax");
 
+    expect(input).toHaveValue("minimax"); // free text is legal
     expect(screen.getAllByRole("option")).toHaveLength(1);
     expect(screen.getByRole("option", { name: /MiniMax-M2\.5/ })).toBeInTheDocument();
+  });
+
+  it("reopening after selecting a value shows the full list (filter only after typing)", async () => {
+    apiGet.mockResolvedValue({ models: [{ id: "glm-5.2" }, { id: "MiniMax-M2.5" }] });
+    wrap(<Controlled providerId="p1" initial="glm-5.2" />);
+
+    const input = screen.getByTestId("cb");
+    fireEvent.focus(input);
+    // value is "glm-5.2" but filterActive is false on fresh open → both options show
+    expect(await screen.findByRole("option", { name: /MiniMax-M2\.5/ })).toBeInTheDocument();
+    expect(screen.getAllByRole("option")).toHaveLength(2);
   });
 
   it("value not present in the list is allowed (free text, no error UI)", async () => {
@@ -406,7 +426,7 @@ export { ModelCombobox, type ModelComboboxProps } from "./ModelCombobox";
 cd ui; npx vitest run src/components/provider-fields/__tests__/ModelCombobox.test.tsx
 ```
 
-Expected: PASS (9 тестов).
+Expected: PASS (10 тестов).
 
 - [ ] **Step 6: Commit**
 
