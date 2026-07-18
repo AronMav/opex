@@ -652,7 +652,7 @@ export default function AgentsPage() {
                       type="button"
                       onClick={() => setEnlargedAvatar({ url: a.icon_url!, name: a.name })}
                       aria-label={t("agents.enlarge_avatar", { name: a.name })}
-                      className="block cursor-zoom-in rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                      className="block cursor-default rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
                     >
                       <IconTile tone="muted" size="lg" className="border-primary/30 shadow-inner group-hover:border-primary/50 transition-colors overflow-hidden">
                         {/* eslint-disable-next-line @next/next/no-img-element -- agent icons are tiny avatars from arbitrary sources (uploads, data URIs, external); next/Image's optimisation pipeline adds no value at this size */}
