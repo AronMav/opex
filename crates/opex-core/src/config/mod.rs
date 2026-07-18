@@ -1823,6 +1823,13 @@ pub struct GlobalToolDispatcherConfig {
     /// (no behaviour change).
     #[serde(default)]
     pub always_core: Vec<String>,
+    /// Tool names removed from every MAIN agent's native tools[] schema at the
+    /// assembly chokepoint (base and non-base). Does NOT cover the dispatcher
+    /// catalogue / subagents / openai-compat — MCP names here must be paired
+    /// with the server's `enabled: false` (see `apply_global_block`). Empty by
+    /// default (no behaviour change).
+    #[serde(default)]
+    pub block: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -3791,6 +3798,7 @@ model = "gpt-4o"
         )
         .expect("minimal config parses");
         assert!(cfg.tool_dispatcher.always_core.is_empty());
+        assert!(cfg.tool_dispatcher.block.is_empty());
 
         // Present section ⇒ list parses.
         let cfg2: AppConfig = toml::from_str(
@@ -3801,10 +3809,12 @@ model = "gpt-4o"
             url = "postgres://localhost/test"
             [tool_dispatcher]
             always_core = ["sequentialthinking"]
+            block = ["read_file"]
             "#,
         )
         .expect("config with [tool_dispatcher] parses");
         assert_eq!(cfg2.tool_dispatcher.always_core, vec!["sequentialthinking".to_string()]);
+        assert_eq!(cfg2.tool_dispatcher.block, vec!["read_file".to_string()]);
     }
 }
 

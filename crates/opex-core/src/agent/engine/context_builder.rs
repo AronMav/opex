@@ -676,6 +676,10 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         &self.cfg().app_config.tool_dispatcher.always_core
     }
 
+    fn dispatcher_block(&self) -> &[String] {
+        &self.cfg().app_config.tool_dispatcher.block
+    }
+
     fn cfg_deny_list(&self) -> Vec<String> {
         // Trigger-hint uses ONLY the agent's own tool_policy.deny for the
         // same reason as `tool_handlers/tool_use.rs::deny_list`: applying

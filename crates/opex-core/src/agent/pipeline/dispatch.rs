@@ -223,9 +223,51 @@ pub fn apply_tool_policy_override(
         .collect()
 }
 
+/// Remove tools whose name is in the global `[tool_dispatcher] block` list.
+///
+/// SCOPE (important): this filters the MAIN agent's native `tools[]` schema at
+/// the context_builder assembly chokepoint — for every agent, base and
+/// non-base. It does NOT filter the dispatcher catalogue (`tool_use`
+/// search/describe/call), the trigger-hint, the suppressor, the subagent
+/// assembly path, or the openai-compat path. Therefore an MCP tool name in
+/// this list MUST always be paired with `enabled: false` on its MCP server —
+/// the registry feeds all assembly paths, so disabling the server is what
+/// actually removes the tool everywhere. `block` alone is only sufficient for
+/// non-MCP (native/yaml) names.
+pub fn apply_global_block(tools: Vec<ToolDefinition>, block: &[String]) -> Vec<ToolDefinition> {
+    if block.is_empty() {
+        return tools;
+    }
+    tools.into_iter().filter(|t| !block.iter().any(|b| b == &t.name)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apply_global_block_removes_only_listed_names() {
+        let mk = |n: &str| ToolDefinition {
+            name: n.to_string(),
+            description: String::new(),
+            input_schema: serde_json::json!({}),
+        };
+        let tools = vec![mk("read_file"), mk("workspace_read"), mk("write_file"), mk("code_exec")];
+        let block = vec!["read_file".to_string(), "write_file".to_string()];
+        let out = apply_global_block(tools, &block);
+        let names: Vec<&str> = out.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["workspace_read", "code_exec"]);
+    }
+
+    #[test]
+    fn apply_global_block_empty_is_noop() {
+        let mk = |n: &str| ToolDefinition {
+            name: n.to_string(), description: String::new(), input_schema: serde_json::json!({}),
+        };
+        let tools = vec![mk("read_file"), mk("workspace_read")];
+        let out = apply_global_block(tools, &[]);
+        assert_eq!(out.len(), 2);
+    }
 
     #[test]
     fn needs_approval_disabled() {

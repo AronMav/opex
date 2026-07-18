@@ -231,6 +231,10 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     /// dispatcher catalogue/hint/suppressor).
     fn dispatcher_always_core(&self) -> &[String];
 
+    /// Global `[tool_dispatcher] block` list — tool names removed from the
+    /// main agent's assembled native schema. Mirrors `dispatcher_always_core`.
+    fn dispatcher_block(&self) -> &[String];
+
     /// Agent's effective tool-policy deny list (consumed by trigger-hint
     /// logic and extension-list assembly). Returns the union of
     /// `agent.tools.deny` and the delegation-computed deny list
@@ -700,6 +704,13 @@ impl ContextBuilder for DefaultContextBuilder {
             tool_list.extend(deps.mcp_tool_definitions().await);
 
             let mut all_tools = deps.filter_tools_by_policy(tool_list);
+            // Global dedup: drop [tool_dispatcher] block names from the native
+            // schema (before dispatcher partition / top-K). MCP names in the
+            // list are additionally removed everywhere by their server's
+            // enabled:false — see apply_global_block's scope contract.
+            all_tools = crate::agent::pipeline::dispatch::apply_global_block(
+                all_tools, deps.dispatcher_block(),
+            );
 
             if dispatcher_enabled {
                 // Partition: keep only static core ∪ core_extra ∪ promoted.
