@@ -1137,6 +1137,55 @@ async fn cleanup_agent_data(db: &sqlx::PgPool, agent_name: &str) -> Result<(), s
     Ok(())
 }
 
+/// Back up an agent's soul biography (`event`/`reflection` chunks) to a JSON
+/// file under `dir` BEFORE deletion. Returns the number of rows backed up
+/// (`0` = nothing written).
+///
+/// Gated on biography EXISTENCE, deliberately NOT on the agent's current
+/// `[agent.soul].enabled` flag: an agent may accumulate biography while soul is
+/// enabled, then have soul toggled off (which does not purge existing rows).
+/// The private-scope `DELETE` in `cleanup_agent_data` carries no `kind` filter,
+/// so it erases that biography regardless of the flag — backing up only when
+/// `soul.enabled == true` would skip the export in exactly that case. Reads
+/// `event`/`reflection` rows directly, bypassing the `refuse_if_biography`
+/// guards — a deliberate one-time export mirroring docs/runbooks/
+/// soul-quarantine.md, not a new mutation path.
+///
+/// Fail-closed: any SELECT or write error is returned so the caller ABORTS the
+/// deletion (a swallowed error would let the subsequent DELETE erase the
+/// biography irrecoverably). The extra SELECT on non-soul agents is a cheap
+/// indexed lookup on `agent_id`.
+async fn backup_soul_biography(
+    db: &sqlx::PgPool,
+    agent_name: &str,
+    dir: &std::path::Path,
+) -> anyhow::Result<usize> {
+    let rows: Vec<(uuid::Uuid, String, String, String)> = sqlx::query_as(
+        "SELECT id, kind, content, created_at::text FROM memory_chunks \
+         WHERE agent_id = $1 AND kind IN ('event','reflection')",
+    )
+    .bind(agent_name)
+    .fetch_all(db)
+    .await?;
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    std::fs::create_dir_all(dir)?;
+    let file = dir.join(format!(
+        "{}-{}.json",
+        agent_name,
+        chrono::Utc::now().format("%Y%m%d-%H%M%S")
+    ));
+    let payload: Vec<Value> = rows
+        .iter()
+        .map(|(id, kind, content, created_at)| {
+            json!({"id": id, "kind": kind, "content": content, "created_at": created_at})
+        })
+        .collect();
+    std::fs::write(&file, serde_json::to_vec_pretty(&payload)?)?;
+    Ok(rows.len())
+}
+
 /// Query params for `DELETE /api/agents/{name}`. Additive — omitted defaults
 /// to `false`, preserving the existing plain-delete contract (History
 /// survives unless the caller explicitly opts into full purge).
@@ -1192,17 +1241,16 @@ pub(crate) async fn api_delete_agent(
     let path = agent_config_path(&name);
 
     // Block deletion of base agents — fail closed: any inability to verify
-    // blocks deletion. Also captures `[agent.soul].enabled` from the parsed
-    // config for the mandatory biography backup below (soul agents only);
-    // a missing config file (NotFound branch) has no soul data to back up.
-    let soul_enabled = match std::fs::read_to_string(&path) {
+    // blocks deletion. (The soul-backup decision below is independent of the
+    // `[agent.soul].enabled` flag — see backup_soul_biography.)
+    match std::fs::read_to_string(&path) {
         Ok(toml_str) => match toml::from_str::<crate::config::AgentConfig>(&toml_str) {
             Ok(existing) if existing.agent.base => {
                 return (StatusCode::FORBIDDEN, Json(json!({
                     "error": format!("Agent '{}' is a base agent and cannot be deleted", name)
                 }))).into_response();
             }
-            Ok(existing) => existing.agent.soul.enabled, // not a base agent, proceed
+            Ok(_) => {} // not a base agent, proceed
             Err(e) => {
                 tracing::error!(agent = %name, error = %e, "agent config is malformed; deletion blocked");
                 return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
@@ -1210,7 +1258,7 @@ pub(crate) async fn api_delete_agent(
                 }))).into_response();
             }
         },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false, // file gone, proceed to cleanup
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // file gone, proceed to cleanup
         Err(e) => {
             tracing::error!(agent = %name, error = %e, "cannot read agent config for deletion safety check");
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
@@ -1220,64 +1268,17 @@ pub(crate) async fn api_delete_agent(
     };
 
     // Mandatory soul biography backup BEFORE cleanup, fail-closed (spec §4.2).
-    // The SQL below reads `event`/`reflection` rows directly, bypassing the
-    // `refuse_if_biography` guards that protect the agent-facing memory tool
-    // and UI mutation routes — this is a deliberate, one-time export mirroring
-    // docs/runbooks/soul-quarantine.md, not a new mutation path.
-    if soul_enabled {
-        let rows: Vec<(uuid::Uuid, String, String, String)> = match sqlx::query_as(
-            "SELECT id, kind, content, created_at::text FROM memory_chunks \
-             WHERE agent_id = $1 AND kind IN ('event','reflection')",
-        )
-        .bind(&name)
-        .fetch_all(&infra.db)
-        .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                // Fail-closed on the READ too (C1): a failed biography SELECT
-                // (e.g. statement_timeout on a large soul) must ABORT deletion.
-                // Swallowing it (`unwrap_or_default`) would write an EMPTY backup,
-                // let the run continue, and the subsequent private-scope DELETE
-                // would erase the biography irrecoverably.
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({
-                        "error": format!("soul biography read for backup failed; deletion aborted: {e}")
-                    })),
-                )
-                    .into_response();
-            }
-        };
-
-        let dir = std::path::Path::new(crate::config::WORKSPACE_DIR)
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .join("backups")
-            .join("agent-deletion");
-
-        let backup_result = (|| -> anyhow::Result<()> {
-            std::fs::create_dir_all(&dir)?;
-            let file = dir.join(format!(
-                "{}-{}.json",
-                name,
-                chrono::Utc::now().format("%Y%m%d-%H%M%S")
-            ));
-            let payload: Vec<Value> = rows
-                .iter()
-                .map(|(id, kind, content, created_at)| {
-                    json!({"id": id, "kind": kind, "content": content, "created_at": created_at})
-                })
-                .collect();
-            std::fs::write(&file, serde_json::to_vec_pretty(&payload)?)?;
-            Ok(())
-        })();
-
-        if let Err(e) = backup_result {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
-                "error": format!("soul biography backup failed; deletion aborted: {e}")
-            }))).into_response();
-        }
+    // Gated on biography existence, NOT `soul.enabled` — see the doc comment on
+    // backup_soul_biography for why the flag is the wrong gate.
+    let backup_dir = std::path::Path::new(crate::config::WORKSPACE_DIR)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("backups")
+        .join("agent-deletion");
+    if let Err(e) = backup_soul_biography(&infra.db, &name, &backup_dir).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+            "error": format!("soul biography backup failed; deletion aborted: {e}")
+        }))).into_response();
     }
 
     // Clean up all agent-related data from DB first (preserve sessions/messages as history)
@@ -2089,6 +2090,56 @@ mod tests {
         assert_eq!(count_rows(&pool, "audit_events", "agent_id", agent).await, 1, "audit_events must survive");
         assert_eq!(count_rows(&pool, "usage_log", "agent_id", agent).await, 1, "usage_log must survive");
         assert_eq!(count_rows(&pool, "session_failures", "agent_id", agent).await, 1, "session_failures must survive");
+    }
+
+    // ── Soul-biography backup gating (final-review Finding 1) ────────────────
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn test_soul_backup_gated_on_existence_not_enabled_flag(pool: sqlx::PgPool) {
+        // Biography exists even though the agent has soul DISABLED (no config /
+        // no enabled flag consulted here): the backup must still be written.
+        // This is the "soul toggled off but biography survives" hole that
+        // gating on `soul.enabled` missed — the private-scope DELETE erases
+        // these rows regardless of the flag.
+        let agent = "BioAgent";
+        sqlx::query("INSERT INTO memory_chunks (agent_id, content, scope, kind) VALUES ($1, 'a lived event', 'private', 'event')")
+            .bind(agent).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO memory_chunks (agent_id, content, scope, kind) VALUES ($1, 'a reflection', 'private', 'reflection')")
+            .bind(agent).execute(&pool).await.unwrap();
+        // A plain fact must NOT be backed up (only event/reflection are biography).
+        sqlx::query("INSERT INTO memory_chunks (agent_id, content, scope, kind) VALUES ($1, 'just a fact', 'private', 'fact')")
+            .bind(agent).execute(&pool).await.unwrap();
+
+        let dir = std::env::temp_dir().join("opex-soul-backup-test-bioagent");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let n = super::backup_soul_biography(&pool, agent, &dir).await.unwrap();
+        assert_eq!(n, 2, "both event and reflection rows must be backed up (facts excluded)");
+
+        let files: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).collect();
+        assert_eq!(files.len(), 1, "exactly one backup file written");
+        let body = std::fs::read_to_string(files[0].path()).unwrap();
+        assert!(body.contains("a lived event"), "event content present in backup");
+        assert!(body.contains("a reflection"), "reflection content present in backup");
+        assert!(!body.contains("just a fact"), "plain facts excluded from biography backup");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn test_soul_backup_noop_when_no_biography(pool: sqlx::PgPool) {
+        // No event/reflection rows → returns 0 and writes no file (never
+        // creates an empty backup for a plain agent).
+        let agent = "NoBioAgent";
+        sqlx::query("INSERT INTO memory_chunks (agent_id, content, scope, kind) VALUES ($1, 'just a fact', 'private', 'fact')")
+            .bind(agent).execute(&pool).await.unwrap();
+
+        let dir = std::env::temp_dir().join("opex-soul-backup-test-nobio");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let n = super::backup_soul_biography(&pool, agent, &dir).await.unwrap();
+        assert_eq!(n, 0, "no biography → nothing backed up");
+        assert!(!dir.exists(), "no backup dir/file created when there is nothing to back up");
     }
 
     // ── Task 6: purge_history ────────────────────────────────────────────────
