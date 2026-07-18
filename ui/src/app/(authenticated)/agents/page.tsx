@@ -18,7 +18,7 @@ import {
 } from "@/hooks/use-profiles";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { PageContainer } from "@/components/ui/page-container";
 import { IconTile } from "@/components/ui/icon-tile";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -34,7 +34,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import type { AgentInfo, AgentDetail, ChannelRow, SecretInfo } from "@/types/api";
-import { Settings, LogOut, Bot, Plus, Search } from "lucide-react";
+import { Settings, LogOut, Bot, Plus, Search, X } from "lucide-react";
 import { Loader } from "@/components/ui/loader";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -728,20 +728,30 @@ export default function AgentsPage() {
         </div>
       )}
 
-      {/* Avatar lightbox */}
+      {/* Avatar lightbox — frameless: the dialog shrink-wraps the photo, with the
+          close affordance overlaid on the image (no name, no uneven padding). */}
       <Dialog open={!!enlargedAvatar} onOpenChange={(o) => { if (!o) setEnlargedAvatar(null); }}>
-        <DialogContent size="md" className="p-3">
+        <DialogContent
+          size="md"
+          showCloseButton={false}
+          className="w-auto max-w-[92vw] overflow-visible border-0 bg-transparent p-0 shadow-none"
+        >
           <DialogTitle className="sr-only">{enlargedAvatar?.name ?? ""}</DialogTitle>
           {enlargedAvatar && (
-            <>
+            <div className="relative">
               {/* eslint-disable-next-line @next/next/no-img-element -- arbitrary-source agent avatar; next/Image adds no value here */}
               <img
                 src={enlargedAvatar.url}
                 alt={enlargedAvatar.name}
-                className="mx-auto max-h-[70dvh] w-auto max-w-full rounded-lg object-contain"
+                className="block max-h-[85dvh] w-auto max-w-[92vw] rounded-lg object-contain"
               />
-              <p className="mt-3 text-center font-mono text-sm font-bold text-foreground">{enlargedAvatar.name}</p>
-            </>
+              <DialogClose
+                className="absolute right-2 top-2 rounded-full bg-black/50 p-1.5 text-white/90 backdrop-blur-sm transition hover:bg-black/70 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+              >
+                <X className="h-4 w-4" />
+                <span className="sr-only">Close</span>
+              </DialogClose>
+            </div>
           )}
         </DialogContent>
       </Dialog>
