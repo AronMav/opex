@@ -296,6 +296,7 @@ pub(crate) struct VisionAnalyzeRequest {
 #[allow(clippy::string_slice)]
 pub(crate) async fn api_vision_analyze(
     State(cfg): State<ConfigServices>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<VisionAnalyzeRequest>,
 ) -> impl IntoResponse {
     let toolgate_url = match cfg.config.toolgate_url.as_deref() {
@@ -306,6 +307,20 @@ pub(crate) async fn api_vision_analyze(
     let image_url = body.image_url.trim().to_string();
     let language = body.language.as_deref().unwrap_or("ru").to_string();
     let question = body.question.clone().unwrap_or_default();
+
+    // Ordered vision provider chain from the caller (`X-Opex-Providers`,
+    // injected by engine_dispatch from the agent's profile vision slot).
+    // Each attempt forwards one `X-Opex-Provider` to toolgate, retrying down
+    // the chain on retryable failures (5xx / 429 / transport) — mirrors the
+    // tts chain in `api_tts_synthesize`. Empty chain → single attempt with no
+    // provider header (legacy: toolgate picks its default).
+    let chain = parse_provider_chain(&headers);
+    let attempts: Vec<Option<&str>> = if chain.is_empty() {
+        vec![None]
+    } else {
+        chain.iter().map(|s| Some(s.as_str())).collect()
+    };
+    let last = attempts.len() - 1;
 
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -355,33 +370,55 @@ pub(crate) async fn api_vision_analyze(
         };
 
         let tg_url = format!("{toolgate_url}/describe");
-        let part = reqwest::multipart::Part::bytes(image_bytes.to_vec())
-            .file_name(base_filename.to_string())
-            .mime_str(mime)
-            .unwrap_or_else(|_| reqwest::multipart::Part::bytes(image_bytes.to_vec()));
-        let mut form = reqwest::multipart::Form::new()
-            .part("file", part)
-            .text("language", language);
-        if !question.is_empty() {
-            form = form.text("prompt", question);
-        }
+        // Multipart forms are not reusable — rebuild per attempt from the
+        // downloaded bytes (kept in memory) so chain retries stay possible.
+        for (i, provider) in attempts.iter().enumerate() {
+            let part = reqwest::multipart::Part::bytes(image_bytes.to_vec())
+                .file_name(base_filename.to_string())
+                .mime_str(mime)
+                .unwrap_or_else(|_| reqwest::multipart::Part::bytes(image_bytes.to_vec()));
+            let mut form = reqwest::multipart::Form::new()
+                .part("file", part)
+                .text("language", language.clone());
+            if !question.is_empty() {
+                form = form.text("prompt", question.clone());
+            }
+            let mut req = http.post(&tg_url).multipart(form);
+            if let Some(p) = provider {
+                req = req.header("X-Opex-Provider", *p);
+            }
 
-        return match http.post(&tg_url).multipart(form).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                match resp.json::<serde_json::Value>().await {
-                    Ok(v) => Json(json!({"description": v["description"].as_str().unwrap_or("")})).into_response(),
-                    Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("parse error: {e}")}))).into_response(),
+            match req.send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    return match resp.json::<serde_json::Value>().await {
+                        Ok(v) => Json(json!({"description": v["description"].as_str().unwrap_or("")})).into_response(),
+                        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("parse error: {e}")}))).into_response(),
+                    };
+                }
+                Ok(resp) => {
+                    let status = resp.status();
+                    let retryable = status.is_server_error() || status.as_u16() == 429;
+                    if retryable && i < last {
+                        tracing::warn!(provider = ?provider, status = %status, "vision provider failed — trying next in chain");
+                        continue;
+                    }
+                    if status.as_u16() == 503 {
+                        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Vision provider not configured"}))).into_response();
+                    }
+                    let body = resp.text().await.unwrap_or_default();
+                    return (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Vision failed: {body}")}))).into_response();
+                }
+                Err(e) => {
+                    if i < last {
+                        tracing::warn!(provider = ?provider, error = %e, "vision provider transport error — trying next in chain");
+                        continue;
+                    }
+                    return (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Vision failed: {e}")}))).into_response();
                 }
             }
-            Ok(resp) if resp.status().as_u16() == 503 => {
-                (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Vision provider not configured"}))).into_response()
-            }
-            Ok(resp) => {
-                let body = resp.text().await.unwrap_or_default();
-                (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Vision failed: {body}")}))).into_response()
-            }
-            Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Vision failed: {e}")}))).into_response(),
-        };
+        }
+        // Defensive: the loop always returns on its last attempt.
+        return (StatusCode::BAD_GATEWAY, Json(json!({"error": "Vision failed: provider chain exhausted"}))).into_response();
     }
 
     // External URL: forward to toolgate /describe-url (SSRF validated there)
@@ -391,21 +428,83 @@ pub(crate) async fn api_vision_analyze(
         payload["question"] = serde_json::Value::String(question);
     }
 
-    match http.post(&tg_url).json(&payload).send().await {
-        Ok(resp) if resp.status().is_success() => {
-            match resp.json::<serde_json::Value>().await {
-                Ok(v) => Json(json!({"description": v["description"].as_str().unwrap_or("")})).into_response(),
-                Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("parse error: {e}")}))).into_response(),
+    for (i, provider) in attempts.iter().enumerate() {
+        let mut req = http.post(&tg_url).json(&payload);
+        if let Some(p) = provider {
+            req = req.header("X-Opex-Provider", *p);
+        }
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => {
+                return match resp.json::<serde_json::Value>().await {
+                    Ok(v) => Json(json!({"description": v["description"].as_str().unwrap_or("")})).into_response(),
+                    Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("parse error: {e}")}))).into_response(),
+                };
+            }
+            Ok(resp) => {
+                let status = resp.status();
+                let retryable = status.is_server_error() || status.as_u16() == 429;
+                if retryable && i < last {
+                    tracing::warn!(provider = ?provider, status = %status, "vision provider failed — trying next in chain");
+                    continue;
+                }
+                if status.as_u16() == 503 {
+                    return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Vision provider not configured"}))).into_response();
+                }
+                let body = resp.text().await.unwrap_or_default();
+                return (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Vision failed: {body}")}))).into_response();
+            }
+            Err(e) => {
+                if i < last {
+                    tracing::warn!(provider = ?provider, error = %e, "vision provider transport error — trying next in chain");
+                    continue;
+                }
+                return (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Vision failed: {e}")}))).into_response();
             }
         }
-        Ok(resp) if resp.status().as_u16() == 503 => {
-            (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Vision provider not configured"}))).into_response()
-        }
-        Ok(resp) => {
-            let body = resp.text().await.unwrap_or_default();
-            (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Vision failed: {body}")}))).into_response()
-        }
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Vision failed: {e}")}))).into_response(),
+    }
+    // Defensive: the loop always returns on its last attempt.
+    (StatusCode::BAD_GATEWAY, Json(json!({"error": "Vision failed: provider chain exhausted"}))).into_response()
+}
+
+/// Parse the ordered provider chain from the `X-Opex-Providers` header
+/// (comma-separated provider names, injected by `engine_dispatch` from the
+/// agent's profile vision slot). Missing/empty header → empty vec.
+fn parse_provider_chain(headers: &axum::http::HeaderMap) -> Vec<String> {
+    headers
+        .get("x-opex-providers")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod provider_chain_tests {
+    use super::parse_provider_chain;
+    use axum::http::HeaderMap;
+
+    #[test]
+    fn parses_ordered_chain() {
+        let mut h = HeaderMap::new();
+        h.insert("x-opex-providers", "ollama-v, mimo-v".parse().unwrap());
+        assert_eq!(parse_provider_chain(&h), vec!["ollama-v".to_string(), "mimo-v".to_string()]);
+    }
+
+    #[test]
+    fn missing_header_is_empty() {
+        assert!(parse_provider_chain(&HeaderMap::new()).is_empty());
+    }
+
+    #[test]
+    fn empty_and_blank_entries_are_dropped() {
+        let mut h = HeaderMap::new();
+        h.insert("x-opex-providers", " , a,, ".parse().unwrap());
+        assert_eq!(parse_provider_chain(&h), vec!["a".to_string()]);
     }
 }
 

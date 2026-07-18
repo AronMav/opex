@@ -355,14 +355,22 @@ impl AgentEngine {
                 } else {
                     self.ssrf_http_client()
                 };
-                // search_web carries the ordered `websearch` profile chain so
-                // toolgate can retry across providers in the agent's configured
-                // order. Every other yaml tool keeps the empty header slice it
-                // always had (mirrors `execute_oauth`'s `&[]`) — this is scoped
-                // strictly to the search capability, not a shared header path.
+                // Capability tools whose provider is profile-routed carry the
+                // ordered profile-slot chain so the downstream service can
+                // retry across providers in the agent's configured order:
+                // `search_web` → websearch (consumed by toolgate search.py),
+                // `analyze_image` → vision (consumed by core
+                // api_vision_analyze, which forwards one X-Opex-Provider per
+                // attempt to toolgate). Every other yaml tool keeps the empty
+                // header slice it always had (mirrors `execute_oauth`'s `&[]`).
                 let mut injected_headers: Vec<(String, String)> = Vec::new();
-                if name == "search_web"
-                    && let Some(h) = websearch_header(&self.cfg().profile_slots)
+                let chain_capability = match name {
+                    "search_web" => Some("websearch"),
+                    "analyze_image" => Some("vision"),
+                    _ => None,
+                };
+                if let Some(cap) = chain_capability
+                    && let Some(h) = slot_chain_header(&self.cfg().profile_slots, cap)
                 {
                     injected_headers.push(h);
                 }
@@ -450,14 +458,18 @@ impl AgentEngine {
 
 }
 
-/// Builds the `X-Opex-Providers` header carrying the ordered `websearch`
-/// profile-slot provider chain (e.g. `"searxng,ollama,brave"`), joined by
-/// comma, so toolgate can retry `search_web` across providers in the agent's
-/// configured order. Returns `None` when the slot is missing or empty — in
-/// that case toolgate falls back to its own default provider selection.
-fn websearch_header(slots: &crate::db::profiles::Slots) -> Option<(String, String)> {
+/// Builds the `X-Opex-Providers` header carrying the ordered profile-slot
+/// provider chain for a capability (e.g. websearch `"searxng,ollama,brave"`,
+/// vision `"ollama-cloud-vision,mimo-vision"`), joined by comma, so the
+/// downstream service can retry across providers in the agent's configured
+/// order. Returns `None` when the slot is missing or empty — in that case the
+/// downstream falls back to its own default provider selection.
+fn slot_chain_header(
+    slots: &crate::db::profiles::Slots,
+    capability: &str,
+) -> Option<(String, String)> {
     let chain = slots
-        .get("websearch")?
+        .get(capability)?
         .iter()
         .map(|e| e.provider.as_str())
         .collect::<Vec<_>>()
@@ -470,8 +482,8 @@ fn websearch_header(slots: &crate::db::profiles::Slots) -> Option<(String, Strin
 }
 
 #[cfg(test)]
-mod websearch_header_tests {
-    use super::websearch_header;
+mod slot_chain_header_tests {
+    use super::slot_chain_header;
     use crate::db::profiles::SlotEntry;
     use std::collections::HashMap;
 
@@ -488,21 +500,38 @@ mod websearch_header_tests {
         let mut slots = HashMap::new();
         slots.insert("websearch".to_string(), vec![entry("a"), entry("b")]);
         assert_eq!(
-            websearch_header(&slots),
+            slot_chain_header(&slots, "websearch"),
             Some(("X-Opex-Providers".to_string(), "a,b".to_string()))
+        );
+    }
+
+    #[test]
+    fn vision_chain_reads_vision_slot_only() {
+        let mut slots = HashMap::new();
+        slots.insert("websearch".to_string(), vec![entry("ws")]);
+        slots.insert("vision".to_string(), vec![entry("ollama-v"), entry("mimo-v")]);
+        assert_eq!(
+            slot_chain_header(&slots, "vision"),
+            Some(("X-Opex-Providers".to_string(), "ollama-v,mimo-v".to_string()))
+        );
+        // websearch chain untouched by the vision entry
+        assert_eq!(
+            slot_chain_header(&slots, "websearch"),
+            Some(("X-Opex-Providers".to_string(), "ws".to_string()))
         );
     }
 
     #[test]
     fn missing_slot_returns_none() {
         let slots: HashMap<String, Vec<SlotEntry>> = HashMap::new();
-        assert_eq!(websearch_header(&slots), None);
+        assert_eq!(slot_chain_header(&slots, "websearch"), None);
+        assert_eq!(slot_chain_header(&slots, "vision"), None);
     }
 
     #[test]
     fn empty_slot_returns_none() {
         let mut slots = HashMap::new();
         slots.insert("websearch".to_string(), vec![]);
-        assert_eq!(websearch_header(&slots), None);
+        assert_eq!(slot_chain_header(&slots, "websearch"), None);
     }
 }
