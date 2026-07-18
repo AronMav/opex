@@ -27,6 +27,13 @@ function DialogTabs<T extends string>({
   onChange: (v: T) => void
   className?: string
 }) {
+  // With many tabs (e.g. the 8-tab agent editor) the label strip overflows the
+  // dialog width and the last tab gets clipped. Past a threshold, show the label
+  // only for the ACTIVE tab and render inactive tabs icon-only (the mobile
+  // pattern, extended to all widths) so every tab stays reachable without a
+  // horizontal scroll. `title` still surfaces each label on hover. Few-tab
+  // dialogs (provider editor, …) keep their labels unchanged.
+  const iconOnlyInactive = items.length > 6
   return (
     <div
       role="tablist"
@@ -51,7 +58,7 @@ function DialogTabs<T extends string>({
             )}
           >
             <Icon className="h-3.5 w-3.5 shrink-0 sm:h-3 sm:w-3" />
-            <span className={isActive ? "inline" : "hidden sm:inline"}>{item.label}</span>
+            <span className={isActive ? "inline" : iconOnlyInactive ? "hidden" : "hidden sm:inline"}>{item.label}</span>
             {isActive && <span className="absolute bottom-0 left-0 right-0 h-px bg-background" />}
           </button>
         )
