@@ -200,14 +200,16 @@ fn context_limit_cache() -> &'static std::sync::Mutex<std::collections::HashMap<
     CONTEXT_LIMIT_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
-/// Resolve the real context-window size for `model` via the provider's API.
+/// Resolve the real context-window size for `model`.
 ///
-/// Each `LlmProvider` can implement `context_limit_hint` to probe its own API
-/// (e.g. Ollama `/api/show`, OpenAI-compat `/v1/models`). Real values are cached
-/// in-process by `"{provider_name}::{model}"` key permanently; heuristic
-/// fallbacks are cached for [`FALLBACK_TTL`] then re-probed (self-heals after a
-/// transient provider outage). Falls back to `default_context_for_model` when
-/// the provider returns `None` or the call fails.
+/// Resolution priority: operator override > external catalog (models.dev/
+/// openrouter) > native API probe (`context_limit_hint`, e.g. Ollama `/api/show`,
+/// OpenAI-compat `/v1/models`) > `default_context_for_model` heuristic. Override
+/// and catalog are cheap in-memory lookups consulted FRESH every call; only the
+/// probe (a network call) is memoized by `"{provider_name}::{model}"` key —
+/// permanently for a real probe value, or for [`FALLBACK_TTL`] for the heuristic
+/// (self-heals after a transient provider outage). Resolved values are mirrored
+/// into that cache for the sync hot-path reader [`context_limit_tokens`].
 ///
 /// Pass the **effective** model (`engine.current_model()`), not the static
 /// config model, so a runtime model override resolves the override's window.
@@ -217,41 +219,56 @@ pub async fn resolve_context_limit(
 ) -> u32 {
     let cache_key = format!("{}::{}", provider.name(), model);
 
+    // Priority: operator override > external catalog (models.dev/openrouter — the
+    // single source that already carries every cloud model's real window) > native
+    // API probe > heuristic.
+    //
+    // Override and catalog are cheap in-memory lookups and the authoritative
+    // sources, so they are consulted FRESH on every call — deliberately ABOVE the
+    // probe cache below. This is what makes the catalog actually authoritative: a
+    // probe value cached before the catalog knew the model (a newly-released model,
+    // or a cold catalog at startup) must never *permanently* shadow the catalog
+    // once it loads, and a gateway whose `/v1/models` under-reports its window
+    // (e.g. z.ai's coding endpoint advertising ~101K for a model it actually serves
+    // far larger) must not pin that wrong value. An explicit operator pin still
+    // wins over the catalog (a model deliberately served at a reduced/custom cap).
+    // We still write these into the cache so the sync hot-path reader
+    // (`context_limit_tokens`) sees the same window.
+    if let Some(v) = provider.operator_context_override(model) {
+        cache_context_limit(&cache_key, v, false);
+        return v;
+    }
+    if let Some(v) = opex_catalog::global_context(provider.name(), model) {
+        cache_context_limit(&cache_key, v, false);
+        return v;
+    }
+
+    // Below here the catalog doesn't know the model (locally-served
+    // Ollama/vLLM/SGLang, where `/api/show` / `/v1/models` num_ctx is the real
+    // ground truth). Memoize the expensive network probe permanently; the name
+    // heuristic is a short-TTL fallback that re-probes after a transient outage.
     if let Ok(guard) = context_limit_cache().lock()
         && let Some(c) = guard.get(&cache_key)
         && (!c.is_fallback || c.at.elapsed() < FALLBACK_TTL) {
             return c.value;
         }
-
-    // Priority: operator override > external catalog (models.dev/openrouter — the
-    // single source that already carries every cloud model's real window) > native
-    // API probe > heuristic.
-    //
-    // The catalog is the authoritative source of context sizes: it is consulted
-    // before the API probe so the UI (`model_discovery`) and this runtime path
-    // resolve the SAME window, and a gateway whose `/v1/models` reports a
-    // wrong/absent context can no longer pin the wrong value permanently. An
-    // explicit operator pin still wins over the catalog (a model deliberately
-    // served at a reduced/custom cap). The native probe stays a fallback ONLY for
-    // models the catalog doesn't know (locally-served Ollama/vLLM/SGLang, where
-    // `/api/show` is the real ground truth). Override/catalog/probe values are all
-    // authoritative (not fallbacks) so they cache permanently; only the heuristic
-    // expires (see [`FALLBACK_TTL`]).
-    let (value, is_fallback) = match provider.operator_context_override(model) {
+    let (value, is_fallback) = match provider.context_limit_hint(model).await {
         Some(v) => (v, false),
-        None => match opex_catalog::global_context(provider.name(), model) {
-            Some(v) => (v, false),
-            None => match provider.context_limit_hint(model).await {
-                Some(v) => (v, false),
-                None => (default_context_for_model(model) as u32, true),
-            },
-        },
+        None => (default_context_for_model(model) as u32, true),
     };
-
-    if let Ok(mut guard) = context_limit_cache().lock() {
-        guard.insert(cache_key, CachedLimit { value, is_fallback, at: std::time::Instant::now() });
-    }
+    cache_context_limit(&cache_key, value, is_fallback);
     value
+}
+
+/// Insert (overwriting) one context-limit cache entry. A no-op if the cache lock
+/// is poisoned — resolution just recomputes next call.
+fn cache_context_limit(cache_key: &str, value: u32, is_fallback: bool) {
+    if let Ok(mut guard) = context_limit_cache().lock() {
+        guard.insert(
+            cache_key.to_string(),
+            CachedLimit { value, is_fallback, at: std::time::Instant::now() },
+        );
+    }
 }
 
 /// Synchronous best-effort window lookup for hot-path context management
@@ -400,6 +417,27 @@ mod resolve_order_tests {
             resolve_context_limit(&pinned, "glm-pinned-xyz").await,
             200_000,
             "operator override must win over the catalog"
+        );
+
+        // 4. Regression (glm-5.2 pinned at z.ai's under-reported /v1/models window):
+        //    a probe value cached BEFORE the catalog knew the model must NOT
+        //    permanently shadow the catalog once it loads the model.
+        let latebind = ProbeProvider { provider_type: "openai_compat", probe: Some(101_376), override_: None };
+        // First resolve: the model isn't in the catalog yet → the probe value caches.
+        assert_eq!(
+            resolve_context_limit(&latebind, "glm-latebind-xyz").await,
+            101_376,
+            "probe is the ground truth while the catalog doesn't know the model"
+        );
+        // A catalog refresh now carries the model at its true (larger) window.
+        let mut c2 = ModelCatalog::new();
+        c2.insert("glm", "glm-latebind-xyz", meta(1_048_576));
+        opex_catalog::install(c2);
+        // Second resolve must return the catalog value, not the stale cached probe.
+        assert_eq!(
+            resolve_context_limit(&latebind, "glm-latebind-xyz").await,
+            1_048_576,
+            "catalog must override a probe value cached before the catalog loaded the model"
         );
     }
 }
