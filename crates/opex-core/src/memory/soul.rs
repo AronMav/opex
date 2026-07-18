@@ -10,6 +10,12 @@ use crate::memory::SoulCandidate;
 pub(crate) const RECENCY_DECAY: f64 = 0.995;
 pub(crate) const PER_SESSION_DIVERSITY_CAP: usize = 3;
 pub(crate) const SOUL_CANDIDATE_LIMIT: i64 = 50;
+/// Reflection floor for the candidate pool. Events vastly outnumber reflections
+/// (~473:27 observed), so a pure top-N ANN over both kinds crowds reflections
+/// out of the pool entirely and the durable (reflection) layer never reaches
+/// scoring. Pull the top reflections separately and union them in, so
+/// `score_and_select` always sees them (spec §retrieval quota).
+pub(crate) const SOUL_REFLECTION_FLOOR: i64 = 15;
 
 /// One item for transactional soul indexing (reflection cycle step 4).
 #[derive(Debug, Clone)]

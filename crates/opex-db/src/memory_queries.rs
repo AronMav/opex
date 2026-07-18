@@ -694,29 +694,48 @@ fn row_to_soul_candidate(r: &sqlx::postgres::PgRow) -> SoulCandidate {
 
 /// Top-N soul chunks (event/reflection) by cosine distance. No touch_accessed —
 /// soul recency is computed from created_at (spec §1: write-on-read disabled).
+/// ANN candidate pool for soul retrieval. Reflections are pulled in a SEPARATE
+/// subquery with its own `reflection_limit` and UNION'd with the top-`event_limit`
+/// events, so the rare durable (reflection) layer is never crowded out of the pool
+/// by the far more numerous events before Rust-side scoring runs. Kinds are
+/// disjoint, so the union has no duplicates. Order is irrelevant here —
+/// `score_and_select` reranks the combined pool.
 pub async fn soul_candidates(
     db: &PgPool,
     vec_str: &str,
     agent_id: &str,
     exclude_source: Option<&str>,
-    limit: i64,
+    event_limit: i64,
+    reflection_limit: i64,
 ) -> Result<Vec<SoulCandidate>> {
     let rows = sqlx::query(
-        r"SELECT id, content, COALESCE(source,'') AS source, kind, importance,
+        r"(SELECT id, content, COALESCE(source,'') AS source, kind, importance,
                   created_at,
                   (1.0 - (embedding <=> $1::vector))::float8 AS similarity
            FROM memory_chunks
            WHERE embedding IS NOT NULL
              AND agent_id = $2
-             AND kind IN ('event', 'reflection')
+             AND kind = 'event'
              AND ($3::text IS NULL OR source <> $3)
            ORDER BY embedding <=> $1::vector
-           LIMIT $4",
+           LIMIT $4)
+          UNION ALL
+          (SELECT id, content, COALESCE(source,'') AS source, kind, importance,
+                  created_at,
+                  (1.0 - (embedding <=> $1::vector))::float8 AS similarity
+           FROM memory_chunks
+           WHERE embedding IS NOT NULL
+             AND agent_id = $2
+             AND kind = 'reflection'
+             AND ($3::text IS NULL OR source <> $3)
+           ORDER BY embedding <=> $1::vector
+           LIMIT $5)",
     )
     .bind(vec_str)
     .bind(agent_id)
     .bind(exclude_source)
-    .bind(limit)
+    .bind(event_limit)
+    .bind(reflection_limit)
     .fetch_all(db)
     .await
     .context("soul candidates query failed")?;
@@ -1060,11 +1079,28 @@ mod tests {
         insert_soul_row(&pool, "A", "fact", "manual", 5.0).await;
         insert_soul_row(&pool, "B", "event", "soul_event:s3", 7.0).await;
 
-        let all = super::soul_candidates(&pool, "[0.5,0.5,0.5,0.5]", "A", None, 50).await.unwrap();
+        let all = super::soul_candidates(&pool, "[0.5,0.5,0.5,0.5]", "A", None, 50, 15).await.unwrap();
         assert_eq!(all.len(), 2);
-        let excl = super::soul_candidates(&pool, "[0.5,0.5,0.5,0.5]", "A", Some("soul_event:s1"), 50).await.unwrap();
+        let excl = super::soul_candidates(&pool, "[0.5,0.5,0.5,0.5]", "A", Some("soul_event:s1"), 50, 15).await.unwrap();
         assert_eq!(excl.len(), 1);
         assert_eq!(excl[0].source, "soul_event:s2");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn soul_candidates_reflection_floor_survives_event_flood(pool: sqlx::PgPool) {
+        // 5 events + 2 reflections; event_limit=3 would crowd reflections out of a
+        // single top-N pool. The separate reflection subquery must still surface both.
+        for i in 0..5 {
+            insert_soul_row(&pool, "A", "event", &format!("soul_event:s{i}"), 7.0).await;
+        }
+        insert_soul_row(&pool, "A", "reflection", "soul_reflection", 9.0).await;
+        insert_soul_row(&pool, "A", "reflection", "soul_reflection", 8.0).await;
+
+        let cands = super::soul_candidates(&pool, "[0.5,0.5,0.5,0.5]", "A", None, 3, 15).await.unwrap();
+        let events = cands.iter().filter(|c| c.kind == "event").count();
+        let reflections = cands.iter().filter(|c| c.kind == "reflection").count();
+        assert_eq!(events, 3, "events capped at event_limit");
+        assert_eq!(reflections, 2, "both reflections survive despite the event flood");
     }
 
     // ── Open-thread recency tests (T2b) ──────────────────────────────

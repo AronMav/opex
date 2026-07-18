@@ -384,6 +384,7 @@ impl MemoryStore {
         let cands = crate::db::memory_queries::soul_candidates(
             &self.db, &vec_str, agent_id, exclude_source,
             crate::memory::soul::SOUL_CANDIDATE_LIMIT,
+            crate::memory::soul::SOUL_REFLECTION_FLOOR,
         ).await?;
         Ok(crate::memory::soul::score_and_select(cands, chrono::Utc::now(), top_k))
     }
