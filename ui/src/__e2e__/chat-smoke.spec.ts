@@ -495,6 +495,11 @@ test("F5 reload during streaming resumes via WS snapshot", async ({ page }) => {
   test.setTimeout(120_000);
 
   await login(page);
+  // Isolated fixture agent: the shared base agent carries concurrent running
+  // sessions (cron digests, owner activity) in the WS snapshot, which makes
+  // the post-reload "which session gets restored" assertion nondeterministic.
+  await page.goto("/chat?agent=e2e_smoke");
+  await page.waitForURL(/\/chat/, { timeout: 15_000 });
   await clickNewChat(page);
   await sendMessage(
     page,
@@ -587,6 +592,9 @@ test("Stuck-session recovery banner never renders", async ({ page }) => {
   test.setTimeout(60_000);
 
   await login(page);
+  // Same isolation rationale as the F5-resume test above.
+  await page.goto("/chat?agent=e2e_smoke");
+  await page.waitForURL(/\/chat/, { timeout: 15_000 });
   await clickNewChat(page);
   await sendMessage(page, "тест");
 
