@@ -799,6 +799,96 @@ pub(crate) struct ForkRequest {
     content: String,                     // new user message text
 }
 
+/// Result of a session fork — reports the ACTUAL branch point used, which may
+/// differ from the requested id when it was never persisted (see
+/// [`fork_session_inner`]).
+pub(crate) struct ForkResult {
+    pub(crate) message_id: uuid::Uuid,
+    pub(crate) parent_message_id: Option<uuid::Uuid>,
+    pub(crate) branch_from_message_id: Option<uuid::Uuid>,
+}
+
+/// Fetch the most recently created message in a session, or `None` if the
+/// session has no messages yet.
+async fn last_message_id(
+    db: &sqlx::PgPool,
+    session_id: uuid::Uuid,
+) -> anyhow::Result<Option<uuid::Uuid>> {
+    let row: Option<(uuid::Uuid,)> = sqlx::query_as(
+        "SELECT id FROM messages WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(session_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|(id,)| id))
+}
+
+/// Core fork logic, extracted from [`api_fork_session`] so it is testable
+/// directly (sqlx tests can drive it without an HTTP harness).
+///
+/// WS2: the UI may hold an optimistic (never-persisted) message id after a
+/// failed turn — e.g. the client-side placeholder created before the LLM call
+/// even started. Blindly trusting that id in the INSERT would violate
+/// `messages_branch_from_message_id_fkey` and 500 the retry path. Instead,
+/// verify the requested id actually exists in this session first; if it
+/// doesn't, fall back to the session's newest persisted message as the branch
+/// point (logged as a warning, never an error) so «Повторить» never
+/// dead-ends.
+pub(crate) async fn fork_session_inner(
+    db: &sqlx::PgPool,
+    session_id: uuid::Uuid,
+    requested_branch_id: Option<uuid::Uuid>,
+    content: &str,
+) -> anyhow::Result<ForkResult> {
+    let branch_id = match requested_branch_id {
+        Some(id) => {
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM messages WHERE id = $1 AND session_id = $2)",
+            )
+            .bind(id)
+            .bind(session_id)
+            .fetch_one(db)
+            .await?;
+            if exists {
+                Some(id)
+            } else {
+                tracing::warn!(
+                    session_id = %session_id, requested = %id,
+                    "fork branch id not found — falling back to last persisted message"
+                );
+                last_message_id(db, session_id).await?
+            }
+        }
+        None => last_message_id(db, session_id).await?,
+    };
+
+    // Find the parent of the resolved branch point (the message BEFORE it).
+    let parent_id = match branch_id {
+        Some(id) => sessions::find_parent_of_message(db, session_id, id).await?,
+        None => None,
+    };
+
+    let new_msg_id = sessions::save_message_branched(
+        db,
+        session_id,
+        "user",
+        content,
+        None,
+        None,
+        None,
+        None,
+        parent_id,
+        branch_id,
+    )
+    .await?;
+
+    Ok(ForkResult {
+        message_id: new_msg_id,
+        parent_message_id: parent_id,
+        branch_from_message_id: branch_id,
+    })
+}
+
 /// POST /api/sessions/{id}/fork?agent=xxx — create a branched user message from an existing message.
 ///
 /// Requires `?agent=<owner>` to prove session ownership: without this any
@@ -818,39 +908,18 @@ pub(crate) async fn api_fork_session(
         return resp;
     }
 
-    // 1. Find the parent of the branch_from message (the message BEFORE it)
-    let parent_id = match sessions::find_parent_of_message(
+    match fork_session_inner(
         &infra.db,
         session_id,
-        body.branch_from_message_id,
-    )
-    .await
-    {
-        Ok(pid) => pid,
-        Err(e) => {
-            return ApiError::Internal(e.to_string()).into_response()
-        }
-    };
-
-    // 2. Save the new user message with branch pointers
-    match sessions::save_message_branched(
-        &infra.db,
-        session_id,
-        "user",
-        &body.content,
-        None,
-        None,
-        None,
-        None,
-        parent_id,
         Some(body.branch_from_message_id),
+        &body.content,
     )
     .await
     {
-        Ok(new_msg_id) => Json(json!({
-            "message_id": new_msg_id,
-            "parent_message_id": parent_id,
-            "branch_from_message_id": body.branch_from_message_id,
+        Ok(result) => Json(json!({
+            "message_id": result.message_id,
+            "parent_message_id": result.parent_message_id,
+            "branch_from_message_id": result.branch_from_message_id,
         }))
         .into_response(),
         Err(e) => ApiError::Internal(e.to_string()).into_response(),
@@ -1219,6 +1288,90 @@ mod verify_session_agent_tests {
         let result = verify_session_agent(&db, session_id, "whatever-agent").await;
         let resp = result.expect_err("nonexistent session must error, not succeed");
         assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+}
+
+// ── fork_session_inner (WS2: unknown branch id must not 500) ───────────────
+#[cfg(test)]
+mod fork_session_inner_tests {
+    use super::fork_session_inner;
+    use sqlx::PgPool;
+
+    /// Insert a session with `count` chained user messages (each one's
+    /// `parent_message_id` pointing at the previous), returning
+    /// `(session_id, last_message_id)`.
+    async fn seed_session_with_messages(db: &PgPool, count: u32) -> (uuid::Uuid, uuid::Uuid) {
+        let session_id = uuid::Uuid::new_v4();
+        let agent = format!("test-owner-{session_id}");
+        sqlx::query(
+            "INSERT INTO sessions (id, agent_id, user_id, channel, started_at, last_message_at) \
+             VALUES ($1, $2, 'test-user', 'web', now(), now())",
+        )
+        .bind(session_id)
+        .bind(&agent)
+        .execute(db)
+        .await
+        .expect("insert session");
+
+        let mut parent_id: Option<uuid::Uuid> = None;
+        let mut last_id = uuid::Uuid::nil();
+        for i in 0..count {
+            let msg_id = uuid::Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO messages (id, session_id, role, content, parent_message_id, created_at) \
+                 VALUES ($1, $2, 'user', $3, $4, now() + make_interval(secs => $5))",
+            )
+            .bind(msg_id)
+            .bind(session_id)
+            .bind(format!("message {i}"))
+            .bind(parent_id)
+            .bind(i as f64)
+            .execute(db)
+            .await
+            .expect("insert message");
+            parent_id = Some(msg_id);
+            last_id = msg_id;
+        }
+        (session_id, last_id)
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn fork_with_unknown_branch_id_falls_back_to_last_message(pool: PgPool) {
+        let (session_id, last_msg_id) = seed_session_with_messages(&pool, 3).await;
+        let bogus = uuid::Uuid::new_v4();
+
+        let result = fork_session_inner(&pool, session_id, Some(bogus), "retry me").await;
+
+        let forked = result.expect("fork must not fail on unknown branch id");
+        assert_eq!(
+            forked.branch_from_message_id,
+            Some(last_msg_id),
+            "unknown branch id must fall back to the last persisted message"
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn fork_with_known_branch_id_uses_requested_id(pool: PgPool) {
+        let (session_id, _last_msg_id) = seed_session_with_messages(&pool, 3).await;
+
+        // Fetch the first message id (not the last) to prove a valid,
+        // non-last id is honoured rather than always falling back.
+        let first_id: uuid::Uuid = sqlx::query_scalar(
+            "SELECT id FROM messages WHERE session_id = $1 ORDER BY created_at ASC LIMIT 1",
+        )
+        .bind(session_id)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch first message");
+
+        let result = fork_session_inner(&pool, session_id, Some(first_id), "edit me").await;
+
+        let forked = result.expect("fork with a valid branch id must succeed");
+        assert_eq!(
+            forked.branch_from_message_id,
+            Some(first_id),
+            "a known branch id must be used as-is, not overridden"
+        );
     }
 }
 
