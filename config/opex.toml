@@ -166,5 +166,12 @@ always_core = ["sequentialthinking"]
 # MCP names here MUST be paired with the server's enabled:false (block does not
 # cover the dispatcher catalogue / subagents / openai-compat). See the
 # 2026-07-18 tool-reliability plan. Filesystem = mcp-filesystem duplicates of
-# native workspace_* (glm-5.2 mis-selected them with host paths).
-block = ["read_file", "write_file", "edit_file", "list_directory", "search_files"]
+# native workspace_* (glm-5.2 mis-selected them with host paths); fetch = flaky
+# mcp-fetch (robots/JSON) superseded by native web_fetch; browser_* = mcp
+# browser-cdp, a strict subset of native browser_action.
+block = [
+    "read_file", "write_file", "edit_file", "list_directory", "search_files",
+    "fetch",
+    "browser_navigate", "browser_click", "browser_type", "browser_extract_text",
+    "browser_screenshot", "browser_evaluate", "browser_close",
+]

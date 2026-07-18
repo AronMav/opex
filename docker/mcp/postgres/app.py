@@ -46,7 +46,9 @@ MCP_TOOLS = [
         "description": (
             "Execute a read-only SQL SELECT query and return results as JSON. "
             "Only SELECT statements are allowed — any DDL or DML is rejected. "
-            "Limit results to avoid large payloads."
+            "Limit results to avoid large payloads. This is the OPEX application "
+            "DB: agent definitions live in TOML files, so there is NO 'agents' "
+            "table — call list_tables first when unsure of the schema."
         ),
         "inputSchema": {
             "type": "object",
