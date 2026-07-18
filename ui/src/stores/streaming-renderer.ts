@@ -448,16 +448,18 @@ export function createStreamingRenderer(store: StoreAccess) {
   // ── Callback for saveLastSession (avoids circular import) ─────────────
   let _onSessionId: ((agent: string, sessionId: string) => void) | null = null;
 
-  // ── Visibilitychange recovery ─────────────────────────────────────────
+  // ── Tab-lifecycle recovery (G4) ───────────────────────────────────────
   // Browsers may suspend an SSE socket on a hidden tab; when the tab returns
   // we may have a half-open connection where `reader.read()` is parked and
-  // no events are flowing. On visibility=visible we walk every agent that
-  // believes it is in an active phase and re-open (via the single `connect`
-  // path) when its last observed SSE event is older than VISIBILITY_STALE_MS.
-  function handleVisibilityChange() {
+  // no events are flowing. Three distinct browser signals can mean "the tab
+  // is back": `visibilitychange`→visible, `online` (network regained), and
+  // `pageshow` (bfcache restore / back-forward navigation). All three funnel
+  // into the SAME staleness-checked reattach below — one code path, three
+  // triggers. Hiding the tab (`visibilitychange`→hidden) is a STRICT no-op:
+  // no dispose, no settle, no state reset. A live stream must never be torn
+  // down just because the tab lost focus.
+  function reattachStaleAgents() {
     if (_disposed) return;
-    if (typeof document === "undefined") return;
-    if (document.visibilityState !== "visible") return;
     const now = Date.now();
     const agentsState = store.get().agents as Record<string, AgentState>;
     for (const agent of Object.keys(agentsState)) {
@@ -471,27 +473,50 @@ export function createStreamingRenderer(store: StoreAccess) {
       // If we never recorded activity OR the gap exceeds the threshold, the
       // socket is almost certainly dead — re-open. connect() disposes the prior
       // session itself (generation bump keeps the stale-write guard), never
-      // POSTs /abort (tab focus must not cancel the backend turn), and replays
-      // the envelope (or an empty finished envelope if the turn already ended).
+      // POSTs /abort (tab focus must not cancel the backend turn), settles
+      // nothing (settleMessages:false — a reconnect CONTINUATION of the same
+      // turn, same message id), and replays the envelope (or an empty
+      // finished envelope if the turn already ended while hidden).
       if (last !== 0 && now - last < VISIBILITY_STALE_MS) continue;
       try {
         connect(agent, sid);
       } catch (e) {
         if (process.env.NODE_ENV !== "production") {
-          console.warn("[streaming-renderer] visibilitychange recovery failed", e);
+          console.warn("[streaming-renderer] tab-lifecycle reattach failed", e);
         }
       }
     }
   }
 
+  function handleVisibilityChange() {
+    if (_disposed) return;
+    if (typeof document === "undefined") return;
+    // Hidden branch: NO dispose, NO settle, NO state reset (G4). Only the
+    // transition TO visible triggers a reattach check.
+    if (document.visibilityState !== "visible") return;
+    reattachStaleAgents();
+  }
+
+  function handleOnline() {
+    reattachStaleAgents();
+  }
+
+  function handlePageShow() {
+    reattachStaleAgents();
+  }
+
   let _visibilityListenerAttached = false;
-  function attachVisibilityListener() {
+  function attachLifecycleListeners() {
     if (_visibilityListenerAttached) return;
     if (typeof document === "undefined") return;
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", handleOnline);
+      window.addEventListener("pageshow", handlePageShow);
+    }
     _visibilityListenerAttached = true;
   }
-  attachVisibilityListener();
+  attachLifecycleListeners();
 
   // ── MEM-01: Agent cleanup ──────────────────────────────────────────────
 
@@ -508,10 +533,11 @@ export function createStreamingRenderer(store: StoreAccess) {
   }
 
   /**
-   * Full teardown of the renderer: removes the document visibilitychange
-   * listener (the one process-wide side effect) and clears every pending
-   * debounce timer. Idempotent. After dispose, the visibility handler and the
-   * debounced UI-state saver are inert. The live store owns one renderer for
+   * Full teardown of the renderer: removes the document `visibilitychange`
+   * listener plus the window `online`/`pageshow` listeners (the process-wide
+   * side effects) and clears every pending debounce timer. Idempotent. After
+   * dispose, the tab-lifecycle handlers and the debounced UI-state saver are
+   * inert. The live store owns one renderer for
    * the page lifetime, so this is mainly for HMR / tests / any future
    * re-instantiation, none of which should leak a stale listener.
    */
@@ -520,6 +546,10 @@ export function createStreamingRenderer(store: StoreAccess) {
     _disposed = true;
     if (typeof document !== "undefined") {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+    }
+    if (typeof window !== "undefined") {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("pageshow", handlePageShow);
     }
     _visibilityListenerAttached = false;
     for (const t of Object.values(uiStateSaveTimers)) clearTimeout(t);

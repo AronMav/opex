@@ -184,6 +184,18 @@ export function createNavigationActions(deps: ActionDeps) {
       // Abort any active stream for this agent
       const currentState = get().agents[agent];
       const previousSessionId = currentState?.activeSessionId;
+
+      // G4 / same-session return: re-resolving to the SAME session that is
+      // already active/streaming (e.g. a cross-agent deep-link picker landing
+      // back on the session the user is already watching) must resume via the
+      // live stream in place — NOT force-settle it. Mirrors selectSession's
+      // "just switch to live view" early return above. Scoped to an ACTIVE
+      // phase only: an idle same-session re-select keeps falling through to
+      // the normal history-mode normalization below.
+      if (previousSessionId === sessionId && isActivePhase(currentState?.connectionPhase)) {
+        return;
+      }
+
       if (previousSessionId && previousSessionId !== sessionId) {
         queryClient.invalidateQueries({ queryKey: qk.sessionMessages(previousSessionId) });
       }
