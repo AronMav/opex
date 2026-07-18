@@ -238,9 +238,7 @@ pub async fn resolve_context_limit(
         cache_context_limit(&cache_key, v, false);
         return v;
     }
-    let __diag_cat = opex_catalog::global_context(provider.name(), model);
-    tracing::warn!(provider_name = %provider.name(), model, catalog = ?__diag_cat, "DIAGCTX resolve_context_limit");
-    if let Some(v) = __diag_cat {
+    if let Some(v) = opex_catalog::global_context(provider.name(), model) {
         cache_context_limit(&cache_key, v, false);
         return v;
     }

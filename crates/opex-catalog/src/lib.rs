@@ -316,7 +316,20 @@ fn merge_caps(a: Option<Caps>, b: Option<Caps>) -> Option<Caps> {
 /// never mask them — regardless of (nondeterministic) insertion order.
 fn upsert<K: std::hash::Hash + Eq>(map: &mut HashMap<K, ModelMeta>, key: K, mut meta: ModelMeta) {
     if let Some(existing) = map.get(&key) {
-        if existing.source.priority() <= meta.source.priority() {
+        // A higher-priority source always wins the numeric fields. On a tie
+        // (both models.dev), keep the LARGER context window. The same model id
+        // is listed under many providers — the native/full model alongside
+        // reseller and reduced "coding-plan" rows that under-report the window
+        // (e.g. glm-5.2: zhipuai=1M vs zai-coding-plan=101376). The loose index
+        // collapses them to one slot; without this the arbitrary (load-order)
+        // winner could be the reduced row, making a vendor-less lookup resolve a
+        // far-too-small window and compact prematurely. Larger-window-wins keeps
+        // the model's true architectural window; a genuinely reduced cap is
+        // expressed via an operator override, not inferred from a reseller row.
+        let keep_existing = existing.source.priority() < meta.source.priority()
+            || (existing.source.priority() == meta.source.priority()
+                && existing.context >= meta.context);
+        if keep_existing {
             // Existing wins numerics; absorb `meta`'s capability presence.
             let merged = merge_caps(existing.caps, meta.caps);
             if let Some(e) = map.get_mut(&key) {
@@ -411,6 +424,31 @@ mod tests {
                 c.caps("openai", "mimo-v2.5-pro").map(|c| c.reasoning_content),
                 Some(true),
                 "reasoning_content must OR-merge regardless of insert order (native_first={native_first})",
+            );
+        }
+    }
+
+    #[test]
+    fn loose_prefers_larger_window_among_equal_priority() {
+        // The same model id is listed under a full-model provider and a reduced
+        // "coding-plan" reseller (real case: glm-5.2 = zhipuai 1M vs
+        // zhipuai-coding-plan 101376, both models.dev). A vendor-less lookup must
+        // resolve the full window, not whichever row happened to load first.
+        for full_first in [true, false] {
+            let mut c = ModelCatalog::new();
+            let full = || meta(1_048_576, CatalogSource::ModelsDev);
+            let coding = || meta(101_376, CatalogSource::ModelsDev);
+            if full_first {
+                c.insert("zhipuai", "glm-5.2", full());
+                c.insert("zhipuai-coding-plan", "glm-5.2", coding());
+            } else {
+                c.insert("zhipuai-coding-plan", "glm-5.2", coding());
+                c.insert("zhipuai", "glm-5.2", full());
+            }
+            assert_eq!(
+                c.context("openai_compat", "glm-5.2"),
+                Some(1_048_576),
+                "vendor-less lookup resolves the full window, not the coding-plan cap (full_first={full_first})",
             );
         }
     }
