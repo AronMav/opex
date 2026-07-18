@@ -180,4 +180,17 @@ describe("ModelCombobox", () => {
     // No jump to index 0 — still nothing highlighted.
     expect(input).not.toHaveAttribute("aria-activedescendant");
   });
+
+  it("size='sm' shrinks the input to h-8; default keeps h-9", () => {
+    wrap(
+      <>
+        <ModelCombobox value="" onChange={vi.fn()} size="sm" data-testid="cb-sm" />
+        <ModelCombobox value="" onChange={vi.fn()} data-testid="cb-def" />
+      </>,
+    );
+    expect(screen.getByTestId("cb-sm").className).toMatch(/\bh-8\b/);
+    const def = screen.getByTestId("cb-def").className;
+    expect(def).not.toMatch(/\bh-8\b/);
+    expect(def).toMatch(/\bh-9\b/);
+  });
 });

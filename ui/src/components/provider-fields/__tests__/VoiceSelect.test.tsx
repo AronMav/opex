@@ -89,9 +89,23 @@ describe("VoiceSelect", () => {
 
   it("a configured voice absent from the fetched list still shows in the trigger", async () => {
     apiGet.mockResolvedValue({ voices: [{ id: "nova", name: "Nova" }] });
-    wrap(<VoiceSelect value="clone:Ghost" onChange={vi.fn()} providerName="minimax" />);
+    const onChange = vi.fn();
+    wrap(<VoiceSelect value="clone:Ghost" onChange={onChange} providerName="minimax" />);
     // "clone:Ghost" isn't in the list — surfaced as a synthetic item so the
-    // trigger isn't blank.
+    // trigger isn't blank, without firing a spurious onChange.
     expect(await screen.findByRole("combobox")).toHaveTextContent("clone:Ghost");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("forwards data-testid on both the select and the degraded input branch", async () => {
+    // Select branch (voices present).
+    apiGet.mockResolvedValueOnce({ voices: [{ id: "nova", name: "Nova" }] });
+    const { unmount } = wrap(<VoiceSelect value="" onChange={vi.fn()} providerName="minimax" data-testid="voice" />);
+    expect(await screen.findByTestId("voice")).toBeInTheDocument();
+    unmount();
+    // Degraded input branch (empty list).
+    apiGet.mockResolvedValueOnce({ voices: [] });
+    wrap(<VoiceSelect value="" onChange={vi.fn()} providerName="broken-tts" data-testid="voice2" />);
+    expect(await screen.findByTestId("voice2")).toBeInTheDocument();
   });
 });
