@@ -70,6 +70,7 @@ export const qk = {
   usage: (days: number) => ["usage", days] as const,
   dailyUsage: (days: number) => ["usage", "daily", days] as const,
   providerModels: (id: string) => ["providers", id, "models"] as const,
+  ttsVoices: (provider: string) => ["tts-voices", provider] as const,
   webhooks: ["webhooks"] as const,
   approvals: ["approvals"] as const,
   backups: ["backups"] as const,
@@ -242,6 +243,26 @@ export function useProviderModelsDetailed(id: string | null) {
     queryFn: () => apiGet<{ models: Array<string | ProviderModel> }>(`/api/providers/${id}/models`),
     select: (d): ProviderModel[] => d.models.map((m) => (typeof m === "string" ? { id: m } : m)),
     enabled: !!id,
+    retry: false,
+    staleTime: 60_000,
+  })
+}
+
+export interface TtsVoice {
+  id: string
+  name: string
+  description?: string
+  language?: string
+}
+
+/** Voice list of a TTS provider (GET /api/tts/voices?provider=). Feeds the
+ *  shared VoiceSelect field. */
+export function useTtsVoices(provider: string | null) {
+  return useQuery({
+    queryKey: qk.ttsVoices(provider ?? ""),
+    queryFn: () => apiGet<{ voices: TtsVoice[] }>(`/api/tts/voices?provider=${encodeURIComponent(provider ?? "")}`),
+    select: (d) => d.voices ?? [],
+    enabled: !!provider,
     retry: false,
     staleTime: 60_000,
   })

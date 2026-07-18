@@ -96,6 +96,9 @@ const REQUIRED_COVERAGE: [string, string, string][] = [
   // Provider models
   ["GET",    "/api/providers/{id}/models", "useProviderModels"],
 
+  // TTS voices
+  ["GET",    "/api/tts/voices",            "useTtsVoices"],
+
   // OAuth bindings
   ["GET",    "/api/oauth/bindings",      "useOAuthBindings"],
 
