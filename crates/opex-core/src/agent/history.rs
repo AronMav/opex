@@ -19,6 +19,15 @@ const MIN_SUMMARY_TOKENS: usize = 2000;
 const SUMMARY_RATIO: f64 = 0.20;
 const SUMMARY_TOKENS_CEILING: usize = 12_000;
 
+/// G3 (Session Resilience / WS5): hard wall-clock budget for the whole
+/// proactive history-compaction LLM sequence (fact-extraction + summary calls
+/// combined, via a shared deadline). Compaction is strictly best-effort — if it
+/// can't finish within this window it is SKIPPED and the turn proceeds
+/// uncompacted (fail-open) rather than stalling on a slow/dead compaction
+/// provider. The reactive context-overflow retry in `pipeline::llm_call`
+/// remains the safety net for a genuinely oversized context.
+pub const COMPACTION_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Estimate token count from text (rough: ~4 chars per token).
 /// Accounts for `tool_calls` JSON size when present.
 pub fn estimate_tokens(messages: &[Message]) -> usize {
@@ -180,8 +189,35 @@ async fn compact_if_needed_inner(
         },
     ];
 
+    // G3: compaction may never stall or fail the turn. Budget the LLM-summarize
+    // sequence at COMPACTION_BUDGET (a shared deadline spanning BOTH the
+    // fact-extraction and summary calls) and treat ANY failure — timeout,
+    // provider error, exhausted fallback chain — as a SKIP: return Ok(None)
+    // with `messages` untouched. Safe because both LLM calls happen BEFORE any
+    // mutation of `messages` below (the rebuild starts at `messages.clear()`).
+    // The reactive overflow-retry in llm_call.rs remains the safety net.
+    let compaction_deadline = tokio::time::Instant::now() + COMPACTION_BUDGET;
+
     let empty_tools: Vec<ToolDefinition> = vec![];
-    let facts_response = active_provider.chat(&extraction_prompt, &empty_tools, crate::agent::providers::CallOptions::default()).await?;
+    let facts_response = match tokio::time::timeout_at(
+        compaction_deadline,
+        active_provider.chat(&extraction_prompt, &empty_tools, crate::agent::providers::CallOptions::default()),
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "compaction LLM call (fact extraction) failed — proceeding uncompacted (fail-open)");
+            return Ok(None);
+        }
+        Err(_) => {
+            tracing::warn!(
+                budget_secs = COMPACTION_BUDGET.as_secs(),
+                "compaction budget exceeded (fact extraction) — proceeding uncompacted (fail-open)"
+            );
+            return Ok(None);
+        }
+    };
     let extracted_facts: Vec<String> =
         serde_json::from_str(&facts_response.content).unwrap_or_default();
 
@@ -225,7 +261,28 @@ async fn compact_if_needed_inner(
         },
     ];
 
-    let summary_response = active_provider.chat(&summary_prompt, &empty_tools, crate::agent::providers::CallOptions::default()).await?;
+    // G3: same shared deadline — a slow summary call also fails open. Still
+    // before any mutation of `messages`, so returning Ok(None) leaves history
+    // untouched.
+    let summary_response = match tokio::time::timeout_at(
+        compaction_deadline,
+        active_provider.chat(&summary_prompt, &empty_tools, crate::agent::providers::CallOptions::default()),
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "compaction LLM call (summary) failed — proceeding uncompacted (fail-open)");
+            return Ok(None);
+        }
+        Err(_) => {
+            tracing::warn!(
+                budget_secs = COMPACTION_BUDGET.as_secs(),
+                "compaction budget exceeded (summary) — proceeding uncompacted (fail-open)"
+            );
+            return Ok(None);
+        }
+    };
 
     // Step 3: Rebuild messages — system + summary + preserved recent
     let preserved: Vec<Message> = messages[end..].to_vec();
@@ -1269,6 +1326,82 @@ mod tests {
             m.role == MessageRole::System && m.content.contains("[Previous conversation summary]")
         });
         assert!(!has_summary, "empty summary should not inject a summary message");
+    }
+
+    // ── G3 (WS5): compaction is budgeted + fail-open ─────────────────────────
+    //
+    // A compaction provider that hangs longer than `COMPACTION_BUDGET` must NOT
+    // stall or fail the turn: `compact_if_needed` returns `Ok(None)` (skip) and
+    // leaves `messages` untouched. The reactive overflow-retry remains the net.
+    struct SlowMockProvider(std::time::Duration);
+
+    #[async_trait]
+    impl LlmProvider for SlowMockProvider {
+        async fn chat(&self, _msgs: &[Message], _tools: &[ToolDefinition], _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+            tokio::time::sleep(self.0).await;
+            Ok(LlmResponse {
+                content: "should never be reached before the budget fires".to_string(),
+                tool_calls: vec![],
+                usage: None,
+                finish_reason: None,
+                model: None,
+                provider: None,
+                fallback_notice: None,
+                tools_used: vec![],
+                iterations: 0,
+                thinking_blocks: vec![],
+            })
+        }
+        async fn chat_stream(&self, msgs: &[Message], tools: &[ToolDefinition], _tx: mpsc::Sender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+            self.chat(msgs, tools, _opts).await
+        }
+        fn name(&self) -> &str { "slow-mock" }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn compaction_budget_exceeded_is_fail_open() {
+        // chat() sleeps 120s — far beyond the 15s COMPACTION_BUDGET. With the
+        // paused clock, tokio auto-advances time to fire the timeout.
+        let slow = SlowMockProvider(std::time::Duration::from_secs(120));
+        let mut messages = make_compactable_messages();
+        let before = messages.clone();
+        // max_tokens=1 forces the compaction gate open (threshold = 1*80/100 = 0).
+        let result = compact_if_needed(&mut messages, &slow, None, 1, 2, None).await;
+        assert!(
+            matches!(result, Ok(None)),
+            "budget overrun must SKIP (Ok(None)), not error — got {result:?}"
+        );
+        assert_eq!(
+            messages.len(),
+            before.len(),
+            "messages must be untouched on a fail-open skip"
+        );
+        let contents: Vec<&String> = messages.iter().map(|m| &m.content).collect();
+        let before_contents: Vec<&String> = before.iter().map(|m| &m.content).collect();
+        assert_eq!(contents, before_contents, "messages content must be untouched on skip");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn compaction_provider_error_is_fail_open() {
+        // A provider that errors (not just slow) must also fail open.
+        struct ErrProvider;
+        #[async_trait]
+        impl LlmProvider for ErrProvider {
+            async fn chat(&self, _m: &[Message], _t: &[ToolDefinition], _o: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+                anyhow::bail!("compaction provider is down")
+            }
+            async fn chat_stream(&self, m: &[Message], t: &[ToolDefinition], _tx: mpsc::Sender<String>, o: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+                self.chat(m, t, o).await
+            }
+            fn name(&self) -> &str { "err" }
+        }
+        let mut messages = make_compactable_messages();
+        let before = messages.clone();
+        let result = compact_if_needed(&mut messages, &ErrProvider, None, 1, 2, None).await;
+        assert!(matches!(result, Ok(None)), "provider error must SKIP, not propagate — got {result:?}");
+        let contents: Vec<&String> = messages.iter().map(|m| &m.content).collect();
+        let before_contents: Vec<&String> = before.iter().map(|m| &m.content).collect();
+        assert_eq!(contents, before_contents, "messages must be untouched on provider-error skip");
     }
 
     // ── prune_old_tool_results tests ─────────────────────────────────────────

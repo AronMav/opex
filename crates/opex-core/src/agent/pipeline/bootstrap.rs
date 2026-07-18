@@ -388,13 +388,15 @@ pub async fn bootstrap<S: EventSink>(
             db_id: None,
     });
 
-    // Compact the history now that the new user message is appended, matching
-    // the pre-refactor order: compact before the first LLM call, re-compact
-    // between tool iterations (compact_tool_results lives in pipeline::execute).
-    // Without this, context windows silently overflow for long sessions.
-    engine
-        .compact_messages(&mut messages, Some(&loop_detector))
-        .await;
+    // G3 (WS5): pre-turn history compaction is NO LONGER done here. It made a
+    // blocking LLM call on the SYNCHRONOUS POST path (bootstrap_sse runs before
+    // the 202 is returned), so a slow/dead compaction provider stalled the turn
+    // into the UI's 30s client timeout. It now runs at the top of the detached
+    // engine turn (`pipeline::execute`, before the first LLM call) where a
+    // budget-exceeding compaction is invisible to the send-POST. The compaction
+    // itself is budgeted + fail-open (see `history::COMPACTION_BUDGET`). This
+    // relocation preserves cron/isolated behaviour: those callers route through
+    // the SAME `pipeline::execute` and so still compact before their first call.
 
     // Load compaction state from DB so proactive compression in execute() can
     // resume where the previous session turn left off (anti-thrash counters, summary).

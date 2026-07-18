@@ -205,6 +205,20 @@ pub async fn execute<S: EventSink>(
         std::sync::Arc::new(names)
     };
 
+    // ── Pre-turn history compaction (G3 / WS5) ───────────────────────────────
+    // Relocated here from `pipeline::bootstrap` (which runs SYNCHRONOUSLY on the
+    // POST path before the 202). Running it at the top of the DETACHED engine
+    // turn — before the first LLM call below — keeps a slow/failing compaction
+    // provider off the send-POST latency path entirely. Compaction is budgeted
+    // + fail-open (`history::COMPACTION_BUDGET`): on timeout / provider error it
+    // returns without mutating `messages`, so the turn proceeds uncompacted and
+    // the reactive overflow-retry in `llm_call.rs` is the backstop. All
+    // transports (SSE, channel, cron/isolated) route through here, preserving
+    // the previous "compact before the first LLM call" behaviour for each.
+    engine
+        .compact_messages(&mut messages, Some(&loop_detector))
+        .await;
+
     // ── Mutable loop state ───────────────────────────────────────────────────
     let loop_config = engine.tool_loop_config();
     let mut final_text = String::new();

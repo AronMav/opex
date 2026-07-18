@@ -200,10 +200,13 @@ pub(crate) async fn api_chat_sse(
 
     // 1. Synchronous bootstrap resolves session_id + user_message_id (= the
     //    stream boundary). NOTE — honest latency: user_message_id only exists
-    //    AFTER `enrich_message_text` (voice transcription / vision / URL fetch)
-    //    and `compact_messages`, so a POST carrying attachments or URLs can take
-    //    seconds before this returns 202. Accepted by design: the UI's
-    //    optimistic echo covers the pause; reordering bootstrap is out of scope.
+    //    AFTER `enrich_message_text` (voice transcription / vision / URL fetch),
+    //    so a POST carrying attachments or URLs can take seconds before this
+    //    returns 202. Accepted by design: the UI's optimistic echo covers the
+    //    pause; reordering bootstrap is out of scope.
+    //    G3 (WS5): history compaction is NO LONGER on this synchronous path — it
+    //    moved to the detached `pipeline::execute` (before the first LLM call),
+    //    so a slow/dead compaction provider can't stall the 202.
     // Wave-2 Task 12: normalize the per-turn model override at the wire
     // boundary — trim + empty string ⇒ None, so a client sending `"model": ""`
     // (or all-whitespace) behaves identically to omitting the field.
