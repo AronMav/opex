@@ -52,7 +52,7 @@ vi.mock("@/stores/auth-store", () => ({
         token: "test-token",
         isAuthenticated: true,
         version: "1.0.0",
-        agents: ["TestAgent"],
+        agents: ["TestAgent", "Agent1", "Helper", "Bot"],
         agentIcons: {},
         lastFetched: Date.now(),
         login: vi.fn(),

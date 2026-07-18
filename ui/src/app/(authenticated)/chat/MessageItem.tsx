@@ -37,6 +37,7 @@ import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { ClarifyCard } from "@/components/chat/ClarifyCard";
 import { abortReasonLabel } from "@/components/chat/abort-reason-label";
 import { useSwipeGesture } from "@/hooks/use-swipe-gesture";
+import { displayAgentName } from "@/lib/agent-display";
 
 
 // ── Parts render cache (PERF-03) ───────────────────────────────────────────
@@ -146,6 +147,8 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
   // REF-05: useShallow-gated read of the agentIcons record — shallow-equal
   // means this component won't re-render when an unrelated key is mutated.
   const agentIcons = useAuthStore(useShallow((s: { agentIcons: Record<string, string | null> }) => s.agentIcons));
+  // WS6: known-agents list used to fail closed on stale/UUID agentId values.
+  const knownAgents = useAuthStore((s: { agents: string[] }) => s.agents);
   // REF-05: typed selector from chat-selectors (primitive — Zustand's default
   // strict equality is sufficient, no useShallow wrapper needed).
   const activeSessionId = useChatStore(selectCurrentActiveSessionId);
@@ -178,6 +181,9 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
     || (isReadOnly && sessionUserId?.startsWith("agent:") ? sessionUserId.slice(6) : null);
   const isAgentSender = !!senderAgentName;
   const senderIconUrl = senderAgentName ? agentIcons[senderAgentName] || undefined : undefined;
+  // WS6: never surface a raw session UUID (or otherwise-unknown id) as the
+  // visible sender label.
+  const senderDisplayName = senderAgentName ? displayAgentName(senderAgentName, knownAgents, t) : null;
 
   const isSending = message.status === "sending";
   const isFailed = message.status === "failed";
@@ -217,7 +223,7 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
         <div className="message-header flex items-center justify-between min-h-5 gap-2">
           <div className="flex min-w-0 items-center gap-2">
             <span className={`text-xs font-semibold uppercase tracking-wider truncate max-w-30 ${isAgentSender ? "text-muted-foreground-subtle" : "text-primary"}`}>
-              {isAgentSender ? senderAgentName : t("chat.you")}
+              {isAgentSender ? senderDisplayName : t("chat.you")}
             </span>
             {message.createdAt && (
               <span className="text-3xs font-mono tabular-nums text-muted-foreground-subtle md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity shrink-0">
@@ -285,10 +291,15 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
   const currentAgent = useChatStore(selectCurrentAgent);
   // REF-05: useShallow-gated read of the agentIcons record.
   const agentIcons = useAuthStore(useShallow((s: { agentIcons: Record<string, string | null> }) => s.agentIcons));
+  // WS6: known-agents list used to fail closed on stale/UUID agentId values.
+  const knownAgents = useAuthStore((s: { agents: string[] }) => s.agents);
 
   // Direct agentId from message props -- no more AgentTurnCounterContext hack
   const agentName = message.agentId || currentAgent;
   const agentIconUrl = agentName ? agentIcons[agentName] || null : null;
+  // WS6: never surface a raw session UUID (or otherwise-unknown id) as the
+  // visible participant label.
+  const agentDisplayName = agentName ? displayAgentName(agentName, knownAgents, t) : null;
 
   const hasParts = message.parts.length > 0;
   const isHighlighted = useIsHighlighted(message);
@@ -351,7 +362,7 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
           <div className="message-header flex items-center justify-between min-h-5">
             <div className="flex min-w-0 items-center gap-2">
               <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground-subtle truncate max-w-30">
-                {agentName || t("chat.assistant")}
+                {agentDisplayName || t("chat.assistant")}
               </span>
               {message.createdAt && (
                 <span className="text-3xs font-mono tabular-nums text-muted-foreground-subtle md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity">

@@ -226,6 +226,7 @@
   "chat.message_placeholder": "Сообщение...",
   "chat.you": "Вы",
   "chat.assistant": "Ассистент",
+  "chat.unknown_agent": "Агент",
   "chat.regenerate_tooltip": "Повторить ответ",
   "chat.regenerate_with_model_tooltip": "Повторить с другой моделью",
   "chat.reasoning": "Размышление",

@@ -74,7 +74,7 @@ vi.mock("@/stores/auth-store", () => ({
         token: "test-token",
         isAuthenticated: true,
         version: "1.0.0",
-        agents: ["TestAgent"],
+        agents: ["TestAgent", "Agent1", "Helper", "HistoryAgent", "DirectAgent", "SenderAgent"],
         agentIcons: { Agent1: "agent1-icon.png", Helper: "helper-icon.png" },
         lastFetched: Date.now(),
         login: vi.fn(),
@@ -402,6 +402,89 @@ describe("Multi-Agent Identity (MAID)", () => {
 
       // Must have the bg-muted/20 background class for visual distinction — agent-sender.*bg-muted
       expect(wrapper!.className).toMatch(/bg-muted\/20/);
+    });
+  });
+
+  // WS6: participant hygiene — a session recreated behind the scenes must
+  // never leak its raw UUID (or any id that isn't a configured agent) to
+  // the visible chat UI as a participant label.
+  describe("WS6: unknown/UUID agentId renders a generic label, never the raw id", () => {
+    const SESSION_UUID = "9f8b6c1a-2d3e-4f5a-8b7c-1a2b3c4d5e6f";
+
+    it("assistant message with a UUID-shaped agentId renders the generic label, not the UUID", () => {
+      const msg = makeMsg({
+        id: "ws6-assistant-uuid",
+        role: "assistant",
+        agentId: SESSION_UUID,
+        parts: [{ type: "text", text: "Reply after silent session recreation" }],
+      });
+
+      render(<MessageItem message={msg} />);
+      expect(screen.getByText("chat.unknown_agent")).toBeInTheDocument();
+      expect(screen.queryByText(SESSION_UUID)).not.toBeInTheDocument();
+    });
+
+    it("agent-sender (inter-agent) message with a UUID-shaped agentId renders the generic label", () => {
+      const msg = makeMsg({
+        id: "ws6-sender-uuid",
+        role: "user",
+        agentId: SESSION_UUID,
+        parts: [{ type: "text", text: "Inter-agent message with a bogus id" }],
+      });
+
+      render(<MessageItem message={msg} />);
+      expect(screen.getByText("chat.unknown_agent")).toBeInTheDocument();
+      expect(screen.queryByText(SESSION_UUID)).not.toBeInTheDocument();
+    });
+
+    it("assistant message whose agentId is not in the known-agents list renders the generic label", () => {
+      const msg = makeMsg({
+        id: "ws6-not-known",
+        role: "assistant",
+        agentId: "GhostAgentThatWasDeleted",
+        parts: [{ type: "text", text: "Reply from a deleted/unknown agent" }],
+      });
+
+      render(<MessageItem message={msg} />);
+      expect(screen.getByText("chat.unknown_agent")).toBeInTheDocument();
+      expect(screen.queryByText("GhostAgentThatWasDeleted")).not.toBeInTheDocument();
+    });
+
+    it("a real, known agent name still renders unchanged (no regression)", () => {
+      const msg = makeMsg({
+        id: "ws6-known",
+        role: "assistant",
+        agentId: "Agent1",
+        parts: [{ type: "text", text: "Reply from a real agent" }],
+      });
+
+      render(<MessageItem message={msg} />);
+      expect(screen.getByText("Agent1")).toBeInTheDocument();
+      expect(screen.queryByText("chat.unknown_agent")).not.toBeInTheDocument();
+    });
+
+    it("AgentTransitionDivider renders the generic label instead of a raw UUID agentId", () => {
+      const messages: ChatMessage[] = [
+        makeMsg({ id: "1", role: "assistant", agentId: "Agent1", parts: [{ type: "text", text: "I am Agent1" }] }),
+        makeMsg({ id: "2", role: "assistant", agentId: SESSION_UUID, parts: [{ type: "text", text: "Recreated-session reply" }] }),
+      ];
+
+      render(
+        <MessageList
+          messages={messages}
+          isStreaming={false}
+          showThinking={false}
+          isLoadingHistory={false}
+          emptyState={<div />}
+          hiddenCount={0}
+          onLoadEarlier={() => {}}
+        />,
+      );
+
+      const separator = screen.getByRole("separator");
+      expect(separator).toBeInTheDocument();
+      expect(separator.textContent).not.toContain(SESSION_UUID);
+      expect(separator.textContent).toContain("chat.unknown_agent");
     });
   });
 });

@@ -226,6 +226,7 @@
   "chat.message_placeholder": "Message...",
   "chat.you": "You",
   "chat.assistant": "Assistant",
+  "chat.unknown_agent": "Agent",
   "chat.regenerate_tooltip": "Regenerate response",
   "chat.regenerate_with_model_tooltip": "Regenerate with a different model",
   "chat.reasoning": "Reasoning",
