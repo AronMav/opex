@@ -2289,6 +2289,19 @@ mod validate_sections_tests {
             "expected daily_plan-requires-heartbeat error, got: {errs:?}"
         );
     }
+
+    #[test]
+    fn base_agent_with_initiative_is_rejected() {
+        let mut c = base_cfg(); // base_cfg() has no [agent.base], defaults false — set it
+        c.agent.base = true;
+        c.agent.initiative.enabled = true;
+        let errs = c.validate_sections();
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("[agent.initiative]") && e.contains("base agent")),
+            "expected initiative-not-allowed-for-base error, got: {errs:?}"
+        );
+    }
 }
 
 /// Load all agent configs from a directory of TOML files.

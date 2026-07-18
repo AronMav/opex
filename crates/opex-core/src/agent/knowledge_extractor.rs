@@ -208,9 +208,13 @@ async fn extract_and_save_inner(
     };
 
     // 7. Soul events (spec §2) — only when [agent.soul] enabled.
+    // `boosted_event` records whether events[0]'s importance received the
+    // appraisal-intensity boost (spec §3.2) — surfaced in the timeline payload.
+    let mut boosted_event = false;
     let events = map_event_items(std::mem::take(&mut extracted.events));
     if soul_deps.cfg.enabled && !events.is_empty() {
         let intensity = appraised.as_ref().map(|a| a.intensity);
+        boosted_event = intensity.is_some();
         let n = save_events(
             session_id, agent_name, memory_store, &soul_deps.cfg, events,
             intensity, soul_deps.emotion.intensity_importance_k,
@@ -227,16 +231,21 @@ async fn extract_and_save_inner(
     // 7c. Mood update + observability (spec §3.3/§3.5) — fail-soft, never abort
     // the rest of extraction (reflection/initiative still run below).
     if let Some(a) = &appraised {
-        if let Err(e) = crate::db::agent_emotion::upsert_blended(
+        let mood_valence_after = match crate::db::agent_emotion::upsert_blended(
             db, agent_name, a.valence, a.label.as_deref(), a.intensity, &soul_deps.emotion,
         ).await {
-            tracing::warn!(agent = agent_name, error = %e, "emotion mood upsert failed");
-        }
+            Ok(blended) => Some(blended),
+            Err(e) => {
+                tracing::warn!(agent = agent_name, error = %e, "emotion mood upsert failed");
+                None
+            }
+        };
         let payload = serde_json::json!({
             "label": a.label, "intensity": a.intensity, "valence": a.valence,
             "desirability": a.desirability, "likelihood": a.likelihood,
             "agency": a.agency.as_str(), "novelty": a.novelty,
             "controllability": a.controllability,
+            "mood_valence_after": mood_valence_after, "boosted_event": boosted_event,
         });
         if let Err(e) = opex_db::session_timeline::log_event(db, session_id, "emotion_appraised", Some(&payload)).await {
             tracing::warn!(agent = agent_name, error = %e, "emotion timeline write failed");
@@ -366,7 +375,7 @@ pub(crate) fn map_event_items(raw: Vec<serde_json::Value>) -> Vec<EventItem> {
         .filter_map(|v| match serde_json::from_value::<EventItem>(v) {
             Ok(item) => Some(item),
             Err(e) => {
-                tracing::debug!(error = %e, "dropping malformed extracted event item");
+                tracing::warn!(error = %e, "dropping malformed extracted event item");
                 None
             }
         })

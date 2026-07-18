@@ -314,13 +314,21 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
             let Some((centroid, mu, sigma)) = crate::agent::drift::baseline_stats(&embs) else {
                 tracing::warn!(agent, "drift baseline degenerate"); return None;
             };
-            // soft-cap backstop: не даём кэшу расти безгранично (спека §4.4,
-            // accepted debt — non-LRU eviction). ВАЖНО: ключ извлекаем в
-            // отдельный `let`, чтобы временный DashMap `Iter` (держит shard read-guard)
-            // ДРОПНУЛСЯ на `;` ДО `remove` — иначе self-deadlock (remove на том же шарде).
+            // soft-cap backstop: не даём кэшу расти безгранично (спека §4.4).
+            // Митигация: жертву выбираем среди записей с anchor_active=false,
+            // чтобы НЕ выкинуть агента посреди активной коррекции дрейфа; к
+            // произвольной первой откатываемся только если все якоря активны
+            // (вырожденный случай при MAX_BASELINES живых коррекций).
+            // ВАЖНО: ключ извлекаем в отдельный `let`, чтобы временный DashMap
+            // `Iter` (держит shard read-guard) ДРОПНУЛСЯ на `;` ДО `remove` —
+            // иначе self-deadlock (remove на том же шарде).
             const MAX_BASELINES: usize = 2000;
             if baselines.len() >= MAX_BASELINES {
-                let victim = baselines.iter().next().map(|e| *e.key());
+                let victim = baselines
+                    .iter()
+                    .find(|e| !e.value().anchor_active)
+                    .or_else(|| baselines.iter().next())
+                    .map(|e| *e.key());
                 if let Some(k) = victim { baselines.remove(&k); }
             }
             baselines
