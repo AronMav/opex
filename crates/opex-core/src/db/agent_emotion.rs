@@ -46,7 +46,7 @@ pub async fn upsert_blended(
     label: Option<&str>,
     intensity: f32,
     cfg: &EmotionConfig,
-) -> Result<()> {
+) -> Result<f32> {
     let mut tx = db.begin().await?;
     let existing = sqlx::query_as::<_, (f32, DateTime<Utc>)>(
         "SELECT valence, updated_at FROM agent_emotion_state WHERE agent_id = $1 FOR UPDATE",
@@ -76,7 +76,9 @@ pub async fn upsert_blended(
     .await?;
 
     tx.commit().await?;
-    Ok(())
+    // Return the post-blend mood valence so callers can record `mood_valence_after`
+    // for observability without a follow-up read.
+    Ok(blended)
 }
 
 #[cfg(test)]
