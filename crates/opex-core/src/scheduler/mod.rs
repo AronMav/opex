@@ -761,9 +761,20 @@ impl Scheduler {
                 // ── Idle guard ────────────────────────────────────────────────
                 let idle_minutes = i64::from(cfg.min_idle_minutes);
                 let active: i64 = match sqlx::query_scalar(
+                    // NB: the sessions table has `run_status` (not `status`) and
+                    // `last_message_at` (there is no `updated_at`). The old query
+                    // named both wrong, so it errored EVERY cron fire → the run
+                    // was skipped as `idle_guard_error` and the scheduled curator
+                    // never actually ran (only manual runs worked).
+                    // Exclude `heartbeat` sessions: the curator's cron (weekly)
+                    // lands on the same :00 minute as the hourly heartbeat, so an
+                    // autonomous heartbeat would otherwise block the curator
+                    // essentially every run. The guard is meant to defer to
+                    // *interactive* work, not the agent's own background tick.
                     "SELECT COUNT(*) FROM sessions \
-                     WHERE updated_at > NOW() - ($1 || ' minutes')::INTERVAL \
-                     AND status = 'running'"
+                     WHERE last_message_at > NOW() - ($1 || ' minutes')::INTERVAL \
+                     AND run_status = 'running' \
+                     AND channel <> 'heartbeat'"
                 )
                 .bind(idle_minutes.to_string())
                 .fetch_one(&db)
