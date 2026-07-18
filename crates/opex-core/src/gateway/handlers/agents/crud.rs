@@ -214,6 +214,51 @@ pub(super) const TABLES_DROP_RIPE: &[&str] = &[
     "file_scenario_outcomes",
 ];
 
+/// Tables allowlisted out of the `agent_table_classification` doctor check
+/// even though they are neither classified above nor auto-exempted. Currently
+/// just `eventbak_prune` — a known one-off backup table unrelated to the
+/// agent-deletion-completeness catalogue.
+const UNCLASSIFIED_TABLE_ALLOWLIST: &[&str] = &["eventbak_prune"];
+
+/// Given the set of table names that carry an `agent_id`/`agent_name` column
+/// (as introspected from `information_schema.columns` in production), return
+/// those NOT covered by any of the classification constants above
+/// (`TABLES_TO_DELETE_BY_AGENT_ID`, `TABLES_WITH_AGENT_NAME`,
+/// `TABLES_HISTORY_AGENT_ID`, `TABLES_WITH_AGENT_ID_NULLABLE`,
+/// `TABLES_DROP_RIPE`), the `memory_chunks` special case, or the allowlist.
+///
+/// Pure and DB-free by design — mirrors the classification set asserted by
+/// `test_every_agent_binding_is_classified` (which runs the same query
+/// against a live schema), but as a unit-testable helper the doctor endpoint
+/// can call directly against the live `information_schema` result without
+/// needing its own copy of the union logic. Non-empty output means a
+/// migration added a new agent-bound table without updating rename/delete
+/// coverage — the exact kind of gap `test_every_agent_binding_is_classified`
+/// guards for at PR time; this is the same guard surfaced operationally.
+///
+/// `pub(crate)`, not `pub(super)`: unlike the constants above, the
+/// `agent_table_classification` doctor check lives in a sibling module
+/// (`gateway::handlers::monitoring::doctor`), not a descendant of `agents` —
+/// `pub(super)` visibility (rooted at `agents`) would not reach it.
+pub(crate) fn unclassified_agent_tables(schema_tables: &[String]) -> Vec<String> {
+    let classified: std::collections::HashSet<&str> = TABLES_TO_DELETE_BY_AGENT_ID
+        .iter()
+        .chain(TABLES_HISTORY_AGENT_ID)
+        .chain(TABLES_WITH_AGENT_ID_NULLABLE) // messages
+        .chain(TABLES_WITH_AGENT_NAME)
+        .chain(TABLES_DROP_RIPE)
+        .copied()
+        .chain(std::iter::once("memory_chunks")) // §3.3 special case
+        .chain(UNCLASSIFIED_TABLE_ALLOWLIST.iter().copied())
+        .collect();
+
+    schema_tables
+        .iter()
+        .filter(|t| !classified.contains(t.as_str()))
+        .cloned()
+        .collect()
+}
+
 /// Rename `agent_id` from `old` to `new` across every catalogued table.
 /// Iterates both NOT NULL and NULLABLE constants; the NULLABLE branch adds an
 /// `IS NOT NULL` predicate so the index can stay tight on non-null rows.
@@ -1661,6 +1706,38 @@ mod tests {
                 "table {table} in TABLES_TO_DELETE_BY_AGENT_ID but not in TABLES_WITH_AGENT_ID_NOT_NULL"
             );
         }
+    }
+
+    // ── unclassified_agent_tables (T2, doctor guard) ─────────────────────
+
+    #[test]
+    fn unclassified_agent_tables_returns_empty_for_known_tables() {
+        // One representative from each classification bucket + the
+        // memory_chunks special case + the allowlist entry.
+        let known: Vec<String> = vec![
+            "scheduled_jobs".into(),         // TABLES_TO_DELETE_BY_AGENT_ID
+            "agent_channels".into(),         // TABLES_WITH_AGENT_NAME
+            "sessions".into(),               // TABLES_HISTORY_AGENT_ID
+            "messages".into(),               // TABLES_WITH_AGENT_ID_NULLABLE
+            "video_jobs".into(),             // TABLES_DROP_RIPE
+            "memory_chunks".into(),          // special case
+            "eventbak_prune".into(),         // allowlist
+        ];
+        assert_eq!(
+            super::unclassified_agent_tables(&known),
+            Vec::<String>::new(),
+            "every known table must be classified — none should surface as unclassified"
+        );
+    }
+
+    #[test]
+    fn unclassified_agent_tables_surfaces_new_table() {
+        let tables = vec!["sessions".to_string(), "new_agent_table".to_string()];
+        assert_eq!(
+            super::unclassified_agent_tables(&tables),
+            vec!["new_agent_table".to_string()],
+            "a table not present in any classification constant must be surfaced"
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]

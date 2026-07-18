@@ -1,7 +1,7 @@
-//! `/api/doctor` — composite health check (15 sub-checks: database,
+//! `/api/doctor` — composite health check (16 sub-checks: database,
 //! toolgate, browser-renderer, secrets, channels, agents,
 //! tool-health, migrations, pgvector, memory-worker, providers,
-//! security-audit, network, backup, disk).
+//! security-audit, network, backup, disk, agent-table-classification).
 //!
 //! Two heavyweight subchecks live here as private helpers:
 //! - [`check_provider_reachability`] — probes every enabled
@@ -659,6 +659,53 @@ pub(crate) async fn api_doctor(
         details: None,
     };
 
+    // ── 16. Agent table classification check ──────────────────────────────
+    // Out-of-migration guard (deletion-completeness design, T2): a migration
+    // that adds a new agent-bound table (agent_id/agent_name column) without
+    // updating the rename/delete constants in `agents::crud` would otherwise
+    // leak orphan rows silently on agent rename/delete. Mirrors
+    // `crud::tests::test_every_agent_binding_is_classified`, but surfaced
+    // operationally against the live schema instead of only at PR time.
+    let atc_db = infra.db.clone();
+    let agent_table_classification_check = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        async move {
+            let start = std::time::Instant::now();
+            let rows: Result<Vec<(String,)>, sqlx::Error> = sqlx::query_as(
+                "SELECT DISTINCT table_name FROM information_schema.columns \
+                 WHERE table_schema='public' AND column_name IN ('agent_id','agent_name')",
+            )
+            .fetch_all(&atc_db)
+            .await;
+            let ms = start.elapsed().as_millis() as u64;
+            match rows {
+                Ok(rows) => {
+                    let table_names: Vec<String> = rows.into_iter().map(|(t,)| t).collect();
+                    let unclassified =
+                        crate::gateway::handlers::agents::unclassified_agent_tables(&table_names);
+                    if unclassified.is_empty() {
+                        CheckResult::ok("all agent-bound tables classified", ms)
+                    } else {
+                        let mut cr = CheckResult::warn(
+                            format!("{} unclassified agent-bound table(s)", unclassified.len()),
+                            ms,
+                            Some("classify new table(s) in agents/crud.rs (Ephemeral/History/DropRipe)".into()),
+                        );
+                        cr.details = Some(json!({"unclassified": unclassified}));
+                        cr
+                    }
+                }
+                Err(e) => CheckResult::error(
+                    format!("failed to introspect agent-bound tables: {e}"),
+                    ms,
+                    Some("check database connectivity".into()),
+                ),
+            }
+        },
+    )
+    .await
+    .unwrap_or_else(|_| CheckResult::timeout("agent_table_classification"));
+
     // ── 15. Network discovery check ──────────────────────────────────────────
     let network_check = tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -782,6 +829,7 @@ pub(crate) async fn api_doctor(
         &security_check,
         &network_check,
         &backup_check,
+        &agent_table_classification_check,
     ];
     let all_ok = all_checks.iter().all(|c| !matches!(c.status, CheckStatus::Error));
 
@@ -803,6 +851,7 @@ pub(crate) async fn api_doctor(
             "security_audit": security_check,
             "network": network_check,
             "backup": backup_check,
+            "agent_table_classification": agent_table_classification_check,
         }
     }))
 }
