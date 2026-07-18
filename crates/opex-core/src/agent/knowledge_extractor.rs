@@ -214,11 +214,14 @@ async fn extract_and_save_inner(
     let events = map_event_items(std::mem::take(&mut extracted.events));
     if soul_deps.cfg.enabled && !events.is_empty() {
         let intensity = appraised.as_ref().map(|a| a.intensity);
-        boosted_event = intensity.is_some();
         let n = save_events(
             session_id, agent_name, memory_store, &soul_deps.cfg, events,
             intensity, soul_deps.emotion.intensity_importance_k,
         ).await;
+        // Report the boost only when an event was actually persisted (n>0): the
+        // intensity boost lands on the first saved event, so an empty save
+        // (all sanitized away, or max_events_per_session=0) means no boost.
+        boosted_event = intensity.is_some() && n > 0;
         tracing::info!(agent = agent_name, saved = n, "soul events indexed");
     }
 
