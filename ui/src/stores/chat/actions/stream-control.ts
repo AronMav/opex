@@ -5,7 +5,7 @@
 
 import type { ActionDeps } from "../../chat-store";
 import { isActivePhase, emptyAgentState, getLiveMessages, uuid } from "../../chat-types";
-import type { ChatMessage, MessageAttachment, TextPart } from "../../chat-types";
+import type { AgentState, ChatMessage, MessageAttachment, TextPart } from "../../chat-types";
 import { getCachedHistoryMessages } from "../../chat-history";
 import { apiPost } from "@/lib/api";
 import { qk } from "@/lib/queries";
@@ -75,6 +75,69 @@ export function createStreamActions(deps: ActionDeps) {
       console.error("[fork] failed:", e);
       const { toast } = await import("sonner");
       toast.error("Не удалось перегенерировать сообщение");
+    }
+  }
+
+  // ── WS2: persisted branch-id resolution ──────────────────────────────────
+  // A regenerate/retry must never hand the fork endpoint a client-only
+  // (never-persisted) message id — Task 3 added a server-side fallback for
+  // this (unknown id → last persisted message in the session), but that
+  // fallback ignores which BRANCH the client is actually viewing. Resolving
+  // the anchor here, against the branch-resolved history + live overlay the
+  // user is looking at, is strictly better than deferring to the server.
+
+  /** A user message's optimistic echo is "sending" until POST succeeds and
+   * "failed" if the POST itself errored — neither has necessarily reached the
+   * DB. Every other value (undefined = history row, "confirmed" = acked via
+   * data-session-id) means the row is known to exist server-side. */
+  function isPersistedStatus(status: ChatMessage["status"]): boolean {
+    return status !== "sending" && status !== "failed";
+  }
+
+  /** Id-keyed merge of persisted history with the live turn overlay — same
+   * "live wins for a shared id, live-only appends" semantics as the render
+   * merge (chat-selectors.ts mergeRender), duplicated locally to avoid a
+   * circular import (chat-selectors imports chat-store). Used ONLY to look
+   * PAST the current (possibly unconfirmed) live turn for a persisted anchor. */
+  function mergeForBranchLookup(history: ChatMessage[], live: ChatMessage[]): ChatMessage[] {
+    const liveIds = new Set(live.map((m) => m.id));
+    return [...history.filter((m) => !liveIds.has(m.id)), ...live];
+  }
+
+  /** Walk backward from `fromIndex` (inclusive) for the newest USER message
+   * whose id is known-persisted. Returns undefined if none is found — the
+   * caller then sends a plain turn instead of forking (nothing to branch
+   * from server-side either). */
+  function resolvePersistedUserId(messages: ChatMessage[], fromIndex: number): string | undefined {
+    for (let i = fromIndex; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "user" && isPersistedStatus(m.status)) return m.id;
+    }
+    return undefined;
+  }
+
+  /** Combined branch-resolved history + live overlay for `agent`/`sessionId` —
+   * the same messages regenerate/regenerateFrom reason about. */
+  function branchLookupMessages(agent: string, sessionId: string, st: AgentState): ChatMessage[] {
+    const historyMessages = getCachedHistoryMessages(sessionId, agent, st.selectedBranches);
+    if (st.messageSource.mode === "history") return historyMessages;
+    return mergeForBranchLookup(historyMessages, getLiveMessages(st.messageSource));
+  }
+
+  /** Fork from `branchId` when persisted; otherwise there is nothing valid to
+   * branch from (e.g. the very first turn of a session failed before ever
+   * reaching the server) — send a plain new turn instead of a fork request. */
+  function regenerateViaResolvedAnchor(
+    agent: string,
+    sessionId: string,
+    branchId: string | undefined,
+    content: string,
+    opts?: { model?: string },
+  ) {
+    if (branchId) {
+      void forkAndStream(agent, sessionId, branchId, content, opts);
+    } else {
+      void renderer.sendTurn(agent, sessionId, content, { userMessageId: uuid(), model: opts?.model });
     }
   }
 
@@ -217,20 +280,25 @@ export function createStreamActions(deps: ActionDeps) {
       const sessionId = st.activeSessionId;
       if (!sessionId) return;
 
-      const messages: ChatMessage[] =
-        st.messageSource.mode === "history"
-          ? getCachedHistoryMessages(sessionId, agent, st.selectedBranches)
-          : getLiveMessages(st.messageSource);
+      const messages = branchLookupMessages(agent, sessionId, st);
 
-      // Last user message anchors the branch.
-      const lastUser = [...messages].reverse().find((m) => m.role === "user");
-      if (!lastUser) return;
+      // Last user message anchors the branch (content to resend).
+      let lastUserIdx = -1;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === "user") { lastUserIdx = i; break; }
+      }
+      if (lastUserIdx === -1) return;
+      const lastUser = messages[lastUserIdx];
       const userText = lastUser.parts
         .filter((p): p is TextPart => p.type === "text")
         .map((p) => p.text)
         .join("\n");
 
-      void forkAndStream(agent, sessionId, lastUser.id, userText, opts);
+      // WS2: the leaf user message itself may be an unconfirmed optimistic
+      // echo (failed turn) — walk back for the newest PERSISTED anchor
+      // instead of blindly trusting lastUser.id.
+      const branchId = resolvePersistedUserId(messages, lastUserIdx);
+      regenerateViaResolvedAnchor(agent, sessionId, branchId, userText, opts);
     },
 
     // B/C/F: branch from the given message. If it's a user message, branch from
@@ -244,10 +312,7 @@ export function createStreamActions(deps: ActionDeps) {
       const sessionId = st.activeSessionId;
       if (!sessionId) return;
 
-      const messages: ChatMessage[] =
-        st.messageSource.mode === "history"
-          ? getCachedHistoryMessages(sessionId, agent, st.selectedBranches)
-          : getLiveMessages(st.messageSource);
+      const messages = branchLookupMessages(agent, sessionId, st);
 
       const targetIdx = messages.findIndex((m) => m.id === messageId);
       if (targetIdx === -1) {
@@ -258,24 +323,26 @@ export function createStreamActions(deps: ActionDeps) {
 
       // Resolve the anchoring USER message: the target itself if it's a user
       // message, else the nearest preceding user message.
-      let userMsg: ChatMessage | undefined;
+      let userIdx = -1;
       for (let i = targetIdx; i >= 0; i--) {
-        if (messages[i].role === "user") {
-          userMsg = messages[i];
-          break;
-        }
+        if (messages[i].role === "user") { userIdx = i; break; }
       }
-      if (!userMsg) {
+      if (userIdx === -1) {
         get().regenerate(opts);
         return;
       }
+      const userMsg = messages[userIdx];
 
       const userText = userMsg.parts
         .filter((p): p is TextPart => p.type === "text")
         .map((p) => p.text)
         .join("\n");
 
-      void forkAndStream(agent, sessionId, userMsg.id, userText, opts);
+      // WS2: same persisted-anchor resolution as regenerate() — the target
+      // (or its preceding user message) may itself be an unconfirmed
+      // optimistic echo.
+      const branchId = resolvePersistedUserId(messages, userIdx);
+      regenerateViaResolvedAnchor(agent, sessionId, branchId, userText, opts);
     },
 
     forkAndRegenerate: async (messageId: string, newContent: string) => {
