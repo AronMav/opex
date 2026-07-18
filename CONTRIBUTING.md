@@ -1,122 +1,124 @@
-# Участие в разработке OPEX
+> **Language:** English · [Русский](CONTRIBUTING.ru.md)
 
-Спасибо за интерес к проекту! Вот как начать.
+# Contributing to OPEX
 
-## Начало работы
+Thanks for your interest in the project! Here's how to get started.
 
-1. Создайте форк репозитория
-2. Клонируйте форк: `git clone https://github.com/AronMav/opex`
-3. Создайте ветку: `git checkout -b feature/your-feature-name`
+## Getting Started
 
-## Настройка окружения разработки
+1. Fork the repository
+2. Clone your fork: `git clone https://github.com/AronMav/opex`
+3. Create a branch: `git checkout -b feature/your-feature-name`
 
-### Зависимости
+## Setting Up a Development Environment
+
+### Prerequisites
 
 - Rust 1.85+ (`rustup update stable`)
-- PostgreSQL 17 с расширением pgvector
-- Bun 1.x (для адаптеров каналов)
-- Python 3.11+ с uv (для toolgate)
+- PostgreSQL 17 with the pgvector extension
+- Bun 1.x (for the channel adapters)
+- Python 3.11+ with uv (for toolgate)
 
-### Локальный запуск
+### Running Locally
 
 ```bash
-# 1. Запустить PostgreSQL
+# 1. Start PostgreSQL
 docker compose -f docker/docker-compose.yml up -d postgres
 
-# 2. Настроить окружение
+# 2. Configure the environment
 cp .env.example .env
-# Отредактируйте .env, указав ваши значения
+# Edit .env with your values
 
-# 3. Собрать и запустить
+# 3. Build and run
 cargo run -p opex-core
 
-# 4. (Опционально) Запустить адаптеры каналов
+# 4. (Optional) Start the channel adapters
 cd channels && bun install && bun run src/index.ts
 ```
 
-### Запуск тестов
+### Running Tests
 
 ```bash
-# Все тесты
+# All tests
 make test
 
-# Один тест
+# A single test
 cargo test test_name -- --nocapture
 
-# Тесты UI
+# UI tests
 cd ui && npm test
 
-# Тесты адаптеров каналов
+# Channel adapter tests
 cd channels && bun test
 ```
 
-### Линтинг
+### Linting
 
 ```bash
 make lint          # cargo clippy --all-targets -- -D warnings
 cd ui && npm run typecheck
 ```
 
-## Стиль кода
+## Code Style
 
 ### Rust
 
-- Следуйте стандартным идиомам Rust (`cargo clippy` должен проходить с `-D warnings`)
-- Используйте `anyhow` для передачи ошибок в прикладном коде, `thiserror` для библиотечных ошибок
-- Никакого `unwrap()` или `expect()` в продакшн-путях — используйте `?` или корректную обработку ошибок
-- Все зависимости должны использовать `rustls-tls` (без OpenSSL) для возможности кросс-компиляции
+- Follow standard Rust idioms (`cargo clippy` must pass with `-D warnings`)
+- Use `anyhow` for error propagation in application code, `thiserror` for library errors
+- No `unwrap()` or `expect()` in production paths — use `?` or proper error handling
+- All dependencies must use `rustls-tls` (no OpenSSL) to keep cross-compilation working
 
 ### TypeScript
 
-- Включён строгий режим — никаких типов `any`
-- Следуйте существующим паттернам в кодовой базе
+- Strict mode is enabled — no `any` types
+- Follow the existing patterns in the codebase
 
-### YAML-инструменты
+### YAML Tools
 
-При добавлении нового инструмента в `workspace/tools/`:
+When adding a new tool to `workspace/tools/`:
 
-- `description` должен быть на английском и чётко объяснять, когда использовать инструмент
-- Устанавливайте `status: draft` до тестирования, `status: verified` после подтверждения работоспособности
-- Тестируйте все параметры перед отправкой
+- `description` must be in English and clearly explain when to use the tool
+- Set `status: draft` until tested, `status: verified` once confirmed working
+- Test all parameters before submitting
 
-## Отправка Pull Request
+## Submitting a Pull Request
 
-1. Убедитесь, что тесты проходят: `make test && make lint`
-2. Держите PR сфокусированным — один feature или fix на PR
-3. Пишите чёткое описание PR, объясняя что и почему
-4. Ссылайтесь на связанные issues
+1. Make sure tests pass: `make test && make lint`
+2. Keep the PR focused — one feature or fix per PR
+3. Write a clear PR description explaining what and why
+4. Reference any related issues
 
-## Сообщение об ошибках
+## Reporting Bugs
 
-При сообщении об ошибке укажите:
+When reporting a bug, please include:
 
-- Версию OPEX или хэш коммита
-- Операционную систему и архитектуру
-- Соответствующие логи (из `journalctl` или stdout)
-- Шаги для воспроизведения
+- The OPEX version or commit hash
+- Your operating system and architecture
+- Relevant logs (from `journalctl` or stdout)
+- Steps to reproduce
 
-## Уязвимости безопасности
+## Security Vulnerabilities
 
-Пожалуйста, **не открывайте** публичные issues для уязвимостей безопасности. Вместо этого создайте [GitHub Security Advisory](https://github.com/AronMav/opex/security/advisories/new) или напишите напрямую мейнтейнерам.
+Please **do not** open public issues for security vulnerabilities. Instead, file a [GitHub Security Advisory](https://github.com/AronMav/opex/security/advisories/new) or contact the maintainers directly.
 
-## Создание Release
+## Creating a Release
 
 ```bash
-# Сборка release-архива (все платформы)
+# Build the release archive (all platforms)
 ./release.sh 0.27.0 --all
 
-# Результат: release/opex-v0.27.0.tar.gz
+# Output: release/opex-v0.27.0.tar.gz
 ```
 
-Скрипт release синхронизирует версию в `Cargo.toml` и файлы `package.json`, собирает все бинарники, упаковывает UI и создаёт единый архив.
+The release script syncs the version across `Cargo.toml` and the `package.json` files, builds all binaries, bundles the UI, and produces a single archive.
 
-Для публикации release на GitHub создайте и запушьте тег — CI собирает и публикует автоматически:
+To publish a release on GitHub, create and push a tag — CI builds and publishes automatically:
 
 ```bash
 git tag v0.27.0
 git push origin v0.27.0
 ```
 
-## Вопросы
+## Questions
 
-Открывайте [GitHub Discussion](https://github.com/AronMav/opex/discussions) для вопросов об использовании, архитектуре или решениях по дизайну.
+Open a [GitHub Discussion](https://github.com/AronMav/opex/discussions) for questions about usage, architecture, or design decisions.

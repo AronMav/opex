@@ -1,77 +1,81 @@
-# Безопасность
+> **Language:** English · [Русский](SECURITY.ru.md)
 
-## Сообщение об уязвимостях
+# Security
 
-Если вы обнаружили уязвимость безопасности, пожалуйста, сообщите о ней конфиденциально через функцию [Security Advisories](https://github.com/AronMav/opex/security/advisories/new) на GitHub. Не открывайте публичный issue.
+## Reporting Vulnerabilities
 
-## Модель безопасности
+If you discover a security vulnerability, please report it privately via GitHub's [Security Advisories](https://github.com/AronMav/opex/security/advisories/new) feature. Do not open a public issue.
 
-OPEX предназначен для работы в частной LAN или за обратным прокси. Он НЕ защищён для прямого воздействия публичного интернета без дополнительных мер (TLS-терминация, файрвол, VPN).
+## Security Model
 
-### Аутентификация
+OPEX is designed to run on a private LAN or behind a reverse proxy. It is NOT hardened for direct exposure to the public internet without additional measures (TLS termination, firewall, VPN).
 
-- **HTTP API** — все эндпоинты требуют `Authorization: Bearer <token>`, кроме health, uploads, webhooks и OAuth-колбэков.
-- **WebSocket** — одноразовые тикеты (`?ticket=<uuid>`, TTL 30с, потребляется при первом использовании), чтобы не раскрывать статический токен в URL.
-- **Webhooks** — Bearer-токен per-webhook (generic) или верификация подписи HMAC-SHA256 (GitHub).
-- **Ограничитель частоты аутентификации** — 10 неудачных попыток с одного IP вызывают блокировку на 5 минут.
-- **Общий ограничитель частоты запросов** — настраиваемый лимит запросов в минуту на IP.
-- **Постоянное по времени сравнение** — все проверки токенов используют `subtle::ConstantTimeEq`.
+### Authentication
 
-### Хранилище секретов (Secrets Vault)
+- **HTTP API** — all endpoints require `Authorization: Bearer <token>`, except health, uploads, webhooks, and OAuth callbacks.
+- **WebSocket** — one-time tickets (`?ticket=<uuid>`, 30s TTL, consumed on first use) so the static token is never exposed in a URL.
+- **Webhooks** — per-webhook Bearer token (generic) or HMAC-SHA256 signature verification (GitHub).
+- **Auth rate limiter** — 10 failed attempts from one IP trigger a 5-minute block.
+- **Global request rate limiter** — configurable requests-per-minute limit per IP.
+- **Constant-time comparison** — all token checks use `subtle::ConstantTimeEq`.
 
-- **Шифрование** — ChaCha20-Poly1305 (AEAD) с уникальным случайным 12-байтным nonce на каждый секрет.
-- **Мастер-ключ** — 32-байтный hex-ключ в env-переменной `OPEX_MASTER_KEY`. Потеря ключа уничтожает все сохранённые секреты.
-- **Область видимости** — секреты скоупируются per-agent `(name, scope)`. Порядок разрешения: agent scope → global → env fallback.
-- **Аудит** — раскрытие секрета через `?reveal=true` создаёт запись в журнале аудита.
-- **Учётные данные каналов** — bot token-ы извлекаются из JSON конфига, хранятся зашифрованными в хранилище под UUID-скоупом канала и скрываются из колонки `config` в базе данных.
+### Secrets Vault
 
-### SSRF-защита
+- **Encryption** — ChaCha20-Poly1305 (AEAD) with a unique random 12-byte nonce per secret.
+- **Master key** — a 32-byte hex key in the `OPEX_MASTER_KEY` env var. Losing the key destroys all stored secrets.
+- **Scoping** — secrets are scoped per-agent `(name, scope)`. Resolution order: agent scope → global → env fallback.
+- **Audit** — revealing a secret via `?reveal=true` creates an audit-log entry.
+- **Channel credentials** — bot tokens are extracted from the JSON config, stored encrypted in the vault under the channel's UUID scope, and redacted from the `config` column in the database.
 
-Выполнение YAML-инструментов использует усиленный HTTP-клиент (`ssrf_http_client`):
-- DNS-резолвер блокирует приватные IP по RFC 1918, loopback и link-local адреса во время разрешения.
-- Валидация URL-схемы блокирует `file://`, `ftp://` и не-HTTP-схемы.
-- Path-параметры URL-кодируются; шаблоны тела запроса экранируются в JSON.
+### SSRF Protection
 
-### Ограничения loopback
+YAML tool execution uses a hardened HTTP client (`ssrf_http_client`):
 
-Запросы с `127.0.0.1` / `::1` разрешены без авторизации только для конкретных внутренних путей:
+- The DNS resolver blocks private RFC 1918, loopback, and link-local addresses during resolution.
+- URL scheme validation blocks `file://`, `ftp://`, and non-HTTP schemes.
+- URL path parameters are URL-encoded; request-body templates are JSON-escaped.
+
+### Loopback Restrictions
+
+Requests from `127.0.0.1` / `::1` are allowed without authorization only for specific internal paths:
 - `/health`, `/api/mcp/callback`, `/api/channels/notify`, `/api/media/upload`, `/uploads/*`, `/ws`
 
-Все остальные запросы с loopback (включая `/api/secrets`, `/api/backup`) по-прежнему требуют Bearer-авторизации.
+All other loopback requests (including `/api/secrets`, `/api/backup`) still require Bearer authorization.
 
-### Доступ к Docker
+### Docker Access
 
-Core подключается к Docker через TCP (`tcp://127.0.0.1:2375`). TCP-слушатель Docker настраивается `setup.sh` так, чтобы привязываться только к localhost.
+Core connects to Docker over TCP (`tcp://127.0.0.1:2375`). The Docker TCP listener is configured by `setup.sh` to bind to localhost only.
 
-### Белый список перезапуска контейнеров
+### Container Restart Allowlist
 
-API может перезапускать только контейнеры из списка `docker.rebuild_allowed` (по умолчанию: `browser-renderer`, `searxng`). PostgreSQL и другие неперечисленные контейнеры исключены. MCP-контейнеры могут быть добавлены в белый список в `config/opex.toml` при необходимости.
+The API can only restart containers on the `docker.rebuild_allowed` list (default: `browser-renderer`, `searxng`). PostgreSQL and other unlisted containers are excluded. MCP containers can be added to the allowlist in `config/opex.toml` if needed.
 
-### Ограничение частоты webhook-аутентификации
+### Webhook Auth Rate Limiting
 
-Счётчик ошибок per-webhook: 5 неудач аутентификации в течение 5 минут блокируют webhook на 10 минут. Предотвращает брутфорс webhook-секретов.
+Per-webhook failure counter: 5 auth failures within 5 minutes block the webhook for 10 minutes. Prevents brute-forcing webhook secrets.
 
-### Заголовки безопасности
+### Security Headers
 
-Применяются глобально: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection: 1; mode=block`, `Referrer-Policy: strict-origin-when-cross-origin`.
+Applied globally: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection: 1; mode=block`, `Referrer-Policy: strict-origin-when-cross-origin`.
 
-### Валидация имён инструментов
+### Tool Name Validation
 
-API-обработчики применяют `[a-zA-Z0-9_-]` к именам инструментов, MCP-записей и навыков для предотвращения path traversal.
+API handlers enforce `[a-zA-Z0-9_-]` on tool, MCP-entry, and skill names to prevent path traversal.
 
-### Sandbox выполнения кода
+### Code Execution Sandbox
 
-Инструмент `code_exec` выполняет пользовательский код в изолированном Docker-контейнере:
-- Без доступа к сети
-- Только для чтения файловая система (кроме `/tmp`)
-- Лимиты памяти и CPU
-- Таймаут выполнения
+The `code_exec` tool runs user code in an isolated Docker container:
 
-## Лучшие практики развёртывания
+- No network access
+- Read-only filesystem (except `/tmp`)
+- Memory and CPU limits
+- Execution timeout
 
-1. **Всегда используйте TLS** — запускайте за nginx/Caddy с HTTPS или используйте VPN.
-2. **Генерируйте надёжные токены** — `openssl rand -hex 32` для `OPEX_AUTH_TOKEN` и `OPEX_MASTER_KEY`.
-3. **Сохраните резервную копию мастер-ключа** — храните его отдельно от базы данных. Без него все секреты хранилища невосстановимы.
-4. **Ограничьте сетевой доступ** — привяжитесь к `127.0.0.1`, если нужен только локальный доступ, или используйте правила файрвола.
-5. **Держите PostgreSQL локально** — стандартный Docker-конфиг привязывает postgres к `127.0.0.1:5432`.
-6. **Проверяйте определения инструментов** — YAML-инструменты могут выполнять произвольные HTTP-запросы. Проверяйте `workspace/tools/` перед развёртыванием.
+## Deployment Best Practices
+
+1. **Always use TLS** — run behind nginx/Caddy with HTTPS, or use a VPN.
+2. **Generate strong tokens** — `openssl rand -hex 32` for `OPEX_AUTH_TOKEN` and `OPEX_MASTER_KEY`.
+3. **Back up the master key** — store it separately from the database. Without it, all vault secrets are unrecoverable.
+4. **Restrict network access** — bind to `127.0.0.1` if you only need local access, or use firewall rules.
+5. **Keep PostgreSQL local** — the default Docker config binds postgres to `127.0.0.1:5432`.
+6. **Review tool definitions** — YAML tools can make arbitrary HTTP requests. Review `workspace/tools/` before deploying.
