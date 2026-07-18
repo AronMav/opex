@@ -19,6 +19,9 @@ export interface ModelComboboxProps {
   staticOptions?: string[];
   placeholder?: string;
   disabled?: boolean;
+  /** Matches the `size` prop of the sibling ProviderSelect/VoiceSelect so the
+   *  three fields line up at the same height when placed in a row. */
+  size?: "sm" | "default";
   id?: string;
   className?: string;
   "data-testid"?: string;
@@ -34,6 +37,7 @@ export function ModelCombobox({
   staticOptions,
   placeholder,
   disabled,
+  size = "default",
   id,
   className = "",
   "data-testid": testId,
@@ -91,7 +95,9 @@ export function ModelCombobox({
       setHighlight((h) => Math.min(h + 1, filtered.length - 1));
       return;
     }
-    if (e.key === "ArrowUp") { e.preventDefault(); setHighlight((h) => Math.max(h - 1, 0)); return; }
+    // Only move up when something is already highlighted — from the initial
+    // "nothing highlighted" state (h = -1) ArrowUp is a no-op, not a jump to 0.
+    if (e.key === "ArrowUp") { e.preventDefault(); setHighlight((h) => (h > 0 ? h - 1 : h)); return; }
     if (e.key === "Enter" && open && highlight >= 0 && filtered[highlight]) {
       e.preventDefault();
       pick(filtered[highlight].id);
@@ -106,12 +112,13 @@ export function ModelCombobox({
         aria-expanded={open}
         aria-controls={listId}
         aria-autocomplete="list"
+        aria-activedescendant={open && highlight >= 0 ? `${listId}-opt-${highlight}` : undefined}
         autoComplete="off"
         value={value}
         placeholder={placeholder}
         disabled={disabled}
         data-testid={testId}
-        className="font-mono text-sm"
+        className={`font-mono text-sm ${size === "sm" ? "h-8" : ""}`}
         onFocus={openList}
         onClick={openList}
         onChange={(e) => {
@@ -144,6 +151,7 @@ export function ModelCombobox({
             filtered.map((m, i) => (
               <li
                 key={m.id}
+                id={`${listId}-opt-${i}`}
                 role="option"
                 aria-selected={m.id === value}
                 className={`flex cursor-pointer items-center justify-between gap-3 rounded-sm px-2 py-1.5 font-mono text-xs ${

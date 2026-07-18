@@ -149,4 +149,35 @@ describe("ModelCombobox", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onChange).toHaveBeenCalledWith("b-model");
   });
+
+  it("aria-activedescendant points at the keyboard-highlighted option", async () => {
+    apiGet.mockResolvedValue({ models: [{ id: "a-model" }, { id: "b-model" }] });
+    wrap(<ModelCombobox value="" onChange={vi.fn()} providerId="p1" data-testid="cb" />);
+
+    const input = screen.getByTestId("cb");
+    fireEvent.focus(input);
+    await screen.findByRole("option", { name: /a-model/ });
+    // Nothing highlighted yet → no active descendant.
+    expect(input).not.toHaveAttribute("aria-activedescendant");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    const active = input.getAttribute("aria-activedescendant");
+    expect(active).toBeTruthy();
+    // The referenced id must be a real option element in the listbox.
+    const highlighted = document.getElementById(active as string);
+    expect(highlighted).toHaveAttribute("role", "option");
+    expect(highlighted).toHaveTextContent("a-model");
+  });
+
+  it("ArrowUp from the initial state does not highlight the first option", async () => {
+    apiGet.mockResolvedValue({ models: [{ id: "a-model" }, { id: "b-model" }] });
+    wrap(<ModelCombobox value="" onChange={vi.fn()} providerId="p1" data-testid="cb" />);
+
+    const input = screen.getByTestId("cb");
+    fireEvent.focus(input);
+    await screen.findByRole("option", { name: /a-model/ });
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    // No jump to index 0 — still nothing highlighted.
+    expect(input).not.toHaveAttribute("aria-activedescendant");
+  });
 });

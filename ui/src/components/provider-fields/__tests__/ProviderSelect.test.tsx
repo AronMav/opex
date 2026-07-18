@@ -66,4 +66,16 @@ describe("ProviderSelect", () => {
     fireEvent.click(screen.getByRole("option", { name: /legacy-llm/ }));
     expect(onChange).toHaveBeenCalledWith("legacy-llm");
   });
+
+  it("a stale value not in the options still shows in the trigger (no blank field)", () => {
+    // "ghost-provider" isn't in the mocked provider list — the trigger must not
+    // go blank; it surfaces the configured value so the user sees what's set.
+    render(<ProviderSelect value="ghost-provider" onChange={vi.fn()} categories={["text", "llm"]} />);
+    expect(screen.getByRole("combobox")).toHaveTextContent("ghost-provider");
+  });
+
+  it("forwards data-testid to the trigger", () => {
+    render(<ProviderSelect value="" onChange={vi.fn()} categories={["text"]} data-testid="prov" />);
+    expect(screen.getByTestId("prov")).toBeInTheDocument();
+  });
 });

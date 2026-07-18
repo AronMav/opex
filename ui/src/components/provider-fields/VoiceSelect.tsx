@@ -24,6 +24,7 @@ export interface VoiceSelectProps {
   size?: "sm" | "default";
   className?: string;
   id?: string;
+  "data-testid"?: string;
 }
 
 /** Unified TTS voice picker over GET /api/tts/voices. Degrades to a free-text
@@ -38,6 +39,7 @@ export function VoiceSelect({
   size = "default",
   className,
   id,
+  "data-testid": testId,
 }: VoiceSelectProps) {
   const { t } = useTranslation();
   const { data: voices = [], isLoading, isError } = useTtsVoices(providerName || null);
@@ -51,9 +53,16 @@ export function VoiceSelect({
         placeholder={t("profiles.voice_placeholder")}
         onChange={(e) => onChange(e.target.value)}
         className={`font-mono text-sm ${className ?? ""}`}
+        data-testid={testId}
       />
     );
   }
+
+  // A configured voice id that isn't in the fetched list (voice removed
+  // server-side, or a different TTS backend). Radix Select blanks the trigger
+  // for an unmatched value, so surface it as a synthetic item.
+  const staleValue =
+    value !== "" && value !== SERVER_DEFAULT && !voices.some((v) => v.id === value) ? value : null;
 
   return (
     <Select
@@ -61,13 +70,18 @@ export function VoiceSelect({
       onValueChange={(v) => onChange(v === SERVER_DEFAULT ? "" : v)}
       disabled={disabled || !providerName}
     >
-      <SelectTrigger id={id} size={size} className={className}>
+      <SelectTrigger id={id} size={size} className={className} data-testid={testId}>
         <SelectValue placeholder={isLoading ? t("fields.voice_loading") : t("profiles.voice_placeholder")} />
       </SelectTrigger>
       <SelectContent>
         {allowServerDefault && (
           <SelectItem value={SERVER_DEFAULT} className="text-sm text-muted-foreground">
             <span className="text-muted-foreground">&mdash; {t("providers.voice_server_default")}</span>
+          </SelectItem>
+        )}
+        {staleValue && (
+          <SelectItem value={staleValue} className="text-sm font-mono">
+            <span className="truncate">{staleValue}</span>
           </SelectItem>
         )}
         {voices.map((v) => (

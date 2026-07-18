@@ -82,5 +82,16 @@ describe("VoiceSelect", () => {
   it("no provider → disabled, no fetch", () => {
     wrap(<VoiceSelect value="" onChange={vi.fn()} providerName="" />);
     expect(apiGet).not.toHaveBeenCalled();
+    // With no provider the query is disabled and the field degrades to the
+    // (disabled) free-text input.
+    expect(screen.getByRole("textbox")).toBeDisabled();
+  });
+
+  it("a configured voice absent from the fetched list still shows in the trigger", async () => {
+    apiGet.mockResolvedValue({ voices: [{ id: "nova", name: "Nova" }] });
+    wrap(<VoiceSelect value="clone:Ghost" onChange={vi.fn()} providerName="minimax" />);
+    // "clone:Ghost" isn't in the list — surfaced as a synthetic item so the
+    // trigger isn't blank.
+    expect(await screen.findByRole("combobox")).toHaveTextContent("clone:Ghost");
   });
 });
