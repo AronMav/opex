@@ -162,3 +162,9 @@ generate_image = 450
 # (e.g. glm-5.2) writing these as free-form text instead of calling them.
 # Distinct from the per-agent [agent.tool_dispatcher]. Empty = no change.
 always_core = ["sequentialthinking"]
+# Tool names removed from every main agent's native tools[] schema (dedup).
+# MCP names here MUST be paired with the server's enabled:false (block does not
+# cover the dispatcher catalogue / subagents / openai-compat). See the
+# 2026-07-18 tool-reliability plan. Filesystem = mcp-filesystem duplicates of
+# native workspace_* (glm-5.2 mis-selected them with host paths).
+block = ["read_file", "write_file", "edit_file", "list_directory", "search_files"]
