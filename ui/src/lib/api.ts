@@ -147,6 +147,18 @@ export async function apiDelete(path: string): Promise<void> {
 }
 
 /**
+ * DELETE /api/agents/{name} — remove an agent config.
+ *
+ * `purgeHistory` (default false, backward-compatible) additionally wipes the
+ * agent's chat history/audit trail server-side via `?purge_history=true`.
+ * Default preserves history, matching every pre-existing call site.
+ */
+export async function deleteAgent(name: string, purgeHistory = false): Promise<void> {
+  const query = purgeHistory ? "?purge_history=true" : "";
+  await apiDelete(`/api/agents/${name}${query}`);
+}
+
+/**
  * Like apiFetch but does NOT set Content-Type — caller controls headers (FormData, blob, etc.).
  *
  * F057: the 30s client abort is fine for JSON control-plane calls but wrong for

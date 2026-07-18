@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
-import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { apiGet, apiPost, apiPut, apiDelete, deleteAgent } from "@/lib/api";
 import { useTranslation } from "@/hooks/use-translation";
 import type { TranslationKey } from "@/i18n/types";
 import { ErrorBanner } from "@/components/ui/error-banner";
@@ -376,6 +378,7 @@ export function formToPayload(f: FormState) {
 
 export default function AgentsPage() {
   const { t } = useTranslation();
+  const router = useRouter();
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -385,6 +388,7 @@ export default function AgentsPage() {
   const [editName, setEditName] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [purgeHistory, setPurgeHistory] = useState(false);
   // Avatar lightbox: which agent's icon is enlarged (null = closed).
   const [enlargedAvatar, setEnlargedAvatar] = useState<{ url: string; name: string } | null>(null);
 
@@ -574,16 +578,26 @@ export default function AgentsPage() {
 
   const doDelete = useCallback(async () => {
     if (!deleteTarget) return;
+    const deletedName = deleteTarget;
     setSaving(true);
     try {
-      await apiDelete(`/api/agents/${deleteTarget}`);
+      await deleteAgent(deletedName, purgeHistory);
       setDeleteTarget(null);
+      setPurgeHistory(false);
       await load();
+      // A same-named profile isn't touched by agent deletion — surface a hint
+      // so the profile doesn't linger unnoticed (profiles are shared config,
+      // not owned by any single agent).
+      if (profilesByName.has(deletedName)) {
+        toast.info(t("agents.delete_profile_hint", { name: deletedName }), {
+          action: { label: t("agents.profile"), onClick: () => router.push("/profiles") },
+        });
+      }
     } catch (e) {
       setError(`${e}`);
     }
     setSaving(false);
-  }, [deleteTarget, load]);
+  }, [deleteTarget, purgeHistory, load, profilesByName, t, router]);
 
   const isValidName = /^[a-zA-Z0-9_-]+$/.test(form.name.trim());
   const canSave =
@@ -798,7 +812,10 @@ export default function AgentsPage() {
       <AlertDialog
         open={!!deleteTarget}
         onOpenChange={(o) => {
-          if (!o) setDeleteTarget(null);
+          if (!o) {
+            setDeleteTarget(null);
+            setPurgeHistory(false);
+          }
         }}
       >
         <AlertDialogContent>
@@ -808,6 +825,20 @@ export default function AgentsPage() {
               {t("agents.delete_agent_description")}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <label className="flex items-start gap-2 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              checked={purgeHistory}
+              onChange={(e) => setPurgeHistory(e.target.checked)}
+              className="mt-0.5 rounded border-border accent-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            <span>
+              {t("agents.delete_purge_history")}
+              {purgeHistory && (
+                <span className="mt-1 block text-2xs text-destructive">{t("agents.delete_purge_warning")}</span>
+              )}
+            </span>
+          </label>
           <AlertDialogFooter>
             <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction variant="destructive" onClick={doDelete}>

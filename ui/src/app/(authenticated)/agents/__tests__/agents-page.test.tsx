@@ -56,6 +56,7 @@ vi.mock("@/lib/api", () => ({
   apiPost: vi.fn(),
   apiPut: vi.fn(),
   apiDelete: vi.fn(),
+  deleteAgent: vi.fn(),
 }));
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
