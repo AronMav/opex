@@ -272,14 +272,22 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn tool_health_orders_by_impact_and_excludes_healthy(pool: sqlx::PgPool) {
-        // bad_tool: 2 fails (high impact). good_tool: 1 success (no fails → excluded).
+        // high impact: 2 fails / 2 total → fail-share 1.0 × 2 fails = 2.0
         record_tool_result(&pool, "A", "bad_tool", false, 100, Some("boom")).await.unwrap();
         record_tool_result(&pool, "A", "bad_tool", false, 100, Some("boom")).await.unwrap();
+        // low impact: 1 fail / 5 total → fail-share 0.2 × 1 fail = 0.2
+        for _ in 0..4 {
+            record_tool_result(&pool, "A", "meh_tool", true, 10, None).await.unwrap();
+        }
+        record_tool_result(&pool, "A", "meh_tool", false, 10, Some("x")).await.unwrap();
+        // healthy: no fails → excluded
         record_tool_result(&pool, "A", "good_tool", true, 50, None).await.unwrap();
+
         let rows = get_tool_health(&pool).await.unwrap();
-        assert_eq!(rows.len(), 1, "only tools with fail_calls > 0");
-        assert_eq!(rows[0]["tool_name"], "bad_tool");
+        assert_eq!(rows.len(), 2, "only tools with fail_calls > 0");
+        assert_eq!(rows[0]["tool_name"], "bad_tool", "highest-impact tool first");
         assert_eq!(rows[0]["fail_calls"], 2);
+        assert_eq!(rows[1]["tool_name"], "meh_tool", "lower-impact tool second");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
