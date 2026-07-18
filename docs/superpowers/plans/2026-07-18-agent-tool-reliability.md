@@ -1,21 +1,27 @@
-# Agent Tool-Reliability Implementation Plan
+# Agent Tool-Reliability Implementation Plan (rev.2 — post-review)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Cut agent tool-call failures (the operator's "agents often miss") by removing an ambiguous/duplicate tool surface, fixing config gaps, and pruning flaky MCP servers — validated against prod `tool_quality`.
+> **rev.2:** rewritten after a 3-reviewer verification pass (Batch-1 Rust anchors; Batches 2-3 server reality; Batch-4 + spec coverage + risks). All review findings are baked in; the biggest corrections: server `opex.toml` is NEVER scp'd (targeted append only), Task 2.1/2.2 re-diagnosed (reserved-secret guard / not-a-config-gap), `block` semantics honestly scoped, a write-path audit gates the mcp-filesystem disable, Batch 4 extends `get_degraded_tools` instead of duplicating it.
 
-**Architecture:** A new global `[tool_dispatcher] block` list (a pure name filter over the assembled tool universe, applied at the single tool-assembly chokepoint) plus disabling the redundant `mcp-filesystem` server removes the native-vs-MCP filesystem overlap that glm-5.2 mis-selects. Config-only fixes close two tool env/target gaps. A per-server audit disables/dedups flaky MCP servers in favour of native equivalents. A small `tool_quality` report surfaces regressions.
+**Goal:** Cut agent tool-call failures (the operator's "agents often miss") by removing an ambiguous/duplicate tool surface, correcting broken server-side tools, and pruning overlapping MCP servers — validated against prod `tool_quality` deltas.
 
-**Tech Stack:** Rust 2024 (opex-core), TOML config, workspace YAML MCP configs, PostgreSQL (`tool_quality`, `providers`). Deploy: `server-deploy.sh` (Rust rebuild + config sync). Spec: `docs/superpowers/specs/2026-07-18-agent-tool-reliability-design.md`.
+**Architecture:** A new global `[tool_dispatcher] block` list — a pure name filter applied at the main tool-assembly chokepoint — plus disabling the redundant `mcp-filesystem` server removes the native-vs-MCP filesystem overlap that glm-5.2 mis-selects. **`block` scope (verified):** it filters only the MAIN agent's native `tools[]` schema; the dispatcher catalogue (`tool_use`), trigger-hint, suppressor, the subagent assembly path, and the openai-compat path all bypass it. For MCP tools the actual guarantee is the server's `enabled: false` — the MCP registry is the single source feeding every assembly path, so disabling the server removes the tools everywhere. **Rule: blocking an MCP tool ALWAYS pairs with disabling its server; `block` alone is only valid for non-MCP names.** Server-side corrections remove a by-construction-broken YAML tool and normalize stale deny-lists; a per-server audit dedups overlapping MCP servers in favour of native equivalents; the existing `tool_quality` degradation query gains an operator endpoint.
+
+**Tech Stack:** Rust 2024 (opex-core), TOML config, workspace YAML MCP configs, PostgreSQL (`tool_quality`, `messages`). Deploy: `server-deploy.sh` (Rust rebuild). Spec: `docs/superpowers/specs/2026-07-18-agent-tool-reliability-design.md`.
 
 ## Global Constraints
 
-- Rust + rustls-tls only; never add OpenSSL. (project constraint)
-- No API-contract or migration breakage. (project constraint)
-- Rust gate before deploy: `cargo check -p opex-core --all-targets` + `cargo clippy -p opex-core --all-targets` clean (clippy is `-D warnings`). Windows can't authoritatively run DB tests — the server is authoritative; `#[sqlx::test]` failures without a local Postgres are expected, not regressions.
+- Rust + rustls-tls only; never add OpenSSL. No API-contract or migration breakage.
+- Rust gate before deploy: `cargo check -p opex-core --all-targets` + `cargo clippy -p opex-core --all-targets` clean. `#[sqlx::test]` tests need `DATABASE_URL` (server / `make test-db`); failing locally without it is expected.
 - No push/deploy without explicit operator approval. Work in `master`. No `Co-Authored-By`.
-- Deploy mechanics: `ssh aronmav@188.246.224.118 'bash ~/opex-src/scripts/server-deploy.sh'` rebuilds Rust + syncs toolgate/channels/migrations. It does NOT sync `workspace/` or `config/` runtime files — those are `scp`'d after diffing the server copy against repo (server copies can diverge). `rg` is absent on the server — use `grep`. `config/opex.toml` and `config/media-drivers.yaml` are read at runtime from `~/opex/config/` (opex.toml is NOT `include_str!`); `scaffold/*` and `media-drivers.yaml` ARE `include_str!` (need rebuild).
-- Validation metric: `tool_quality` fail-rate (`fail_calls/total_calls`) and `penalty_score` per tool, before vs after, 2–3 day prod window.
+- **Server config files DIVERGE from repo — NEVER blind-scp them (review BLOCKER B1):**
+  - `~/opex/config/opex.toml` (134 lines) carries prod-only sections (`[typing]`, `[otel]`, `[curator]`, `[lsp]`) absent from the repo copy. Targeted in-place edits only. `[tool_dispatcher]` is currently its LAST section (lines 133-134) — verify before appending.
+  - `~/opex/docker/docker-compose.yml`: `tts-silero` is intentionally commented out on the server (active TTS = qwen3 on the GPU PC); repo copy has it active. Never scp compose repo→server without backporting first.
+  - `config/agents/*.toml` exist ONLY on the server (repo tracks just `.gitkeep`).
+  - `~/opex/workspace/mcp/` is a server-curated set (differs from repo).
+- `rg` is absent on the server — use `grep`. Server restarts: `systemctl --user restart opex-core`. Config watcher watches `opex.toml` only (agent TOMLs need a restart or PUT).
+- Validation metric: **deltas** of `tool_quality.fail_calls`/`total_calls` over the window (the counters are cumulative and never truncated; lifetime ratios are diluted by history — review m2). Baseline snapshot before, re-snapshot after 2-3 days.
 
 ---
 
@@ -23,34 +29,35 @@
 
 | File | Responsibility | Change |
 |---|---|---|
-| `crates/opex-core/src/config/mod.rs` | `GlobalToolDispatcherConfig` struct | Add `block: Vec<String>` field (after `always_core`, ~L1825) |
-| `crates/opex-core/src/agent/pipeline/dispatch.rs` | tool-policy filtering | Add pure `apply_global_block(tools, block)` + unit test |
-| `crates/opex-core/src/agent/context_builder.rs` | tool-assembly trait | Add `fn dispatcher_block(&self) -> &[String];` (near `dispatcher_always_core`, ~L232); apply block after L702 |
-| `crates/opex-core/src/agent/engine/context_builder.rs` | trait impl for `AgentEngine` | Impl `dispatcher_block()` (near `dispatcher_always_core` impl, ~L675) |
-| `config/opex.toml` | global dispatcher config | Add `block = [...]` under `[tool_dispatcher]` |
-| `workspace/mcp/filesystem.yaml` | MCP-filesystem server | `enabled: false` |
-| `workspace/mcp/{fetch,…}.yaml` | flaky MCP servers | `enabled: false` per audit (Batch 3) |
-| `config/agents/*.toml` | per-agent tool policy | `process_start` → `process` normalize (Batch 2) |
+| `crates/opex-core/src/config/mod.rs` | `GlobalToolDispatcherConfig` (L1818) | Add `block: Vec<String>` after `always_core` (L1825); extend parse test (L3782) |
+| `crates/opex-core/src/agent/pipeline/dispatch.rs` | tool-policy filtering | Add pure `apply_global_block` + unit tests (tests mod at L227) |
+| `crates/opex-core/src/agent/context_builder.rs` | `ContextBuilderDeps` trait (L96) | Add `dispatcher_block()` decl after L232; apply block after L702 |
+| `crates/opex-core/src/agent/engine/context_builder.rs` | trait impl (single impl site, L207) | Impl `dispatcher_block()` next to L675 |
+| `crates/opex-core/src/db/tool_quality.rs` | tool_quality queries (has `get_degraded_tools`) | Add `get_tool_health()` + `#[sqlx::test]` (pattern at L236) |
+| `crates/opex-core/src/gateway/handlers/monitoring/mod.rs` | monitoring routes | Register `GET /api/tools/health` |
+| `config/opex.toml` (repo) | reference config | Add `block = [...]` under `[tool_dispatcher]` (for history/fresh installs) |
+| `workspace/mcp/filesystem.yaml` (repo) | mcp-filesystem | `enabled: false` (server copy is md5-identical — safe to mirror) |
+| Server-only: `~/opex/config/opex.toml`, `~/opex/workspace/mcp/*.yaml`, `~/opex/config/agents/*.toml`, `~/opex/workspace/tools/core_get_skills_repairs.yaml` | prod runtime config | targeted in-place edits (ssh sed/append), no scp of diverged files |
 
 ---
 
-# BATCH 1 — Filesystem tool de-duplication + global `block`
+# BATCH 1 — Filesystem tool de-duplication + global `block` (+ Batch 4 code in the same deploy)
 
-Primary lever. Rust `block` mechanism (Task 1.1) then config activation + deploy (Task 1.2).
+Primary lever. One Rust deploy carries Task 1.1 AND Task 4.1 (both are opex-core code — review m3: merging deploys also puts the measurement endpoint live for the before/after window).
 
 ## Task 1.1: Global `block` config + pure filter + wiring
 
 **Files:**
-- Modify: `crates/opex-core/src/config/mod.rs` (~L1818-1826, `GlobalToolDispatcherConfig`)
-- Modify: `crates/opex-core/src/agent/pipeline/dispatch.rs` (add pure fn + test)
-- Modify: `crates/opex-core/src/agent/context_builder.rs` (trait method decl ~L232 + apply after L702)
-- Modify: `crates/opex-core/src/agent/engine/context_builder.rs` (trait impl ~L675)
+- Modify: `crates/opex-core/src/config/mod.rs` (struct L1818-1826; test L3782-3808)
+- Modify: `crates/opex-core/src/agent/pipeline/dispatch.rs` (pure fn + tests; tests mod at L227 has `use super::*`)
+- Modify: `crates/opex-core/src/agent/context_builder.rs` (trait decl after L232; apply after L702)
+- Modify: `crates/opex-core/src/agent/engine/context_builder.rs` (impl next to L675)
 
 **Interfaces:**
-- Produces: `config::GlobalToolDispatcherConfig.block: Vec<String>`; `dispatch::apply_global_block(tools: Vec<ToolDefinition>, block: &[String]) -> Vec<ToolDefinition>`; trait method `dispatcher_block(&self) -> &[String]`.
-- Consumes: existing `dispatcher_always_core()` pattern (mirror it exactly).
+- Produces: `config::GlobalToolDispatcherConfig.block: Vec<String>`; `dispatch::apply_global_block(tools: Vec<ToolDefinition>, block: &[String]) -> Vec<ToolDefinition>`; trait method `dispatcher_block(&self) -> &[String]` on `ContextBuilderDeps`.
+- Consumes: existing `dispatcher_always_core()` pattern — impl path is verbatim `&self.cfg().app_config.tool_dispatcher.<field>` (verified against the existing impl at `engine/context_builder.rs:675-677`).
 
-- [ ] **Step 1: Write the failing test** in `crates/opex-core/src/agent/pipeline/dispatch.rs` (in the existing `#[cfg(test)] mod tests`):
+- [ ] **Step 1: Write the failing tests** in `crates/opex-core/src/agent/pipeline/dispatch.rs`, inside the existing `#[cfg(test)] mod tests` (L227, already has `use super::*`):
 
 ```rust
 #[test]
@@ -78,18 +85,25 @@ fn apply_global_block_empty_is_noop() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run to verify FAIL**
 
 Run: `cargo test -p opex-core --bins apply_global_block 2>&1 | grep -E 'error|test result'`
 Expected: compile error `cannot find function 'apply_global_block'`.
 
-- [ ] **Step 3: Implement the pure filter** in `crates/opex-core/src/agent/pipeline/dispatch.rs` (below `filter_tools_by_policy`):
+- [ ] **Step 3: Implement the pure filter** in `dispatch.rs` below `filter_tools_by_policy`, with the HONEST scope contract (review M1 — do not overclaim):
 
 ```rust
 /// Remove tools whose name is in the global `[tool_dispatcher] block` list.
-/// A pure name filter over the fully-assembled tool universe — the single
-/// global place to drop a tool from EVERY agent's schema (base and non-base),
-/// e.g. redundant MCP duplicates of native tools. Order-independent removal.
+///
+/// SCOPE (important): this filters the MAIN agent's native `tools[]` schema at
+/// the context_builder assembly chokepoint — for every agent, base and
+/// non-base. It does NOT filter the dispatcher catalogue (`tool_use`
+/// search/describe/call), the trigger-hint, the suppressor, the subagent
+/// assembly path, or the openai-compat path. Therefore an MCP tool name in
+/// this list MUST always be paired with `enabled: false` on its MCP server —
+/// the registry feeds all assembly paths, so disabling the server is what
+/// actually removes the tool everywhere. `block` alone is only sufficient for
+/// non-MCP (native/yaml) names.
 pub fn apply_global_block(tools: Vec<ToolDefinition>, block: &[String]) -> Vec<ToolDefinition> {
     if block.is_empty() {
         return tools;
@@ -98,31 +112,47 @@ pub fn apply_global_block(tools: Vec<ToolDefinition>, block: &[String]) -> Vec<T
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Run to verify PASS**
 
 Run: `cargo test -p opex-core --bins apply_global_block 2>&1 | grep 'test result'`
 Expected: `test result: ok. 2 passed`.
 
-- [ ] **Step 5: Add the config field** in `crates/opex-core/src/config/mod.rs` — inside `GlobalToolDispatcherConfig`, right after the `always_core` field (~L1825):
+- [ ] **Step 5: Add the config field AND extend the parse test** (review m5) in `crates/opex-core/src/config/mod.rs`.
+
+(a) Inside `GlobalToolDispatcherConfig`, right after `always_core` (L1825):
 
 ```rust
-    /// Tool names globally removed from EVERY agent's schema (base and non-base),
-    /// applied to the fully-assembled tool universe before dispatcher partition.
-    /// The single global place to drop redundant/duplicate tools (e.g. MCP
-    /// filesystem duplicates of native `workspace_*`). Empty by default.
+    /// Tool names removed from every MAIN agent's native tools[] schema at the
+    /// assembly chokepoint (base and non-base). Does NOT cover the dispatcher
+    /// catalogue / subagents / openai-compat — MCP names here must be paired
+    /// with the server's `enabled: false` (see `apply_global_block`). Empty by
+    /// default (no behaviour change).
     #[serde(default)]
     pub block: Vec<String>,
 ```
 
-- [ ] **Step 6: Add the trait method decl** in `crates/opex-core/src/agent/context_builder.rs`, right after the `dispatcher_always_core` decl (~L232):
+(b) In the existing test `global_tool_dispatcher_defaults_empty_and_parses` (L3782-3808): add to the cfg2 TOML literal, under `always_core = ["sequentialthinking"]`:
+
+```toml
+block = ["read_file"]
+```
+
+and extend the asserts:
 
 ```rust
-    /// Global `[tool_dispatcher] block` list — tool names removed from every
-    /// agent's assembled schema. Mirrors `dispatcher_always_core`.
+assert!(cfg.tool_dispatcher.block.is_empty());
+assert_eq!(cfg2.tool_dispatcher.block, vec!["read_file".to_string()]);
+```
+
+- [ ] **Step 6: Add the trait method decl** in `agent/context_builder.rs`, right after the `dispatcher_always_core` decl (L232):
+
+```rust
+    /// Global `[tool_dispatcher] block` list — tool names removed from the
+    /// main agent's assembled native schema. Mirrors `dispatcher_always_core`.
     fn dispatcher_block(&self) -> &[String];
 ```
 
-- [ ] **Step 7: Implement the trait method** in `crates/opex-core/src/agent/engine/context_builder.rs`, right after the `dispatcher_always_core` impl (~L675-677):
+- [ ] **Step 7: Implement the trait method** in `agent/engine/context_builder.rs`, right after the `dispatcher_always_core` impl (L675-677):
 
 ```rust
     fn dispatcher_block(&self) -> &[String] {
@@ -130,21 +160,22 @@ Expected: `test result: ok. 2 passed`.
     }
 ```
 
-- [ ] **Step 8: Apply the block at the assembly chokepoint** in `crates/opex-core/src/agent/context_builder.rs`, immediately after `let mut all_tools = deps.filter_tools_by_policy(tool_list);` (L702):
+- [ ] **Step 8: Apply the block at the chokepoint** in `agent/context_builder.rs`, immediately after `let mut all_tools = deps.filter_tools_by_policy(tool_list);` (L702):
 
 ```rust
-            let mut all_tools = deps.filter_tools_by_policy(tool_list);
-            // Global dedup: drop tools listed in [tool_dispatcher] block from
-            // EVERY agent (before dispatcher partition / top-K). See A-tool-rel design.
+            // Global dedup: drop [tool_dispatcher] block names from the native
+            // schema (before dispatcher partition / top-K). MCP names in the
+            // list are additionally removed everywhere by their server's
+            // enabled:false — see apply_global_block's scope contract.
             all_tools = crate::agent::pipeline::dispatch::apply_global_block(
                 all_tools, deps.dispatcher_block(),
             );
 ```
 
-- [ ] **Step 9: Verify any other `ContextDeps` impls/mocks compile** (the trait gained a method). Search for impls:
+- [ ] **Step 9: Verify the single impl site** (verified in review: `ContextBuilderDeps` has exactly one impl, `engine/context_builder.rs:207`; `MockContextBuilder` implements a different trait and won't break):
 
 Run: `grep -rn 'dispatcher_always_core' crates/opex-core/src | grep -v 'context_builder.rs'`
-Expected: no other impl sites (only the one in `engine/context_builder.rs`). If a test mock impls the trait, add `fn dispatcher_block(&self) -> &[String] { &[] }` to it.
+Expected: empty (no other impl sites). If a future mock impls the trait, it must add `fn dispatcher_block(&self) -> &[String] { &[] }`.
 
 - [ ] **Step 10: Full gate**
 
@@ -155,260 +186,278 @@ Run: `cargo clippy -p opex-core --all-targets 2>&1 | grep -iE 'warning|error' | 
 
 ```bash
 git add crates/opex-core/src/config/mod.rs crates/opex-core/src/agent/pipeline/dispatch.rs crates/opex-core/src/agent/context_builder.rs crates/opex-core/src/agent/engine/context_builder.rs
-git commit -m "feat(tools): global [tool_dispatcher] block list to dedup agent tool surface"
+git commit -m "feat(tools): global [tool_dispatcher] block for native-schema dedup (paired with MCP enabled:false)"
 ```
 
-## Task 1.2: Activate — disable mcp-filesystem, set block, deploy, measure
+## Task 1.2: Activate — write-path audit, disable mcp-filesystem, set block, deploy, measure
 
 **Files:**
-- Modify: `workspace/mcp/filesystem.yaml` (`enabled: true` → `false`)
-- Modify: `config/opex.toml` (`[tool_dispatcher]` add `block`)
+- Modify (repo): `workspace/mcp/filesystem.yaml`, `config/opex.toml`
+- Modify (server, targeted): `~/opex/config/opex.toml` (append), `~/opex/workspace/mcp/filesystem.yaml` (sed)
 
-- [ ] **Step 1: Disable mcp-filesystem** in `workspace/mcp/filesystem.yaml`:
+- [ ] **Step 0: SPEC OPEN-ITEM GATE (review M2) — audit where successful MCP writes went.** Prod data shows Arty succeeded via MCP `write_file` 5/12 and `edit_file` 16/28 — someone DID write successfully. `tool_quality` stores no args; extract them from message history:
 
-```yaml
-enabled: false
+```bash
+ssh aronmav@188.246.224.118 "docker exec docker-postgres-1 psql -U opex -d opex -c \"SELECT created_at, agent_id, left(tool_calls::text, 400) FROM messages WHERE tool_calls::text LIKE '%write_file%' OR tool_calls::text LIKE '%edit_file%' ORDER BY created_at DESC LIMIT 30;\""
 ```
 
-- [ ] **Step 2: Add the block list** in `config/opex.toml` under `[tool_dispatcher]` (next to `always_core`):
+Classify every successful call's `path` argument against the native `workspace_write` jail for that agent (`agents/{name}/…` + shared dirs `tools/skills/mcp/uploads` + shared root files):
+- ALL inside the jail → no capability loss; proceed.
+- ANY outside (e.g. Arty writing into another agent's dir or an arbitrary /workspace path) → **STOP: present the path list to the operator** and get an explicit decision (per spec: such a workflow needs a purpose-built mechanism — a shared drop-dir or explicit cross-agent tool — NOT unrestricted MCP-filesystem) BEFORE proceeding.
+
+- [ ] **Step 1: Repo edits.** `workspace/mcp/filesystem.yaml` → `enabled: false`. `config/opex.toml` `[tool_dispatcher]` → add:
 
 ```toml
 block = ["read_file", "write_file", "edit_file", "list_directory", "search_files"]
 ```
 
-- [ ] **Step 3: Verify opex.toml parses** (it's read at runtime, not embedded):
+- [ ] **Step 2: Verify parse test covers it**
 
-Run: `cargo test -p opex-core --bins tool_dispatcher 2>&1 | grep 'test result'`
-Expected: existing `[tool_dispatcher]` parse tests pass (they exercise the struct; `block` defaults to `[]` when absent and parses when present).
+Run: `cargo test -p opex-core --bins global_tool_dispatcher 2>&1 | grep 'test result'`
+Expected: pass — the test extended in Task 1.1 Step 5 asserts `block` parses.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add workspace/mcp/filesystem.yaml config/opex.toml
-git commit -m "config: disable mcp-filesystem, block its 5 tools globally (native workspace_* covers it)"
+git commit -m "config: disable mcp-filesystem, block its 5 tools in native schema (native workspace_* covers reads; write jail is intended)"
 ```
 
-- [ ] **Step 5: Deploy (ONLY after operator approval to push)** — Rust rebuild (Task 1.1 code) + sync the two config files.
+- [ ] **Step 4: Deploy (ONLY after operator approval to push).** Single Rust deploy for Tasks 1.1 + 4.1; then TARGETED server config edits (review B1 — never scp opex.toml: the server copy has prod-only sections `[typing]`/`[otel]`/`[curator]`/`[lsp]`):
 
 ```bash
 git push origin master
 ssh aronmav@188.246.224.118 'bash ~/opex-src/scripts/server-deploy.sh'
-# server-deploy.sh does NOT sync workspace/ or config/ runtime files — scp them:
-# First diff the server copy vs repo to confirm no divergence, then overwrite.
-ssh aronmav@188.246.224.118 'cat ~/opex/config/opex.toml' > /tmp/srv_toml
-diff <(git show HEAD:config/opex.toml) /tmp/srv_toml   # expect only the block= line differs (server=old)
-scp config/opex.toml aronmav@188.246.224.118:~/opex/config/opex.toml
-scp workspace/mcp/filesystem.yaml aronmav@188.246.224.118:~/opex/workspace/mcp/filesystem.yaml
+# 1) Confirm [tool_dispatcher] is still the LAST section of the server opex.toml:
+ssh aronmav@188.246.224.118 'tail -5 ~/opex/config/opex.toml'
+# 2) Append the block line (safe because the section is last; if it is no longer
+#    last, insert after the always_core line with sed instead):
+ssh aronmav@188.246.224.118 "printf 'block = [\"read_file\", \"write_file\", \"edit_file\", \"list_directory\", \"search_files\"]\n' >> ~/opex/config/opex.toml && grep -n 'block' ~/opex/config/opex.toml"
+# 3) Disable the server's mcp-filesystem (server copy verified md5-identical to repo):
+ssh aronmav@188.246.224.118 "sed -i 's/^enabled: true/enabled: false/' ~/opex/workspace/mcp/filesystem.yaml && cat ~/opex/workspace/mcp/filesystem.yaml"
 ssh aronmav@188.246.224.118 'systemctl --user restart opex-core'
 ```
 
-- [ ] **Step 6: Smoke**
+- [ ] **Step 5: Smoke** (NB, review m4: `/api/tool-definitions` assembles system+yaml+MCP directly and BYPASSES the chokepoint — `read_file` absent there proves the server-disable worked; the `block` mechanism itself is proven by the unit tests, not this smoke):
 
 ```bash
-ssh aronmav@188.246.224.118 'curl -sf http://localhost:18789/health; echo; for s in opex-core; do systemctl --user show $s -p NRestarts --value; done'
-# Expect: {"status":"ok",...}, NRestarts 0
-# Confirm the filesystem tools are gone from a base agent schema:
-ssh aronmav@188.246.224.118 "TOKEN=\$(grep -oP 'OPEX_AUTH_TOKEN=\K.*' ~/opex/.env|tr -d '\"'|head -1); curl -sf -H \"Authorization: Bearer \$TOKEN\" http://localhost:18789/api/tool-definitions | grep -o read_file || echo 'read_file absent (good)'"
+ssh aronmav@188.246.224.118 'curl -sf http://localhost:18789/health; echo; systemctl --user show opex-core -p NRestarts --value'
+ssh aronmav@188.246.224.118 "TOKEN=\$(grep -oP 'OPEX_AUTH_TOKEN=\K.*' ~/opex/.env|tr -d '\"'|head -1); curl -sf -H \"Authorization: Bearer \$TOKEN\" http://localhost:18789/api/tool-definitions | grep -o read_file || echo 'read_file absent (server-disable OK)'"
 ```
-Expected: `read_file absent (good)`; native `workspace_read` still present.
 
-- [ ] **Step 7: Record baseline for the metric** (so Batch's effect is measurable):
+Expected: health ok, NRestarts 0, `read_file absent (server-disable OK)`, native `workspace_read` still present.
+
+- [ ] **Step 6: Baseline snapshot for the DELTA metric** (review m2 — counters are cumulative; compare deltas, not lifetime ratios):
 
 ```bash
-ssh aronmav@188.246.224.118 "docker exec docker-postgres-1 psql -U opex -d opex -c \"SELECT tool_name, sum(total_calls) tc, sum(fail_calls) fc FROM tool_quality WHERE tool_name IN ('read_file','write_file','edit_file','list_directory','search_files') GROUP BY tool_name;\""
+ssh aronmav@188.246.224.118 "docker exec docker-postgres-1 psql -U opex -d opex -c \"SELECT agent_name, tool_name, total_calls, fail_calls FROM tool_quality ORDER BY tool_name, agent_name;\"" > /tmp/tool_quality_baseline_$(date +%Y%m%d).txt
 ```
-Note the counts; after 2–3 days these tools should show no NEW calls (gone from schema).
+
+Success criterion after 2-3 days: zero delta on the 5 filesystem tools (no new calls — gone from every schema), and shrinking fail deltas overall.
 
 ---
 
-# BATCH 2 — Config gaps (config-only, no Rust rebuild)
+# BATCH 2 — Server-side corrections (no Rust rebuild; server-only files)
 
-Independent of Batch 1. Each task verifies the gap on the server first, then fixes.
+Review re-diagnosed all three tasks. Server-side edits only; nothing here is committed to the repo except Task 2.2's optional description.
 
-## Task 2.1: `core_get_skills_repairs` missing `OPEX_AUTH_TOKEN`
+## Task 2.1: `core_get_skills_repairs` — by-construction broken YAML tool (review B2)
 
-**Files:** MCP server config that provides `core_get_skills_repairs` (identify in Step 1), likely `workspace/mcp/<server>.yaml` or its container env in `docker/docker-compose.yml`.
+**Reality (verified):** NOT a docker MCP. It is an agent-created YAML tool that exists ONLY on the server — `~/opex/workspace/tools/core_get_skills_repairs.yaml` (`created_by: agent`), calling core `GET /api/skills/repairs` with `auth: {type: bearer_env, key: OPEX_AUTH_TOKEN}`. The failure is the INTENTIONAL reserved-secret guard (F002): `tools/yaml_tools.rs:27-30` → `secrets::is_reserved_secret_name()` (`secrets.rs:43-45` — `OPEX_MASTER_KEY`/`OPEX_AUTH_TOKEN`/`DATABASE_URL` may never be tool credentials; admin-token exfiltration guard). The guard fires BEFORE env is read — no env injection can ever fix this. **Do NOT touch docker-compose.yml** (irrelevant here; also the server compose intentionally diverges — tts-silero commented out).
 
-- [ ] **Step 1: Locate the tool + its server** on the server:
-
-```bash
-ssh aronmav@188.246.224.118 "grep -rl core_get_skills_repairs ~/opex/workspace/mcp/ ~/opex/docker/ 2>/dev/null; docker exec docker-postgres-1 psql -U opex -d opex -tAc \"SELECT tool_name,left(last_error,120) FROM tool_quality WHERE tool_name='core_get_skills_repairs';\""
-```
-Expected: identifies the MCP server (a core-callback MCP) and confirms `env var 'OPEX_AUTH_TOKEN'` in `last_error`.
-
-- [ ] **Step 2: Inject the token** into that server's environment. If it's a docker MCP, add to its `environment:` in `docker/docker-compose.yml`:
-
-```yaml
-    environment:
-      - OPEX_AUTH_TOKEN=${OPEX_AUTH_TOKEN}
-```
-(the value is already in the host env / core `.env`). If it's a native/yaml tool, add the env passthrough where that server is spawned.
-
-- [ ] **Step 3: Apply on server + restart that server only:**
+- [ ] **Step 1: Confirm current state** (read-only):
 
 ```bash
-scp docker/docker-compose.yml aronmav@188.246.224.118:~/opex/docker/docker-compose.yml
-ssh aronmav@188.246.224.118 'cd ~/opex/docker && docker compose up -d <server-name>'
+ssh aronmav@188.246.224.118 "cat ~/opex/workspace/tools/core_get_skills_repairs.yaml"
 ```
 
-- [ ] **Step 4: Verify** the tool now authenticates (call it via an agent turn or check next `tool_quality` update shows a success).
+Expected: `auth: {type: bearer_env, key: OPEX_AUTH_TOKEN}`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 2: Operator decision (AskUserQuestion):**
+  - **(a) Delete the tool (recommended):** it cannot work by construction; skills-repairs data is already reachable via `GET /api/skills/repairs` for the operator, and base agents can query it through other sanctioned paths.
+  - **(b) Dedicated non-reserved secret:** mint `CORE_API_TOKEN` in the vault (same token value) via `POST /api/secrets`, repoint the yaml's `auth.key` to it. This is a deliberate, operator-approved narrow bypass of F002 — do NOT weaken `is_reserved_secret_name` itself.
+
+- [ ] **Step 3: Apply on the server.** (a): `ssh aronmav@188.246.224.118 'rm ~/opex/workspace/tools/core_get_skills_repairs.yaml'`. (b): create the secret, then `sed -i 's/OPEX_AUTH_TOKEN/CORE_API_TOKEN/' ~/opex/workspace/tools/core_get_skills_repairs.yaml`.
+
+- [ ] **Step 4: Verify.** (a): the tool disappears from `/api/tool-definitions`. (b): its next invocation succeeds (watch `tool_quality.last_error` clear).
+
+No repo commit — the file exists only on the server.
+
+## Task 2.2: `query_db` — NOT a config gap (review: hypothesis refuted); optional description hardening
+
+**Reality (verified):** served by mcp-postgres (`workspace/mcp/postgres.yaml` → `docker/mcp/postgres/app.py`), read-only/SELECT-only, DSN already targets the correct opex DB. 33 calls / 5 fails (85% success). The `relation "agents" does not exist` errors are AGENT-AUTHORED SQL against a table that doesn't exist by design (agents live in TOML). Changing the DSN or disabling the tool would be WRONG — outcome (c): the tool is fine; the incident is bad model SQL.
+
+- [ ] **Step 1 (optional, low priority): harden the description** in `docker/mcp/postgres/app.py` (repo-tracked): append to the `query_db` tool description: `"This is the OPEX application DB. Agent definitions live in TOML files — there is no 'agents' table. Call list_tables first when unsure."`
+
+- [ ] **Step 2: Commit (repo)**: `git add docker/mcp/postgres/app.py && git commit -m "docs(mcp): query_db description — no agents table, list_tables first"`.
+
+- [ ] **Step 3: Defer the container rebuild** — the description only takes effect on an mcp-postgres image rebuild; batch it with the next compose-touching deploy rather than a dedicated one (note: compose is NOT synced by server-deploy.sh, and the server compose has intentional divergence — see Global Constraints).
+
+## Task 2.3: Normalize stale `process_start` in agent deny-lists — SERVER-side only (review M4)
+
+**Reality (verified):** repo `config/agents/` contains only `.gitkeep` — agent TOMLs are server-runtime files, intentionally untracked. The phantom sits in server copies: `Alma.toml:23`, `Aria.toml:22`, `Arty.toml:27`, `Tyler.toml:23` (Opex is base — unaffected). No rollback risk: drift-correct is off; a UI PUT serializes current state.
+
+- [ ] **Step 1: Confirm on the server:**
 
 ```bash
-git add docker/docker-compose.yml
-git commit -m "fix(mcp): inject OPEX_AUTH_TOKEN for core-callback MCP (core_get_skills_repairs)"
+ssh aronmav@188.246.224.118 "grep -n 'process_start' ~/opex/config/agents/*.toml"
 ```
 
-## Task 2.2: `query_db` targets wrong relation ("agents")
-
-**Files:** the `query_db` tool config (identify in Step 1 — YAML tool `workspace/tools/query_db.yaml` or an MCP-postgres server).
-
-- [ ] **Step 1: Locate + inspect** the tool's DB target:
+- [ ] **Step 2: In-place replace on the server:**
 
 ```bash
-ssh aronmav@188.246.224.118 "grep -rn 'query_db' ~/opex/workspace/tools/ ~/opex/workspace/mcp/ 2>/dev/null; docker exec docker-postgres-1 psql -U opex -d opex -tAc \"SELECT left(last_error,140) FROM tool_quality WHERE tool_name='query_db' ORDER BY last_call_at DESC LIMIT 1;\""
+ssh aronmav@188.246.224.118 "sed -i 's/\"process_start\"/\"process\"/' ~/opex/config/agents/Alma.toml ~/opex/config/agents/Aria.toml ~/opex/config/agents/Arty.toml ~/opex/config/agents/Tyler.toml && grep -n '\"process\"' ~/opex/config/agents/*.toml"
 ```
-Expected: shows the DSN/database and the `relation "agents" does not exist` error → the tool points at a DB/schema without the `agents` table (agents live in config TOMLs, not a DB table — so either the query is wrong or the DSN is wrong).
 
-- [ ] **Step 2: Decide the fix** from Step 1's evidence: (a) if the DSN points at the wrong database → correct it to the opex DB; (b) if the intended target has no `agents` relation by design → this tool's contract is wrong; disable it (`enabled:false` / remove) rather than leave a permanently-failing tool. Record the decision inline in the commit message.
+- [ ] **Step 3: Restart core** (config watcher covers opex.toml only). Fold into the Batch-3 restart to avoid extra restarts. No git commit (files are not repo-tracked).
 
-- [ ] **Step 3: Apply** the chosen fix (edit the yaml, `scp` to server, no restart needed for YAML tools — read per-request).
+---
 
-- [ ] **Step 4: Verify** next call succeeds or the tool is gone from the schema.
+# BATCH 3 — Overlapping/duplicate MCP servers (verify-then-disable) + retry sanity
 
-- [ ] **Step 5: Commit** with the decision recorded.
+Pairing rule everywhere: MCP tool removal = server `enabled: false` (the effective mechanism) + name in `block` (native-schema hygiene). One core restart at the end of the batch covers 2.3 + 3.1 + 3.3.
 
-## Task 2.3: Normalize stale `process_start` in agent deny-lists
+## Task 3.1: `fetch` MCP (45/51 fail) → native `web_fetch`
 
-**Files:** `config/agents/*.toml` (non-base agents: Alma, Aria, Arty, Tyler — deny-lists contain phantom `process_start`).
+**Verified:** server `~/opex/workspace/mcp/fetch.yaml` exists, `enabled: true`. Failures: robots.txt fetch errors + "No valid JSON from MCP". Native `web_fetch` is an unconditional core tool (`static_core_tool_names`, `tool_defs.rs:62`; toolgate `/web` readability extraction + SSRF + domain blocklist; does not check robots.txt — succeeds where mcp-fetch broke). Parity note: neither does JS rendering (that's `browser_action`); minor loss of mcp-fetch's `raw`/`start_index` paging vs `web_fetch`'s `max_length` — acceptable.
 
-- [ ] **Step 1: Confirm the stale entries:**
+- [ ] **Step 1: Confirm `web_fetch` present** in `/api/tool-definitions` (same curl as Task 1.2 Step 5, grep `web_fetch`).
 
-Run: `grep -rn 'process_start' config/agents/`
-Expected: `process_start` in non-base deny-lists.
-
-- [ ] **Step 2: Replace** `process_start` → `process` in each (the real tool name; harmless for non-base but correct):
-
-Run: `sed -i 's/"process_start"/"process"/' config/agents/*.toml` (verify with `grep -rn 'process' config/agents/`).
-
-- [ ] **Step 3: Sync to server** (config watcher watches `opex.toml` only, not agent TOMLs — a PUT or restart is needed; scp then restart core, OR PUT each agent via API). Simplest:
+- [ ] **Step 2: Disable + block (server, targeted):**
 
 ```bash
-for f in Alma Aria Arty Tyler; do scp config/agents/$f.toml aronmav@188.246.224.118:~/opex/config/agents/$f.toml; done
+ssh aronmav@188.246.224.118 "sed -i 's/^enabled: true/enabled: false/' ~/opex/workspace/mcp/fetch.yaml"
+# extend the server block list (single line added in Task 1.2) — replace in place:
+ssh aronmav@188.246.224.118 "sed -i 's/^block = \[\"read_file\"/block = [\"fetch\", \"read_file\"/' ~/opex/config/opex.toml && grep '^block' ~/opex/config/opex.toml"
+```
+
+- [ ] **Step 3: Mirror in repo** `config/opex.toml` (add `"fetch"` to the block list) and, if `workspace/mcp/fetch.yaml` is repo-tracked (`git ls-files workspace/mcp/fetch.yaml`), mirror `enabled: false` there too. Commit: `git commit -m "config: dedup MCP fetch in favour of native web_fetch"`.
+
+## Task 3.2: `get_transcript` — already removed in prod; cleanup only (review: nothing to disable)
+
+**Verified:** the mcp-youtube-transcript server is ALREADY gone — no yaml in `~/opex/workspace/mcp/` (MCP servers load exclusively from there), no service in the active compose. Last failing call 2026-07-07; zero since; no skill references it.
+
+- [ ] **Step 1: Confirm absence:** `ssh aronmav@188.246.224.118 "ls ~/opex/workspace/mcp/ | grep -i transcript || echo gone"` → `gone`.
+- [ ] **Step 2 (hygiene): remove the stale catalogue cache** `~/opex/workspace/mcp/.cache/mcp-youtube-transcript.json`; note the stale nested `~/opex/docker/docker/` copy for a later cleanup pass (do not delete it in this plan).
+
+## Task 3.3: MCP browser (browser-cdp) — dedup, not flakiness (review: motive corrected)
+
+**Verified:** browser-cdp's 7 tools (`browser_navigate`, `browser_click`, `browser_type`, `browser_extract_text`, `browser_screenshot`, `browser_evaluate`, `browser_close`) are a strict functional subset of native `browser_action` (17 actions incl. scroll/hover/drag/press/fill/set_dialog); session persistence is not unique (browser-renderer holds sessions too); no `/profiles` volume on the MCP container. ITS does NOT depend on it (`its.yaml` → toolgate; its-skills use `its`/`search_web`/`web_fetch`). The MCP browser is actually HEALTHY (`browser_evaluate` 29/0; the 14 navigate fails were unreachable-target addresses) — removal is justified by SURFACE DEDUP for glm-5.2 mis-selection, not by flakiness. Per the pairing rule the server MUST be disabled (block alone would leave the tools callable via `tool_use` — review M1).
+
+- [ ] **Step 1: Confirm native `browser_action` reachable** (A8 fix): `ssh aronmav@188.246.224.118 'curl -sf -o /dev/null -w "%{http_code}\n" -X POST http://localhost:9020/automation -H "Content-Type: application/json" -d "{\"action\":\"create_session\"}"'` → `200`.
+
+- [ ] **Step 2: Disable + block ALL SEVEN names (server, targeted):**
+
+```bash
+ssh aronmav@188.246.224.118 "sed -i 's/^enabled: true/enabled: false/' ~/opex/workspace/mcp/browser-cdp.yaml"
+ssh aronmav@188.246.224.118 "sed -i 's/^block = \[/block = [\"browser_navigate\", \"browser_click\", \"browser_type\", \"browser_extract_text\", \"browser_screenshot\", \"browser_evaluate\", \"browser_close\", /' ~/opex/config/opex.toml && grep '^block' ~/opex/config/opex.toml"
+```
+
+- [ ] **Step 3: Mirror in repo** `config/opex.toml` + `workspace/mcp/browser-cdp.yaml` if tracked. Commit: `git commit -m "config: dedup MCP browser-cdp in favour of native browser_action"`.
+
+- [ ] **Step 4: Single restart + verify for the whole batch:**
+
+```bash
 ssh aronmav@188.246.224.118 'systemctl --user restart opex-core'
+ssh aronmav@188.246.224.118 "TOKEN=\$(grep -oP 'OPEX_AUTH_TOKEN=\K.*' ~/opex/.env|tr -d '\"'|head -1); curl -sf -H \"Authorization: Bearer \$TOKEN\" http://localhost:18789/api/tool-definitions | grep -oE 'browser_navigate|fetch\"|read_file' || echo 'all dedup targets absent'"
 ```
 
-- [ ] **Step 4: Commit**
+Expected: `all dedup targets absent`; `browser_action`, `web_fetch`, `workspace_read` still present; agents answer normally.
 
-```bash
-git add config/agents/*.toml
-git commit -m "config: normalize phantom process_start -> process in agent deny-lists"
-```
+## Task 3.4: Retry/failover sanity for external 5xx (review M3 — spec requirement, read-only)
+
+Spec Section 3 scope: "confirm the retry/failover policy is sane (transient 5xx should retry, not hard-fail the turn) — no code change unless the policy is found broken." Targets: `its` 502, `search_web` 5xx, `analyze_image` 5xx, `generate_image` 503.
+
+- [ ] **Step 1: Read the YAML/capability tool execution path** (`agent/engine_dispatch.rs` + `tools/` HTTP client usage): does a 5xx response from a yaml/capability tool get retried, or returned to the LLM as a tool-error string immediately?
+- [ ] **Step 2: Classify.** Returning "tool error: 502" to the LLM (which can retry itself) IS sane for tool calls (unlike LLM-call failover). Verify no path turns a tool 5xx into a hard turn failure. Check `tool_quality` penalty behaviour doesn't permanently bury a tool after a transient burst (`penalty_score` recovers via rolling window — confirm from `db/tool_quality.rs`).
+- [ ] **Step 3: Verdict.** If sane (expected): record "no change needed" in the batch commit message. If a tool 5xx hard-fails a turn: file it as a follow-up fix with the exact code path — do NOT hotfix inside this batch.
 
 ---
 
-# BATCH 3 — Flaky MCP audit (verify-then-disable)
+# BATCH 4 — Visibility: `/api/tools/health` (code ships with Batch 1's deploy)
 
-Each server: confirm a native equivalent covers it AND it's chronically failing, THEN disable. Never disable blind.
+Review m1: `src/db/tool_quality.rs` ALREADY has `get_degraded_tools()` (penalty<0.8, feeds `/api/doctor`) — extend that module rather than duplicating in a handler.
 
-## Task 3.1: `fetch` MCP (45/51 fail) vs native `web_fetch`
-
-- [ ] **Step 1: Confirm native `web_fetch` is available to the failing agents** and covers the use:
-
-```bash
-ssh aronmav@188.246.224.118 "TOKEN=\$(grep -oP 'OPEX_AUTH_TOKEN=\K.*' ~/opex/.env|tr -d '\"'|head -1); curl -sf -H \"Authorization: Bearer \$TOKEN\" http://localhost:18789/api/tool-definitions | grep -o web_fetch"
-```
-Expected: `web_fetch` present. (Design already verified it's not in any non-base deny-list.)
-
-- [ ] **Step 2: Disable the MCP `fetch` server** + block its tool name:
-  - `workspace/mcp/fetch.yaml` → `enabled: false`
-  - add `"fetch"` to `config/opex.toml` `[tool_dispatcher] block`.
-
-- [ ] **Step 3: Sync + restart:** `scp` both files to server, `systemctl --user restart opex-core`.
-
-- [ ] **Step 4: Verify** `fetch` absent from schema, `web_fetch` present; a fetch-style task now routes to `web_fetch`.
-
-- [ ] **Step 5: Commit** `config: disable flaky MCP fetch in favour of native web_fetch`.
-
-## Task 3.2: `get_transcript` MCP (process timeout)
-
-- [ ] **Step 1: Confirm the native path** — transcription is a toolgate handler (`transcribe`/`summarize_video`), not this MCP. Verify the handler works:
-
-```bash
-ssh aronmav@188.246.224.118 'curl -sf http://localhost:9011/health && echo toolgate-ok'
-```
-
-- [ ] **Step 2: Verify no unique dependency** on `get_transcript` (grep skills/agents for it):
-
-```bash
-ssh aronmav@188.246.224.118 "grep -rln get_transcript ~/opex/workspace/skills/ ~/opex/config/skills/ 2>/dev/null || echo 'no skill depends on it'"
-```
-
-- [ ] **Step 3: If no dependency → disable** its MCP server (`enabled:false`) + block the tool name. If a skill depends on it → repoint the skill to the toolgate handler instead (record which skill).
-
-- [ ] **Step 4: Sync + restart + verify + commit.**
-
-## Task 3.3: MCP browser (`browser_navigate`/`browser_evaluate`) vs native `browser_action`
-
-- [ ] **Step 1: Confirm native `browser_action` reachable** (A8 fix pointed it at localhost:9020):
-
-```bash
-ssh aronmav@188.246.224.118 'curl -sf -o /dev/null -w "%{http_code}\n" -X POST http://localhost:9020/automation -H "Content-Type: application/json" -d "{\"action\":\"create_session\"}"'
-```
-Expected: `200`.
-
-- [ ] **Step 2: Decide** — if the MCP browser server (browser-cdp) duplicates `browser_action`, add `browser_navigate`/`browser_evaluate` (and siblings) to the global `block`, keeping native `browser_action`. If the MCP browser offers something native doesn't (e.g. CDP-specific ops an agent relies on), keep it and instead note the overlap. Base the decision on `tool_quality` usage + skill references (`grep -rln browser_navigate ~/opex/workspace/skills/`).
-
-- [ ] **Step 3: Apply chosen block, sync, restart, verify, commit.**
-
----
-
-# BATCH 4 — Visibility: `tool_quality` degradation report
-
-Surface degrading tools so regressions are caught by data, not anecdote.
-
-## Task 4.1: Degradation report endpoint
+## Task 4.1: `get_tool_health()` query + endpoint
 
 **Files:**
-- Modify: `crates/opex-core/src/gateway/handlers/monitoring/mod.rs` (add route) + a handler (new fn in an existing monitoring handler file, e.g. `monitoring/usage.rs` or a new `monitoring/tool_health.rs`).
+- Modify: `crates/opex-core/src/db/tool_quality.rs` (query + `#[sqlx::test]` — the file already has the pattern at L236 with `migrations` path)
+- Modify: `crates/opex-core/src/gateway/handlers/monitoring/mod.rs` (route `GET /api/tools/health`) + handler fn in `monitoring/usage.rs` (or sibling)
 
 **Interfaces:**
-- Produces: `GET /api/tools/health` → JSON list of `{agent_name, tool_name, total_calls, fail_calls, fail_rate, penalty_score, last_error}` for tools with `fail_calls > 0`, ordered by `fail_rate * total_calls` desc (worst impact first).
+- Produces: `db::tool_quality::get_tool_health(db: &PgPool) -> Result<Vec<ToolHealthRow>>` where `ToolHealthRow { agent_name: String, tool_name: String, total_calls: i64, fail_calls: i64, penalty_score: f64, last_error: Option<String> }`; handler `GET /api/tools/health` returns `{ tools: [...] }` ordered worst-impact first. Route is auto-covered by the bearer middleware (verified: not in PUBLIC_EXACT/PUBLIC_PREFIX) and does not conflict with `/api/tools` routes (axum merge panics only on exact path+method duplicates).
 
-- [ ] **Step 1: Write the failing test** (handler-level, in the new handler file's `#[cfg(test)]`): assert the SQL query string selects the expected columns and orders by impact. (Full HTTP test needs DB — gated on server; a string/shape unit test is the CI-safe check.)
+- [ ] **Step 1: Write the failing `#[sqlx::test]`** in `db/tool_quality.rs` tests (mirror the existing test at L236 — same `migrations` attribute):
 
 ```rust
-#[test]
-fn tool_health_query_selects_expected_columns() {
-    let q = tool_health_query();
-    for col in ["agent_name","tool_name","total_calls","fail_calls","penalty_score","last_error"] {
-        assert!(q.contains(col), "missing {col}");
-    }
-    assert!(q.contains("fail_calls > 0"));
+#[sqlx::test(migrations = "../../../migrations")]
+async fn tool_health_orders_by_impact(db: sqlx::PgPool) {
+    // two tools: one high-impact failer, one healthy
+    record_tool_result(&db, "A", "bad_tool", false, 100, Some("boom")).await.unwrap();
+    record_tool_result(&db, "A", "bad_tool", false, 100, Some("boom")).await.unwrap();
+    record_tool_result(&db, "A", "good_tool", true, 50, None).await.unwrap();
+    let rows = get_tool_health(&db).await.unwrap();
+    assert_eq!(rows[0].tool_name, "bad_tool");
+    assert!(rows.iter().all(|r| r.fail_calls > 0), "healthy tools excluded");
 }
 ```
 
-- [ ] **Step 2: Run — fails** (`tool_health_query` undefined). `cargo test -p opex-core --bins tool_health_query`.
+(Adapt `record_tool_result`'s exact signature to the file's existing helper — it already exists and is used by the L236 test; copy its call shape from there.)
 
-- [ ] **Step 3: Implement** the query fn + handler + row struct (mirror an existing monitoring handler, e.g. `api_list_failures` in `session_failures.rs` for the shape). `tool_health_query()` returns the `SELECT ... FROM tool_quality WHERE fail_calls > 0 ORDER BY (fail_calls::float/NULLIF(total_calls,0)) * total_calls DESC` string; the handler runs it and returns JSON. Register `GET /api/tools/health` in `monitoring/mod.rs::routes()`.
+- [ ] **Step 2: Run — expected FAIL** locally with `EnvVar(NotPresent)` (no DATABASE_URL — project norm; authoritative run is on the server via `make test-db`). Compile-fail first proves the test exercises the new fn.
 
-- [ ] **Step 4: Run — passes.** Full gate (`cargo check --all-targets` + clippy).
+- [ ] **Step 3: Implement** `ToolHealthRow` + `get_tool_health` in `db/tool_quality.rs`:
 
-- [ ] **Step 5: Commit** `feat(monitoring): GET /api/tools/health — tool_quality degradation report`.
+```rust
+#[derive(Debug, serde::Serialize, sqlx::FromRow)]
+pub struct ToolHealthRow {
+    pub agent_name: String,
+    pub tool_name: String,
+    pub total_calls: i64,
+    pub fail_calls: i64,
+    pub penalty_score: f64,
+    pub last_error: Option<String>,
+}
 
-- [ ] **Step 6: Deploy (operator approval) + smoke:**
+/// Failing tools ordered by impact (fail-share × volume), worst first.
+/// Complements `get_degraded_tools` (penalty<0.8 → /api/doctor) with the raw
+/// counters an operator needs to see WHAT is failing and how often.
+pub async fn get_tool_health(db: &PgPool) -> Result<Vec<ToolHealthRow>> {
+    let rows = sqlx::query_as::<_, ToolHealthRow>(
+        "SELECT agent_name, tool_name, total_calls, fail_calls, penalty_score, last_error \
+         FROM tool_quality WHERE fail_calls > 0 \
+         ORDER BY (fail_calls::float / NULLIF(total_calls, 0)) * fail_calls DESC",
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+```
+
+(Adjust column types to the actual schema — `total_calls`/`fail_calls` are integers in m070/001; if they're `INT4`, use `i32` in the struct.)
+
+- [ ] **Step 4: Handler + route.** In `monitoring/usage.rs` (or a sibling monitoring handler): fetch + wrap in `Json(json!({"tools": rows}))` with the module's usual 500-on-error shape; register in `monitoring/mod.rs::routes()`:
+
+```rust
+.route("/api/tools/health", get(api_tools_health))
+```
+
+- [ ] **Step 5: Gate** — `cargo check -p opex-core --all-targets` + clippy clean. Commit: `git commit -m "feat(monitoring): GET /api/tools/health — tool_quality degradation report"`.
+
+- [ ] **Step 6: Ships with Batch 1's deploy** (same Rust rebuild — review m3). Smoke after that deploy:
 
 ```bash
-git push origin master && ssh aronmav@188.246.224.118 'bash ~/opex-src/scripts/server-deploy.sh'
 ssh aronmav@188.246.224.118 "TOKEN=\$(grep -oP 'OPEX_AUTH_TOKEN=\K.*' ~/opex/.env|tr -d '\"'|head -1); curl -sf -H \"Authorization: Bearer \$TOKEN\" http://localhost:18789/api/tools/health | head -c 300"
 ```
-Expected: JSON list of degrading tools.
+
+Expected: JSON with the current failing tools (read_file family present in history until the window resets the deltas).
+
+- [ ] **Step 7: Server-side full test run** (authoritative, per project norm): `CARGO_BUILD_JOBS=4 nice ionice` + `make test-db` on the server (or targeted `cargo test tool_health` with DATABASE_URL) — the `#[sqlx::test]` from Step 1 must pass there.
 
 ---
 
-# Final validation (after 2–3 day prod window)
+# Final validation (after 2-3 day prod window)
 
-- [ ] Re-run the Batch 1 baseline query — the 5 filesystem tools show no NEW calls.
-- [ ] `GET /api/tools/health` — filesystem-family and `fetch` no longer in the degraded list; overall fail-rate down.
-- [ ] Optional (Section 4 prompt note, DEFERRED): only if data still shows systematic mis-selection, add a short tool-selection note to `crates/opex-core/scaffold/base/*.md` — separate follow-up, not in this plan.
+- [ ] Re-snapshot the Task 1.2 Step 6 query; diff against the baseline file. Success: zero delta for the 5 filesystem tools + `fetch` + the 7 browser-cdp tools; shrinking fail deltas overall.
+- [ ] `GET /api/tools/health` — the dedup targets show no fresh `last_error` timestamps; remaining entries are external-service 5xx (its/search_web/…) or agent-SQL (`query_db`) — both understood, not tool-surface defects.
+- [ ] Optional (spec Section 4 prompt note, DEFERRED): only if mis-selection persists in the data, add a short tool-selection note to `crates/opex-core/scaffold/base/*.md` — separate follow-up, not this plan.
