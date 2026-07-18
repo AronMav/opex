@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
-use crate::agent::path_guard::resolve_workspace_path;
 use crate::tools::content_security::detect_prompt_injection;
 
 /// Operator-configured extra workspace-root directories agents may write into
@@ -1041,12 +1040,34 @@ pub async fn edit_workspace_file(
     base: bool,
 ) -> Result<()> {
     let path = validate_workspace_path(workspace_dir, agent_name, filename).await?;
-    // Canonicalize before is_read_only to prevent symlink bypass.
-    // Phase 64 SEC-02: use path_guard::resolve_workspace_path which
-    // fails closed on workspace escape and uses dunce::canonicalize
-    // for cross-platform consistency (no \\?\ prefix on Windows).
-    let check_path = resolve_workspace_path(workspace_dir, &path)
-        .with_context(|| format!("'{filename}' escapes workspace or cannot be resolved"))?;
+    // Canonicalize the ALREADY-RESOLVED `path` before is_read_only to prevent
+    // symlink bypass. `path` already carries the workspace prefix (e.g.
+    // `workspace/skills/x.md`), so it must NOT be re-joined against the
+    // workspace root — doing so produced a `workspace/workspace/...` double
+    // prefix that failed canonicalization ("escapes workspace or cannot be
+    // resolved") whenever `workspace_dir` was relative (production's
+    // `WORKSPACE_DIR = "workspace"`). Mirror the working guard in
+    // `write_workspace_file`: canonicalize the parent and reattach the leaf.
+    let parent = path.parent().ok_or_else(|| anyhow::anyhow!("path has no parent"))?;
+    let check_path = {
+        let parent_canon = dunce::canonicalize(parent)
+            .with_context(|| format!("'{filename}' escapes workspace or cannot be resolved"))?;
+        let file = path.file_name().ok_or_else(|| anyhow::anyhow!("path has no filename"))?;
+        let candidate = parent_canon.join(file);
+        // Resolve a symlinked file to its real target so is_read_only can block
+        // writes through e.g. "sneaky.md" → "SOUL.md".
+        if candidate.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+            dunce::canonicalize(&candidate).unwrap_or(candidate)
+        } else {
+            candidate
+        }
+    };
+    // Verify the canonical path stays inside the workspace (symlink bypass prevention).
+    let ws_canon = dunce::canonicalize(workspace_dir)
+        .unwrap_or_else(|_| std::path::PathBuf::from(workspace_dir));
+    if !check_path.starts_with(&ws_canon) {
+        anyhow::bail!("'{filename}' resolves outside workspace");
+    }
     if is_read_only(workspace_dir, &check_path, base) {
         anyhow::bail!("'{filename}' is read-only and cannot be modified");
     }
@@ -1502,6 +1523,38 @@ mod tests {
             "non-base agent must not write into tools/ even with relative workspace_dir"
         );
         std::env::set_current_dir(cwd_backup).unwrap();
+    }
+
+    /// Regression (2026-07-18): `edit_workspace_file` must succeed when
+    /// `workspace_dir` is a RELATIVE string (production's
+    /// `WORKSPACE_DIR = "workspace"`). Previously it re-joined the
+    /// already-resolved path through `resolve_workspace_path`, producing a
+    /// `workspace/workspace/...` double prefix that failed canonicalization →
+    /// "escapes workspace or cannot be resolved", breaking `workspace_edit` for
+    /// every file in production. Unit tests missed it because they pass an
+    /// ABSOLUTE tmp dir as `workspace_dir` (an absolute path skips the re-join).
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn edit_workspace_file_succeeds_with_relative_workspace_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd_backup = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        std::fs::create_dir_all("workspace/skills").unwrap();
+        std::fs::write("workspace/skills/note.md", "hello world").unwrap();
+
+        let result =
+            edit_workspace_file("workspace", "Arty", "skills/note.md", "world", "there", false).await;
+
+        // Read the file before restoring cwd (path is relative to tmp cwd).
+        let edited = std::fs::read_to_string("workspace/skills/note.md").unwrap();
+        std::env::set_current_dir(cwd_backup).unwrap();
+
+        assert!(
+            result.is_ok(),
+            "edit must succeed with relative workspace_dir, got: {:?}",
+            result.err()
+        );
+        assert_eq!(edited, "hello there", "edit must replace the substring in place");
     }
 
     #[cfg(unix)]
