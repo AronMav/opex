@@ -236,6 +236,19 @@ pub struct AgentToolConfig {
     /// timeout so the backend fails first. Empty by default.
     #[serde(default)]
     pub tool_timeout_overrides: HashMap<String, u64>,
+    /// Workspace-root directories (beyond the built-in `agents/tools/skills/mcp/
+    /// uploads/toolgate/channels`) that agents may create and write files into at
+    /// any nesting depth — shared knowledge vaults like `zettelkasten`. Without an
+    /// entry here, a write to `zettelkasten/note.md` is silently redirected into
+    /// the agent's private `agents/{name}/` subtree (read resolves to the shared
+    /// root, so read/write diverge). Each name is a single top-level directory
+    /// component (no slashes). Default: `["zettelkasten"]`.
+    #[serde(default = "default_shared_writable_dirs")]
+    pub shared_writable_dirs: Vec<String>,
+}
+
+fn default_shared_writable_dirs() -> Vec<String> {
+    vec!["zettelkasten".to_string()]
 }
 
 fn default_message_wait_for_idle_secs() -> u64 {
@@ -259,6 +272,7 @@ impl Default for AgentToolConfig {
             safety_timeout_secs: default_safety_timeout_secs(),
             default_tool_timeout_secs: default_tool_timeout_secs(),
             tool_timeout_overrides: HashMap::new(),
+            shared_writable_dirs: default_shared_writable_dirs(),
         }
     }
 }
@@ -3550,6 +3564,7 @@ message_result_secs = 900
             safety_timeout_secs: 300, // less than 100 + 500 = 600
             default_tool_timeout_secs: 120,
             tool_timeout_overrides: HashMap::new(),
+            shared_writable_dirs: Vec::new(),
         };
         assert!(!cfg.invariant_holds());
         cfg.warn_if_invariant_violated(); // must not panic

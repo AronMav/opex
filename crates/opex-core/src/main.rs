@@ -610,6 +610,8 @@ async fn main() -> Result<()> {
         cfg.checkpoint.clone(),
     ));
 
+    crate::agent::workspace::set_shared_writable_dirs(cfg.agent_tool.shared_writable_dirs.clone());
+
     crate::agent::lsp::set_lsp_enabled(cfg.lsp.enabled);
     let lsp_manager: Option<Arc<crate::agent::lsp::LspManager>> = if cfg.lsp.enabled {
         use std::time::Duration;
