@@ -24,6 +24,13 @@
 | **History/compliance** (agent_id) | `TABLES_HISTORY_AGENT_ID` | **сохраняются**; удаляются ТОЛЬКО при `?purge_history=true` |
 | **DropRipe** (deprecated) | `TABLES_DROP_RIPE` | не трогаются; удалены миграцией m090 |
 
+> **Оговорка (`cron_runs`):** формально в классе History, но каскадится
+> `ON DELETE CASCADE` от `scheduled_jobs` (Ephemeral). При обычном delete строки
+> `cron_runs`, привязанные к живому job'у агента, удаляются вместе с job'ом —
+> история запусков крона не переживает удаление. Это pre-existing FK-поведение,
+> вне scope фичи; здесь зафиксировано, чтобы «History переживает» не читалось
+> буквально для этой таблицы.
+
 `memory_chunks` — особый случay (§3.3 спеки):
 - `scope='private'` (личные факты + биография soul: `kind IN (event, reflection)`) — **удаляются**;
 - `scope='shared'` (авторская общая память) — **переназначаются** на `agent_id=''` (переживают автора).
