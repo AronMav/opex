@@ -12,7 +12,6 @@ triggers:
   - ошибка доступа
 tools_required:
   - search_web
-  - duckduckgo_search
 priority: 5
 state: active
 ---
@@ -27,7 +26,7 @@ When a web search provider returns an access block error (403, 429, rate limit, 
 
 ### Step 2: Apply fallback chain
 1. **Retry `search_web` once** — provider failover is server-side and automatic (toolgate walks the active-provider priority list; `search_web` has NO provider parameter)
-2. **Use alternate search tools** — `duckduckgo_search` (no API key) or `tavily_search` as an explicit fallback path
+2. **Wait and retry** — provider errors are often transient; search_web walks the active-provider priority list server-side, so a retry may hit a healthy provider
 3. **Report to user** — if all providers fail, inform user: "Web search temporarily unavailable. Provider errors: {details}"
 
 ### Step 3: Log the incident
@@ -40,7 +39,6 @@ When a web search provider returns an access block error (403, 429, rate limit, 
 | 1 | ws-searxng | Self-hosted, no rate limits |
 | 2 | ws-ollama | Cloud fallback |
 | 3 | ws-brave | API key required |
-| 4 | duckduckgo_search | Instant answers, no API key |
 
 ### Common Errors
 - `403 Forbidden` — API key invalid or expired
