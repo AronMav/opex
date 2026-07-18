@@ -15,7 +15,7 @@ Deleting an agent via `DELETE /api/agents/{name}` (`api_delete_agent`, `crates/o
 - **`profiles`** — the same-named profile survives (Lana's profile is still in prod `profiles`).
 - **Session-scoped subagents** (`SessionAgentPool`) of the deleted agent in other sessions — only the main engine handle is stopped.
 
-Two systemic root causes: (1) the classification is an implicit hand-maintained subset with no "schema → list" guard; (2) `agent_name` bindings were never modelled. A third hazard (audit v2 A7): the deprecated `pending_messages` table sits under m090 DROP while still listed in `TABLES_WITH_AGENT_ID_NOT_NULL`, and `test_rename_mid_failure_leaves_pre_rename_state` pins a stale hand-written table list — so a naive drop breaks agent rename/delete.
+Two systemic root causes: (1) the classification is an implicit hand-maintained subset with no "schema → list" guard; (2) `agent_name` bindings were never modelled for DELETE — rename already covers the four (`handler_config`/`handler_jobs`/`tool_quality`/`pending_skill_repairs`) via an inline list (`crud.rs:919`, the 2026-07-18 fix); this spec unifies that inline list into a shared constant. A third hazard (audit v2 A7): the deprecated `pending_messages` table sits under m090 DROP while still listed in `TABLES_WITH_AGENT_ID_NOT_NULL`, and `test_rename_mid_failure_leaves_pre_rename_state` pins a stale hand-written 20-table list — so a naive drop breaks agent **rename** (which iterates the const) and the sqlx schema test; plain delete on HEAD does not iterate `pending_messages`.
 
 ## 2. Goals & non-goals
 
@@ -40,7 +40,7 @@ enum AgentDataClass {
 - **Ephemeral (agent_id):** `agent_emotion_state`, `memory_chunks` (see §3.3), `outbound_queue`, `stream_jobs`, `pairing_codes`, `pending_approvals`, `scheduled_jobs`, `webhooks`, `agent_oauth_bindings`, `gmail_triggers`, `agent_github_repos`, `approval_allowlist`, `channel_allowed_users`, `agent_plans`.
 - **Ephemeral (agent_name)** — NEW `const TABLES_WITH_AGENT_NAME`: `agent_channels`, `agent_model_overrides`, `handler_config`, `handler_jobs`, `tool_quality`, `pending_skill_repairs`.
 - **History (agent_id):** `sessions`, `messages`, `audit_log`, `audit_events`, `usage_log`, `session_failures`, `cron_runs`.
-- **DropRipe:** `pending_messages`, `video_jobs` (+ column-less `file_scenarios`, `file_scenario_outcomes`) — never added to the delete path; removed from `TABLES_WITH_AGENT_ID_NOT_NULL` first, then m090.
+- **DropRipe:** `pending_messages` (agent_id), `video_jobs` (agent_name) (+ column-less `file_scenarios`, `file_scenario_outcomes`) — never added to the delete path. Const surgery is asymmetric: only `pending_messages` is REMOVED from `TABLES_WITH_AGENT_ID_NOT_NULL` (`crud.rs:128`); `video_jobs` is in no constant today and is simply NOT added to the new `TABLES_WITH_AGENT_NAME`. Then m090.
 - **Non-column bindings** handled explicitly: `uploads` (agent_icon owner), vault scope, `profiles` (name convention — hint only).
 
 The classification is the single source of truth consumed by the delete path, the purge path, and the drift guard. Ground truth for membership is prod `information_schema` (verified: 23 `agent_id` tables + 7 `agent_name` tables at HEAD).
@@ -48,8 +48,8 @@ The classification is the single source of truth consumed by the delete path, th
 ### 3.2 Delete path (ephemeral, always)
 
 `api_delete_agent` expansion, in the existing transaction where possible:
-- Iterate `TABLES_WITH_AGENT_ID_NOT_NULL` (minus DropRipe) `DELETE ... WHERE agent_id=$1`, and the new `TABLES_WITH_AGENT_NAME` `DELETE ... WHERE agent_name=$1`.
-- `memory_chunks` (§3.3) is a special case — not a plain `WHERE agent_id=$1`.
+- Iterate the **new Ephemeral(agent_id) constant** (the 14 tables of §3.1, EXCLUDING `memory_chunks` which is the §3.3 special case) `DELETE ... WHERE agent_id=$1`, and the new `TABLES_WITH_AGENT_NAME` `DELETE ... WHERE agent_name=$1`.
+  **NEVER iterate `TABLES_WITH_AGENT_ID_NOT_NULL` here** — that const is the full catalogue including History (`sessions`, `audit_log`, `audit_events`, `usage_log`, `session_failures`, `cron_runs`); a flat delete over it would destroy history/audit on a PLAIN delete (the exact hazard the doc-comment at `crud.rs:1593-1599` warns about). History is touched only by §3.6.
 - After DB: best-effort remove `workspace/agents/{name}/` via the existing path-guard (§3.4); kill session-scoped subagents of the agent via `session_pools` (§3.5).
 - `profiles`: not deleted; the API response / UI signals the same-named profile still exists.
 
@@ -67,13 +67,13 @@ After the DB work, best-effort delete of `workspace/agents/{name}/`. Reuse the e
 
 ### 3.5 Session-scoped subagents
 
-`api_delete_agent` currently stops only the main engine handle. Extend it to walk `AppState.session_pools` and kill any `LiveAgent` whose agent name matches the deleted agent (its cancellation token), so no background subagent task of a deleted agent survives in another session's pool.
+`api_delete_agent` currently stops only the main engine handle. Extend it to walk `AgentCore.session_pools` (`clusters/agent_core.rs:24`, available via the handler's `State<AgentCore>`) and kill any `LiveAgent` whose `name` matches the deleted agent — `LiveAgent` carries `name: String` and an `Arc<AtomicBool>` cancel flag (`session_agent_pool.rs:36-41`; `remove()`/`kill_all()` at :128/:150 are the existing kill paths to mirror), so no background subagent task of a deleted agent survives in another session's pool.
 
 ### 3.6 purge_history
 
 `DELETE /api/agents/{name}?purge_history=true` (default `false` = current behaviour). On `true`, within a transaction:
 - `DELETE FROM sessions WHERE agent_id=$1` — FK `ON DELETE CASCADE` removes `messages`, `session_timeline`, `session_failures`, `session_shares`, `session_goals`, `session_todos`, `stream_jobs`, `pending_approvals` (verified prod FKs); `usage_log.session_id` is `SET NULL`.
-- Separately (no covering CASCADE): `usage_log WHERE agent_id=$1`, `handler_jobs WHERE agent_name=$1` (session_id is `NOT NULL` but has NO FK → would orphan), `audit_log`/`audit_events`/`cron_runs WHERE agent_id=$1`.
+- Separately (no covering CASCADE): `usage_log WHERE agent_id=$1`, `audit_log`/`audit_events`/`cron_runs WHERE agent_id=$1`. (`handler_jobs` needs no purge step — it is Ephemeral and already emptied by the plain delete of §3.2; noted here because its `session_id` is `NOT NULL` with NO FK, so it would otherwise orphan.)
 - **Multi-agent decision (confirmed): delete the whole session** where the agent is `sessions.agent_id` (primary) — CASCADE takes co-participants' turns with it. Foreign sessions where the agent only participated (`messages.agent_id` nullable, agent not the session's `agent_id`) are NOT touched. The UI warns that co-participant turns in the agent's own sessions are lost.
 
 ### 3.7 Two-tier drift guard
@@ -84,7 +84,9 @@ After the DB work, best-effort delete of `workspace/agents/{name}/`. Reuse the e
 
 ### 3.8 m090 migration (ordering-critical)
 
-New migration `090_drop_deprecated_tables.sql` DROPs `pending_messages`, `video_jobs`, `file_scenarios`, `file_scenario_outcomes`. **Must run only AFTER** `pending_messages`/`video_jobs` are removed from `TABLES_WITH_AGENT_ID_NOT_NULL`/classification and the drift test/rename-test updated — otherwise rename/delete of any agent throws `relation does not exist` + rollback. Export the 4 `file_scenarios` + 11 `video_jobs` legacy rows before the drop (history-preserving, like the m089 pattern).
+New migration `090_drop_deprecated_tables.sql` DROPs `pending_messages`, `video_jobs`, `file_scenarios`, `file_scenario_outcomes`. **Must run only AFTER** `pending_messages` is removed from `TABLES_WITH_AGENT_ID_NOT_NULL` and the drift test/rename-test updated — otherwise agent RENAME throws `relation does not exist` + rollback (the const is iterated by rename; plain delete is unaffected on HEAD).
+
+**Export mechanism (explicit):** an operator runbook step BEFORE deploying m090 — `pg_dump --table=file_scenarios --table=video_jobs` (or `COPY ... TO`) into `~/opex/backups/`, following the deleted-agents-20260717 backup precedent. Prod counts today: `file_scenarios` 4 rows, `video_jobs` 11 rows (`pending_messages`/`file_scenario_outcomes` are 0 — nothing to export). NOTE: m089 is a documentary `COMMENT ON` migration — a precedent for the deprecation comment style only, NOT for exporting (it exports nothing).
 
 ### 3.9 UI
 
