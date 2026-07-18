@@ -1225,14 +1225,30 @@ pub(crate) async fn api_delete_agent(
     // and UI mutation routes — this is a deliberate, one-time export mirroring
     // docs/runbooks/soul-quarantine.md, not a new mutation path.
     if soul_enabled {
-        let rows: Vec<(uuid::Uuid, String, String, String)> = sqlx::query_as(
+        let rows: Vec<(uuid::Uuid, String, String, String)> = match sqlx::query_as(
             "SELECT id, kind, content, created_at::text FROM memory_chunks \
              WHERE agent_id = $1 AND kind IN ('event','reflection')",
         )
         .bind(&name)
         .fetch_all(&infra.db)
         .await
-        .unwrap_or_default();
+        {
+            Ok(r) => r,
+            Err(e) => {
+                // Fail-closed on the READ too (C1): a failed biography SELECT
+                // (e.g. statement_timeout on a large soul) must ABORT deletion.
+                // Swallowing it (`unwrap_or_default`) would write an EMPTY backup,
+                // let the run continue, and the subsequent private-scope DELETE
+                // would erase the biography irrecoverably.
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "error": format!("soul biography read for backup failed; deletion aborted: {e}")
+                    })),
+                )
+                    .into_response();
+            }
+        };
 
         let dir = std::path::Path::new(crate::config::WORKSPACE_DIR)
             .parent()
