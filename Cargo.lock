@@ -2198,6 +2198,7 @@ dependencies = [
  "futures-util",
  "serde_json",
  "struson",
+ "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

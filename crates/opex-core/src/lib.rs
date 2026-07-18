@@ -99,8 +99,8 @@ pub mod gateway {
     pub use opex_gateway_util::trace_context;
 
     pub mod middleware {
-        // Facade preserving `gateway::middleware::{AuthRateLimiter, RequestRateLimiter}`.
-        pub use super::rate_limiter::{AuthRateLimiter, RequestRateLimiter};
+        // Facade preserving `gateway::middleware::{AuthRateLimiter, RequestRateLimiter, valid_bearer}`.
+        pub use super::rate_limiter::{AuthRateLimiter, RequestRateLimiter, valid_bearer};
     }
 
     #[path = "sse"]

@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 // in the full gateway handler subtree (crate::gateway::handlers::auth).
 // These re-exports preserve the `middleware::{AuthRateLimiter, RequestRateLimiter}`
 // path consumed by `gateway/mod.rs`.
-pub use super::rate_limiter::{AuthRateLimiter, RequestRateLimiter};
+pub use super::rate_limiter::{AuthRateLimiter, RequestRateLimiter, valid_bearer};
 
 /// Snapshot both rate-limiter map sizes for `/api/health/dashboard`.
 /// Returns `(0, 0)` before the router has constructed the limiters
@@ -125,6 +125,7 @@ pub(crate) async fn request_rate_limit_middleware(
     req: Request<Body>,
     next: Next,
     limiter: Arc<RequestRateLimiter>,
+    expected_token: Arc<str>,
 ) -> impl IntoResponse {
     let path = req.uri().path();
     // Exempt health from rate limiting
@@ -142,6 +143,14 @@ pub(crate) async fn request_rate_limit_middleware(
 
     // Exempt loopback from request rate limiting (internal services: toolgate, channels, engine)
     if is_loopback(&client_ip) {
+        return next.run(req).await;
+    }
+
+    // Exempt authenticated requests: a valid Bearer is already gated by the
+    // auth middleware; the per-IP budget below protects the anonymous
+    // surface (/api/uploads/*, /api/shares/*, /api/oauth/callback, …) and
+    // pre-auth probing. See `valid_bearer` doc for rationale.
+    if valid_bearer(req.headers(), &expected_token) {
         return next.run(req).await;
     }
 

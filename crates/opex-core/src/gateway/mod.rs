@@ -172,8 +172,9 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
     let req_limiter = REQ_LIMITER.get().cloned().expect("REQ_LIMITER just set");
     let app = {
         let req_limiter = req_limiter.clone();
+        let shared_token = shared_token.clone();
         app.layer(axum_mw::from_fn(move |req, next| {
-            request_rate_limit_middleware(req, next, req_limiter.clone())
+            request_rate_limit_middleware(req, next, req_limiter.clone(), shared_token.clone())
         }))
     };
 

@@ -217,3 +217,21 @@ impl RequestRateLimiter {
         self.state.len()
     }
 }
+
+/// True when the request carries `Authorization: Bearer <token>` exactly
+/// matching the gateway auth token (constant-time compare).
+///
+/// Used by the request rate limiter middleware to exempt authenticated
+/// callers: the per-IP budget shields the server from anonymous abuse, while
+/// the web UI's own polling (tasks/sessions/notifications across several
+/// open tabs) legitimately exceeds a small budget — throttling it surfaces
+/// as 429 storms in the browser. Invalid or absent tokens still consume the
+/// budget, so the exemption cannot be triggered by garbage headers.
+pub fn valid_bearer(headers: &axum::http::HeaderMap, expected_token: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .is_some_and(|t| bool::from(t.as_bytes().ct_eq(expected_token.as_bytes())))
+}
