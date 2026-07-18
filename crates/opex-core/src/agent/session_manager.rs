@@ -216,12 +216,16 @@ pub(crate) enum SessionOutcome {
     Interrupted,
 }
 
-/// RAII guard that marks a session as `'failed'` if dropped without an explicit
+/// RAII guard that marks a session as `'interrupted'` (or `'failed'` if a
+/// genuine failure was already recorded) if dropped without an explicit
 /// `done()` or `fail()` call.
 ///
 /// Usage: call `done().await` on success or `fail(reason).await` on known errors.
-/// If neither is called (e.g. early `?` return), `Drop` fires a best-effort fallback
-/// via `tokio::spawn` to mark the session as `'failed'`.
+/// If neither is called (e.g. early `?` return, panic, abort), `Drop` fires a
+/// best-effort fallback via `tokio::spawn` to mark the session terminal.
+/// Per invariant G1, a session only ends `'failed'` when a genuine
+/// engine/LLM error was recorded (`recorded == true`); every other forced
+/// termination claims `'interrupted'` so the session stays resumable.
 ///
 /// The guard holds `PgPool` directly (not `SessionManager`) to avoid self-referential
 /// ownership issues in the `Drop` impl.
@@ -378,28 +382,36 @@ impl Drop for SessionLifecycleGuard {
             // `self` after Drop returns (Drop is sync — work happens via spawn).
             let agent_id = self.agent_id.clone();
             let already_recorded = self.recorded;
+            // G1: an unrecorded early exit (abort, panic, transport death) is a
+            // forced termination, not an engine error — claim `interrupted` so
+            // the session stays resumable. Only a recorded genuine failure
+            // (explicit `fail()` path already finalized/finalizing) keeps
+            // `failed`.
+            let claim_status = if already_recorded { "failed" } else { "interrupted" };
             let fut = async move {
                 // Unified cleanup path (I1). Idempotent — returns Ok(false)
                 // if another writer (finalize, watchdog, cancel-grace) already
                 // finalized the session. `cleanup_session_terminated` performs
-                // the atomic running→failed claim, streaming-message preservation,
-                // synthetic tool-result patching, and the timeline `failed` event
-                // in one transaction; no manual `log_event` is needed after.
+                // the atomic running→{claim_status} claim, streaming-message
+                // preservation, synthetic tool-result patching, and the
+                // matching timeline event in one transaction; no manual
+                // `log_event` is needed after.
                 match crate::db::sessions::cleanup_session_terminated(
                     &db,
                     sid,
-                    "failed",
+                    claim_status,
                     "guard dropped (early exit)",
                 )
                 .await
                 {
                     Ok(true) => {
-                        // We won the running→failed claim, so no other writer
-                        // finalized this session — a genuine early exit (panic /
-                        // `?` bubble) worth surfacing.
+                        // We won the running→{claim_status} claim, so no other
+                        // writer finalized this session — a genuine early exit
+                        // (panic / `?` bubble / abort) worth surfacing.
                         tracing::warn!(
                             session_id = %sid,
-                            "session guard dropped while Running — marked session failed (early exit)"
+                            "session guard dropped while Running — marked session {} (early exit)",
+                            claim_status
                         );
                         // Structured `session_failures` row — best-effort.
                         // Skipped when the explicit failure path
@@ -469,6 +481,77 @@ impl Drop for SessionLifecycleGuard {
 mod tests {
     use super::*;
 
+    /// Create a fresh session and transition it straight to `running` —
+    /// `create_new_session` leaves `run_status` NULL, so `Drop`'s fallback
+    /// (which only claims `WHERE run_status = 'running'`) would otherwise
+    /// never fire for these tests.
+    async fn create_running_session(pool: &sqlx::PgPool) -> Uuid {
+        let session_id = crate::db::sessions::create_new_session(
+            pool,
+            "test-agent",
+            "test-user",
+            "test-channel",
+        )
+        .await
+        .unwrap();
+        crate::db::sessions::set_session_run_status(pool, session_id, "running")
+            .await
+            .unwrap();
+        session_id
+    }
+
+    /// Poll `sessions.run_status` until it reaches a terminal value.
+    /// `Drop`'s fallback cleanup is spawned via `tokio::spawn` (fire-and-forget)
+    /// when no `TaskTracker` is attached, so tests without `with_tracker` must
+    /// poll rather than await a tracker.
+    async fn wait_for_terminal_status(pool: &sqlx::PgPool, session_id: Uuid) -> String {
+        const TERMINAL: &[&str] = &["done", "failed", "interrupted", "cancelled", "timeout"];
+        for _ in 0..100 {
+            let status: Option<String> =
+                sqlx::query_scalar("SELECT run_status FROM sessions WHERE id = $1")
+                    .bind(session_id)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+            if let Some(s) = &status {
+                if TERMINAL.contains(&s.as_str()) {
+                    return s.clone();
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("session {session_id} did not reach a terminal run_status in time");
+    }
+
+    /// G1: a guard dropped while `Running` with no recorded failure (abort,
+    /// panic, transport death) must claim `interrupted`, not `failed` — the
+    /// session must stay resumable. The forensic `session_failures` row
+    /// (kind `guard_dropped`) is still written exactly as before.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn guard_drop_without_recorded_error_marks_interrupted(pool: sqlx::PgPool) {
+        let session_id = create_running_session(&pool).await;
+        {
+            let _guard = SessionLifecycleGuard::new(pool.clone(), session_id)
+                .with_agent("TestAgent");
+            // dropped here while outcome == Running, recorded == false
+        }
+        // Drop spawns async cleanup — poll until terminal.
+        let status = wait_for_terminal_status(&pool, session_id).await;
+        assert_eq!(
+            status, "interrupted",
+            "unrecorded early exit must be resumable, not failed"
+        );
+        // Forensic row still written.
+        let kind: Option<String> = sqlx::query_scalar(
+            "SELECT failure_kind FROM session_failures WHERE session_id = $1",
+        )
+        .bind(session_id)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert_eq!(kind.as_deref(), Some("guard_dropped"));
+    }
+
     #[sqlx::test(migrations = "../../migrations")]
     async fn lifecycle_guard_interrupt_writes_wal(pool: sqlx::PgPool) {
         let session_id = crate::db::sessions::create_new_session(&pool, "test-agent", "test-user", "test-channel")
@@ -515,28 +598,15 @@ mod tests {
     /// Drop on a still-Running guard with `with_agent` set inserts a
     /// `session_failures` row with `failure_kind = 'guard_dropped'` —
     /// covering the "cancelled mid-stream / SSE disconnect" path that
-    /// previously left `session_failures` empty.
+    /// previously left `session_failures` empty. Per G1, an unrecorded
+    /// drop claims `interrupted` (resumable), not `failed` — only the
+    /// forensic `session_failures` row still records the event.
     #[sqlx::test(migrations = "../../migrations")]
     async fn lifecycle_guard_drop_records_session_failure(pool: sqlx::PgPool) {
         use std::sync::Arc;
         use tokio_util::task::TaskTracker;
 
-        let session_id = crate::db::sessions::create_new_session(
-            &pool,
-            "test-agent",
-            "test-user",
-            "test-channel",
-        )
-        .await
-        .unwrap();
-        // Drop's fallback only fires when the session is currently 'running'
-        // (cleanup_session_terminated step 1 claims `WHERE run_status =
-        // 'running'`). create_new_session leaves run_status NULL, so we must
-        // transition to 'running' first to simulate the live-stream state
-        // we're emulating cancellation against.
-        crate::db::sessions::set_session_run_status(&pool, session_id, "running")
-            .await
-            .unwrap();
+        let session_id = create_running_session(&pool).await;
 
         let tracker = Arc::new(TaskTracker::new());
         {
@@ -551,14 +621,15 @@ mod tests {
         tracker.close();
         tracker.wait().await;
 
-        // 1. Session marked failed.
+        // 1. Session marked interrupted (G1: unrecorded drop is resumable,
+        // not a failure).
         let status: String =
             sqlx::query_scalar("SELECT run_status FROM sessions WHERE id = $1")
                 .bind(session_id)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(status, "failed");
+        assert_eq!(status, "interrupted");
 
         // 2. Timeline event recorded.
         let event_type: String = sqlx::query_scalar(
@@ -568,7 +639,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(event_type, "failed");
+        assert_eq!(event_type, "interrupted");
 
         // 3. session_failures row inserted with the right shape.
         let rows = crate::db::session_failures::get_session_failures_for_session(&pool, session_id)
