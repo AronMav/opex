@@ -238,7 +238,11 @@ export function AgentEditDialog({
   const [activeTab, setActiveTab] = useState<AgentTab>("general");
   const isValidAgentName = form.name.trim().length === 0 || /^[a-zA-Z0-9_-]+$/.test(form.name.trim());
   const { data: allProviders = [] } = useProviders();
-  const llmProviders = allProviders.filter((p) => p.type === "text");
+  // Includes legacy "llm" type alongside "text" so this matches the provider
+  // universe RoutingRulesEditor's ProviderSelect offers (categories=["text","llm"]);
+  // otherwise a legacy-typed provider picked in a routing rule can't be found
+  // here, leaving ModelCombobox's providerId null (degrades to free-text).
+  const llmProviders = allProviders.filter((p) => p.type === "text" || p.type === "llm");
   const { data: profilesData } = useProfiles();
   const profileNames = (profilesData?.profiles ?? []).map((p) => p.name);
 
