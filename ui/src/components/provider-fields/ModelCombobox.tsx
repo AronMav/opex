@@ -118,7 +118,7 @@ export function ModelCombobox({
           onChange(e.target.value);
           setFilterActive(true);
           setHighlight(-1);
-          if (!open) openList();
+          if (!open) { setActivated(true); setOpen(true); }
         }}
         onKeyDown={onKeyDown}
       />

@@ -81,6 +81,26 @@ describe("ModelCombobox", () => {
     expect(screen.getAllByRole("option")).toHaveLength(2);
   });
 
+  it("typing after Escape-close keeps the filter engaged on reopen (filter-state race)", async () => {
+    apiGet.mockResolvedValue({ models: [{ id: "glm-5.2" }, { id: "MiniMax-M2.5" }] });
+    wrap(<Controlled providerId="p1" />);
+
+    const input = screen.getByTestId("cb");
+    fireEvent.focus(input);
+    await screen.findByRole("option", { name: /glm-5\.2/ });
+
+    fireEvent.change(input, { target: { value: "glm" } });
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "glmx" } });
+
+    expect(screen.getByText("fields.model_no_match")).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /MiniMax-M2\.5/ })).not.toBeInTheDocument();
+  });
+
   it("value not present in the list is allowed (free text, no error UI)", async () => {
     apiGet.mockResolvedValue({ models: [{ id: "glm-5.2" }] });
     wrap(<ModelCombobox value="custom/model-id" onChange={vi.fn()} providerId="p1" data-testid="cb" />);
