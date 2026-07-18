@@ -20,6 +20,7 @@ import { Stepper } from "@/components/ui/stepper";
 import { AuthShell, AuthBrand } from "@/components/ui/auth-shell";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { ModelCombobox } from "@/components/provider-fields";
 import {
   Key,
   User,
@@ -28,7 +29,6 @@ import {
   Check,
   Loader2,
   Wifi,
-  RefreshCw,
   ShieldCheck,
   CheckCircle2,
   AlertTriangle,
@@ -162,11 +162,6 @@ export default function SetupPage() {
   const [apiKeyValue, setApiKeyValue] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [defaultModel, setDefaultModel] = useState("");
-  // `providerName` was tracked here for a flow that no longer reads it; we
-  // still call the API and treat the response, but the local mirror is
-  // dead state.
-  const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
   const [testCallStatus, setTestCallStatus] = useState<"idle" | "testing" | "ok" | "fail">("idle");
 
   // ── Step 2: Agent ─────────────────────────────────────────────────────
@@ -226,15 +221,11 @@ export default function SetupPage() {
 
   const selectedTypeInfo = providerTypes.find((pt) => pt.id === providerType);
   const fallbackModels = FALLBACK_MODELS[providerType] ?? [];
-  const modelOptions = discoveredModels.length > 0 ? discoveredModels : fallbackModels;
-  void modelOptions; // used via JSX chips below
 
   const handleProviderTypeChange = (v: string) => {
     setProviderType(v);
     setApiKeyValue("");
     setDefaultModel("");
-    setDiscoveredModels([]);
-    discoverGenRef.current++; // invalidate in-flight discover
     const info = providerTypes.find((pt) => pt.id === v);
     if (info?.default_base_url) setBaseUrl(info.default_base_url);
     else setBaseUrl("");
@@ -243,24 +234,6 @@ export default function SetupPage() {
   };
 
   const providerNameRef = useRef("");
-  const discoverGenRef = useRef(0);
-  const discoverModels = async () => {
-    if (!providerType) return;
-    const gen = ++discoverGenRef.current;
-    setModelsLoading(true);
-    try {
-      const bUrl = baseUrl || undefined;
-      const url = `/api/providers/${providerType}/models${bUrl ? `?base_url=${encodeURIComponent(bUrl)}` : ""}`;
-      const data = await apiGet<{ models: { id: string }[] | string[] }>(url);
-      if (gen !== discoverGenRef.current) return; // stale response
-      const ids = data.models.map((m) => typeof m === "string" ? m : m.id);
-      setDiscoveredModels(ids);
-      if (ids.length > 0 && !defaultModel) setDefaultModel(ids[0]);
-    } catch {
-      // fallback to hardcoded models
-    }
-    if (gen === discoverGenRef.current) setModelsLoading(false);
-  };
 
   // ── Step handlers ─────────────────────────────────────────────────────
 
@@ -619,74 +592,13 @@ export default function SetupPage() {
                   <label htmlFor={modelId} className="text-sm font-medium text-muted-foreground">
                     {t("setup.model")} <span className="text-destructive">*</span>
                   </label>
-                  {discoveredModels.length > 0 ? (
-                    <div className="flex gap-2">
-                      <Select
-                        value={discoveredModels.includes(defaultModel) ? defaultModel : ""}
-                        onValueChange={setDefaultModel}
-                      >
-                        <SelectTrigger id={modelId} className="font-mono text-sm">
-                          <SelectValue placeholder={t("setup.select_model")} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {discoveredModels.map((m) => (
-                            <SelectItem key={m} value={m} className="font-mono text-sm">{m}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="shrink-0 h-9 w-9"
-                        onClick={discoverModels}
-                        disabled={modelsLoading}
-                      >
-                        <RefreshCw className={`h-3.5 w-3.5 ${modelsLoading ? "animate-spin" : ""}`} />
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="flex gap-2">
-                      <Input
-                        id={modelId}
-                        value={defaultModel}
-                        onChange={(e) => setDefaultModel(e.target.value)}
-                        className="font-mono text-sm"
-                        placeholder={fallbackModels.length > 0 ? fallbackModels[0] : t("setup.model_placeholder")}
-                      />
-                      {selectedTypeInfo && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="shrink-0 h-9 text-xs"
-                          onClick={discoverModels}
-                          disabled={modelsLoading}
-                        >
-                          {modelsLoading ? (
-                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <RefreshCw className="h-3.5 w-3.5" />
-                          )}
-                          <span className="ml-1">{t("common.discover")}</span>
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                  {fallbackModels.length > 0 && discoveredModels.length === 0 && !defaultModel && (
-                    <div className="flex flex-wrap gap-1.5 mt-1">
-                      {fallbackModels.map((m) => (
-                        <Button
-                          key={m}
-                          type="button"
-                          variant="outline"
-                          size="xs"
-                          onClick={() => setDefaultModel(m)}
-                          className="font-mono text-2xs"
-                        >
-                          {m}
-                        </Button>
-                      ))}
-                    </div>
-                  )}
+                  <ModelCombobox
+                    id={modelId}
+                    value={defaultModel}
+                    onChange={setDefaultModel}
+                    staticOptions={fallbackModels}
+                    placeholder={fallbackModels.length > 0 ? fallbackModels[0] : t("setup.model_placeholder")}
+                  />
                 </div>
               )}
 

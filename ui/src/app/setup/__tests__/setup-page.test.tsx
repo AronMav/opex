@@ -1,6 +1,7 @@
 import { test, expect, vi, beforeEach } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 // ── @/lib/api: route apiGet by path; everything else resolves ─────────────
 const requirementsResult = {
@@ -42,24 +43,37 @@ vi.mock("sonner", () => ({
 
 import SetupPage from "../page";
 
+// ModelCombobox (rendered on the provider step) calls useProviderModelsDetailed
+// (react-query) unconditionally, so any render of SetupPage needs a
+// QueryClientProvider ancestor even though providerId is never set here
+// (static-options mode) — otherwise useQuery throws "No QueryClient set".
+function renderSetupPage() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <SetupPage />
+    </QueryClientProvider>,
+  );
+}
+
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
 });
 
 test("renders the OPEX brand", async () => {
-  render(<SetupPage />);
+  renderSetupPage();
   expect(await screen.findByText("OPEX")).toBeInTheDocument();
 });
 
 test("renders 4 stepper circles", () => {
-  const { container } = render(<SetupPage />);
+  const { container } = renderSetupPage();
   const circles = container.querySelectorAll('[class*="rounded-full"]');
   expect(circles.length).toBe(4);
 });
 
 test("shows the requirements step heading", async () => {
-  render(<SetupPage />);
+  renderSetupPage();
   expect(
     await screen.findByText("setup.step_requirements"),
   ).toBeInTheDocument();
@@ -81,7 +95,7 @@ test("step 1 seeds the Default profile's text slot; step 2 creates the agent wit
     return {};
   });
 
-  render(<SetupPage />);
+  renderSetupPage();
 
   // requirements → provider
   fireEvent.click(await screen.findByText("common.next"));
