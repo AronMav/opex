@@ -1351,6 +1351,7 @@
   "profiles.default_hint": "The Default profile can't be deleted",
   "profiles.add_reserve": "+ Reserve",
   "profiles.model_placeholder": "Model",
+  "profiles.model_default_placeholder": "Provider default",
   "profiles.voice_placeholder": "Voice",
   "profiles.provider_placeholder": "Provider",
   "profiles.saved": "Profile saved",

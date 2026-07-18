@@ -1351,6 +1351,7 @@
   "profiles.default_hint": "Профиль Default нельзя удалить",
   "profiles.add_reserve": "+ Резерв",
   "profiles.model_placeholder": "Модель",
+  "profiles.model_default_placeholder": "По умолчанию провайдера",
   "profiles.voice_placeholder": "Голос",
   "profiles.provider_placeholder": "Провайдер",
   "profiles.saved": "Профиль сохранён",

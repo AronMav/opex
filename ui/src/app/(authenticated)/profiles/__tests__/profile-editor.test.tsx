@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
 import type { ProfileBase } from "@/hooks/use-profiles";
@@ -20,11 +20,19 @@ vi.mock("@/lib/api", () => ({ apiGet }));
 vi.mock("@/lib/queries", () => ({
   useProviders: () => ({
     data: [
-      { id: "p1", name: "openai", type: "text", provider_type: "openai_compat", enabled: true },
-      { id: "p2", name: "minimax", type: "tts", provider_type: "minimax", enabled: true },
+      { id: "p1", name: "openai", type: "text", provider_type: "openai_compat", default_model: "gpt-4.1", enabled: true },
+      { id: "p2", name: "minimax", type: "tts", provider_type: "minimax", default_model: null, enabled: true },
+      { id: "p3", name: "other-llm", type: "text", provider_type: "openai_compat", default_model: "glm-5", enabled: true },
     ],
   }),
+  useProviderModelsDetailed: () => ({ data: [], isLoading: false }),
+  useTtsVoices: () => ({ data: [], isLoading: false, isError: false }),
 }));
+
+// jsdom не реализует scrollIntoView/pointer capture, которые дергает Radix Select.
+window.HTMLElement.prototype.scrollIntoView = vi.fn();
+window.HTMLElement.prototype.hasPointerCapture = vi.fn();
+window.HTMLElement.prototype.releasePointerCapture = vi.fn();
 
 const { mockMutate } = vi.hoisted(() => ({ mockMutate: vi.fn() }));
 vi.mock("@/hooks/use-profiles", async (importOriginal) => {
@@ -119,5 +127,28 @@ describe("ProfileEditor", () => {
       { provider: "", model: "gpt-4o-mini" },
       { provider: "openai", model: "gpt-4" },
     ]);
+  });
+
+  it("changing the provider of a text row clears its model", async () => {
+    render(<ProfileEditor profile={makeProfile()} open onClose={vi.fn()} />);
+
+    const modelInput = screen.getByTestId("profile-model-text-0") as HTMLInputElement;
+    expect(modelInput).toHaveValue("gpt-4");
+
+    // ProviderSelect строки text — первый combobox в первой строке.
+    // Выбираем ДРУГОЙ провайдер (не текущий "openai") — Radix не обязан
+    // дёргать onValueChange при повторном выборе того же значения.
+    const row = screen.getByTestId("profile-row-text-0");
+    fireEvent.click(within(row).getAllByRole("combobox")[0]);
+    fireEvent.click(await screen.findByRole("option", { name: /other-llm/ }));
+
+    expect(screen.getByTestId("profile-model-text-0")).toHaveValue("");
+  });
+
+  it("model field is disabled until a provider is chosen", () => {
+    render(<ProfileEditor profile={makeProfile()} open onClose={vi.fn()} />);
+    fireEvent.click(screen.getAllByRole("button", { name: /profiles\.add_reserve/i })[0]);
+    // новая строка: provider = "" → model input задизейблен
+    expect(screen.getByTestId("profile-model-text-1")).toBeDisabled();
   });
 });
