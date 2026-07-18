@@ -125,7 +125,6 @@ pub(super) const TABLES_WITH_AGENT_ID_NOT_NULL: &[&str] = &[
     "outbound_queue",
     "pairing_codes",
     "pending_approvals",
-    "pending_messages",
     "scheduled_jobs",
     "session_failures",
     "sessions",
@@ -145,26 +144,70 @@ pub(super) const TABLES_WITH_AGENT_ID_NULLABLE: &[&str] = &[
 
 /// Tables from which to DELETE rows when an agent is deleted.
 ///
-/// This is a STRICT SUBSET of `TABLES_WITH_AGENT_ID_NOT_NULL`. The other
-/// tables (e.g., `audit_log`, `audit_events`, `usage_log`, `cron_runs`,
-/// `sessions`, `tasks`) hold compliance / history / user-owned data that
-/// must SURVIVE agent deletion. Cascade-deleting those would destroy audit
-/// trails or user chat history. The "right" delete behavior for those is
-/// open product question — see follow-up issue [FF-T2-followup-delete-scope].
-///
-/// Until that's resolved, this list preserves the pre-T2 inline-array
-/// scope: only the per-agent state tables that have no compliance value.
+/// This is the Ephemeral(agent_id) class of the deletion-completeness design
+/// (docs/superpowers/specs/2026-07-18-agent-deletion-completeness-design.md):
+/// per-agent runtime/state with no compliance value. It is a STRICT SUBSET of
+/// `TABLES_WITH_AGENT_ID_NOT_NULL`; History tables (`sessions`, `audit_log`,
+/// `audit_events`, `usage_log`, `session_failures`, `cron_runs`) must SURVIVE
+/// a plain delete and are removed only by purge_history. `memory_chunks` is
+/// deliberately NOT here — it needs scope-aware handling (private delete +
+/// shared anonymize), see `cleanup_agent_data`.
 pub(super) const TABLES_TO_DELETE_BY_AGENT_ID: &[&str] = &[
-    "scheduled_jobs",
-    "webhooks",
-    "agent_oauth_bindings",
-    "gmail_triggers",
+    "agent_emotion_state",
     "agent_github_repos",
+    "agent_oauth_bindings",
+    "agent_plans",
     "approval_allowlist",
     "channel_allowed_users",
-    // Stage C initiative: per-agent plan object (agent_id TEXT PRIMARY KEY,
-    // no FK, no compliance/history value) — must not outlive its agent.
-    "agent_plans",
+    "gmail_triggers",
+    "outbound_queue",
+    "pairing_codes",
+    "pending_approvals",
+    "scheduled_jobs",
+    "stream_jobs",
+    "webhooks",
+];
+
+/// Tables keyed by `agent_name` (no agent_id column). All Ephemeral: both
+/// rename and delete iterate this list. Unifies the previous ad-hoc handling
+/// (agent_channels/agent_model_overrides separate UPDATEs + an inline list in
+/// the rename transaction).
+pub(super) const TABLES_WITH_AGENT_NAME: &[&str] = &[
+    "agent_channels",
+    "agent_model_overrides",
+    "handler_config",
+    "handler_jobs",
+    "pending_skill_repairs",
+    "tool_quality",
+];
+
+/// History/compliance tables (agent_id). Survive plain delete; removed only
+/// by purge_history (sessions CASCADE covers the session-child family).
+///
+/// `#[allow(dead_code)]`: not yet consumed by production code — wired into
+/// `purge_history` in a later deletion-completeness task. Referenced today
+/// only by `test_every_agent_binding_is_classified`.
+#[allow(dead_code)]
+pub(super) const TABLES_HISTORY_AGENT_ID: &[&str] = &[
+    "audit_events",
+    "audit_log",
+    "cron_runs",
+    "session_failures",
+    "sessions",
+    "usage_log",
+];
+
+/// Deprecated tables pending the m090 DROP. Excluded from every operation;
+/// tolerated by the drift test until the migration lands, then vestigial.
+///
+/// `#[allow(dead_code)]`: production code has no reason to reference a
+/// deprecated table; referenced today only by the drift test below.
+#[allow(dead_code)]
+pub(super) const TABLES_DROP_RIPE: &[&str] = &[
+    "pending_messages",
+    "video_jobs",
+    "file_scenarios",
+    "file_scenario_outcomes",
 ];
 
 /// Rename `agent_id` from `old` to `new` across every catalogued table.
@@ -874,9 +917,10 @@ pub(crate) async fn api_update_agent(
         // Table catalogue + UPDATE loop live in `rename_agent_id_in_tables`;
         // see TABLES_WITH_AGENT_ID_NOT_NULL / TABLES_WITH_AGENT_ID_NULLABLE.
         // Rename transaction covers all `agent_id` tables plus:
-        //   - agent_channels / agent_model_overrides (agent_name column)
-        //   - handler_config / tool_quality / handler_jobs / pending_skill_repairs
-        //     (agent_name column, outside the agent_id catalogue)
+        //   - every TABLES_WITH_AGENT_NAME table (agent_channels,
+        //     agent_model_overrides, handler_config, handler_jobs,
+        //     pending_skill_repairs, tool_quality — agent_name column,
+        //     outside the agent_id catalogue)
         //   - sessions.participants (TEXT[] array_replace)
         // All updates share a single sqlx::Transaction — failure at any point
         // triggers automatic rollback (via explicit rollback or Transaction::Drop).
@@ -888,35 +932,12 @@ pub(crate) async fn api_update_agent(
             tx.rollback().await.ok();
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("rename failed: {}", e)}))).into_response();
         }
-        // agent_channels uses agent_name instead of agent_id
-        if let Err(e) = sqlx::query("UPDATE agent_channels SET agent_name = $1 WHERE agent_name = $2")
-            .bind(&new_name)
-            .bind(&name)
-            .execute(&mut *tx)
-            .await
-        {
-            tracing::warn!(error = %e, "failed to update agent_channels.agent_name on rename");
-            tx.rollback().await.ok();
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("rename failed at table agent_channels: {}", e)}))).into_response();
-        }
-        // agent_model_overrides uses agent_name (TEXT PK, no FK) — separate
-        // from the agent_id catalogue, same as agent_channels above.
-        if let Err(e) = sqlx::query("UPDATE agent_model_overrides SET agent_name = $1 WHERE agent_name = $2")
-            .bind(&new_name)
-            .bind(&name)
-            .execute(&mut *tx)
-            .await
-        {
-            tracing::warn!(error = %e, "failed to update agent_model_overrides.agent_name on rename");
-            tx.rollback().await.ok();
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("rename failed at table agent_model_overrides: {}", e)}))).into_response();
-        }
-        // Additional agent_name-keyed tables outside the agent_id catalogue.
-        // handler_config carries per-agent handler valve values (most sensitive —
-        // orphaned rows would silently fall back to defaults); the rest are
-        // transient but cheap to keep consistent. Table names are compile-time
-        // constants (no injection). (Audit A7.)
-        for table in ["handler_config", "tool_quality", "handler_jobs", "pending_skill_repairs"] {
+        // agent_name-keyed tables outside the agent_id catalogue. handler_config
+        // carries per-agent handler valve values (most sensitive — orphaned rows
+        // would silently fall back to defaults); the rest are transient but
+        // cheap to keep consistent. Table names are compile-time constants (no
+        // injection). (Audit A7.)
+        for table in TABLES_WITH_AGENT_NAME {
             let sql = format!("UPDATE {table} SET agent_name = $1 WHERE agent_name = $2");
             if let Err(e) = sqlx::query(&sql)
                 .bind(&new_name)
@@ -1471,23 +1492,16 @@ mod tests {
     /// This test documents the expected behavior by simulating the rename loop in-memory.
     #[test]
     fn test_rename_mid_failure_leaves_pre_rename_state() {
-        // Mirror the exact table list from the rename handler (19 tables total)
-        let tables_agent_id: Vec<&str> = vec![
-            "sessions", "scheduled_jobs", "channel_allowed_users",
-            "usage_log", "cron_runs", "audit_events", "pending_approvals",
-            "pending_messages", "webhooks", "stream_jobs", "outbound_queue",
-            "audit_log", "agent_github_repos", "gmail_triggers",
-            "agent_oauth_bindings", "approval_allowlist", "memory_chunks",
-        ];
-        // Additional tables updated outside the loop
-        let extra_tables: Vec<&str> = vec!["messages", "agent_channels", "agent_model_overrides"];
-
-        let all_tables: Vec<&str> = tables_agent_id.iter()
-            .chain(extra_tables.iter())
+        // Derive the table list from the real constants so const surgery can
+        // never silently diverge from this test again.
+        let all_tables: Vec<&str> = super::TABLES_WITH_AGENT_ID_NOT_NULL.iter()
+            .chain(super::TABLES_WITH_AGENT_ID_NULLABLE.iter())
             .copied()
             .collect();
 
-        assert_eq!(all_tables.len(), 20, "rename should cover exactly 20 tables");
+        let expected: usize = super::TABLES_WITH_AGENT_ID_NOT_NULL.len()
+            + super::TABLES_WITH_AGENT_ID_NULLABLE.len();
+        assert_eq!(all_tables.len(), expected, "rename should cover exactly the catalogued agent_id tables");
 
         let old_name = "OldAgent";
         let new_name = "NewAgent";
@@ -1588,6 +1602,44 @@ mod tests {
                 "table {table} does not exist in schema"
             );
         }
+    }
+
+    /// Every table with an `agent_id` or `agent_name` column must be
+    /// classified into exactly one of Ephemeral(agent_id)
+    /// (`TABLES_TO_DELETE_BY_AGENT_ID`), History (`TABLES_HISTORY_AGENT_ID`),
+    /// nullable (`TABLES_WITH_AGENT_ID_NULLABLE`, i.e. `messages`),
+    /// agent_name-keyed (`TABLES_WITH_AGENT_NAME`), DropRipe
+    /// (`TABLES_DROP_RIPE`), or the `memory_chunks` special case. Adding a
+    /// migration with a new agent binding and forgetting to classify it here
+    /// fails this test instead of silently leaking through deletion/rename.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn test_every_agent_binding_is_classified(pool: sqlx::PgPool) {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT table_name, column_name FROM information_schema.columns \
+             WHERE table_schema='public' AND column_name IN ('agent_id','agent_name')",
+        ).fetch_all(&pool).await.unwrap();
+
+        let classified: std::collections::HashSet<&str> = super::TABLES_TO_DELETE_BY_AGENT_ID.iter()
+            .chain(super::TABLES_HISTORY_AGENT_ID)
+            .chain(super::TABLES_WITH_AGENT_ID_NULLABLE)   // messages
+            .chain(super::TABLES_WITH_AGENT_NAME)
+            .chain(super::TABLES_DROP_RIPE)
+            .copied()
+            .chain(std::iter::once("memory_chunks")) // §3.3 special case
+            .collect();
+
+        for (table, col) in &rows {
+            assert!(
+                classified.contains(table.as_str()),
+                "table {table} (column {col}) has an agent binding but no AgentDataClass — \
+                 classify it in crud.rs (Ephemeral/History/DropRipe) before merging"
+            );
+        }
+        // No table may be in two classes.
+        let total = super::TABLES_TO_DELETE_BY_AGENT_ID.len() + super::TABLES_HISTORY_AGENT_ID.len()
+            + super::TABLES_WITH_AGENT_ID_NULLABLE.len() + super::TABLES_WITH_AGENT_NAME.len()
+            + super::TABLES_DROP_RIPE.len() + 1;
+        assert_eq!(classified.len(), total, "a table is classified twice");
     }
 
     /// `TABLES_TO_DELETE_BY_AGENT_ID` MUST be a strict subset of
