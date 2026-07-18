@@ -138,6 +138,35 @@ impl StreamRegistry {
             {
                 tracing::warn!(error = %e, "stream_registry: failed to mark superseded job as error");
             }
+            // Task 2 (Session Resilience): pre-mark the superseded session
+            // `interrupted` with an explicit reason immediately, rather than
+            // relying solely on the cooperative cancel_token reaching
+            // `finalize` (reason "cancel_token") or, failing that, the
+            // `SessionLifecycleGuard::Drop` backstop (reason "guard dropped
+            // (early exit)"). Mirrors the SSE cancel-grace pre-mark in
+            // `sse_converter.rs`. Safe to fire immediately even though the old
+            // stream's engine task is only cooperatively cancelled here (not
+            // aborted) and may still be mid-flight: `cleanup_session_terminated`
+            // performs an atomic running→interrupted claim, and the guard's own
+            // `done()`/`fail()`/`interrupt()` transitions are no-ops at the DB
+            // level once run_status is no longer 'running' (their
+            // `set_session_run_status` call is WHERE-guarded on
+            // run_status='running') — so a late-finishing superseded turn can
+            // never clobber this explicit 'superseded' claim.
+            if let Err(e) = crate::db::sessions::cleanup_session_terminated(
+                &self.db,
+                existing.session_id,
+                "interrupted",
+                "superseded",
+            )
+            .await
+            {
+                tracing::warn!(
+                    session_id = %existing.session_id,
+                    error = %e,
+                    "stream_registry: failed to pre-mark superseded session interrupted"
+                );
+            }
         }
 
         streams.insert(
@@ -356,6 +385,69 @@ mod tests {
         let db = PgPool::connect_lazy("postgres://invalid").unwrap();
         let registry = StreamRegistry::new(db);
         assert!(!registry.cancel("nonexistent").await);
+    }
+
+    /// Task 2 (Session Resilience, G1): registering a new stream for a
+    /// session that already has an active stream (supersede) must
+    /// immediately pre-mark the OLD session `interrupted` with the explicit
+    /// reason `superseded` — not left to the cooperative cancel_token or the
+    /// `SessionLifecycleGuard::Drop` backstop to eventually resolve it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn supersede_pre_marks_old_session_interrupted(pool: sqlx::PgPool) {
+        let registry = StreamRegistry::new(pool.clone());
+        let sid = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO sessions (id, agent_id, user_id, channel, run_status) \
+             VALUES ($1, 'A', 'u', 'ui', 'running')",
+        )
+        .bind(sid)
+        .execute(registry.db())
+        .await
+        .expect("seed session");
+
+        let old_token = CancellationToken::new();
+        registry
+            .register_with_token(sid, "A", old_token.clone(), Uuid::new_v4())
+            .await
+            .expect("first register");
+
+        // A second registration for the SAME session_id supersedes the first.
+        let new_token = CancellationToken::new();
+        registry
+            .register_with_token(sid, "A", new_token, Uuid::new_v4())
+            .await
+            .expect("second register (supersede)");
+
+        assert!(
+            old_token.is_cancelled(),
+            "supersede must cancel the old stream's token cooperatively"
+        );
+
+        let run_status: Option<String> =
+            sqlx::query_scalar("SELECT run_status FROM sessions WHERE id = $1")
+                .bind(sid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            run_status.as_deref(),
+            Some("interrupted"),
+            "superseded session must be pre-marked interrupted immediately, not left running"
+        );
+
+        let payload: serde_json::Value = sqlx::query_scalar(
+            "SELECT payload FROM session_timeline \
+             WHERE session_id = $1 AND event_type = 'interrupted' \
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(sid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            payload["reason"], "superseded",
+            "explicit reason must be 'superseded', not the generic cancel_token/guard_dropped reasons"
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]

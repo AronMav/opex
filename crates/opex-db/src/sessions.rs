@@ -1460,6 +1460,41 @@ pub async fn cleanup_interrupted_sessions(db: &PgPool) -> Result<usize> {
     Ok(count)
 }
 
+/// Graceful-shutdown pre-mark (Session Resilience Task 2, G1): bulk-claim
+/// every still-`running` session `interrupted` with an explicit `reason`
+/// (e.g. `"shutdown"`), preserving any in-flight streaming partial via the
+/// same per-session `cleanup_session_terminated` path
+/// `cleanup_interrupted_sessions` (startup, reason `"crash_recovery"`) and
+/// the watchdog (reason `"watchdog_inactivity_*"`) already use.
+///
+/// Called ONCE from `main.rs` right after the cooperative drain-with-timeout
+/// gives up on any stragglers, so a turn that ignored cancellation lands
+/// `interrupted` with an honest reason written by the ORIGINAL process —
+/// instead of depending on a future restart's crash-recovery sweep (which may
+/// be minutes or hours away) to notice it. Idempotent: sessions the
+/// cooperative drain already resolved are no longer `running`, so the SELECT
+/// simply returns fewer rows; nothing is double-written.
+pub async fn mark_all_running_sessions_terminated(db: &PgPool, reason: &str) -> Result<usize> {
+    let running: Vec<Uuid> =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM sessions WHERE run_status = 'running'")
+            .fetch_all(db)
+            .await?;
+    let count = running.len();
+    if count > 0 {
+        tracing::info!(count, reason, "shutdown: pre-marking still-running sessions interrupted");
+    }
+    for session_id in &running {
+        if let Err(e) = cleanup_session_terminated(db, *session_id, "interrupted", reason).await {
+            tracing::warn!(
+                error = %e,
+                session_id = %session_id,
+                "shutdown: failed to pre-mark running session interrupted"
+            );
+        }
+    }
+    Ok(count)
+}
+
 /// Last-resort safety-net: forcibly mark any 'running' session idle longer
 /// than `threshold_secs` as 'interrupted'. Called from startup-cleanup.
 pub async fn finalize_truly_stale_sessions(
@@ -2743,6 +2778,70 @@ mod tests {
             "SELECT run_status FROM sessions WHERE id = $1"
         ).bind(s).fetch_one(&pool).await.unwrap();
         assert_eq!(status, "interrupted");
+    }
+
+    /// Session Resilience Task 2 (G1): the graceful-shutdown bulk pre-mark
+    /// claims every still-`running` session `interrupted` with the caller's
+    /// explicit reason, preserves any in-flight streaming partial (same
+    /// guarantee `cleanup_interrupted_sessions` gives at startup), and is a
+    /// no-op for sessions that already resolved (done/failed/interrupted).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn mark_all_running_sessions_terminated_marks_only_running(pool: sqlx::PgPool) {
+        let running = super::create_new_session(&pool, "a", "u", "web").await.unwrap();
+        super::set_session_run_status(&pool, running, "running").await.unwrap();
+        sqlx::query(
+            "INSERT INTO messages (session_id, role, content, status)
+             VALUES ($1, 'assistant', 'partial reply', 'streaming')",
+        )
+        .bind(running)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let already_done = super::create_new_session(&pool, "a", "u", "web").await.unwrap();
+        super::set_session_run_status(&pool, already_done, "done").await.unwrap();
+
+        let count = super::mark_all_running_sessions_terminated(&pool, "shutdown")
+            .await
+            .unwrap();
+        assert_eq!(count, 1, "only the running session is claimed");
+
+        let running_status: String =
+            sqlx::query_scalar("SELECT run_status FROM sessions WHERE id = $1")
+                .bind(running)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(running_status, "interrupted");
+
+        let (content, msg_status): (String, String) = sqlx::query_as(
+            "SELECT content, status FROM messages WHERE session_id = $1",
+        )
+        .bind(running)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(content, "partial reply", "streaming partial preserved, not dropped");
+        assert_eq!(msg_status, "interrupted");
+
+        let payload: serde_json::Value = sqlx::query_scalar(
+            "SELECT payload FROM session_timeline \
+             WHERE session_id = $1 AND event_type = 'interrupted' \
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(running)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(payload["reason"], "shutdown");
+
+        // The already-terminal session must be untouched.
+        let done_status: String = sqlx::query_scalar("SELECT run_status FROM sessions WHERE id = $1")
+            .bind(already_done)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(done_status, "done", "already-terminal session must not be touched");
     }
 
     #[sqlx::test(migrations = "../../migrations")]

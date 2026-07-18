@@ -857,6 +857,24 @@ async fn main() -> Result<()> {
         &sched,
     ).await;
 
+    // Session Resilience Task 2 (G1): the drain above cancels every in-flight
+    // turn cooperatively and waits up to `drain_timeout`, but a turn that
+    // ignores cancellation (wedged tool call, sync block, unresponsive
+    // provider) is NOT hard-aborted here — `AgentHandle::shutdown` only tears
+    // down subagents/scheduler jobs. Without this sweep such a session would
+    // stay `run_status='running'` until either a future restart's
+    // `cleanup_interrupted_sessions` (reason "crash_recovery") or the
+    // in-process watchdog (which already stopped ticking — it selects on the
+    // same shutdown token) eventually notices it. Pre-mark explicitly now, in
+    // the ORIGINAL process, with an honest "shutdown" reason. Idempotent — a
+    // session the drain already resolved is no longer 'running' and is
+    // simply not selected.
+    match crate::db::sessions::mark_all_running_sessions_terminated(&db_pool, "shutdown").await {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!(count = n, "graceful shutdown: pre-marked stragglers interrupted"),
+        Err(e) => tracing::error!(error = %e, "graceful shutdown: failed to sweep running sessions"),
+    }
+
     // Drain background tasks spawned by finalize (notifications, knowledge extraction).
     // close() prevents new spawns; timeout prevents hanging on unresponsive DB.
     shutdown_bg_tasks.close();
