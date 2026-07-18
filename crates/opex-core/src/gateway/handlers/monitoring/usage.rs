@@ -16,6 +16,16 @@ pub(crate) struct UsageQuery {
     days: Option<u32>,
 }
 
+/// `GET /api/tools/health` — failing tools ordered by impact (worst first).
+/// Operator-facing degradation report over `tool_quality`; complements
+/// `/api/doctor`'s `get_degraded_tools` with the raw counters.
+pub(crate) async fn api_tools_health(State(infra): State<InfraServices>) -> Json<Value> {
+    match crate::db::tool_quality::get_tool_health(&infra.db).await {
+        Ok(tools) => Json(json!({ "tools": tools })),
+        Err(e) => Json(json!({ "error": e.to_string() })),
+    }
+}
+
 pub(crate) async fn api_usage(
     State(infra): State<InfraServices>,
     Query(q): Query<UsageQuery>,

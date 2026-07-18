@@ -226,12 +226,61 @@ pub async fn get_degraded_tools(db: &PgPool) -> Result<Vec<serde_json::Value>> {
 }
 
 // ---------------------------------------------------------------------------
+// get_tool_health
+// ---------------------------------------------------------------------------
+
+/// Failing tools ordered by impact (fail-share × fail-volume), worst first.
+/// Complements `get_degraded_tools` (penalty<0.8 → `/api/doctor`) with the raw
+/// counters an operator needs to see WHAT is failing and how often. Feeds
+/// `GET /api/tools/health`.
+pub async fn get_tool_health(db: &PgPool) -> Result<Vec<serde_json::Value>> {
+    let rows = sqlx::query_as::<_, (String, String, f32, i64, i64, Option<String>)>(
+        r"
+        SELECT agent_name, tool_name, penalty_score, total_calls, fail_calls, last_error
+        FROM tool_quality
+        WHERE fail_calls > 0
+        ORDER BY (fail_calls::float / NULLIF(total_calls, 0)) * fail_calls DESC
+        ",
+    )
+    .fetch_all(db)
+    .await?;
+
+    let result = rows
+        .into_iter()
+        .map(|(agent, name, penalty, total, fail, last_error)| {
+            json!({
+                "agent_name": agent,
+                "tool_name": name,
+                "penalty_score": penalty,
+                "total_calls": total,
+                "fail_calls": fail,
+                "last_error": last_error,
+            })
+        })
+        .collect();
+
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn tool_health_orders_by_impact_and_excludes_healthy(pool: sqlx::PgPool) {
+        // bad_tool: 2 fails (high impact). good_tool: 1 success (no fails → excluded).
+        record_tool_result(&pool, "A", "bad_tool", false, 100, Some("boom")).await.unwrap();
+        record_tool_result(&pool, "A", "bad_tool", false, 100, Some("boom")).await.unwrap();
+        record_tool_result(&pool, "A", "good_tool", true, 50, None).await.unwrap();
+        let rows = get_tool_health(&pool).await.unwrap();
+        assert_eq!(rows.len(), 1, "only tools with fail_calls > 0");
+        assert_eq!(rows[0]["tool_name"], "bad_tool");
+        assert_eq!(rows[0]["fail_calls"], 2);
+    }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn penalty_is_scoped_per_agent(pool: sqlx::PgPool) {
