@@ -33,15 +33,15 @@ use std::path::{Component, Path, PathBuf};
 ///   symlink-based traversal even for files that have not been created.
 /// * Fails closed with [`std::io::ErrorKind::PermissionDenied`] when the
 ///   canonical form escapes the workspace root.
-///
-/// NOTE: the production write/edit paths now inline an equivalent
-/// parent-canonicalize guard (see `write_workspace_file`) after e205c1f6
-/// removed the re-join that caused a `workspace/workspace/...` double prefix.
-/// This function is retained as the reference implementation exercised by the
-/// path-canonicalization contract tests (`tests/integration_path_canonicalize.rs`
-/// + the unit tests below); hence `allow(dead_code)` for the bin target, which
-/// does not compile the test callers. FOLLOW-UP: retarget those tests at the
-/// inline guard and delete this, or re-expose it as the shared guard.
+//
+// NOTE: production write/edit paths now inline an equivalent parent-canonicalize
+// guard (see write_workspace_file) after e205c1f6 removed the re-join that caused
+// a workspace/workspace/... double prefix. This function is retained as the
+// reference implementation exercised by the path-canonicalization contract tests
+// (tests/integration_path_canonicalize.rs + the unit tests below); hence
+// allow(dead_code) for the bin target, which does not compile the test callers.
+// FOLLOW-UP: retarget those tests at the inline guard and delete this, or
+// re-expose it as the shared guard.
 #[allow(dead_code)]
 pub fn resolve_workspace_path(
     workspace_dir: &str,
