@@ -160,7 +160,7 @@ export function ProfileEditor({ profile, open, onClose }: ProfileEditorProps) {
                           value={row.provider}
                           categories={categoriesFor(cap)}
                           size="sm"
-                          className="w-40"
+                          className="w-auto min-w-0 flex-1 basis-40"
                           onChange={(v) => {
                             // Провайдер сменился — прежние model/voice ему не принадлежат.
                             // Пустая model = default_model провайдера (семантика useAgentTextModel).
@@ -178,7 +178,7 @@ export function ProfileEditor({ profile, open, onClose }: ProfileEditorProps) {
                             providerId={providerIdByName(row.provider)}
                             disabled={!row.provider}
                             placeholder={row.provider ? t("profiles.model_default_placeholder") : t("fields.select_provider_first")}
-                            className="w-40"
+                            className="min-w-0 flex-1 basis-40"
                             data-testid={`profile-model-${cap}-${idx}`}
                           />
                         )}
@@ -189,7 +189,7 @@ export function ProfileEditor({ profile, open, onClose }: ProfileEditorProps) {
                             onChange={(v) => updateRow(cap, idx, { voice: v })}
                             providerName={row.provider}
                             size="sm"
-                            className="w-40"
+                            className="w-auto min-w-0 flex-1 basis-40"
                           />
                         )}
 

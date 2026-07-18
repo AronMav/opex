@@ -133,7 +133,9 @@ export function ModelCombobox({
         <ul
           id={listId}
           role="listbox"
-          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto overscroll-contain rounded-md border border-border bg-popover p-1 shadow-md"
+          // Grow past the (often narrow) input up to a cap so long model ids
+          // stay readable; min-w-full keeps it at least as wide as the field.
+          className="absolute left-0 top-full z-50 mt-1 max-h-64 w-max min-w-full max-w-[min(24rem,90vw)] overflow-y-auto overscroll-contain rounded-md border border-border bg-popover p-1 shadow-md"
         >
           {loading ? (
             <li className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground">
