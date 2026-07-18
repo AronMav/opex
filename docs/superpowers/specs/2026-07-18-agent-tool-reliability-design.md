@@ -40,8 +40,40 @@ its tool names. Agents already have everything they need:
   agents were wrongly sending to the jailed MCP-filesystem).
 
 The MCP-filesystem (jailed to `/workspace`, port 9045) is a redundant,
-differently-jailed duplicate that currently mostly **fails** — nothing working
-is lost by removing it.
+differently-jailed duplicate that currently mostly **fails**.
+
+### Agent-restriction impact (MUST account for — agents are restricted)
+
+Agent tool access is NOT uniform. Verified from prod agent TOMLs:
+- **Base agent (Opex):** deny only `[workspace_delete, workspace_rename]`. Has
+  `code_exec` (full host access) + native `workspace_*`.
+- **Non-base agents (Alma, Aria, Arty, Tyler):** deny
+  `[code_exec, process(_start), workspace_delete, workspace_rename]`. **No host
+  access at all** (no `code_exec`, no `process`).
+
+What each agent keeps after MCP-filesystem is removed, and what changes:
+- **Read — NO loss for anyone.** Native `workspace_read` uses the read-any path
+  (`validate_workspace_path_read`, `allow_read_any=true`, `workspace.rs:720`) —
+  it reads ANY file under `/workspace` for base AND non-base agents, i.e. the
+  exact `/workspace`-wide read MCP-filesystem provided.
+- **Write — an intended tightening for non-base.** Native `workspace_write`
+  jails non-base agents to their own `agents/{name}/` dir plus the shared root
+  dirs (`tools`, `skills`, `mcp`, `uploads`) and shared root files. MCP-filesystem
+  `write_file` let a non-base agent write ANYWHERE in `/workspace`, including
+  **another agent's directory**. Removing it enforces the security-by-default
+  jail the project already intends ([[project_access_control_default_restricted]]).
+  The only capability lost is "a non-base agent writes into another agent's
+  directory" — a privilege hole, not a feature.
+- **Host paths (`/home/aronmav`, …) — no change.** Non-base agents never had host
+  access; their host-path MCP-filesystem calls were always doomed (the observed
+  "Access denied" failures). Base agents keep `code_exec` for host work.
+
+**Open item for the operator (blocks nothing, but confirm):** does any *non-base*
+agent legitimately need to WRITE into another agent's directory or an arbitrary
+`/workspace` path outside its own dir + shared dirs? If yes, that workflow needs
+a purpose-built mechanism (a shared drop-dir, or an explicit cross-agent tool) —
+NOT the unrestricted MCP-filesystem. Prod `tool_quality` shows write_file mostly
+failing, so this is expected to be "no", but it is called out rather than assumed.
 
 **Mechanism (owner-approved: global, in `opex.toml`):**
 1. `workspace/mcp/filesystem.yaml` → `enabled: false` (removes read_file/
@@ -53,12 +85,17 @@ is lost by removing it.
    This is a new field `GlobalToolDispatcherConfig.block: Vec<String>` mirroring
    the existing `always_core: Vec<String>`, applied in the dispatch tool filter
    (`agent/pipeline/dispatch.rs`) before per-agent policy — a tool in the global
-   `block` list is never offered to any agent.
+   `block` list is never offered to any agent (base or non-base).
 
 **Unit:** `block` is a pure name filter over the assembled tool list; testable in
 isolation (list in → filtered list out). Depends only on config.
 
 **Reversible:** re-enable the yaml + clear `block`.
+
+**Tangential cleanup (fold into Batch 2):** existing non-base agent TOMLs still
+list the phantom `process_start` in their deny-lists (the A1 fix corrected only
+the code default for NEW agents). Harmless (non-base never get `process`), but
+worth normalizing `process_start` → `process` when those files are touched.
 
 ---
 
@@ -78,6 +115,15 @@ Per-server audit (in the plan). Known cases:
 Each disable/keep decision follows the Section-1 pattern (yaml `enabled:false`
 and/or global `block`). No decision is made blind — the plan verifies each server
 still has a live consumer before disabling.
+
+**Restriction check:** before blocking any MCP tool in favour of a native
+equivalent, the plan MUST confirm the native replacement is actually available
+to the affected agents. Verified now: `web_fetch` and `browser_action` are NOT
+in any non-base deny-list (non-base deny is only
+`[code_exec, process(_start), workspace_delete, workspace_rename]`), and
+`browser_action` additionally requires the browser-renderer to be reachable
+(true after the A8 fix). So preferring the native tools does not strand
+restricted agents.
 
 ---
 
