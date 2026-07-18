@@ -427,6 +427,14 @@ mod tests {
         assert!(validate_agent_name("my.agent").is_err());
     }
 
+    #[test]
+    fn validate_agent_name_rejects_path_traversal() {
+        // Guards api_delete_agent's soul-backup write and config path.
+        assert!(validate_agent_name("../etc/passwd").is_err());
+        assert!(validate_agent_name("a/b").is_err());
+        assert!(validate_agent_name("..").is_err());
+    }
+
     // ── build_agent_config ───────────────────────────────
 
     fn minimal_payload(name: &str) -> AgentCreatePayload {

@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Json},
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fs::canonicalize;
 use std::path::PathBuf;
@@ -1105,17 +1106,71 @@ pub(crate) async fn api_update_agent(
 
 async fn cleanup_agent_data(db: &sqlx::PgPool, agent_name: &str) -> Result<(), sqlx::Error> {
     let mut tx = db.begin().await?;
-    // agent_channels uses agent_name (separate from the agent_id catalogue)
-    sqlx::query("DELETE FROM agent_channels WHERE agent_name = $1")
-        .bind(agent_name).execute(&mut *tx).await?;
-    // agent_model_overrides uses agent_name (TEXT PK, no FK to agents) —
-    // must be deleted explicitly, same as agent_channels above.
-    sqlx::query("DELETE FROM agent_model_overrides WHERE agent_name = $1")
-        .bind(agent_name).execute(&mut *tx).await?;
+    // agent_name-keyed Ephemeral tables (agent_channels, agent_model_overrides,
+    // handler_config, handler_jobs, pending_skill_repairs, tool_quality) — no
+    // agent_id column on these; see TABLES_WITH_AGENT_NAME. Mirrors the
+    // rename-path loop over the same constant.
+    for table in TABLES_WITH_AGENT_NAME {
+        // SAFETY: `table` is a compile-time literal from TABLES_WITH_AGENT_NAME;
+        // agent_name flows through a bind parameter.
+        let sql = format!("DELETE FROM {table} WHERE agent_name = $1");
+        sqlx::query(&sql)
+            .bind(agent_name)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                tracing::warn!(table = %table, error = %e, "failed to delete rows on agent delete");
+                e
+            })?;
+    }
     // Per-agent state tables — see TABLES_TO_DELETE_BY_AGENT_ID. This is a
     // strict subset of TABLES_WITH_AGENT_ID_NOT_NULL; compliance / history
     // tables are intentionally skipped.
     delete_agent_id_in_tables(&mut tx, agent_name).await?;
+    // memory_chunks (§3.3): private facts + soul biography are the agent's —
+    // delete; shared knowledge survives its author — anonymize.
+    sqlx::query("DELETE FROM memory_chunks WHERE agent_id = $1 AND scope = 'private'")
+        .bind(agent_name).execute(&mut *tx).await?;
+    sqlx::query("UPDATE memory_chunks SET agent_id = '' WHERE agent_id = $1 AND scope = 'shared'")
+        .bind(agent_name).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Query params for `DELETE /api/agents/{name}`. Additive — omitted defaults
+/// to `false`, preserving the existing plain-delete contract (History
+/// survives unless the caller explicitly opts into full purge).
+#[derive(Deserialize)]
+pub(crate) struct DeleteAgentQuery {
+    #[serde(default)]
+    pub purge_history: bool,
+}
+
+/// Full history purge (opt-in via `?purge_history=true`, called AFTER
+/// `cleanup_agent_data`, own transaction). Sessions where this agent is
+/// primary are deleted outright — FK CASCADE removes messages,
+/// session_timeline, session_failures, session_shares, session_goals,
+/// session_todos, stream_jobs, pending_approvals (verified against
+/// migrations/*.sql). Owner decision: multi-agent sessions are deleted whole.
+///
+/// Messages authored by this agent inside OTHER agents' sessions are
+/// intentionally untouched (foreign history).
+async fn purge_agent_history(db: &sqlx::PgPool, agent_name: &str) -> Result<(), sqlx::Error> {
+    let mut tx = db.begin().await?;
+    sqlx::query("DELETE FROM sessions WHERE agent_id = $1")
+        .bind(agent_name).execute(&mut *tx).await?;
+    // No covering CASCADE for these: usage_log.session_id is ON DELETE SET
+    // NULL (row survives with session_id cleared), and audit_log/audit_events/
+    // cron_runs carry no session FK at all — hence the explicit sweep, keyed
+    // by agent_id so rows whose session is already gone (or was never
+    // session-scoped) are still reaped. session_failures IS session-CASCADEd
+    // but is swept too for idempotency/defense-in-depth.
+    for t in ["usage_log", "audit_log", "audit_events", "cron_runs", "session_failures"] {
+        // SAFETY: `t` is a compile-time literal from the fixed array above;
+        // agent_name flows through a bind parameter.
+        sqlx::query(&format!("DELETE FROM {t} WHERE agent_id = $1"))
+            .bind(agent_name).execute(&mut *tx).await?;
+    }
     tx.commit().await?;
     Ok(())
 }
@@ -1125,30 +1180,86 @@ pub(crate) async fn api_delete_agent(
     State(auth): State<AuthServices>,
     State(infra): State<InfraServices>,
     axum::extract::Path(name): axum::extract::Path<String>,
+    Query(query): Query<DeleteAgentQuery>,
 ) -> impl IntoResponse {
+    // Reject traversal / out-of-charset names before any filesystem or DB use
+    // (mirrors api_update_agent / rename). Prevents a `%2F`-decoded segment
+    // from escaping config/agents or the soul-backup dir below.
+    if let Err(msg) = validate_agent_name(&name) {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": msg}))).into_response();
+    }
+
     let path = agent_config_path(&name);
 
-    // Block deletion of base agents — fail closed: any inability to verify blocks deletion
-    match std::fs::read_to_string(&path) {
+    // Block deletion of base agents — fail closed: any inability to verify
+    // blocks deletion. Also captures `[agent.soul].enabled` from the parsed
+    // config for the mandatory biography backup below (soul agents only);
+    // a missing config file (NotFound branch) has no soul data to back up.
+    let soul_enabled = match std::fs::read_to_string(&path) {
         Ok(toml_str) => match toml::from_str::<crate::config::AgentConfig>(&toml_str) {
             Ok(existing) if existing.agent.base => {
                 return (StatusCode::FORBIDDEN, Json(json!({
                     "error": format!("Agent '{}' is a base agent and cannot be deleted", name)
                 }))).into_response();
             }
+            Ok(existing) => existing.agent.soul.enabled, // not a base agent, proceed
             Err(e) => {
                 tracing::error!(agent = %name, error = %e, "agent config is malformed; deletion blocked");
                 return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
                     "error": "agent config is malformed; fix it before deleting"
                 }))).into_response();
             }
-            Ok(_) => {} // not a base agent, proceed
         },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // file gone, proceed to cleanup
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false, // file gone, proceed to cleanup
         Err(e) => {
             tracing::error!(agent = %name, error = %e, "cannot read agent config for deletion safety check");
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
                 "error": format!("cannot verify agent config before deletion: {}", e)
+            }))).into_response();
+        }
+    };
+
+    // Mandatory soul biography backup BEFORE cleanup, fail-closed (spec §4.2).
+    // The SQL below reads `event`/`reflection` rows directly, bypassing the
+    // `refuse_if_biography` guards that protect the agent-facing memory tool
+    // and UI mutation routes — this is a deliberate, one-time export mirroring
+    // docs/runbooks/soul-quarantine.md, not a new mutation path.
+    if soul_enabled {
+        let rows: Vec<(uuid::Uuid, String, String, String)> = sqlx::query_as(
+            "SELECT id, kind, content, created_at::text FROM memory_chunks \
+             WHERE agent_id = $1 AND kind IN ('event','reflection')",
+        )
+        .bind(&name)
+        .fetch_all(&infra.db)
+        .await
+        .unwrap_or_default();
+
+        let dir = std::path::Path::new(crate::config::WORKSPACE_DIR)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("backups")
+            .join("agent-deletion");
+
+        let backup_result = (|| -> anyhow::Result<()> {
+            std::fs::create_dir_all(&dir)?;
+            let file = dir.join(format!(
+                "{}-{}.json",
+                name,
+                chrono::Utc::now().format("%Y%m%d-%H%M%S")
+            ));
+            let payload: Vec<Value> = rows
+                .iter()
+                .map(|(id, kind, content, created_at)| {
+                    json!({"id": id, "kind": kind, "content": content, "created_at": created_at})
+                })
+                .collect();
+            std::fs::write(&file, serde_json::to_vec_pretty(&payload)?)?;
+            Ok(())
+        })();
+
+        if let Err(e) = backup_result {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+                "error": format!("soul biography backup failed; deletion aborted: {e}")
             }))).into_response();
         }
     }
@@ -1165,6 +1276,15 @@ pub(crate) async fn api_delete_agent(
         }))).into_response();
     }
 
+    // Opt-in full history purge (?purge_history=true). Own transaction, run
+    // AFTER the ephemeral-state cleanup above commits.
+    if query.purge_history
+        && let Err(e) = purge_agent_history(&infra.db, &name).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+                "error": format!("failed to purge agent history: {}", e)
+            }))).into_response();
+        }
+
     // Vault cleanup AFTER DB transaction committed (vault is not transactional —
     // if we deleted credentials before and the transaction failed, channels would
     // lose their tokens irrecoverably)
@@ -1179,9 +1299,36 @@ pub(crate) async fn api_delete_agent(
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
         }
 
+    // Best-effort: remove the agent's workspace directory (SOUL/SELF/MEMORY…).
+    // Path-guarded like agent/path_guard.rs: canonicalize and require the
+    // target to stay under {workspace}/agents/. Never fails the deletion.
+    let ws_root = std::path::Path::new(crate::config::WORKSPACE_DIR).join("agents");
+    let target = ws_root.join(&name);
+    match (dunce::canonicalize(&ws_root), dunce::canonicalize(&target)) {
+        (Ok(root_c), Ok(target_c)) if target_c.starts_with(&root_c) && target_c != root_c => {
+            if let Err(e) = std::fs::remove_dir_all(&target_c) {
+                tracing::warn!(agent = %name, error = %e, "workspace dir removal failed (best-effort)");
+            } else {
+                tracing::info!(agent = %name, "workspace dir removed");
+            }
+        }
+        (Ok(_), Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {} // no dir — fine
+        other => tracing::warn!(agent = %name, ?other, "workspace dir path-guard refused removal"),
+    }
+
     // Hot-stop: remove from running engines
     let handle = agents.map.write().await.remove(&name);
     auth.access_guards.write().await.remove(&name);
+
+    // Kill any session-scoped LiveAgent instances of this agent across every
+    // session's pool — they run background tasks with their own dialog state;
+    // dropping the LiveAgent aborts its task via its Drop impl.
+    {
+        let mut pools = agents.session_pools.write().await;
+        for pool in pools.values_mut() {
+            pool.remove(&name);
+        }
+    }
 
     // Remove agent container
     if let Some(ref sandbox) = infra.sandbox {
@@ -1770,5 +1917,240 @@ mod tests {
                 "table {table} listed as NULLABLE but schema says NOT NULL"
             );
         }
+    }
+
+    // ── cleanup_agent_data / purge_agent_history (T4/T6, server-authoritative) ──
+    //
+    // These seed minimal rows into every catalogued table and exercise the
+    // real DELETE/UPDATE loops, rather than re-deriving the SQL in the test.
+    // sqlx-macro tests require a live Postgres (DATABASE_URL) — they compile
+    // and are correct by inspection here, but only actually RUN on the
+    // server (`make test-db`); see CLAUDE.md.
+
+    /// Seed exactly one row into every Ephemeral table (both the
+    /// agent_id-keyed `TABLES_TO_DELETE_BY_AGENT_ID` and the
+    /// agent_name-keyed `TABLES_WITH_AGENT_NAME`) plus a private and a
+    /// shared `memory_chunks` row, all bound to `agent`. Also seeds one
+    /// representative row per History table (`sessions`, `audit_log`,
+    /// `audit_events`, `usage_log`, `session_failures`) so callers can assert
+    /// they survive a plain delete.
+    ///
+    /// `cron_runs` is deliberately NOT seeded here: it FK-cascades from
+    /// `scheduled_jobs.id` (`ON DELETE CASCADE`), and `scheduled_jobs` is
+    /// itself Ephemeral — any `cron_runs` row tied to a real job is removed
+    /// the moment the job is, regardless of History classification. That is
+    /// a pre-existing schema relationship, out of scope for this change; it
+    /// is exercised separately (via an agent_id-keyed sweep, independent of
+    /// any live job) in `test_purge_history_cascades` below.
+    ///
+    /// Returns the session id used as the FK anchor for `stream_jobs`.
+    async fn seed_agent_state(pool: &sqlx::PgPool, agent: &str) -> uuid::Uuid {
+        // History anchor session — survives cleanup_agent_data, also used as
+        // the FK target for stream_jobs (Ephemeral) and usage_log/
+        // session_failures (History).
+        let (session_id,): (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO sessions (agent_id, user_id, channel) VALUES ($1, 'u1', 'web') RETURNING id",
+        )
+        .bind(agent)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+
+        // ── TABLES_TO_DELETE_BY_AGENT_ID (13) ──
+        sqlx::query("INSERT INTO agent_emotion_state (agent_id) VALUES ($1)")
+            .bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO agent_github_repos (agent_id, owner, repo) VALUES ($1, 'o', 'r')")
+            .bind(agent).execute(pool).await.unwrap();
+        let (oauth_account_id,): (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO oauth_accounts (provider) VALUES ('google') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO agent_oauth_bindings (agent_id, provider, account_id) VALUES ($1, 'google', $2)")
+            .bind(agent).bind(oauth_account_id).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO agent_plans (agent_id) VALUES ($1)")
+            .bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO approval_allowlist (agent_id, tool_pattern) VALUES ($1, 'workspace_*')")
+            .bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO channel_allowed_users (agent_id, channel_user_id) VALUES ($1, 'u1')")
+            .bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO gmail_triggers (agent_id, email_address, pubsub_topic) VALUES ($1, 'a@b.com', 'topic1')")
+            .bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO outbound_queue (agent_id, channel, action_name, payload) VALUES ($1, 'telegram', 'send_text', '{}'::jsonb)")
+            .bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO pairing_codes (code, agent_id, channel_user_id) VALUES ('code1', $1, 'u1')")
+            .bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO pending_approvals (agent_id, tool_name) VALUES ($1, 'workspace_write')")
+            .bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO scheduled_jobs (agent_id, name, cron_expr, task_message) VALUES ($1, 'job1', '* * * * *', 'hi')")
+            .bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO stream_jobs (session_id, agent_id) VALUES ($1, $2)")
+            .bind(session_id).bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO webhooks (name, agent_id) VALUES ('wh1', $1)")
+            .bind(agent).execute(pool).await.unwrap();
+
+        // ── TABLES_WITH_AGENT_NAME (6) ──
+        sqlx::query("INSERT INTO agent_channels (agent_name, channel_type, display_name) VALUES ($1, 'telegram', 'Disp')")
+            .bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO agent_model_overrides (agent_name, model) VALUES ($1, 'gpt-4o')")
+            .bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO handler_config (handler_id, agent_name) VALUES ('h1', $1)")
+            .bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO handler_jobs (handler_id, agent_name, session_id) VALUES ('h1', $1, $2)")
+            .bind(agent).bind(session_id).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO pending_skill_repairs (skill_name, agent_name, kind, diagnosis) VALUES ('sk1', $1, 'fix', 'd')")
+            .bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO tool_quality (agent_name, tool_name) VALUES ($1, 'tool1')")
+            .bind(agent).execute(pool).await.unwrap();
+
+        // ── memory_chunks special case ──
+        sqlx::query("INSERT INTO memory_chunks (agent_id, user_id, content, scope, kind) VALUES ($1, 'u1', 'private fact', 'private', 'fact')")
+            .bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO memory_chunks (agent_id, user_id, content, scope, kind) VALUES ($1, 'u1', 'shared fact', 'shared', 'fact')")
+            .bind(agent).execute(pool).await.unwrap();
+
+        // ── History (survive plain delete) ──
+        sqlx::query("INSERT INTO audit_log (agent_id, tool_name, status) VALUES ($1, 'workspace_write', 'ok')")
+            .bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO audit_events (agent_id, event_type) VALUES ($1, 'agent_updated')")
+            .bind(agent).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO usage_log (agent_id, provider, session_id) VALUES ($1, 'openai', $2)")
+            .bind(agent).bind(session_id).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO session_failures (session_id, agent_id, failure_kind, error_message) VALUES ($1, $2, 'llm_error', 'boom')")
+            .bind(session_id).bind(agent).execute(pool).await.unwrap();
+
+        session_id
+    }
+
+    async fn count_rows(pool: &sqlx::PgPool, table: &str, column: &str, value: &str) -> i64 {
+        let sql = format!("SELECT COUNT(*) FROM {table} WHERE {column} = $1");
+        sqlx::query_scalar(&sql).bind(value).fetch_one(pool).await.unwrap()
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn test_ephemeral_delete_removes_all_state(pool: sqlx::PgPool) {
+        let agent = "DeleteMe";
+        seed_agent_state(&pool, agent).await;
+
+        super::cleanup_agent_data(&pool, agent).await.unwrap();
+
+        // Every Ephemeral(agent_id) table is empty for this agent.
+        for table in super::TABLES_TO_DELETE_BY_AGENT_ID {
+            let n = count_rows(&pool, table, "agent_id", agent).await;
+            assert_eq!(n, 0, "table {table} should have no rows left for {agent}");
+        }
+        // Every Ephemeral(agent_name) table is empty for this agent.
+        for table in super::TABLES_WITH_AGENT_NAME {
+            let n = count_rows(&pool, table, "agent_name", agent).await;
+            assert_eq!(n, 0, "table {table} should have no rows left for {agent}");
+        }
+
+        // memory_chunks: private deleted, shared anonymized (agent_id = '').
+        let private_left: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM memory_chunks WHERE agent_id = $1 AND scope = 'private'",
+        )
+        .bind(agent)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(private_left, 0, "private memory_chunks must be deleted");
+
+        let shared_anonymized: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM memory_chunks WHERE agent_id = '' AND scope = 'shared' AND content = 'shared fact'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(shared_anonymized, 1, "shared memory_chunks must survive, anonymized to agent_id=''");
+        let shared_under_old_name: i64 = count_rows(&pool, "memory_chunks", "agent_id", agent).await
+            - private_left; // any remaining agent_id=agent rows after private-delete
+        assert_eq!(shared_under_old_name, 0, "no memory_chunks should remain under the deleted agent's name");
+
+        // History survives untouched.
+        assert_eq!(count_rows(&pool, "sessions", "agent_id", agent).await, 1, "sessions must survive");
+        assert_eq!(count_rows(&pool, "audit_log", "agent_id", agent).await, 1, "audit_log must survive");
+        assert_eq!(count_rows(&pool, "audit_events", "agent_id", agent).await, 1, "audit_events must survive");
+        assert_eq!(count_rows(&pool, "usage_log", "agent_id", agent).await, 1, "usage_log must survive");
+        assert_eq!(count_rows(&pool, "session_failures", "agent_id", agent).await, 1, "session_failures must survive");
+    }
+
+    // ── Task 6: purge_history ────────────────────────────────────────────────
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn test_history_preserved_by_default(pool: sqlx::PgPool) {
+        // "Plain delete" == cleanup_agent_data only (purge_agent_history is
+        // never called unless ?purge_history=true) — assert History rows
+        // (session + its message + a usage_log row) survive.
+        let agent = "PlainDeleteAgent";
+        let (session_id,): (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO sessions (agent_id, user_id, channel) VALUES ($1, 'u1', 'web') RETURNING id",
+        )
+        .bind(agent)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO messages (session_id, agent_id, role, content) VALUES ($1, $2, 'user', 'hi')")
+            .bind(session_id).bind(agent).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO usage_log (agent_id, provider, session_id) VALUES ($1, 'openai', $2)")
+            .bind(agent).bind(session_id).execute(&pool).await.unwrap();
+
+        super::cleanup_agent_data(&pool, agent).await.unwrap();
+
+        assert_eq!(count_rows(&pool, "sessions", "agent_id", agent).await, 1, "session must survive plain delete");
+        let messages_left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE session_id = $1")
+            .bind(session_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(messages_left, 1, "message must survive plain delete");
+        assert_eq!(count_rows(&pool, "usage_log", "agent_id", agent).await, 1, "usage_log must survive plain delete");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn test_purge_history_cascades(pool: sqlx::PgPool) {
+        let agent = "PurgeMeAgent";
+        let (session_id,): (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO sessions (agent_id, user_id, channel) VALUES ($1, 'u1', 'web') RETURNING id",
+        )
+        .bind(agent)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO messages (session_id, agent_id, role, content) VALUES ($1, $2, 'user', 'hi')")
+            .bind(session_id).bind(agent).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO session_timeline (session_id, event_type) VALUES ($1, 'running')")
+            .bind(session_id).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO session_failures (session_id, agent_id, failure_kind, error_message) VALUES ($1, $2, 'llm_error', 'boom')")
+            .bind(session_id).bind(agent).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO usage_log (agent_id, provider, session_id) VALUES ($1, 'openai', $2)")
+            .bind(agent).bind(session_id).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO audit_log (agent_id, tool_name, status) VALUES ($1, 'workspace_write', 'ok')")
+            .bind(agent).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO audit_events (agent_id, event_type) VALUES ($1, 'agent_updated')")
+            .bind(agent).execute(&pool).await.unwrap();
+        // cron_runs: independent of the seeded session — anchored to its own
+        // scheduled_job, exercised via the explicit agent_id sweep only.
+        let (job_id,): (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO scheduled_jobs (agent_id, name, cron_expr, task_message) VALUES ($1, 'job1', '* * * * *', 'hi') RETURNING id",
+        )
+        .bind(agent)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO cron_runs (job_id, agent_id) VALUES ($1, $2)")
+            .bind(job_id).bind(agent).execute(&pool).await.unwrap();
+
+        super::purge_agent_history(&pool, agent).await.unwrap();
+
+        assert_eq!(count_rows(&pool, "sessions", "agent_id", agent).await, 0, "session must be gone after purge");
+        let messages_left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE session_id = $1")
+            .bind(session_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(messages_left, 0, "messages must cascade-delete with the session");
+        let timeline_left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM session_timeline WHERE session_id = $1")
+            .bind(session_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(timeline_left, 0, "session_timeline must cascade-delete with the session");
+        assert_eq!(count_rows(&pool, "session_failures", "agent_id", agent).await, 0, "session_failures must be gone");
+        assert_eq!(count_rows(&pool, "usage_log", "agent_id", agent).await, 0, "usage_log must be gone (explicit sweep)");
+        assert_eq!(count_rows(&pool, "audit_log", "agent_id", agent).await, 0, "audit_log must be gone (explicit sweep)");
+        assert_eq!(count_rows(&pool, "audit_events", "agent_id", agent).await, 0, "audit_events must be gone (explicit sweep)");
+        assert_eq!(count_rows(&pool, "cron_runs", "agent_id", agent).await, 0, "cron_runs must be gone (explicit sweep)");
     }
 }
