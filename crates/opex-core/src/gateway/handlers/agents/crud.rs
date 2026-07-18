@@ -2004,10 +2004,10 @@ mod tests {
         sqlx::query("INSERT INTO tool_quality (agent_name, tool_name) VALUES ($1, 'tool1')")
             .bind(agent).execute(pool).await.unwrap();
 
-        // ── memory_chunks special case ──
-        sqlx::query("INSERT INTO memory_chunks (agent_id, user_id, content, scope, kind) VALUES ($1, 'u1', 'private fact', 'private', 'fact')")
+        // ── memory_chunks special case (user_id column dropped by m021) ──
+        sqlx::query("INSERT INTO memory_chunks (agent_id, content, scope, kind) VALUES ($1, 'private fact', 'private', 'fact')")
             .bind(agent).execute(pool).await.unwrap();
-        sqlx::query("INSERT INTO memory_chunks (agent_id, user_id, content, scope, kind) VALUES ($1, 'u1', 'shared fact', 'shared', 'fact')")
+        sqlx::query("INSERT INTO memory_chunks (agent_id, content, scope, kind) VALUES ($1, 'shared fact', 'shared', 'fact')")
             .bind(agent).execute(pool).await.unwrap();
 
         // ── History (survive plain delete) ──
