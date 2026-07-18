@@ -82,6 +82,31 @@ pub async fn get_active_job(db: &PgPool, session_id: Uuid) -> sqlx::Result<Optio
     .await
 }
 
+/// True when a NEWER stream job exists for the same session than `job_id` —
+/// i.e. this turn's stream has been superseded by a later `POST /api/chat` on
+/// the same session (web supersede is same-session; see `register_with_token`).
+///
+/// Used by `SessionLifecycleGuard` to ownership-gate the terminal
+/// `sessions.run_status` write: a superseded turn no longer owns the session
+/// row (the newer turn re-claimed it `running`), so its `done/fail/interrupt`
+/// (and the Drop backstop) must NOT flip the row terminal — doing so would
+/// strand the newer, still-running turn. Discriminates purely on `created_at`
+/// ordering, so it does not conflate supersede with a genuine stream `error`.
+/// Fail-open on a missing/own row (returns `false`) so a normal single turn is
+/// never wrongly suppressed.
+pub async fn is_superseded(db: &PgPool, job_id: Uuid) -> sqlx::Result<bool> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS ( \
+           SELECT 1 FROM stream_jobs later \
+           JOIN stream_jobs mine ON mine.id = $1 \
+           WHERE later.session_id = mine.session_id \
+             AND later.created_at > mine.created_at )",
+    )
+    .bind(job_id)
+    .fetch_one(db)
+    .await
+}
+
 /// Delete old jobs.
 ///
 /// Audit 2026-05-08: previously this only removed rows with `finished_at IS

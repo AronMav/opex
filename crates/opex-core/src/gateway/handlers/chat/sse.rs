@@ -324,7 +324,11 @@ pub(crate) async fn api_chat_sse(
         // T3: execute the already-bootstrapped turn. The stream is already
         // registered (above), so every event execute_sse emits lands in the
         // registry buffer.
-        if let Err(e) = engine.execute_sse(boot, engine_event_tx.clone(), engine_cancel).await {
+        // T2: pass THIS turn's stream_job_id so the SessionLifecycleGuard can
+        // ownership-gate its terminal run_status writes — a same-session
+        // supersede must not let the OLD turn's finalize clobber the NEW turn's
+        // just-claimed `running` row (and vice-versa).
+        if let Err(e) = engine.execute_sse(boot, engine_event_tx.clone(), engine_cancel, Some(job_id)).await {
             tracing::error!(error = %e, "SSE chat error (agent: {})", current_agent_name);
             // Error is a non-text event — use send_async to honor CONTEXT.md
             // "non-text never dropped" contract. send_async awaits a slot on

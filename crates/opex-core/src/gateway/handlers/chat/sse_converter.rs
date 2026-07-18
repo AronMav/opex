@@ -207,7 +207,17 @@ pub(super) async fn run_converter(
                     "cancel grace window ({}s) exceeded, hard-aborting engine",
                     CANCEL_GRACE.as_secs(),
                 );
+                // T2 ownership gate: this cancel-grace hard-abort also fires on
+                // the OLD stream when a same-session supersede cancels its token.
+                // If a NEWER stream_job superseded this turn, the newer turn owns
+                // the (still-running) session row — marking it `interrupted` here
+                // would strand that turn. Only pre-mark when we are still the
+                // active turn for the session.
+                let superseded = crate::gateway::stream_jobs::is_superseded(&db, job_id)
+                    .await
+                    .unwrap_or(false);
                 if let Some(sid) = session_uuid
+                    && !superseded
                     && let Err(e) = crate::db::sessions::cleanup_session_terminated(
                         &db,
                         sid,

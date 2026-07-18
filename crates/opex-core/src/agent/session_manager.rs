@@ -255,6 +255,17 @@ pub(crate) struct SessionLifecycleGuard {
     /// recorded "guard dropped (early exit)" while `session_failures`
     /// stayed empty).
     recorded: bool,
+    /// SSE-only: the `stream_jobs.id` for THIS turn's stream, set by
+    /// `execute_sse` after the POST handler registers the stream. When present,
+    /// every terminal `run_status` write (`done`/`fail`/`interrupt` and the
+    /// Drop backstop) is ownership-gated: if a NEWER stream job exists for the
+    /// same session (`stream_jobs::is_superseded`), this turn has been
+    /// superseded by a later same-session `POST /api/chat` that already
+    /// re-claimed the session `running`, so we MUST NOT flip the row terminal
+    /// — doing so would strand the newer, still-running turn at that terminal
+    /// status (the T2 critical clobber). `None` for channel/cron/retry paths,
+    /// which never share a session row with a concurrent registry supersede.
+    stream_job_id: Option<Uuid>,
 }
 
 impl SessionLifecycleGuard {
@@ -266,12 +277,71 @@ impl SessionLifecycleGuard {
             bg_tasks: None,
             agent_id: None,
             recorded: false,
+            stream_job_id: None,
         }
     }
 
     pub fn with_tracker(mut self, tracker: std::sync::Arc<tokio_util::task::TaskTracker>) -> Self {
         self.bg_tasks = Some(tracker);
         self
+    }
+
+    /// Attach THIS turn's `stream_jobs.id` so terminal `run_status` writes are
+    /// ownership-gated against same-session supersede (T2). `execute_sse` calls
+    /// this after the POST handler registers the stream. See the `stream_job_id`
+    /// field doc for the invariant this protects.
+    pub(crate) fn set_stream_job_id(&mut self, id: Option<Uuid>) {
+        self.stream_job_id = id;
+    }
+
+    /// True when this turn has been superseded by a newer same-session stream —
+    /// its `stream_jobs` row is older than a later turn's. Only meaningful on
+    /// the SSE path (`stream_job_id` set); `None` (channel/cron/retry) is never
+    /// superseded. Fail-open (`false`) on a DB error so a transient blip cannot
+    /// silently swallow a legitimate terminal write.
+    async fn superseded_by_newer_turn(&self) -> bool {
+        match self.stream_job_id {
+            Some(job_id) => {
+                match crate::gateway::stream_jobs::is_superseded(&self.db, job_id).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(
+                            session_id = %self.session_id,
+                            error = %e,
+                            "lifecycle guard: supersede check failed — treating as not superseded"
+                        );
+                        false
+                    }
+                }
+            }
+            None => false,
+        }
+    }
+
+    /// Shared guard for `done`/`fail`/`interrupt`: if this turn was superseded
+    /// by a newer same-session stream, resolve the guard as a DB no-op and
+    /// report `true` so the caller returns before touching `run_status`.
+    ///
+    /// We mark the guard `recorded = true` and flip `outcome` out of `Running`
+    /// so the Drop backstop ALSO stays quiet (no fallback claim, no synthesized
+    /// `session_failures` row) — the newer turn is the sole owner of the
+    /// session row and will finalize it. Returns `false` (proceed normally) for
+    /// the common, non-superseded case.
+    async fn skip_terminal_write_if_superseded(&mut self, phase: &str) -> bool {
+        if !self.superseded_by_newer_turn().await {
+            return false;
+        }
+        tracing::debug!(
+            session_id = %self.session_id,
+            phase,
+            "lifecycle guard: skipping terminal run_status write — turn superseded by a newer same-session stream"
+        );
+        // Resolved-as-superseded: suppress the Drop backstop. We intentionally
+        // leave the DB row untouched (the newer turn owns it) but record the
+        // in-memory outcome as terminal so `Drop` sees a non-`Running` state.
+        self.recorded = true;
+        self.outcome = SessionOutcome::Interrupted;
+        true
     }
 
     /// Attach the owning agent's id. Required for the Drop-path
@@ -288,6 +358,9 @@ impl SessionLifecycleGuard {
     /// synthesizes a fake `session_failures` row for a session the caller
     /// explicitly considered successful — even if the DB transition failed.
     pub async fn done(&mut self) {
+        if self.skip_terminal_write_if_superseded("done").await {
+            return;
+        }
         warn_invalid_transition(Some(SessionStatus::Running), SessionStatus::Done, self.session_id);
         // Set BEFORE DB call: if the DB write fails the outcome stays `Running`
         // and Drop will run the mark-failed fallback, but we must not generate
@@ -316,6 +389,9 @@ impl SessionLifecycleGuard {
     /// `spawn_record_failure` immediately after this returns — the failure row is
     /// already in flight, so Drop must not insert another.
     pub async fn fail(&mut self, reason: &str) {
+        if self.skip_terminal_write_if_superseded("fail").await {
+            return;
+        }
         warn_invalid_transition(Some(SessionStatus::Running), SessionStatus::Failed, self.session_id);
         // See doc comment above — flipping unconditionally protects against
         // a duplicate row when the DB transition fails.
@@ -345,6 +421,9 @@ impl SessionLifecycleGuard {
     /// unconditionally to prevent the Drop fallback from synthesizing a
     /// structured failure row.
     pub async fn interrupt(&mut self, reason: &str) {
+        if self.skip_terminal_write_if_superseded("interrupt").await {
+            return;
+        }
         warn_invalid_transition(Some(SessionStatus::Running), SessionStatus::Interrupted, self.session_id);
         self.recorded = true;
         match crate::db::sessions::set_session_run_status(&self.db, self.session_id, "interrupted").await {
@@ -378,10 +457,12 @@ impl Drop for SessionLifecycleGuard {
             // no-op (Ok(false), already terminal) stays at debug.
             let db = self.db.clone();
             let sid = self.session_id;
-            // Snapshot agent_id + recorded so the async block doesn't borrow
-            // `self` after Drop returns (Drop is sync — work happens via spawn).
+            // Snapshot agent_id + recorded + stream_job_id so the async block
+            // doesn't borrow `self` after Drop returns (Drop is sync — work
+            // happens via spawn).
             let agent_id = self.agent_id.clone();
             let already_recorded = self.recorded;
+            let stream_job_id = self.stream_job_id;
             // G1: an unrecorded early exit (abort, panic, transport death) is a
             // forced termination, not an engine error — claim `interrupted` so
             // the session stays resumable. Only a recorded genuine failure
@@ -389,6 +470,20 @@ impl Drop for SessionLifecycleGuard {
             // `failed`.
             let claim_status = if already_recorded { "failed" } else { "interrupted" };
             let fut = async move {
+                // T2 ownership gate for the hard-abort path (no finalize ran, so
+                // the skip in done/fail/interrupt never fired): if a newer
+                // same-session stream superseded this turn, the newer turn owns
+                // the `running` row — the atomic running→{claim_status} claim
+                // below WOULD succeed and clobber it. Skip entirely.
+                if let Some(job_id) = stream_job_id
+                    && crate::gateway::stream_jobs::is_superseded(&db, job_id).await.unwrap_or(false)
+                {
+                    tracing::debug!(
+                        session_id = %sid,
+                        "Drop guard cleanup skipped: turn superseded by a newer same-session stream"
+                    );
+                    return;
+                }
                 // Unified cleanup path (I1). Idempotent — returns Ok(false)
                 // if another writer (finalize, watchdog, cancel-grace) already
                 // finalized the session. `cleanup_session_terminated` performs

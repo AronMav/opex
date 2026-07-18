@@ -44,7 +44,10 @@ struct ActiveStreamInner {
 
 /// A single SSE stream. `broadcast_tx` is outside the Mutex because
 /// `broadcast::Sender::send` only requires `&self`.
-#[allow(dead_code)] // session_id/created_at are diagnostic metadata, not read at runtime.
+#[allow(dead_code)] // session_id/created_at are set at insert but only diagnostic
+                    // metadata — not read at runtime (the T2 supersede pre-mark that
+                    // briefly read `session_id` was reverted; ownership gating now
+                    // lives on the per-turn SessionLifecycleGuard).
 struct ActiveStream {
     inner: Mutex<ActiveStreamInner>,
     broadcast_tx: broadcast::Sender<(u64, String)>,
@@ -138,35 +141,22 @@ impl StreamRegistry {
             {
                 tracing::warn!(error = %e, "stream_registry: failed to mark superseded job as error");
             }
-            // Task 2 (Session Resilience): pre-mark the superseded session
-            // `interrupted` with an explicit reason immediately, rather than
-            // relying solely on the cooperative cancel_token reaching
-            // `finalize` (reason "cancel_token") or, failing that, the
-            // `SessionLifecycleGuard::Drop` backstop (reason "guard dropped
-            // (early exit)"). Mirrors the SSE cancel-grace pre-mark in
-            // `sse_converter.rs`. Safe to fire immediately even though the old
-            // stream's engine task is only cooperatively cancelled here (not
-            // aborted) and may still be mid-flight: `cleanup_session_terminated`
-            // performs an atomic running→interrupted claim, and the guard's own
-            // `done()`/`fail()`/`interrupt()` transitions are no-ops at the DB
-            // level once run_status is no longer 'running' (their
-            // `set_session_run_status` call is WHERE-guarded on
-            // run_status='running') — so a late-finishing superseded turn can
-            // never clobber this explicit 'superseded' claim.
-            if let Err(e) = crate::db::sessions::cleanup_session_terminated(
-                &self.db,
-                existing.session_id,
-                "interrupted",
-                "superseded",
-            )
-            .await
-            {
-                tracing::warn!(
-                    session_id = %existing.session_id,
-                    error = %e,
-                    "stream_registry: failed to pre-mark superseded session interrupted"
-                );
-            }
+            // NOTE (T2 critical fix): we deliberately do NOT write session
+            // `run_status` here. Web supersede is SAME-SESSION — the new POST
+            // continues the session and, having already been claimed `running`
+            // by `bootstrap_sse` (ReentryMode::ResumeRunning, running→running)
+            // BEFORE this `register_with_token` runs, the NEW turn now owns the
+            // session row. The registry key is `session_id.to_string()`, so
+            // `existing` is the SAME session_id as the incoming turn; marking it
+            // `interrupted` here would flip the new turn's just-claimed
+            // `running` row to `interrupted`, and the new turn's own
+            // `SessionLifecycleGuard::done()` (WHERE-guarded on
+            // run_status='running') would then silently no-op, stranding a
+            // successful turn at `interrupted`. Supersede's ONLY session-level
+            // duty is to cooperatively cancel the OLD turn (token above); that
+            // turn finalizes `interrupted` via its own guard, which is
+            // ownership-gated (`stream_job_id`) so it cannot clobber the newer
+            // turn's row. See docs/superpowers/specs/2026-07-18-session-resilience-design.md §4 WS1.
         }
 
         streams.insert(
@@ -387,13 +377,15 @@ mod tests {
         assert!(!registry.cancel("nonexistent").await);
     }
 
-    /// Task 2 (Session Resilience, G1): registering a new stream for a
-    /// session that already has an active stream (supersede) must
-    /// immediately pre-mark the OLD session `interrupted` with the explicit
-    /// reason `superseded` — not left to the cooperative cancel_token or the
-    /// `SessionLifecycleGuard::Drop` backstop to eventually resolve it.
+    /// T2 critical (regression): web supersede is SAME-SESSION. A second
+    /// `register_with_token` for the same `session_id` must cancel the old
+    /// stream + error the old stream_job, but must NOT write `run_status` —
+    /// the session belongs to the NEW turn (already claimed `running` by
+    /// bootstrap) and flipping it here would strand that turn. Replaces the
+    /// old `supersede_pre_marks_old_session_interrupted` test, which asserted
+    /// the buggy pre-mark behaviour.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn supersede_pre_marks_old_session_interrupted(pool: sqlx::PgPool) {
+    async fn supersede_leaves_session_running_for_new_turn(pool: sqlx::PgPool) {
         let registry = StreamRegistry::new(pool.clone());
         let sid = Uuid::new_v4();
         sqlx::query(
@@ -406,7 +398,7 @@ mod tests {
         .expect("seed session");
 
         let old_token = CancellationToken::new();
-        registry
+        let job1 = registry
             .register_with_token(sid, "A", old_token.clone(), Uuid::new_v4())
             .await
             .expect("first register");
@@ -423,6 +415,16 @@ mod tests {
             "supersede must cancel the old stream's token cooperatively"
         );
 
+        // The OLD stream_job is errored…
+        let job1_status: String =
+            sqlx::query_scalar("SELECT status FROM stream_jobs WHERE id = $1")
+                .bind(job1)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(job1_status, "error", "superseded stream_job marked error");
+
+        // …but the SESSION row is left `running` for the new turn to own.
         let run_status: Option<String> =
             sqlx::query_scalar("SELECT run_status FROM sessions WHERE id = $1")
                 .bind(sid)
@@ -431,22 +433,106 @@ mod tests {
                 .unwrap();
         assert_eq!(
             run_status.as_deref(),
-            Some("interrupted"),
-            "superseded session must be pre-marked interrupted immediately, not left running"
+            Some("running"),
+            "supersede must NOT flip the session terminal — the new turn owns the running row"
         );
 
-        let payload: serde_json::Value = sqlx::query_scalar(
-            "SELECT payload FROM session_timeline \
-             WHERE session_id = $1 AND event_type = 'interrupted' \
-             ORDER BY created_at DESC LIMIT 1",
+        // No terminal timeline event was written by supersede.
+        let terminal_events: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM session_timeline \
+             WHERE session_id = $1 AND event_type IN ('interrupted','failed','done')",
         )
         .bind(sid)
         .fetch_one(&pool)
         .await
         .unwrap();
+        assert_eq!(terminal_events, 0, "supersede writes no terminal session event");
+    }
+
+    /// T2 critical (full bootstrap→register→finalize ordering): reproduces the
+    /// real same-session supersede sequence end-to-end and proves neither the
+    /// OLD turn's cooperative-cancel finalize NOR the NEW turn's success
+    /// clobbers the other. This is the ordering the prior seeded-SQL test
+    /// missed — the OLD turn's `interrupt()` runs AFTER the NEW turn re-claimed
+    /// `running`, and without the `stream_job_id` ownership gate it would flip
+    /// the row to `interrupted`, silently no-op'ing the NEW turn's `done()`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn supersede_old_finalize_does_not_clobber_new_turn(pool: sqlx::PgPool) {
+        use crate::agent::session_manager::SessionLifecycleGuard;
+
+        let registry = StreamRegistry::new(pool.clone());
+        let sid = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO sessions (id, agent_id, user_id, channel, run_status) \
+             VALUES ($1, 'A', 'u', 'ui', 'running')",
+        )
+        .bind(sid)
+        .execute(registry.db())
+        .await
+        .expect("seed session");
+
+        // Turn 1 registers its stream (job1) — session already 'running'.
+        let old_token = CancellationToken::new();
+        let job1 = registry
+            .register_with_token(sid, "A", old_token.clone(), Uuid::new_v4())
+            .await
+            .expect("register turn1");
+
+        // Turn 2's bootstrap claims the SAME session `running` (ResumeRunning:
+        // running→running, idempotent) BEFORE registering — this is the real
+        // ordering from sse.rs (bootstrap_sse then register_with_token).
+        let claimed = crate::db::sessions::claim_session_for_reentry(
+            &pool,
+            sid,
+            opex_db::ReentryMode::ResumeRunning,
+        )
+        .await
+        .expect("reentry claim");
+        assert!(claimed, "ResumeRunning claim must succeed (running→running)");
+
+        // Turn 2 registers (job2) → supersede of turn1.
+        let new_token = CancellationToken::new();
+        let job2 = registry
+            .register_with_token(sid, "A", new_token, Uuid::new_v4())
+            .await
+            .expect("register turn2 (supersede)");
+        assert!(old_token.is_cancelled(), "turn1 token cancelled by supersede");
+
+        // OLD turn1 observes the cancel and finalizes `interrupted` — with its
+        // own stream_job_id (job1) set. Because job2 is newer, the ownership
+        // gate must SKIP the run_status write.
+        let mut guard1 = SessionLifecycleGuard::new(pool.clone(), sid);
+        guard1.set_stream_job_id(Some(job1));
+        guard1.interrupt("cancel_token").await;
+
+        let after_old: Option<String> =
+            sqlx::query_scalar("SELECT run_status FROM sessions WHERE id = $1")
+                .bind(sid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(
-            payload["reason"], "superseded",
-            "explicit reason must be 'superseded', not the generic cancel_token/guard_dropped reasons"
+            after_old.as_deref(),
+            Some("running"),
+            "superseded OLD turn's interrupt must NOT clobber the new turn's running row"
+        );
+
+        // NEW turn2 finishes successfully and finalizes `done` — job2 is the
+        // newest, so the gate lets the write through.
+        let mut guard2 = SessionLifecycleGuard::new(pool.clone(), sid);
+        guard2.set_stream_job_id(Some(job2));
+        guard2.done().await;
+
+        let after_new: Option<String> =
+            sqlx::query_scalar("SELECT run_status FROM sessions WHERE id = $1")
+                .bind(sid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            after_new.as_deref(),
+            Some("done"),
+            "new turn's done() must win — the session ends 'done', not stranded 'interrupted'"
         );
     }
 

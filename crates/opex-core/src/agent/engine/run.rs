@@ -102,7 +102,9 @@ impl AgentEngine {
     ) -> Result<Uuid> {
         let boot = self.bootstrap_sse(msg, resume_session_id, force_new_session, None).await?;
         let session_id = boot.session_id;
-        self.execute_sse(boot, event_tx, cancel).await?;
+        // Retry wrapper: no StreamRegistry stream_job is registered for this
+        // path, so there is no supersede ownership to gate (None).
+        self.execute_sse(boot, event_tx, cancel, None).await?;
         Ok(session_id)
     }
 
@@ -166,6 +168,7 @@ impl AgentEngine {
         boot: BootstrapOutcome,
         tx: EngineEventSender,
         cancel: tokio_util::sync::CancellationToken,
+        stream_job_id: Option<Uuid>,
     ) -> Result<()> {
         // R-DRAIN: register the REAL pipeline cancel token (not an orphan) and
         // hold the RAII guard for the whole turn so graceful-shutdown
@@ -203,6 +206,12 @@ impl AgentEngine {
             turn_model_override,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("bootstrap always sets lifecycle_guard");
+        // T2: ownership-gate this turn's terminal run_status writes against
+        // same-session supersede. `stream_job_id` is `Some` only on the real
+        // POST /api/chat path (set after `register_with_token`); `None` for the
+        // retry wrapper (`handle_sse`) and non-SSE transports, which never share
+        // a session row with a concurrent registry supersede.
+        lifecycle_guard.set_stream_job_id(stream_job_id);
         let mut compressor = compressor;
 
         // F036: publish THIS session's SSE sender so the approval/clarify
