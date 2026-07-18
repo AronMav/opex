@@ -999,4 +999,6 @@ All other configuration goes in `config/opex.toml` or the secrets vault.
 
 **Hot reload:** config file watcher (notify crate) reloads `config/opex.toml` and agent configs without restart. Agent rename is transactional (updates 19+ DB tables).
 
+**Agent deletion:** a three-class table classification (Ephemeral / History / DropRipe) in `gateway/handlers/agents/crud.rs` drives complete cleanup — Ephemeral tables deleted, History kept unless `?purge_history=true`, `memory_chunks` private-scope deleted + shared-scope anonymized, soul biography backed up fail-closed before any destructive step, workspace dir removed with a canonicalize guard. A drift test + `agent_table_classification` doctor check catch unclassified new tables. Operator runbook: `docs/runbooks/agent-deletion.md`.
+
 For complete configuration reference see `docs/CONFIGURATION.md`.
