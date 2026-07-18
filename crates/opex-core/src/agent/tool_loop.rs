@@ -14,7 +14,22 @@ pub struct ToolLoopConfig {
     pub max_auto_continues: u8,
     pub max_loop_nudges: usize,
     pub error_break_threshold: usize,
+    /// Sliding window (most-recent N tool calls) scanned for a repeated
+    /// identical call that is NOT consecutive — catches "alternating" loops the
+    /// `break_threshold` (consecutive) counter misses, e.g. A,B,A,B,A,B where the
+    /// model ping-pongs between two tools (or a tool + a "thinking" call) with
+    /// the same args each time. 0 disables the window scan.
+    pub loop_window_size: usize,
+    /// How many times the SAME (tool,args) hash may appear within
+    /// `loop_window_size` before it is treated as a loop. Break fires on the
+    /// occurrence that reaches this count. 0 disables the window scan.
+    pub loop_window_repeat_threshold: usize,
 }
+
+/// Default sliding-window span for the non-consecutive repeat scan.
+pub const DEFAULT_LOOP_WINDOW_SIZE: usize = 24;
+/// Default repeat count within the window that trips a loop break.
+pub const DEFAULT_LOOP_WINDOW_REPEAT_THRESHOLD: usize = 6;
 
 impl ToolLoopConfig {
     pub fn effective_max_iterations(&self) -> usize {
@@ -33,6 +48,8 @@ impl Default for ToolLoopConfig {
             max_auto_continues: 5,
             max_loop_nudges: 3,
             error_break_threshold: 3,
+            loop_window_size: DEFAULT_LOOP_WINDOW_SIZE,
+            loop_window_repeat_threshold: DEFAULT_LOOP_WINDOW_REPEAT_THRESHOLD,
         }
     }
 }
@@ -54,6 +71,8 @@ pub struct LoopDetector {
     consecutive_errors: usize,
     last_error_tool: Option<String>,
     error_break_threshold: usize,
+    loop_window_size: usize,
+    loop_window_repeat_threshold: usize,
 }
 
 impl LoopDetector {
@@ -68,7 +87,24 @@ impl LoopDetector {
             consecutive_errors: 0,
             last_error_tool: None,
             error_break_threshold: config.error_break_threshold,
+            loop_window_size: config.loop_window_size,
+            loop_window_repeat_threshold: config.loop_window_repeat_threshold,
         }
+    }
+
+    /// Count how many of the most-recent `loop_window_size` recorded calls share
+    /// `hash`. Used by [`check_limits`] to catch non-consecutive (alternating)
+    /// repeats that the consecutive counter resets away.
+    fn window_repeat_count(&self, hash: u64) -> usize {
+        if self.loop_window_size == 0 {
+            return 0;
+        }
+        self.recent
+            .iter()
+            .rev()
+            .take(self.loop_window_size)
+            .filter(|&&h| h == hash)
+            .count()
     }
 
     /// PHASE 1: Check if this call WOULD trigger a loop break. Call BEFORE execution.
@@ -77,6 +113,19 @@ impl LoopDetector {
             let hash = Self::hash_call(tool_name, args);
             if self.last_hash == Some(hash) && self.consecutive + 1 >= self.break_threshold {
                 return LoopStatus::Break(format!("tool '{}' called {} times consecutively", tool_name, self.consecutive + 1));
+            }
+            // Non-consecutive (alternating) repeat: the identical call keeps
+            // recurring within the recent window even though other calls are
+            // interleaved (A,B,A,B,…). The consecutive counter above resets on
+            // every B, so this is the only guard that catches it.
+            if self.loop_window_repeat_threshold > 0 {
+                let occurrences = self.window_repeat_count(hash) + 1; // +1 = this pending call
+                if occurrences >= self.loop_window_repeat_threshold {
+                    return LoopStatus::Break(format!(
+                        "tool '{}' called {} times with identical args within the last {} calls (alternating loop)",
+                        tool_name, occurrences, self.loop_window_size
+                    ));
+                }
             }
         }
         LoopStatus::Ok
@@ -196,6 +245,8 @@ impl From<&crate::config::ToolLoopSettings> for ToolLoopConfig {
             max_auto_continues: s.max_auto_continues,
             max_loop_nudges: s.max_loop_nudges,
             error_break_threshold: s.error_break_threshold.unwrap_or(3),
+            loop_window_size: DEFAULT_LOOP_WINDOW_SIZE,
+            loop_window_repeat_threshold: DEFAULT_LOOP_WINDOW_REPEAT_THRESHOLD,
         }
     }
 }
@@ -215,6 +266,7 @@ mod tests {
             max_auto_continues: 3,
             max_loop_nudges: 2,
             error_break_threshold: 3,
+            ..ToolLoopConfig::default()
         }
     }
 
@@ -241,6 +293,63 @@ mod tests {
         // A third identical call must still trip immediately.
         let status2 = detector.check_limits("tool", &args);
         assert!(matches!(status2, LoopStatus::Break(_)), "detector must retain history after nudge — no reset() allowed");
+    }
+
+    /// The Arty failure mode: the model ping-pongs A,B,A,B,… with identical args,
+    /// so the CONSECUTIVE counter resets on every B and never trips. The sliding
+    /// window scan must still catch it once A recurs `loop_window_repeat_threshold`
+    /// times within `loop_window_size`.
+    #[test]
+    fn alternating_loop_is_detected_by_window_scan() {
+        // High consecutive threshold so ONLY the window scan can fire.
+        let cfg = ToolLoopConfig { break_threshold: 100, ..ToolLoopConfig::default() };
+        let mut d = LoopDetector::new(&cfg);
+        let a = serde_json::json!({"thought": "same"});
+        let b = serde_json::json!({"skill": "web-search"});
+        // Record 5 interleaved A/B pairs — A appears 5× (default threshold is 6).
+        for _ in 0..5 {
+            assert!(matches!(d.check_limits("A", &a), LoopStatus::Ok));
+            d.record_execution("A", &a, true);
+            d.record_execution("B", &b, true); // resets the consecutive streak
+        }
+        // The 6th identical A within the window trips the alternating-loop guard.
+        assert!(
+            matches!(d.check_limits("A", &a), LoopStatus::Break(_)),
+            "A,B,A,B… with identical args must trip the window scan"
+        );
+    }
+
+    #[test]
+    fn alternating_below_threshold_is_ok() {
+        let cfg = ToolLoopConfig { break_threshold: 100, ..ToolLoopConfig::default() };
+        let mut d = LoopDetector::new(&cfg);
+        let a = serde_json::json!({"x": 1});
+        let b = serde_json::json!({"y": 2});
+        for _ in 0..3 {
+            d.record_execution("A", &a, true);
+            d.record_execution("B", &b, true);
+        }
+        assert!(
+            matches!(d.check_limits("A", &a), LoopStatus::Ok),
+            "3 repeats is below the window threshold (6) — must not trip"
+        );
+    }
+
+    /// Same tool with DIFFERENT args each time (distinct hashes) is legitimate
+    /// progress (e.g. sequentialthinking advancing thoughtNumber, or reading
+    /// different files) and must never trip the window scan.
+    #[test]
+    fn distinct_args_do_not_false_positive() {
+        let cfg = ToolLoopConfig { break_threshold: 100, ..ToolLoopConfig::default() };
+        let mut d = LoopDetector::new(&cfg);
+        for i in 0..20 {
+            let args = serde_json::json!({ "n": i });
+            assert!(
+                matches!(d.check_limits("tool", &args), LoopStatus::Ok),
+                "distinct-arg calls must never trip the window scan"
+            );
+            d.record_execution("tool", &args, true);
+        }
     }
 
     #[test]

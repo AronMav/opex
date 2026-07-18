@@ -1162,6 +1162,37 @@ pub async fn sweep_orphan_tool_results(db: &PgPool) -> Result<u64> {
     Ok(result.rows_affected())
 }
 
+/// Session-scoped variant of [`sweep_orphan_tool_results`]. Same safe predicate
+/// (delete a `role='tool'` row only when NO assistant in the SAME session
+/// declares its `tool_call_id`), but limited to one session so it can run on
+/// session entry — a crash that commits a tool-result while losing its parent
+/// assistant no longer waits for the next process restart to be swept. The
+/// read-path filter already keeps such rows out of the LLM context; this stops
+/// them accumulating. NOTE: it deliberately does NOT touch "boundary-split"
+/// results (whose assistant DOES exist but was excluded by a compaction
+/// boundary) — those are valid history, not orphans. Returns rows deleted.
+pub async fn sweep_orphan_tool_results_for_session(db: &PgPool, session_id: Uuid) -> Result<u64> {
+    let result = sqlx::query(
+        "DELETE FROM messages t \
+         WHERE t.session_id = $1 \
+           AND t.role = 'tool' \
+           AND t.tool_call_id IS NOT NULL \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM messages a \
+             CROSS JOIN LATERAL jsonb_array_elements(a.tool_calls) elem \
+             WHERE a.session_id = t.session_id \
+               AND a.role = 'assistant' \
+               AND a.tool_calls IS NOT NULL \
+               AND jsonb_typeof(a.tool_calls) = 'array' \
+               AND elem->>'id' = t.tool_call_id \
+           )",
+    )
+    .bind(session_id)
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Stamp the originating channel `chat_id` on a session (idempotent). Called on
 /// each channel turn so an interrupted interactive `/goal` can be channel-pushed
 /// (e.g. Telegram) instead of only surfacing in the UI bell. No-op for web

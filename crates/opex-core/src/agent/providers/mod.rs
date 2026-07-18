@@ -477,9 +477,17 @@ pub(super) fn strip_orphaned_tool_messages(messages: &[Message]) -> Vec<Message>
                 if in_valid {
                     result.push(msg.clone());
                 } else {
-                    tracing::warn!(
+                    // Expected, handled condition — NOT an error. A compaction
+                    // boundary (or a branch switch) can exclude an assistant
+                    // tool_call from the assembled context while its result row
+                    // survives; dropping the now-orphaned result here keeps the
+                    // transcript valid for the provider. True crash-orphans are
+                    // persist-swept on session entry (`sweep_orphan_tool_results_for_session`),
+                    // so this fires per-turn only for the benign boundary-split
+                    // case — hence debug, not warn (was WARN-spamming ~every turn).
+                    tracing::debug!(
                         tool_call_id = id_str,
-                        "dropping orphaned tool message (no preceding tool_call in context)"
+                        "dropping orphaned tool message (no preceding tool_call in assembled context)"
                     );
                 }
             }

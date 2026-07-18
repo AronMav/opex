@@ -186,6 +186,18 @@ pub async fn bootstrap<S: EventSink>(
         Err(e) => tracing::warn!(session=%session_id, error=%e, "cleanup_session_streaming_messages failed"),
     }
 
+    // Persist-clean true orphan tool-result rows for THIS session on entry (a
+    // crash can commit a tool-result while losing its parent assistant). The
+    // read-path filter already keeps them out of context; this stops them
+    // accumulating without waiting for the next process restart's global sweep.
+    // Boundary-split results (assistant present but excluded by compaction) are
+    // NOT touched — they are valid history, not orphans.
+    match crate::db::sessions::sweep_orphan_tool_results_for_session(&engine.cfg().db, session_id).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(session=%session_id, count=%n, "swept orphaned tool-result rows on session entry"),
+        Err(e) => tracing::warn!(session=%session_id, error=%e, "session orphan-tool sweep failed (non-fatal)"),
+    }
+
     log_timeline_running_with_retry(&sm, session_id).await;
 
     // 3. Emit first Phase event (silently dropped by SseSink; routed by ChannelStatusSink)
