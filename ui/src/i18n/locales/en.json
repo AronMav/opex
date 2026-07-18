@@ -1377,5 +1377,11 @@
   "palette.blocked_streaming": "Can't jump to a message while the agent is responding",
   "palette.favourites": "Favourites",
   "palette.session_deleted": "That session no longer exists",
-  "palette.open_error": "Failed to open the session — try again"
+  "palette.open_error": "Failed to open the session — try again",
+
+  "fields.model_loading": "Loading models…",
+  "fields.model_list_unavailable": "List unavailable — type the model id manually",
+  "fields.model_no_match": "No matches — the value will be used as-is",
+  "fields.select_provider_first": "Select a provider first",
+  "fields.voice_loading": "Loading voices…"
 }

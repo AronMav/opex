@@ -1377,5 +1377,11 @@
   "palette.blocked_streaming": "Нельзя перейти к сообщению, пока агент отвечает",
   "palette.favourites": "Избранное",
   "palette.session_deleted": "Эта сессия больше не существует",
-  "palette.open_error": "Не удалось открыть сессию — попробуйте ещё раз"
+  "palette.open_error": "Не удалось открыть сессию — попробуйте ещё раз",
+
+  "fields.model_loading": "Загрузка моделей…",
+  "fields.model_list_unavailable": "Список недоступен — введите id модели вручную",
+  "fields.model_no_match": "Совпадений нет — значение будет использовано как есть",
+  "fields.select_provider_first": "Сначала выберите провайдера",
+  "fields.voice_loading": "Загрузка голосов…"
 }
