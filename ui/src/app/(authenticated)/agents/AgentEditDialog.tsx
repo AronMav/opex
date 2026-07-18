@@ -168,10 +168,6 @@ export interface AgentEditDialogProps {
   saving: boolean;
   canSave: boolean;
   onSave: () => void;
-  // Models (used by RoutingRulesEditor)
-  discoveredModels: Record<string, string[]>;
-  modelsLoading?: string | null;
-  fetchModels: (provider: string) => void;
   // Tools
   toolNames: string[];
   // Secrets
@@ -231,8 +227,6 @@ export function AgentEditDialog({
   saving,
   canSave,
   onSave,
-  discoveredModels,
-  fetchModels,
   toolNames,
   // secretNames, channelSaving, onOpenChannelDialog, onRestartChannel,
   // onDeleteChannelRequest — accepted but no longer consumed here after the
@@ -620,7 +614,7 @@ export function AgentEditDialog({
 
             {/* ── Channels tab ── */}
             <div className={`col-start-1 row-start-1 space-y-3 transition-none ${activeTab === "channels" ? "" : "opacity-0 pointer-events-none select-none"}`}>
-                <RoutingRulesEditor routing={form.routing} llmProviders={llmProviders} discoveredModels={discoveredModels} fetchModels={fetchModels} onChange={(routing) => upd({ routing })} />
+                <RoutingRulesEditor routing={form.routing} llmProviders={llmProviders} onChange={(routing) => upd({ routing })} />
                 {editName && (
                   <div className="space-y-2 border-t border-border/30 pt-3">
                     <div className="flex items-center justify-between">

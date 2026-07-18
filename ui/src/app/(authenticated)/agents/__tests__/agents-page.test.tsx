@@ -36,10 +36,7 @@ vi.mock("../AgentEditDialog", () => ({
   DeleteChannelDialog: () => null,
 }));
 
-vi.mock("../RoutingRulesEditor", () => ({
-  PROVIDERS: [{ value: "minimax", label: "MiniMax" }],
-  FALLBACK_MODELS: {},
-}));
+vi.mock("../RoutingRulesEditor", () => ({}));
 
 // Only `apiGet("/api/agents")` matters for the initial render.
 const { apiGet } = vi.hoisted(() => ({ apiGet: vi.fn() }));

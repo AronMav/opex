@@ -54,8 +54,6 @@ vi.mock("@/hooks/use-profiles", () => ({
 }));
 
 vi.mock("./RoutingRulesEditor", () => ({
-  PROVIDERS: [],
-  FALLBACK_MODELS: {},
   RoutingRulesEditor: () => null,
 }));
 
@@ -368,8 +366,6 @@ describe("AgentEditDialog UI", () => {
       saving: false,
       canSave: true,
       onSave: vi.fn(),
-      discoveredModels: {},
-      fetchModels: vi.fn(),
       toolNames: [],
       secretNames: [],
       channels: [],

@@ -24,12 +24,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import type { AgentInfo, AgentDetail, ChannelRow, SecretInfo, Provider } from "@/types/api";
+import type { AgentInfo, AgentDetail, ChannelRow, SecretInfo } from "@/types/api";
 import { Settings, LogOut, Bot, Plus, Search } from "lucide-react";
 import { Loader } from "@/components/ui/loader";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
-import { FALLBACK_MODELS } from "./RoutingRulesEditor";
 import {
   AgentEditDialog,
   ChannelDialog,
@@ -414,37 +413,6 @@ export default function AgentsPage() {
     }
   }, []);
 
-  // Dynamic model discovery
-  const [discoveredModels, setDiscoveredModels] = useState<Record<string, string[]>>({});
-  const [modelsLoading, setModelsLoading] = useState<string | null>(null);
-  const discoveredModelsRef = useRef(discoveredModels);
-  discoveredModelsRef.current = discoveredModels;
-
-  const fetchModels = useCallback(async (providerName: string, providerConnection?: string) => {
-    const cacheKey = providerConnection || providerName;
-    if (discoveredModelsRef.current[cacheKey]) return;
-    setModelsLoading(cacheKey);
-    try {
-      // Resolve provider UUID: look up by connection name or provider type name
-      const lookup = providerConnection || providerName;
-      const providersData = await apiGet<{ providers: Provider[] }>("/api/providers");
-      const match = (providersData.providers || []).find(
-        (p) => p.name === lookup || p.provider_type === providerName
-      );
-      if (!match) {
-        setDiscoveredModels((prev) => ({ ...prev, [cacheKey]: FALLBACK_MODELS[providerName] ?? [] }));
-        return;
-      }
-      const data = await apiGet<{ models: Array<string | { id: string }> }>(`/api/providers/${match.id}/models`);
-      const ids = (data.models || []).map((m) => typeof m === "string" ? m : m.id);
-      setDiscoveredModels((prev) => ({ ...prev, [cacheKey]: ids.length > 0 ? ids : (FALLBACK_MODELS[providerName] ?? []) }));
-    } catch {
-      setDiscoveredModels((prev) => ({ ...prev, [cacheKey]: FALLBACK_MODELS[providerName] ?? [] }));
-    } finally {
-      setModelsLoading(null);
-    }
-  }, []);
-
   const loadChannels = useCallback(async (name: string) => {
     try {
       const data = await apiGet<ChannelRow[]>(`/api/agents/${name}/channels`);
@@ -737,9 +705,6 @@ export default function AgentsPage() {
         saving={saving}
         canSave={canSave}
         onSave={saveAgent}
-        discoveredModels={discoveredModels}
-        modelsLoading={modelsLoading}
-        fetchModels={fetchModels}
         toolNames={toolNames}
         secretNames={secretNames}
         channels={channels}

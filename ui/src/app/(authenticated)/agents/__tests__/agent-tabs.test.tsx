@@ -58,8 +58,6 @@ vi.mock("@/components/ui/cron-schedule-picker", () => ({
 }));
 
 vi.mock("./RoutingRulesEditor", () => ({
-  PROVIDERS: [],
-  FALLBACK_MODELS: {},
   RoutingRulesEditor: () => null,
 }));
 
@@ -75,8 +73,6 @@ function makeProps(formOverride: Partial<FormState> = {}, updFn = vi.fn()): Agen
     saving: false,
     canSave: true,
     onSave: vi.fn(),
-    discoveredModels: {},
-    fetchModels: vi.fn(),
     toolNames: [],
     secretNames: [],
     channels: [],

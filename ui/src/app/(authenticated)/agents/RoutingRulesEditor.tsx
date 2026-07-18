@@ -8,23 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Field } from "@/components/ui/field";
 import type { Provider, RoutingRule } from "@/types/api";
-import { Link2, Settings, Plus, ChevronDown, ChevronUp, X } from "lucide-react";
-
-export const PROVIDERS = [
-  { value: "minimax", label: "MiniMax" },
-  { value: "anthropic", label: "Anthropic" },
-  { value: "google", label: "Google Gemini" },
-  { value: "openai", label: "OpenAI" },
-  { value: "deepseek", label: "DeepSeek" },
-  { value: "groq", label: "Groq" },
-  { value: "together", label: "Together AI" },
-  { value: "openrouter", label: "OpenRouter" },
-  { value: "mistral", label: "Mistral" },
-  { value: "xai", label: "xAI (Grok)" },
-  { value: "perplexity", label: "Perplexity" },
-  { value: "ollama", label: "Ollama (local)" },
-  { value: "claude-cli", label: "Claude CLI" },
-] as const;
+import { Settings, Plus, ChevronDown, ChevronUp, X } from "lucide-react";
+import { ModelCombobox, ProviderSelect } from "@/components/provider-fields";
 
 export const ROUTING_CONDITIONS: { value: string; labelKey: TranslationKey }[] = [
   { value: "default", labelKey: "agents.routing_default" },
@@ -37,27 +22,9 @@ export const ROUTING_CONDITIONS: { value: string; labelKey: TranslationKey }[] =
   { value: "fallback", labelKey: "agents.routing_fallback" },
 ];
 
-export const FALLBACK_MODELS: Record<string, string[]> = {
-  minimax: ["MiniMax-M2.5", "MiniMax-M1"],
-  anthropic: ["claude-sonnet-4-20250514", "claude-haiku-4-5-20251001", "claude-opus-4-20250514"],
-  google: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],
-  openai: ["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "o4-mini", "o3"],
-  deepseek: ["deepseek-chat", "deepseek-reasoner"],
-  groq: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it"],
-  openrouter: [],
-  mistral: ["mistral-large-latest", "mistral-small-latest", "codestral-latest"],
-  xai: ["grok-3", "grok-3-mini"],
-  perplexity: ["sonar-pro", "sonar"],
-  ollama: [],
-  "claude-cli": [],
-  together: [],
-};
-
 function RoutingRuleRow({
   rule,
   llmProviders,
-  discoveredModels,
-  fetchModels,
   onChange,
   onRemove,
   onMoveUp,
@@ -65,8 +32,6 @@ function RoutingRuleRow({
 }: {
   rule: RoutingRule;
   llmProviders: Provider[];
-  discoveredModels: Record<string, string[]>;
-  fetchModels: (connection: string) => void;
   onChange: (patch: Partial<RoutingRule>) => void;
   onRemove: () => void;
   onMoveUp?: () => void;
@@ -79,36 +44,25 @@ function RoutingRuleRow({
     <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-2">
       <div className="flex flex-col sm:flex-row sm:items-center gap-2">
         <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-2">
-          <Select
-            value={rule.provider || "__none__"}
-            onValueChange={(v) => {
-              if (v === "__none__") { onChange({ provider: "", model: "" }); return; }
+          <ProviderSelect
+            value={rule.provider}
+            allowNone
+            categories={["text", "llm"]}
+            className="w-full bg-background border-border text-xs h-9"
+            onChange={(v) => {
+              if (v === "") { onChange({ provider: "", model: "" }); return; }
               const conn = llmProviders.find((p) => p.name === v);
               onChange({ provider: v, model: conn?.default_model ?? "" });
-              fetchModels(v);
             }}
-          >
-            <SelectTrigger className="w-full bg-background border-border text-xs h-9">
-              <SelectValue placeholder="Select provider..." />
-            </SelectTrigger>
-            <SelectContent className="border-border">
-              <SelectItem value="__none__" className="text-xs text-muted-foreground">
-                <span className="text-muted-foreground">&mdash;</span>
-              </SelectItem>
-              {llmProviders.map((conn) => (
-                <SelectItem key={conn.name} value={conn.name} className="text-xs">
-                  <span className="flex items-center gap-2">
-                    <Link2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    <span>{conn.name}</span>
-                    <span className="text-muted-foreground-subtle text-2xs">{conn.default_model}</span>
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Input value={rule.model} placeholder={t("agents.model_placeholder")}
-            className="bg-background border-border font-mono text-xs h-8"
-            onChange={(e) => onChange({ model: e.target.value })} />
+          />
+          <ModelCombobox
+            value={rule.model}
+            onChange={(m) => onChange({ model: m })}
+            providerId={llmProviders.find((p) => p.name === rule.provider)?.id ?? null}
+            disabled={!rule.provider}
+            placeholder={t("agents.model_placeholder")}
+            className="w-full"
+          />
           <Select value={rule.condition} onValueChange={(v) => onChange({ condition: v })}>
             <SelectTrigger className="w-full bg-background border-border text-xs h-9">
               <SelectValue />
@@ -175,16 +129,12 @@ function RoutingRuleRow({
 export interface RoutingRulesEditorProps {
   routing: RoutingRule[];
   llmProviders: Provider[];
-  discoveredModels: Record<string, string[]>;
-  fetchModels: (connection: string) => void;
   onChange: (routing: RoutingRule[]) => void;
 }
 
 export function RoutingRulesEditor({
   routing,
   llmProviders,
-  discoveredModels,
-  fetchModels,
   onChange,
 }: RoutingRulesEditorProps) {
   const { t } = useTranslation();
@@ -225,8 +175,6 @@ export function RoutingRulesEditor({
               key={idx}
               rule={rule}
               llmProviders={llmProviders}
-              discoveredModels={discoveredModels}
-              fetchModels={fetchModels}
               onChange={(patch) => {
                 const next = [...routing];
                 next[idx] = { ...next[idx], ...patch };
