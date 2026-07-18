@@ -14,9 +14,6 @@ vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
 }));
 
-const { apiGet } = vi.hoisted(() => ({ apiGet: vi.fn() }));
-vi.mock("@/lib/api", () => ({ apiGet }));
-
 vi.mock("@/lib/queries", () => ({
   useProviders: () => ({
     data: [
@@ -69,7 +66,6 @@ describe("ProfileEditor", () => {
 
   beforeEach(async () => {
     mockMutate.mockClear();
-    apiGet.mockClear();
     const mod = await import("../_parts/ProfileEditor");
     ProfileEditor = mod.ProfileEditor;
   });
