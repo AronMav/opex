@@ -297,20 +297,38 @@ pub async fn bootstrap<S: EventSink>(
 
     // 7. Enrich (slow) — runs AFTER the user message is durable so a refresh
     //    during enrichment still finds the conversation in a consistent state.
+    //    Hard 60s outer timeout: each internal step (URL fetch 10s, vision via
+    //    toolgate, voice transcription) has its own timeout, but a hung
+    //    toolgate can still chain past those — this is the safety net so
+    //    bootstrap can never block the engine task indefinitely on enrichment.
     let toolgate_url = engine
         .cfg()
         .app_config
         .toolgate_url
         .clone()
         .unwrap_or_else(|| "http://localhost:9011".to_string());
-    let enrich = crate::agent::pipeline::subagent::enrich_message_text(
-        engine.http_client(),
-        &engine.cfg().app_config.gateway.listen,
-        &toolgate_url,
-        &user_text,
-        &ctx.msg.attachments,
+    const ENRICHMENT_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+    let enrich = match tokio::time::timeout(
+        ENRICHMENT_HARD_TIMEOUT,
+        crate::agent::pipeline::subagent::enrich_message_text(
+            engine.http_client(),
+            &engine.cfg().app_config.gateway.listen,
+            &toolgate_url,
+            &user_text,
+            &ctx.msg.attachments,
+        ),
     )
-    .await;
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            tracing::warn!(
+                session_id = %session_id,
+                "enrichment exceeded 60s hard timeout; proceeding with original text"
+            );
+            crate::agent::pipeline::subagent::EnrichResult { text: user_text.clone() }
+        }
+    };
     let enriched_text = enrich.text;
 
     // Decision-webhooks for BeforeMessage: block the turn or inject context.
