@@ -1242,8 +1242,11 @@ pub async fn set_session_chat_id(db: &PgPool, session_id: Uuid, chat_id: i64) ->
 }
 
 /// Mark a session as permanently failed after max retries exhausted.
+/// Mark a session `failed`. Defensive WHERE clause: only touches sessions
+/// currently `running` — never clobbers an already-done/interrupted row that
+/// might have been flipped by a concurrent finalize or lifecycle-guard drop.
 pub async fn mark_session_failed(db: &PgPool, session_id: Uuid) -> Result<()> {
-    sqlx::query("UPDATE sessions SET run_status = 'failed' WHERE id = $1")
+    sqlx::query("UPDATE sessions SET run_status = 'failed' WHERE id = $1 AND run_status = 'running'")
         .bind(session_id)
         .execute(db)
         .await?;

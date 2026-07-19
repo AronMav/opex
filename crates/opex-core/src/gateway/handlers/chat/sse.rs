@@ -406,6 +406,24 @@ pub(crate) async fn api_chat_sse(
         let request_span = tracing::info_span!("sse_engine_turn");
         let engine_handle = bus.bg_tasks.spawn(
             async move {
+                // Turn-level hard timeout: 10 minutes. Defense-in-depth against
+                // runaway tool execution (MCP hang), stuck LLM streaming, or
+                // any internal pipeline hang that bypasses the per-tool/per-call
+                // timeouts. On expiry, cancels the engine task (which propagates
+                // into execute() via the shared cancel token) so finalize can
+                // mark the session interrupted instead of leaving it running
+                // forever — the user sees an "interrupted" reply instead of a
+                // spinner that never stops.
+                const TURN_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+                let turn_cancel = engine_cancel.clone();
+                let turn_timer = tokio::spawn(async move {
+                    tokio::time::sleep(TURN_HARD_TIMEOUT).await;
+                    tracing::warn!(
+                        "turn exceeded 600s hard timeout — cancelling engine task"
+                    );
+                    turn_cancel.cancel();
+                });
+
                 let current_agent_name = engine_for_task.name().to_string();
                 // Bootstrap INSIDE the task — no longer awaited by the POST
                 // handler. If this fails, emit Error+Finish so the stream
@@ -421,9 +439,6 @@ pub(crate) async fn api_chat_sse(
                     Err(e) => {
                         tracing::error!(error = %e, "SSE bootstrap error (agent: {})", current_agent_name);
                         let sid_str = resp_session_id.to_string();
-                        // Mark session failed (best-effort — a DB error here is
-                        // non-fatal; the stream error event below is the
-                        // user-visible signal).
                         if let Err(e2) = opex_db::sessions::mark_session_failed(&db_for_task, resp_session_id).await {
                             tracing::warn!(error = %e2, session_id = %resp_session_id, "failed to mark session failed after bootstrap error");
                         }
@@ -436,11 +451,8 @@ pub(crate) async fn api_chat_sse(
                                 continuation: false,
                             })
                             .await;
-                        // Mark the registry entry finished so a waiting GET
-                        // /stream subscriber unblocks (converter would
-                        // normally do this, but the converter's finish path
-                        // only fires when execute_sse returns).
                         registry_for_task.mark_finished(&sid_str).await;
+                        turn_timer.abort();
                         return;
                     }
                 };
@@ -449,8 +461,25 @@ pub(crate) async fn api_chat_sse(
                     .await
                 {
                     tracing::error!(error = %e, "SSE chat error (agent: {})", current_agent_name);
+                    let sid_str = resp_session_id.to_string();
+                    if let Err(e2) = opex_db::sessions::mark_session_failed(&db_for_task, resp_session_id).await {
+                        tracing::warn!(error = %e2, session_id = %resp_session_id, "failed to mark session failed after execute_sse error");
+                    }
                     let _ = engine_event_tx.send_async(StreamEvent::Error(e.to_string())).await;
+                    let _ = engine_event_tx
+                        .send_async(StreamEvent::Finish {
+                            finish_reason: "error".to_string(),
+                            continuation: false,
+                        })
+                        .await;
+                    registry_for_task.mark_finished(&sid_str).await;
+                    turn_timer.abort();
+                    return;
                 }
+
+                // Normal completion: cancel the timeout so it doesn't fire after
+                // the turn already finished.
+                turn_timer.abort();
 
                 let event = opex_types::ws::WsEvent::SessionUpdated {
                     agent: agent_for_broadcast,
