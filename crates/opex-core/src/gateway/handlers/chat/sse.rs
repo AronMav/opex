@@ -182,7 +182,7 @@ pub(crate) async fn api_chat_sse(
     tracing::info!(agent_name = %agent_name, mentioned = ?mentioned_agent, "mention routing: final target agent");
 
     // Send cleaned text to LLM (without @mention prefix — prevents LLM from echoing it)
-    let mut msg = opex_types::IncomingMessage {
+    let msg = opex_types::IncomingMessage {
         user_id: crate::agent::channel_kind::channel::UI.to_string(),
         text: Some(cleaned_text),
         attachments: req.attachments,
@@ -241,169 +241,6 @@ pub(crate) async fn api_chat_sse(
     // existing-session case (force_new_session=false + session_id=Some).
     let resume_session_id = if force_new_session { None } else { session_id };
 
-    // Determine the session_id + user_message_id UP-FRONT so we can register
-    // the stream and return 202 BEFORE bootstrap runs. Bootstrap+execute move
-    // into the detached engine task — a client disconnect (page refresh during
-    // POST) no longer drops the bootstrap future mid-way, leaving an orphan
-    // session row with run_status=NULL and no user_message (the exact bug we
-    // just fixed).
-    //
-    //   * New chat (force_new=true): use the client-provided id if present,
-    //     otherwise generate fresh. The id is stamped onto msg.context so
-    //     context_builder uses `session_create_new_with_id` and the row gets
-    //     the EXACT id we promised in the 202.
-    //   * Existing chat (session_id=Some, not force_new): use that id directly.
-    //   * Legacy (neither): we don't know the id up-front, so fall through to
-    //     the synchronous bootstrap path below. Channels don't hit this path
-    //     (they use handle_with_status / handle_streamming), so the cost is
-    //     limited to misbehaving UI clients.
-    let preallocated_session_id = if force_new_session {
-        let sid = session_id.unwrap_or_else(uuid::Uuid::new_v4);
-        // Ensure context_builder's force_new branch picks up THIS id (whether
-        // client-provided or freshly generated). Without this, bootstrap would
-        // generate its own UUID for the no-pre-allocation case and the 202
-        // we return would point at a non-existent session.
-        msg.context = serde_json::json!({ "client_session_id": sid.to_string() });
-        Some(sid)
-    } else if session_id.is_some() {
-        session_id
-    } else {
-        None
-    };
-
-    let preallocated_user_message_id = req.user_message_id.or_else(|| {
-        // For the preallocated path we need a user_message_id too — generate
-        // one and stamp it on the msg so bootstrap's save_message_ex_with_id
-        // uses it. The id is also echoed in the 202 below.
-        if preallocated_session_id.is_some() {
-            let id = uuid::Uuid::new_v4();
-            msg.user_message_id = Some(id);
-            Some(id)
-        } else {
-            None
-        }
-    });
-
-    // Preallocated path: register stream + spawn detached engine task + 202.
-    if let Some(resp_session_id) = preallocated_session_id {
-        let resp_user_message_id =
-            preallocated_user_message_id.expect("user_message_id is set whenever session_id is");
-
-        // Register the stream BEFORE responding so a subsequent GET /{id}/stream
-        // finds it. The engine task will populate the buffer.
-        let Some(job_id) = bus
-            .stream_registry
-            .register_with_token(
-                resp_session_id,
-                &agent_name,
-                pipeline_cancel.clone(),
-                resp_user_message_id,
-            )
-            .await
-        else {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({"error": "stream registry at capacity"})),
-            )
-                .into_response();
-        };
-
-        // Phase 62 RES-01: bounded engine-side channel + coalescing converter task.
-        let (raw_tx, raw_rx) = tokio::sync::mpsc::channel::<StreamEvent>(256);
-        let (event_tx, event_rx) =
-            tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
-        let (sse_tx, sse_rx) =
-            tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(1024);
-        drop(sse_rx);
-
-        crate::gateway::sse::spawn_coalescing_converter(
-            raw_rx,
-            event_tx.clone(),
-            infra.metrics.clone(),
-            msg.agent_id.clone(),
-        );
-
-        let engine_event_tx = crate::agent::engine_event_sender::EngineEventSender::new(raw_tx);
-
-        // Detached engine task: bootstrap + execute + finalize run here. Even
-        // if the client disconnects immediately after the 202, this task keeps
-        // running on `bus.bg_tasks` (TaskTracker) and the converter buffers
-        // every emitted event into StreamRegistry — a later GET /stream
-        // replays them. Bootstrap failure is surfaced as an Error event so the
-        // UI sees it via the stream instead of a hanging 202.
-        let ui_tx = bus.ui_event_tx.clone();
-        let agent_for_broadcast = msg.agent_id.clone();
-        let engine_cancel = pipeline_cancel.clone();
-        let engine_for_task = engine.clone();
-        let boot_msg = msg.clone();
-        let request_span = tracing::info_span!("sse_engine_turn");
-        let engine_handle = bus.bg_tasks.spawn(
-            async move {
-                let current_agent_name = engine_for_task.name().to_string();
-                // Bootstrap INSIDE the task — no longer awaited by the POST
-                // handler. If this fails, emit Error+Finish so the stream
-                // surfaces it instead of hanging.
-                let boot = match engine_for_task
-                    .bootstrap_sse(&boot_msg, resume_session_id, force_new_session, model_override)
-                    .await
-                {
-                    Ok(b) => b,
-                    Err(e) => {
-                        tracing::error!(error = %e, "SSE bootstrap error (agent: {})", current_agent_name);
-                        let _ = engine_event_tx
-                            .send_async(StreamEvent::Error(e.to_string()))
-                            .await;
-                        let _ = engine_event_tx
-                            .send_async(StreamEvent::Finish {
-                                finish_reason: "error".to_string(),
-                                continuation: false,
-                            })
-                            .await;
-                        return;
-                    }
-                };
-                if let Err(e) = engine_for_task
-                    .execute_sse(boot, engine_event_tx.clone(), engine_cancel, Some(job_id))
-                    .await
-                {
-                    tracing::error!(error = %e, "SSE chat error (agent: {})", current_agent_name);
-                    let _ = engine_event_tx.send_async(StreamEvent::Error(e.to_string())).await;
-                }
-
-                let event = opex_types::ws::WsEvent::SessionUpdated {
-                    agent: agent_for_broadcast,
-                    session_id: None,
-                    channel: Some(crate::agent::channel_kind::channel::UI.to_string()),
-                };
-                ui_tx.send(event.to_json()).ok();
-            }
-            .instrument(request_span),
-        );
-
-        let ctx = ConverterCtx {
-            db: infra.db.clone(),
-            invite_db: infra.db.clone(),
-            registry: bus.stream_registry.clone(),
-            sse_tx,
-            pipeline_cancel,
-            job_id,
-            agent_name,
-            mentioned_for_invite: mentioned_agent,
-            user_text_for_title,
-        };
-        crate::trace_propagation::spawn_traced(run_converter(ctx, event_rx, engine_handle));
-
-        return (
-            StatusCode::ACCEPTED,
-            Json(accepted_response_body(resp_session_id, resp_user_message_id)),
-        )
-            .into_response();
-    }
-
-    // Legacy synchronous path (no preallocated session_id) — keep the old
-    // behaviour where bootstrap runs before 202 is sent. Used for legacy
-    // requests without force_new_session AND without session_id (channels
-    // don't hit this POST handler, so this is rare).
     let boot = match engine.bootstrap_sse(&msg, resume_session_id, force_new_session, model_override).await {
         Ok(b) => b,
         Err(e) => {
@@ -418,7 +255,7 @@ pub(crate) async fn api_chat_sse(
     let resp_session_id = boot.session_id;
     let resp_user_message_id = boot.user_message_id;
 
-    // Register the stream BEFORE responding — guarantees a subsequent
+    // 2. Register the stream BEFORE responding — guarantees a subsequent
     //    GET /{id}/stream finds it. Capture `job_id` HERE (it used to be
     //    captured inside the converter's now-removed register block); it threads
     //    into ConverterCtx so the Finish/Error/exit `stream_jobs::set_content`
