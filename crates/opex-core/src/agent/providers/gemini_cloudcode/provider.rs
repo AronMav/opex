@@ -272,7 +272,7 @@ impl LlmProvider for GeminiCloudCodeProvider {
                         status,
                     })
                 }
-                SendError::Http { status, body: b, retry_after } => {
+                SendError::Http { status, body: b, retry_after: _ } => {
                     // Detect free-tier 429 quota error.
                     let redacted = crate::redact::redact_oauth_str(&b);
                     if status == 429

@@ -608,10 +608,10 @@ mod tests {
                     .fetch_one(pool)
                     .await
                     .unwrap();
-            if let Some(s) = &status {
-                if TERMINAL.contains(&s.as_str()) {
-                    return s.clone();
-                }
+            if let Some(s) = &status
+                && TERMINAL.contains(&s.as_str())
+            {
+                return s.clone();
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
