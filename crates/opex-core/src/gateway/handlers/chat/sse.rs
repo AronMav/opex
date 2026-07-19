@@ -284,10 +284,34 @@ pub(crate) async fn api_chat_sse(
         }
     });
 
-    // Preallocated path: register stream + spawn detached engine task + 202.
+    // Preallocated path: create session row + register stream + spawn detached engine task + 202.
     if let Some(resp_session_id) = preallocated_session_id {
         let resp_user_message_id =
             preallocated_user_message_id.expect("user_message_id is set whenever session_id is");
+
+        // Create the session row BEFORE register_with_token — the stream_jobs
+        // table has a FK on session_id, so an INSERT there for a not-yet-created
+        // session violates the constraint and register_with_token returns None
+        // (which the user sees as "stream registry at capacity"). For force_new
+        // we use the pre-allocated id; for resume (session_id=Some, not
+        // force_new) the session already exists and we skip this step.
+        if force_new_session
+            && let Err(e) = opex_db::sessions::create_new_session_with_id(
+                &infra.db,
+                resp_session_id,
+                &agent_name,
+                crate::agent::channel_kind::channel::UI,
+                crate::agent::channel_kind::channel::UI,
+            )
+            .await
+        {
+            tracing::error!(error = %e, "preallocated session create failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
 
         // Register the stream BEFORE responding so a subsequent GET /{id}/stream
         // finds it. The engine task will populate the buffer.
