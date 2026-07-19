@@ -143,21 +143,35 @@ pub struct TimelineToolEvent {
 
 /// Load tool_end events for a session to replay into LoopDetector (BUG-026).
 /// The timeline payload for tool_end events contains: {"tool_call_id": "...", "tool_name": "...", "success": true/false, "args_hash": "..."}
+///
+/// H5 fix: bounded to the most recent `TOOL_EVENTS_WARMUP_LIMIT` rows. The
+/// LoopDetector's `recent` deque is 64 entries wide, so anything older than
+/// ~256 rows is discarded immediately — fetching all rows paid O(N) DB scan
+/// + O(N) allocation per resume on long-lived sessions (cron / goal driver).
 pub async fn load_tool_events(db: &PgPool, session_id: Uuid) -> Result<Vec<TimelineToolEvent>> {
     let rows = sqlx::query_as::<_, (String, Option<bool>, Option<String>)>(
         r#"
-        SELECT
-            payload->>'tool_name' AS tool_name,
-            (payload->>'success')::bool AS success,
-            payload->>'args_hash' AS args_hash
-        FROM session_timeline
-        WHERE session_id = $1
-          AND event_type = 'tool_end'
-          AND payload->>'tool_name' IS NOT NULL
+        WITH recent_rows AS (
+            SELECT
+                payload->>'tool_name' AS tool_name,
+                (payload->>'success')::bool AS success,
+                payload->>'args_hash' AS args_hash,
+                created_at
+            FROM session_timeline
+            WHERE session_id = $1
+              AND event_type = 'tool_end'
+              AND payload->>'tool_name' IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT $2
+        )
+        SELECT tool_name, success, args_hash FROM recent_rows
         ORDER BY created_at ASC
         "#,
     )
     .bind(session_id)
+    // 4× the LoopDetector `recent` window (64). Keeps hash-repeat + recent
+    // error streak fully hydrated without paying for the entire history.
+    .bind(TOOL_EVENTS_WARMUP_LIMIT as i64)
     .fetch_all(db)
     .await?;
 
@@ -170,6 +184,10 @@ pub async fn load_tool_events(db: &PgPool, session_id: Uuid) -> Result<Vec<Timel
         })
         .collect())
 }
+
+/// H5: maximum number of `tool_end` rows `load_tool_events` will hydrate the
+/// LoopDetector with. See that function's doc comment for the rationale.
+pub const TOOL_EVENTS_WARMUP_LIMIT: usize = 256;
 
 #[cfg(test)]
 mod tests {

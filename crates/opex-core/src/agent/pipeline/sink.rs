@@ -87,7 +87,16 @@ impl SseSink {
 impl EventSink for SseSink {
     async fn emit(&mut self, ev: PipelineEvent) -> Result<(), SinkError> {
         match ev {
-            PipelineEvent::Stream(se) => self.tx.send_async(se).await.map_err(|_| SinkError::Closed),
+            // H10 fix: distinguish DroppedTextDelta (a contract-permitted
+            // transient drop under coalescer saturation) from a true Closed
+            // signal. The old mapping conflated both into SinkError::Closed,
+            // which execute() then interpreted as "client disconnected" and
+            // terminated the turn as Interrupted on a false positive.
+            PipelineEvent::Stream(se) => match self.tx.send_async(se).await {
+                Ok(()) => Ok(()),
+                Err(crate::agent::engine_event_sender::EngineSendError::DroppedTextDelta) => Ok(()),
+                Err(_) => Err(SinkError::Closed),
+            },
             PipelineEvent::Phase(_)   => Ok(()), // SSE does not transport typing indicator
         }
     }
@@ -114,7 +123,16 @@ impl EventSink for ChannelStatusSink {
     async fn emit(&mut self, ev: PipelineEvent) -> Result<(), SinkError> {
         match ev {
             PipelineEvent::Phase(p) => {
-                if let Some(tx) = &self.status_tx { let _ = tx.send(p); }
+                // H9 fix: surface a closed status channel as SinkError::Closed
+                // so execute() can transition the turn to Interrupted instead
+                // of silently swallowing the error and continuing to emit into
+                // the void. `UnboundedSender::send` only errs on a closed
+                // receiver, so the mapping is unambiguous.
+                if let Some(tx) = &self.status_tx
+                    && tx.send(p).is_err()
+                {
+                    return Err(SinkError::Closed);
+                }
                 Ok(())
             }
             PipelineEvent::Stream(StreamEvent::TextDelta(s)) => {

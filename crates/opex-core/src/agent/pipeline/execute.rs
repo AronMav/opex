@@ -460,7 +460,24 @@ pub async fn execute<S: EventSink>(
         let (llm_result, partial, sink_fatal) =
             forward_chunks_into_sink(llm_fut, chunk_rx, sink).await;
         if let Some(e) = sink_fatal {
-            return Err(e);
+            // H2 fix: do NOT bubble Err — that would skip finalize and lose the
+            // partial text the sink already streamed. Return an Interrupted
+            // outcome carrying the partial text so the caller's finalize() arm
+            // persists it and the channel-adapter / UI reload stays consistent.
+            tracing::warn!(
+                session_id = %bootstrap_outcome.session_id,
+                error = %e,
+                partial_len = partial.len(),
+                "execute: sink fatal — returning Interrupted with partial text"
+            );
+            return Ok(ExecuteOutcome {
+                status: ExecuteStatus::Interrupted("sink_fatal"),
+                final_text: partial,
+                thinking_json: None,
+                messages_len_at_end: messages.len(),
+                final_parent_msg_id: user_message_id,
+                assistant_message_id: assistant_msg_id,
+            });
         }
 
         // 6. Handle LLM result

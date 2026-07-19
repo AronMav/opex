@@ -48,7 +48,23 @@ export function useSmoothedText(rawText: string, isStreaming: boolean) {
     const tick = () => {
       if (queueRef.current.length > 0) {
         const jump = Math.ceil(queueRef.current.length * QUEUE_JUMP_RATIO);
-        const charsToShow = Math.min(queueRef.current.length, jump);
+        let charsToShow = Math.min(queueRef.current.length, jump);
+
+        // C1 fix: do NOT slice between a UTF-16 surrogate pair — slicing a
+        // high surrogate (0xD800–0xDBFF) apart from its low surrogate
+        // (0xDC00–0xDFFF) produces a dangling surrogate that renders as
+        // "\uFFFD" (the replacement char) and flickers during the stream.
+        // If the cut lands between a pair, advance by one code unit so the
+        // pair stays intact. The leftover low surrogate is preserved in the
+        // queue for the next tick (where it rejoins its high surrogate
+        // because we look at the new boundary again).
+        const lastUnit = queueRef.current.charCodeAt(charsToShow - 1);
+        if (lastUnit >= 0xd800 && lastUnit <= 0xdbff && charsToShow < queueRef.current.length) {
+          const nextUnit = queueRef.current.charCodeAt(charsToShow);
+          if (nextUnit >= 0xdc00 && nextUnit <= 0xdfff) {
+            charsToShow += 1;
+          }
+        }
 
         const nextPart = queueRef.current.slice(0, charsToShow);
         queueRef.current = queueRef.current.slice(charsToShow);

@@ -373,7 +373,9 @@ pub enum FinalizeOutcome {
     },
     Interrupted {
         partial: String,
-        reason: &'static str,
+        // Owned so dynamic reasons (e.g. a goal-lock acquisition error) fit
+        // alongside the &'static str literals from ExecuteStatus::Interrupted.
+        reason: String,
     },
 }
 
@@ -473,14 +475,17 @@ pub async fn finalize<S: EventSink>(
 
     let out = match &outcome {
         FinalizeOutcome::Done { assistant_text, thinking_json, turn_limited } => {
-            // Resolve the guard before the DB write (C2): if save_message fails the
-            // session must not be marked 'failed' by guard Drop — the LLM already
-            // produced its response. Failure to persist is non-fatal for session status.
-            lifecycle_guard.done().await;
+            // Persist the assistant message BEFORE resolving the guard. If the
+            // INSERT fails the user will not see the reply on reload (the
+            // `messages` table is the source of truth for history), so the
+            // honest session status is `interrupted` rather than `done`. The
+            // streamed content remains in `stream_jobs` (written by the SSE
+            // converter on Finish) for an operator-side recovery path.
+            //
             // Use the pre-generated UUID (sent as `messageId` in the `MessageStart`
             // SSE event) so the DB row ID matches the live buffer ID in the frontend.
             // This prevents duplicate messages caused by `historyIds.has(m.id)` misses.
-            if let Err(e) = crate::db::sessions::save_message_ex_with_id(
+            let persisted = crate::db::sessions::save_message_ex_with_id(
                 &ctx.db,
                 ctx.assistant_message_id,
                 ctx.session_id,
@@ -494,13 +499,19 @@ pub async fn finalize<S: EventSink>(
                 None,
                 None, // final assistant row carries no tool-loop step index
             )
-            .await
-            {
-                tracing::error!(
-                    session_id = %ctx.session_id,
-                    error = %e,
-                    "finalize: failed to persist assistant message"
-                );
+            .await;
+            match &persisted {
+                Ok(()) => {
+                    lifecycle_guard.done().await;
+                }
+                Err(e) => {
+                    tracing::error!(
+                        session_id = %ctx.session_id,
+                        error = %e,
+                        "finalize: failed to persist assistant message; marking session interrupted"
+                    );
+                    lifecycle_guard.interrupt("persist_failed").await;
+                }
             }
             spawn_knowledge_extraction(
                 ctx.db.clone(),
@@ -892,7 +903,7 @@ pub fn execute_status_to_finalize(
         },
         ExecuteStatus::Interrupted(reason) => FinalizeOutcome::Interrupted {
             partial: final_text,
-            reason,
+            reason: reason.to_string(),
         },
     }
 }
@@ -1281,7 +1292,7 @@ mod tests {
             ctx,
             FinalizeOutcome::Interrupted {
                 partial: "p".into(),
-                reason: "sink_closed",
+                reason: "sink_closed".into(),
             },
             &mut sink,
             &mut guard,

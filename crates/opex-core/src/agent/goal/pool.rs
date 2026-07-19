@@ -79,7 +79,7 @@ pub fn goal_lock(locks: &GoalLocks, session_id: Uuid) -> Arc<tokio::sync::Mutex<
     lock
 }
 
-/// Acquire the serialization guard a user turn holds against the goal driver.
+/// H4 fix: cancel-aware + timeout-bounded acquisition of the goal guard.
 ///
 /// FIX C2: the guard is taken UNCONDITIONALLY whenever goal locks are configured
 /// — independent of goal-driver *pool membership*. A driver task is spawned and
@@ -87,16 +87,39 @@ pub fn goal_lock(locks: &GoalLocks, session_id: Uuid) -> Arc<tokio::sync::Mutex<
 /// registers its handle in the pool (`resume_autonomous_goals`,
 /// `bootstrap_cron_goal`, `/goal`). Gating the user guard on `is_running` left a
 /// TOCTOU window in which a user turn saw an empty pool, skipped the lock, and
-/// ran concurrently with the driver's first turn on the same session. Returns
-/// `None` only when the engine has no goal infrastructure (`locks` is `None`).
-pub async fn user_turn_goal_guard(
+/// ran concurrently with the driver's first turn on the same session.
+///
+/// A stuck goal driver (or one that does not observe its own cancel token) used
+/// to block the user turn indefinitely with no UI recourse — `/abort` cancelled
+/// the pipeline token but did NOT release the goal lock. This variant observes
+/// both:
+///   * `cancel` — aborted turns bail out promptly instead of waiting on the lock
+///   * `timeout` — last-resort upper bound so a wedged driver cannot lock the
+///     chat forever.
+///
+/// Returns:
+///   * `Ok(Some(_))` — lock acquired, turn may proceed.
+///   * `Ok(None)`    — no goal infrastructure; no-op.
+///   * `Err(reason)` — acquisition cancelled or timed out. The caller should
+///     finalize the turn as `Interrupted` with `reason` so the user gets a
+///     visible "agent busy / cancelled" outcome instead of a silent hang.
+pub async fn user_turn_goal_guard_cancelable(
     locks: Option<&GoalLocks>,
     session_id: Uuid,
-) -> Option<tokio::sync::OwnedMutexGuard<()>> {
-    match locks {
-        Some(l) => Some(goal_lock(l, session_id).lock_owned().await),
-        None => None,
-    }
+    cancel: CancellationToken,
+    timeout: std::time::Duration,
+) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, &'static str> {
+    let Some(l) = locks else { return Ok(None) };
+    let lock = goal_lock(l, session_id);
+    let acquired = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err("goal_lock_cancelled"),
+        res = tokio::time::timeout(timeout, lock.lock_owned()) => match res {
+            Ok(g) => g,
+            Err(_) => return Err("goal_lock_timeout"),
+        },
+    };
+    Ok(Some(acquired))
 }
 
 #[cfg(test)]
@@ -137,9 +160,19 @@ mod tests {
         // Precondition: the driver is NOT observable via the pool yet.
         assert!(!is_running(&pool, sid), "spawn window: driver not yet registered in pool");
 
-        // A concurrent user turn must still serialize behind the driver.
+        // A concurrent user turn must still serialize behind the driver. Use a
+        // non-cancelled token and a generous timeout so the only thing that can
+        // gate acquisition here is the driver's held lock.
         let locks2 = locks.clone();
-        let user = tokio::spawn(async move { user_turn_goal_guard(Some(&locks2), sid).await });
+        let user = tokio::spawn(async move {
+            user_turn_goal_guard_cancelable(
+                Some(&locks2),
+                sid,
+                CancellationToken::new(),
+                Duration::from_secs(5),
+            )
+            .await
+        });
 
         tokio::time::sleep(Duration::from_millis(75)).await;
         assert!(
@@ -151,13 +184,21 @@ mod tests {
         let guard = tokio::time::timeout(Duration::from_secs(1), user)
             .await
             .expect("user turn must acquire once the driver releases")
-            .unwrap();
+            .unwrap()
+            .expect("guard acquired, not cancelled/timed out");
         assert!(guard.is_some(), "user turn acquired the goal guard after release");
     }
 
     #[tokio::test]
     async fn user_turn_guard_is_none_without_locks() {
         // No goal infrastructure (e.g. configs without goal support) → no guard, no-op.
-        assert!(user_turn_goal_guard(None, Uuid::new_v4()).await.is_none());
+        let res = user_turn_goal_guard_cancelable(
+            None,
+            Uuid::new_v4(),
+            CancellationToken::new(),
+            Duration::from_secs(1),
+        )
+        .await;
+        assert!(matches!(res, Ok(None)));
     }
 }

@@ -56,6 +56,15 @@ export function createStreamingRenderer(store: StoreAccess) {
   // empty envelope cheaply when there is no in-flight turn, so a shorter
   // staleness window recovers a suspended socket faster with negligible cost.
   const VISIBILITY_STALE_MS = 15_000;
+  // C2 fix: focused-tab activity watchdog. `reader.read()` may park forever
+  // on a half-open TCP connection (LB idle timeout, NAT rebinding, WiFi flap
+  // before TCP keepalive surfaces RST) — `onConnectionLost` does NOT fire and
+  // the visibility handler is a no-op while the tab stays focused. The
+  // watchdog polls `_lastEventTime` every interval and reattaches any agent
+  // whose stream has been silent for longer than the threshold while it
+  // remains in an active phase.
+  const ACTIVITY_WATCHDOG_INTERVAL_MS = 5_000;
+  const ACTIVITY_WATCHDOG_STALE_MS = 30_000;
 
   // ── Fix I: bounded reconnect (backoff + cap) ─────────────────────────────
   // `onConnectionLost` previously re-`connect`ed immediately with no delay,
@@ -458,7 +467,7 @@ export function createStreamingRenderer(store: StoreAccess) {
   // triggers. Hiding the tab (`visibilitychange`→hidden) is a STRICT no-op:
   // no dispose, no settle, no state reset. A live stream must never be torn
   // down just because the tab lost focus.
-  function reattachStaleAgents() {
+  function reattachStaleAgents(staleMs: number) {
     if (_disposed) return;
     const now = Date.now();
     const agentsState = store.get().agents as Record<string, AgentState>;
@@ -477,7 +486,7 @@ export function createStreamingRenderer(store: StoreAccess) {
       // nothing (settleMessages:false — a reconnect CONTINUATION of the same
       // turn, same message id), and replays the envelope (or an empty
       // finished envelope if the turn already ended while hidden).
-      if (last !== 0 && now - last < VISIBILITY_STALE_MS) continue;
+      if (last !== 0 && now - last < staleMs) continue;
       try {
         connect(agent, sid);
       } catch (e) {
@@ -494,16 +503,24 @@ export function createStreamingRenderer(store: StoreAccess) {
     // Hidden branch: NO dispose, NO settle, NO state reset (G4). Only the
     // transition TO visible triggers a reattach check.
     if (document.visibilityState !== "visible") return;
-    reattachStaleAgents();
+    reattachStaleAgents(VISIBILITY_STALE_MS);
   }
 
   function handleOnline() {
-    reattachStaleAgents();
+    reattachStaleAgents(VISIBILITY_STALE_MS);
   }
 
   function handlePageShow() {
-    reattachStaleAgents();
+    reattachStaleAgents(VISIBILITY_STALE_MS);
   }
+
+  // C2: focused-tab activity watchdog. The visibility/online/pageshow triggers
+  // above only fire on browser lifecycle events, so a half-open socket on a tab
+  // that STAYS focused would never be noticed. This timer polls independently
+  // and reattaches any active-phase agent silent past ACTIVITY_WATCHDOG_STALE_MS
+  // (a laxer threshold than the event-driven path — polling must not thrash a
+  // merely-slow LLM).
+  let _activityWatchdog: ReturnType<typeof setInterval> | null = null;
 
   let _visibilityListenerAttached = false;
   function attachLifecycleListeners() {
@@ -513,6 +530,12 @@ export function createStreamingRenderer(store: StoreAccess) {
     if (typeof window !== "undefined") {
       window.addEventListener("online", handleOnline);
       window.addEventListener("pageshow", handlePageShow);
+    }
+    if (_activityWatchdog === null) {
+      _activityWatchdog = setInterval(() => {
+        if (_disposed) return;
+        reattachStaleAgents(ACTIVITY_WATCHDOG_STALE_MS);
+      }, ACTIVITY_WATCHDOG_INTERVAL_MS);
     }
     _visibilityListenerAttached = true;
   }
@@ -552,6 +575,10 @@ export function createStreamingRenderer(store: StoreAccess) {
       window.removeEventListener("pageshow", handlePageShow);
     }
     _visibilityListenerAttached = false;
+    if (_activityWatchdog !== null) {
+      clearInterval(_activityWatchdog);
+      _activityWatchdog = null;
+    }
     for (const t of Object.values(uiStateSaveTimers)) clearTimeout(t);
     for (const k of Object.keys(uiStateSaveTimers)) delete uiStateSaveTimers[k];
     // Fix I: cancel every pending reconnect timer and clear attempt counters.

@@ -372,7 +372,37 @@ pub async fn bootstrap<S: EventSink>(
 
     // 8. Slash-command detection (spec §11.1 — future extension point for richer outputs)
     let command_output = match engine.handle_command(&user_text, ctx.msg).await {
-        Some(result) => Some(result?),
+        Some(result) => match result {
+            Ok(out) => Some(out),
+            Err(e) => {
+                // H8 fix: persist a synthetic assistant error message before
+                // bubbling — otherwise the user message is orphaned in the DB
+                // (no reply row) and the lifecycle-guard Drop marks the
+                // session `interrupted` with an opaque diagnostic. A visible
+                // assistant row that explains the failure gives the user a
+                // clear signal that the command (not the engine) errored.
+                let reason = format!("Command failed: {e}");
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %e,
+                    "slash-command handler returned an error; persisting synthetic assistant message"
+                );
+                let error_text = format!("⚠️ {reason}");
+                let _ = sm
+                    .save_message_ex(
+                        session_id,
+                        "assistant",
+                        &error_text,
+                        None,
+                        None,
+                        Some(&engine.cfg().agent.name),
+                        None,
+                        Some(user_message_id),
+                    )
+                    .await;
+                return Err(e);
+            }
+        },
         None => None,
     };
 

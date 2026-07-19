@@ -137,11 +137,17 @@ pub(crate) async fn chat_completions(
             tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(1024);
 
         let messages = req.messages.clone();
-        tokio::spawn(async move {
+        // H6 fix: route through `engine.state().bg_tasks` (TaskTracker) instead
+        // of bare `tokio::spawn` so graceful shutdown awaits these tasks. The
+        // OpenAI-compat path used to leak detached tasks on SIGTERM — the
+        // runtime dropped them mid-LLM-call, losing in-flight state.
+        let outer_bg_tasks = engine.state().bg_tasks.clone();
+        outer_bg_tasks.spawn(async move {
             let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<String>(1024);
 
             let engine_clone = engine.clone();
-            let handle = tokio::spawn(async move {
+            let inner_bg_tasks = engine_clone.state().bg_tasks.clone();
+            let handle = inner_bg_tasks.spawn(async move {
                 engine_clone.handle_openai(&messages, Some(chunk_tx)).await
             });
 

@@ -93,6 +93,15 @@ impl EngineEventSender {
         &self.inner
     }
 
+    /// Identity comparison: returns true iff `self` and `other` wrap the same
+    /// underlying mpsc channel. Used by `SseSenderGuard` to perform a
+    /// compare-and-swap on drop so a superseding turn's sender is not evicted
+    /// by an older turn unwinding (H1 fix).
+    #[inline]
+    pub fn same_channel(&self, other: &EngineEventSender) -> bool {
+        self.inner.same_channel(&other.inner)
+    }
+
     /// Non-async send using `try_send` under the hood.
     ///
     /// * **TextDelta:** on Full returns `Err(DroppedTextDelta)` (contract-compliant drop).

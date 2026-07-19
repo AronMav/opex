@@ -370,18 +370,38 @@ async fn agent_processing_loop(
         // this live agent was spawned at — forwarded so nested `agent` tool calls
         // observe the parent's depth via enriched `_context.subagent_depth`.
 
-        let result = engine
-            .run_subagent_with_session(
-                &msg.text,
-                max_iterations,
-                deadline,
-                Some(cancel.clone()),
-                None,
-                None,
-                Some(session_id),
-                depth,
-            )
-            .await;
+        // H7 fix: panic recovery. If `run_subagent_with_session` panics (or
+        // any of its downstream calls do), the unwinding would propagate out
+        // of this loop, end the spawned task, and leave `status` stuck at
+        // STATUS_PROCESSING forever — the user-visible `agent(status)` would
+        // keep reporting "processing" long after the task is dead. Wrap the
+        // call so a panic becomes an `Err` that flows through the same
+        // result-handling path as a normal failure.
+        let result = std::panic::AssertUnwindSafe(
+            engine
+                .run_subagent_with_session(
+                    &msg.text,
+                    max_iterations,
+                    deadline,
+                    Some(cancel.clone()),
+                    None,
+                    None,
+                    Some(session_id),
+                    depth,
+                ),
+        );
+        let result = match futures_util::FutureExt::catch_unwind(result).await {
+            Ok(inner) => inner,
+            Err(panic_payload) => {
+                let msg_string = panic_payload
+                    .downcast_ref::<String>()
+                    .map(|s| s.as_str())
+                    .or_else(|| panic_payload.downcast_ref::<&'static str>().copied())
+                    .unwrap_or("<non-string panic payload>")
+                    .to_string();
+                Err(anyhow::anyhow!("live agent panicked: {msg_string}"))
+            }
+        };
 
         let result_text = match result {
             Ok(text) => text,

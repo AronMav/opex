@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use opex_types::{Message, ToolDefinition};
 use crate::agent::error_classify;
 use crate::agent::providers::LlmProvider;
+use crate::agent::providers::error::{LlmCallError, PartialState};
 
 // ── Budget ──────────────────────────────────────────────────────────
 
@@ -531,6 +532,10 @@ pub async fn chat_stream_with_overflow_recovery(
 // ── Transient retry (streaming) ─────────────────────────────────────
 
 /// Streaming variant of [`chat_with_transient_retry`].
+///
+/// `session_cancel` is observed during every retry backoff sleep so a user
+/// pressing Stop (or a graceful shutdown) interrupts the turn immediately
+/// instead of waiting for the full delay × `max_attempts`.
 pub async fn chat_stream_with_transient_retry(
     provider: &dyn LlmProvider,
     messages: &mut Vec<Message>,
@@ -538,11 +543,19 @@ pub async fn chat_stream_with_transient_retry(
     chunk_tx: mpsc::Sender<String>,
     compact: &impl Compactor,
     opts: crate::agent::providers::CallOptions,
+    session_cancel: tokio_util::sync::CancellationToken,
 ) -> Result<opex_types::LlmResponse> {
     let config = error_classify::RetryConfig::default();
     let mut last_error: Option<anyhow::Error> = None;
 
     for attempt in 0..config.max_attempts {
+        // Check cancellation before each attempt — same invariant the outer
+        // deadline_retry_inner loop already enforces for its own attempts.
+        if session_cancel.is_cancelled() {
+            return Err(anyhow::Error::new(LlmCallError::UserCancelled {
+                partial_state: PartialState::Empty,
+            }));
+        }
         let result = chat_stream_with_overflow_recovery(
             provider,
             messages,
@@ -571,7 +584,17 @@ pub async fn chat_stream_with_transient_retry(
                 );
                 last_error = Some(e);
                 if attempt < config.max_attempts - 1 {
-                    tokio::time::sleep(delay).await;
+                    // Cancel-aware sleep: a Stop press / shutdown must preempt
+                    // the backoff instead of waiting for the full delay.
+                    tokio::select! {
+                        biased;
+                        _ = session_cancel.cancelled() => {
+                            return Err(anyhow::Error::new(LlmCallError::UserCancelled {
+                                partial_state: PartialState::Empty,
+                            }));
+                        }
+                        _ = tokio::time::sleep(delay) => {}
+                    }
                 }
             }
         }
@@ -693,6 +716,7 @@ async fn deadline_retry_inner(
             chunk_tx.clone(),
             compact,
             opts.clone(),
+            session_cancel.clone(),
         ).await;
 
         match result {

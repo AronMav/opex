@@ -23,10 +23,24 @@ use crate::agent::stream_event::StreamEvent;
 struct SseSenderGuard {
     map: std::sync::Arc<dashmap::DashMap<Uuid, EngineEventSender>>,
     session_id: Uuid,
+    /// The sender this guard installed. Compared against the live map value on
+    /// drop so a superseding turn's sender cannot be evicted by an older turn
+    /// unwinding (H1 fix). `EngineEventSender` is itself `Clone` sharing the
+    /// same underlying mpsc channel — identity is established via
+    /// `same_channel`, not Arc pointer equality.
+    installed: EngineEventSender,
 }
 impl Drop for SseSenderGuard {
     fn drop(&mut self) {
-        self.map.remove(&self.session_id);
+        // Compare-and-swap: only remove the entry if it still points at OUR
+        // sender. If a newer turn has already installed its own sender for the
+        // same session_id (the narrow TOCTOU window `claim_session_with_retry`
+        // admits), evicting unconditionally would dead-route approvals to the
+        // live turn. Remove iff the channel identity matches.
+        //
+        // `remove_if` performs the check atomically under the DashMap shard
+        // lock so a concurrent `insert` cannot race between check and remove.
+        self.map.remove_if(&self.session_id, |_, v| v.same_channel(&self.installed));
     }
 }
 
@@ -217,10 +231,12 @@ impl AgentEngine {
         // F036: publish THIS session's SSE sender so the approval/clarify
         // managers can target it specifically. The RAII guard removes only this
         // session's entry on every exit path (bootstrap here already succeeded).
+        let installed_sse_sender = sse_sender.clone();
         self.sse_event_tx().insert(session_id, sse_sender);
         let _sse_sender_guard = SseSenderGuard {
             map: self.sse_event_tx().clone(),
             session_id,
+            installed: installed_sse_sender,
         };
 
         // Session-recovery prompt for the interactive behaviour layer. Sourced
@@ -354,8 +370,44 @@ impl AgentEngine {
         // Serialize this user turn against the goal driver (no-op when the engine
         // has no goal infrastructure). Acquired unconditionally — independent of
         // pool membership — to close the driver spawn-window TOCTOU (FIX C2).
-        let _goal_guard =
-            crate::agent::goal::pool::user_turn_goal_guard(self.cfg().goal_locks.as_ref(), session_id).await;
+        // H4 fix: cancel- and timeout-aware — a stuck goal driver must not block
+        // the user turn indefinitely with no UI recourse.
+        let _goal_guard = match crate::agent::goal::pool::user_turn_goal_guard_cancelable(
+            self.cfg().goal_locks.as_ref(),
+            session_id,
+            cancel.clone(),
+            std::time::Duration::from_secs(30),
+        )
+        .await
+        {
+            Ok(g) => g,
+            Err(reason) => {
+                tracing::warn!(
+                    session = %session_id,
+                    reason,
+                    "goal guard acquisition bailed out; finalizing as interrupted"
+                );
+                let fin_ctx = finalize::finalize_context_from_engine(
+                    self,
+                    session_id,
+                    boot_for_execute.messages.len(),
+                    Some(user_message_id),
+                    crate::agent::compressor::Compressor::new(0),
+                    uuid::Uuid::nil(),
+                );
+                let _: anyhow::Result<String> = finalize::finalize(
+                    fin_ctx,
+                    finalize::FinalizeOutcome::Interrupted {
+                        partial: String::new(),
+                        reason: reason.to_string(),
+                    },
+                    &mut s,
+                    &mut lifecycle_guard,
+                )
+                .await;
+                return Ok(());
+            }
+        };
         // Interactive layers: fallback provider + session-corruption recovery
         // (no-op without a configured fallback). Stops a recoverable provider
         // outage / corrupt-context error from failing the live web turn.
@@ -646,8 +698,45 @@ impl AgentEngine {
         // autonomous loop and a real user turn never execute on the same session
         // concurrently, even in the driver spawn window before it joins the pool
         // (FIX C2). No-op when the engine has no goal infrastructure.
-        let _goal_guard =
-            crate::agent::goal::pool::user_turn_goal_guard(self.cfg().goal_locks.as_ref(), session_id).await;
+        // H4 fix: cancel- and timeout-aware so a stuck goal driver cannot block
+        // the channel turn indefinitely — the dispatcher's `cancel` and a 30s
+        // upper bound bail out cleanly with a visible Interrupted outcome.
+        let _goal_guard = match crate::agent::goal::pool::user_turn_goal_guard_cancelable(
+            self.cfg().goal_locks.as_ref(),
+            session_id,
+            cancel.clone(),
+            std::time::Duration::from_secs(30),
+        )
+        .await
+        {
+            Ok(g) => g,
+            Err(reason) => {
+                tracing::warn!(
+                    session = %session_id,
+                    reason,
+                    "goal guard acquisition bailed out; finalizing as interrupted"
+                );
+                let fin_ctx = finalize::finalize_context_from_engine(
+                    self,
+                    session_id,
+                    boot_for_execute.messages.len(),
+                    Some(user_message_id),
+                    crate::agent::compressor::Compressor::new(0),
+                    uuid::Uuid::nil(),
+                );
+                let _: anyhow::Result<String> = finalize::finalize(
+                    fin_ctx,
+                    finalize::FinalizeOutcome::Interrupted {
+                        partial: String::new(),
+                        reason: reason.to_string(),
+                    },
+                    &mut s,
+                    &mut lifecycle_guard,
+                )
+                .await;
+                return Err(anyhow::anyhow!("goal_guard_{}", reason));
+            }
+        };
 
         // `cancel` is supplied by the caller (channel dispatcher) so a request
         // timeout / WS disconnect / `/stop` can break this turn COOPERATIVELY —
@@ -665,16 +754,33 @@ impl AgentEngine {
         let outcome = match execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &interactive_layers).await {
             Ok(o) => o,
             Err(e) => {
-                let msg = format!("pipeline error: {}", e);
+                // H3 fix: route the error through finalize so partial text (if
+                // any — execute may have streamed some before the Err) is
+                // persisted, the session lifecycle transitions cleanly, and
+                // the channel-adapter / UI reload stays consistent. Returning
+                // Err bare would rely on the lifecycle-guard Drop fallback and
+                // produce an opaque "guard_dropped" diagnostic with no assistant
+                // row — leaving an orphan user message in the conversation.
+                let reason = format!("pipeline error: {}", e);
                 tracing::error!(session = %session_id, error = %e, "pipeline failed");
-                self.record_hard_error(&mut lifecycle_guard, session_id, msg.clone()).await;
-                let _ = s.emit(PipelineEvent::Stream(StreamEvent::Error(msg))).await;
-                let _ = s
-                    .emit(PipelineEvent::Stream(StreamEvent::Finish {
-                        finish_reason: "error".to_string(),
-                        continuation: false,
-                    }))
-                    .await;
+                let fin_ctx = finalize::finalize_context_from_engine(
+                    self,
+                    session_id,
+                    0,
+                    Some(user_message_id),
+                    compressor,
+                    uuid::Uuid::nil(),
+                );
+                let _: anyhow::Result<String> = finalize::finalize(
+                    fin_ctx,
+                    finalize::FinalizeOutcome::Failed {
+                        partial: String::new(),
+                        reason: reason.clone(),
+                    },
+                    &mut s,
+                    &mut lifecycle_guard,
+                )
+                .await;
                 return Err(e);
             }
         };
@@ -745,10 +851,16 @@ impl AgentEngine {
     /// Handle with streaming: sends content chunks via mpsc channel for progressive display.
     ///
     /// Thin adapter over pipeline::{bootstrap, execute, finalize} using `ChunkSink`.
+    ///
+    /// `cancel` is the caller-controlled cancellation token (typically owned by
+    /// the WS handler). It is registered with `state` so graceful shutdown
+    /// (`cancel_all_requests`) can also reach this turn — closing C3 (the
+    /// streaming path used to spawn a fresh token that nobody could cancel).
     pub async fn handle_streaming(
         &self,
         msg: &IncomingMessage,
         chunk_tx: tokio::sync::mpsc::Sender<String>,
+        cancel: tokio_util::sync::CancellationToken,
     ) -> Result<String> {
         let mut s = sink::ChunkSink::new(chunk_tx);
 
@@ -910,7 +1022,11 @@ impl AgentEngine {
             }
         }
 
-        let cancel = tokio_util::sync::CancellationToken::new();
+        let cancel = cancel;
+        // C3 fix: register the streaming turn's cancel token with state so
+        // graceful shutdown (cancel_all_requests on SIGTERM/SIGHUP) can reach
+        // it — same invariant the SSE and channel-status paths already uphold.
+        let _req_guard = self.state.register_request_guarded(cancel.clone());
         let interactive_layers =
             BehaviourLayers::for_interactive(&self.tool_loop_config(), msg.text.clone().unwrap_or_default());
         // Record the real reason on hard error rather than the guard's opaque
@@ -918,9 +1034,30 @@ impl AgentEngine {
         let outcome = match execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &interactive_layers).await {
             Ok(o) => o,
             Err(e) => {
-                let msg = format!("pipeline error: {}", e);
+                // H3 fix: route through finalize so the partial reply (if any)
+                // is persisted and the session lifecycle transitions cleanly
+                // instead of relying on the lifecycle-guard Drop fallback that
+                // produces an opaque diagnostic with no assistant row.
+                let reason = format!("pipeline error: {}", e);
                 tracing::error!(session = %session_id, error = %e, "pipeline failed");
-                self.record_hard_error(&mut lifecycle_guard, session_id, msg).await;
+                let fin_ctx = finalize::finalize_context_from_engine(
+                    self,
+                    session_id,
+                    0,
+                    Some(user_message_id),
+                    compressor,
+                    uuid::Uuid::nil(),
+                );
+                let _: anyhow::Result<String> = finalize::finalize(
+                    fin_ctx,
+                    finalize::FinalizeOutcome::Failed {
+                        partial: String::new(),
+                        reason: reason.clone(),
+                    },
+                    &mut s,
+                    &mut lifecycle_guard,
+                )
+                .await;
                 return Err(e);
             }
         };

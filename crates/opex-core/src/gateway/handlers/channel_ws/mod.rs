@@ -478,15 +478,26 @@ async fn handle_ws(socket: WebSocket, agents: AgentCore, bus: ChannelBus, status
                         };
 
                         let (chunk_tx, mut chunk_rx) = mpsc::channel::<String>(512);
+                        // C4 fix: WS disconnect (loop break below or `select!`
+                        // exit) cancels the in-flight turn so a dropped client
+                        // does not leave the engine running to completion.
+                        let turn_cancel = tokio_util::sync::CancellationToken::new();
+                        let turn_cancel_clone = turn_cancel.clone();
                         let engine_clone = engine.clone();
                         let handle = tokio::spawn(async move {
-                            engine_clone.handle_streaming(&incoming, chunk_tx).await
+                            engine_clone.handle_streaming(&incoming, chunk_tx, turn_cancel_clone).await
                         });
 
                         while let Some(chunk) = chunk_rx.recv().await {
                             let msg = WsServerMessage::Chunk { text: chunk };
                             if ws_sink.send(ws_json(&msg)).await.is_err() { break; }
                         }
+                        // chunk_rx returned None → either the engine finished
+                        // naturally OR the WS died above. Cancel the turn (a
+                        // no-op if it already finished) before awaiting the
+                        // handle so a disconnected client terminates the work
+                        // promptly instead of leaking until the LLM finishes.
+                        turn_cancel.cancel();
 
                         match handle.await {
                             Ok(Ok(_)) => {
