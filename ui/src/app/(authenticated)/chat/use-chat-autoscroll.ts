@@ -31,8 +31,12 @@ export function useChatAutoscroll(
   const [sentinelEl, setSentinelEl] = useState<HTMLDivElement | null>(null);
   const [scrollerEl, setScrollerEl] = useState<HTMLElement | null>(null);
 
-  // Performance: track token growth for the tail message ONLY (O(1))
-  const lastMsgPartsLenRef = useRef(0);
+  // Performance: track text growth for the tail message ONLY (O(1)). H1 fix:
+  // the badge previously counted `parts.length` which stays at 1 for an
+  // entire streaming text reply (the text part is mutated in place) — the
+  // badge gave zero signal during long answers. Track the total text length
+  // instead so the user sees real growth.
+  const lastMsgTextLenRef = useRef(0);
   const lastMsgIdRef = useRef<string | null>(null);
 
   // Reset badge when user reaches the tail
@@ -59,26 +63,15 @@ export function useChatAutoscroll(
     });
   }, [scrollerEl, sentinelEl]);
 
-  // Gentle rAF pin: ensures we stay at the bottom during rapid streaming/layout shifts.
-  // Only active when shouldFollow is TRUE and streaming is ACTIVE.
-  useEffect(() => {
-    if (!scrollerEl || !isStreaming) return;
-
-    let raf = 0;
-    const loop = () => {
-      if (shouldFollowRef.current && scrollerEl) {
-        const maxScroll = scrollerEl.scrollHeight - scrollerEl.clientHeight;
-        // Only force if we drifted more than a few pixels (avoids jittering with Virtuoso's internal scroll)
-        if (scrollerEl.scrollTop < maxScroll - 5) {
-          scrollerEl.scrollTop = scrollerEl.scrollHeight;
-        }
-      }
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-
-    return () => cancelAnimationFrame(raf);
-  }, [scrollerEl, isStreaming]);
+  // H2 fix: the continuous 60Hz rAF scroll-pin loop was removed. It forced
+  // synchronous layout reads/writes every frame for the entire duration of
+  // streaming regardless of whether new content arrived — the dominant cause
+  // of "chat gets sluggish during long responses". `react-virtuoso`'s
+  // `followOutput="auto"` (configured on the Virtuoso instance in MessageList)
+  // already pins to the bottom as new rows arrive, with internally throttled
+  // layout work that only fires on actual content changes. The user-intent
+  // detection (wheel/touch/key) above still flips `shouldFollow` off so the
+  // Virtuoso followOutput gate stays correct.
 
   // User-intent detection: wheel/touch/key events flip shouldFollow OFF.
   useEffect(() => {
@@ -144,19 +137,19 @@ export function useChatAutoscroll(
     missedTokensRef.current = 0;
   }, []);
 
-  const trackNewTokens = useCallback((lastMsgId: string, partsCount: number) => {
+  const trackNewTokens = useCallback((lastMsgId: string, textLen: number) => {
     if (!isAtTailRef.current) {
       if (lastMsgId === lastMsgIdRef.current) {
-        const delta = Math.max(0, partsCount - lastMsgPartsLenRef.current);
+        const delta = Math.max(0, textLen - lastMsgTextLenRef.current);
         missedTokensRef.current += delta;
       } else {
         // New message started while away from tail
-        missedTokensRef.current += partsCount;
+        missedTokensRef.current += textLen;
       }
       setMissedTokens(missedTokensRef.current);
     }
     lastMsgIdRef.current = lastMsgId;
-    lastMsgPartsLenRef.current = partsCount;
+    lastMsgTextLenRef.current = textLen;
   }, []);
 
   return {

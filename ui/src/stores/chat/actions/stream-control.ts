@@ -187,10 +187,17 @@ export function createStreamActions(deps: ActionDeps) {
       // await, so it is already set when sendMessage returns.
       interrupting.add(agent);
       try {
-        // Abort the current stream (POST /abort + local teardown).
-        renderer.abortActiveStream(agent);
+        // Abort the current stream (POST /abort + local teardown). C4 fix:
+        // AWAIT the backend ack before starting the new turn on the same
+        // session id, otherwise the POST /abort can race past the new POST
+        // /api/chat and cancel the fresh turn. Local phase polling alone is
+        // not sufficient — it settles synchronously on `abortLocalOnly`
+        // regardless of when (or whether) the server processes the abort.
+        await renderer.abortActiveStream(agent);
 
-        // Poll up to 1500ms for connectionPhase to reach idle.
+        // Defensive local-idle check (cheap; the awaited POST already gives
+        // us the strong guarantee above). Keeps the phase consistent if some
+        // other code path flipped it back to active.
         const POLL_INTERVAL_MS = 100;
         const MAX_WAIT_MS = 1500;
         const deadline = Date.now() + MAX_WAIT_MS;
@@ -214,10 +221,16 @@ export function createStreamActions(deps: ActionDeps) {
 
     queueMessage: (text: string, attachments?: Array<MessageAttachment>, opts?: { voice?: boolean }) => {
       const agent = get().currentAgent;
+      const prev = get().agents[agent]?.pendingMessage ?? null;
+      const isVoice = opts?.voice === true;
+      // H6 fix: detect "this typed call overwrites a prior typed queued
+      // message" before the set() runs, and surface a toast afterwards. The
+      // slot is single-occupancy, so without this the user got zero signal
+      // that their earlier queued text was discarded in favour of the new one.
+      const replacedTyped = !!prev && !prev.voice && !isVoice;
+
       set((draft) => {
         if (!draft.agents[agent]) draft.agents[agent] = emptyAgentState();
-        const prev = draft.agents[agent].pendingMessage;
-        const isVoice = opts?.voice === true;
         // If a previous voice message is already queued and this one is also
         // voice, append with "\n" — the user spoke several phrases during the
         // same turn instead of replacing the earlier one. A NON-voice queue call
@@ -236,6 +249,12 @@ export function createStreamActions(deps: ActionDeps) {
           agent,
         };
       });
+
+      if (replacedTyped) {
+        void import("sonner").then(({ toast }) => {
+          toast.info("Предыдущее сообщение в очереди заменено новым.");
+        });
+      }
     },
 
     clearPending: (agent?: string) => {

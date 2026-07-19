@@ -13,11 +13,24 @@ import { ApprovalArgsEditor } from "./ApprovalArgsEditor";
 
 interface ApprovalCardProps {
   part: ApprovalPart;
+  /**
+   * Agent whose tool call triggered this approval. Falls back to the
+   * currently-focused agent when not threaded (legacy call sites).
+   *
+   * H7 fix: the durable "Always allow" grant must be recorded against the
+   * TRIGGERING agent, not the agent the user happens to be viewing — in
+   * multi-agent sessions these can differ, and a grant recorded against the
+   * wrong agent left the triggering agent re-prompting forever.
+   */
+  agentId?: string;
 }
 
-export function ApprovalCard({ part }: ApprovalCardProps) {
+export function ApprovalCard({ part, agentId }: ApprovalCardProps) {
   const { t } = useTranslation();
   const currentAgent = useChatStore((s) => s.currentAgent);
+  // Prefer the threaded triggering agent; fall back to currentAgent for
+  // legacy call sites that don't pass agentId yet.
+  const grantAgent = agentId ?? currentAgent;
   const [isEditing, setIsEditing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,8 +57,10 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
     try {
       // Persist the durable grant first; only approve if it stuck, so the user
       // isn't misled into thinking future calls are whitelisted when they aren't.
-      if (currentAgent) {
-        const grant = await addApprovalAllowlist(currentAgent, part.toolName);
+      // H7: record against the TRIGGERING agent (grantAgent), not the
+      // currently-focused UI agent.
+      if (grantAgent) {
+        const grant = await addApprovalAllowlist(grantAgent, part.toolName);
         if (!grant.ok) {
           setError(grant.error ?? t("chat.approval_error"));
           return;
@@ -60,7 +75,7 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
     } finally {
       setIsSubmitting(false);
     }
-  }, [part.approvalId, part.toolName, currentAgent, t]);
+  }, [part.approvalId, part.toolName, grantAgent, t]);
 
   const handleReject = useCallback(async () => {
     setIsSubmitting(true);

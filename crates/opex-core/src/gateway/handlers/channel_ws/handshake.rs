@@ -169,8 +169,12 @@ pub(super) async fn handle_ready(
 }
 
 /// Replay channel actions that were queued but never acked (max 50 oldest).
-/// Each replay gets a fresh `action_id`; the queue row is marked `sent` so
-/// duplicate adapter restarts don't fan out the same action twice.
+/// Each replay gets a fresh `action_id`; the queue row stays `pending` until
+/// the adapter acks via `ActionResult` (H-2 fix). The previous behaviour
+/// marked rows `sent` fire-and-forget right after the send, so a second
+/// adapter crash before the ack landed left the action permanently lost —
+/// `get_pending` filters `pending`, so the replay on the next reconnect
+/// skipped the still-unacked rows.
 async fn replay_outbound_queue(
     ctx: &CwsCtx,
     agent_name: &str,
@@ -201,8 +205,17 @@ async fn replay_outbound_queue(
         {
             let mut oids = outbound_ids.lock().await;
             if oids.len() > 1000 {
-                oids.clear();
-                tracing::warn!("outbound_ids overflow, cleared");
+                // LRU-style eviction: drop the oldest 25% rather than the whole
+                // map so a single overflow doesn't lose ack-tracking for every
+                // in-flight action at once (M-1 fix). HashMap has no ordering,
+                // so this is a random sample — but bounded and better than
+                // nuking the entire map.
+                let drop_count = oids.len() / 4;
+                let keys: Vec<String> = oids.keys().take(drop_count).cloned().collect();
+                for k in keys {
+                    oids.remove(&k);
+                }
+                tracing::warn!(dropped = drop_count, "outbound_ids overflow, partial eviction");
             }
             oids.insert(action_id.clone(), queue_id);
         }
@@ -214,13 +227,10 @@ async fn replay_outbound_queue(
             tracing::warn!(%agent_name, "writer closed during outbound queue replay");
             break;
         }
-        let db = ctx.infra.db.clone();
-        // AUDIT-FF-004: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
-        tokio::spawn(async move {
-            if let Err(e) = outbound::mark_sent(&db, queue_id).await {
-                tracing::warn!(queue_id = %queue_id, error = %e, "outbound mark_sent failed");
-            }
-        });
+        // H-2: NO mark_sent here — the row stays `pending` and is resolved by
+        // the reader's `ActionResult` handler (mark_acked/mark_failed). If the
+        // adapter crashes again before acking, the next reconnect's
+        // `get_pending` will pick this row up and re-replay it.
     }
 }
 

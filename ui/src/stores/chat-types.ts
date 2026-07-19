@@ -236,6 +236,13 @@ export interface AgentState {
    * provider retry) — NOT the transport layer, which no longer reconnects (T8).
    */
   isLlmReconnecting: boolean;
+  /**
+   * H8 fix: transport-reconnect progress feedback. Zero while no transport
+   * reconnect is in flight; 1..RECONNECT_MAX_RETRIES (currently 6) during the
+   * backed-off retry loop after a drop. Surfaced in `ReconnectingIndicator`
+   * so the user sees how many attempts remain instead of a 30s blind spinner.
+   */
+  transportReconnectAttempt: number;
   /** Branch selection state: parentMessageId -> selectedChildId. */
   selectedBranches: Record<string, string>;
   /**
@@ -374,6 +381,7 @@ export function emptyAgentState(): AgentState {
     turnLimitMessage: null,
     streamGeneration: 0,
     isLlmReconnecting: false,
+    transportReconnectAttempt: 0,
     selectedBranches: {},
     pendingMessage: null,
     voiceTurnPending: false,

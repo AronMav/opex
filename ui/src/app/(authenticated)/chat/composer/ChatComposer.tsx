@@ -186,6 +186,25 @@ export function ChatComposer() {
     }
   }, [currentAgent]);
 
+  // H11 fix: stop any in-progress voice recording when the user switches
+  // agents. The recorder state is keyed by `currentAgent` (auto-result +
+  // transcript both route to the current agent's composer), so a recording
+  // started on agent A would otherwise land its transcript on agent B after
+  // the switch — confusing and irreversible. Stopping here drops any partial
+  // audio without sending a transcript; the user can re-record on the new
+  // agent if they wish.
+  const prevAgentRef = useRef(currentAgent);
+  useEffect(() => {
+    if (prevAgentRef.current !== currentAgent) {
+      prevAgentRef.current = currentAgent;
+      if (voice.state === "recording" || voice.state === "transcribing") {
+        // Fire-and-forget — the returned transcript is intentionally
+        // discarded on an agent-switch abort.
+        void voice.stop();
+      }
+    }
+  }, [currentAgent, voice]);
+
   // Auto-resize textarea — use "0px" reset instead of "auto" to prevent flicker on paste
   const autoResize = useCallback(() => {
     const ta = textareaRef.current;
@@ -513,6 +532,7 @@ export function ChatComposer() {
         <form
           ref={formRef}
           data-composer-input
+          data-composer-root
           className={cn(
             "relative flex flex-col rounded-xl border bg-card/50 shadow-elev-2 transition-all duration-200 focus-within:border-primary/50",
             dragOver ? "border-primary/50 bg-primary/5" : "border-border/50"

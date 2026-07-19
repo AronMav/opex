@@ -184,6 +184,20 @@ export function createTelegramDriver(
   const errorCooldownMs = (channelConfig?.error_cooldown_ms as number) ?? 60_000;
   const errorPolicy = (channelConfig?.error_policy as string) ?? "suppress_repeated";
 
+  // H-1 fix: honour the typing_mode handshake. The previous code accepted the
+  // parameter and then ignored it — every mode produced the same "typing"
+  // indicator. Supported modes:
+  //   instant  — typing on every phase (legacy behaviour, default)
+  //   thinking — typing only during the 'thinking'/'composing' phases
+  //   message  — typing only while the assistant message is streaming
+  //   never    — never send a typing indicator
+  // We coerce unknown values to "instant" so a fat-fingered config does not
+  // silently disable typing entirely.
+  const typingModeEffective =
+    typingMode === "instant" || typingMode === "thinking" || typingMode === "message" || typingMode === "never"
+      ? typingMode
+      : "instant";
+
   const bot = new Bot(credential, apiUrl ? { client: { apiRoot: apiUrl } } : undefined);
 
   // Track forum topics that have already been renamed (resets on restart — fine, Telegram keeps the name)
@@ -677,8 +691,12 @@ async function processMessage(
     }
   }
 
-  // Send typing indicator
-  await retryTg(() => bot.api.sendChatAction(chatId, "typing"), 3, "sendChatAction", chatId, threadId, errorCooldownMs);
+  // Send typing indicator (H-1 fix: gated by typingModeEffective — "never"
+  // suppresses entirely; "thinking"/"message" gate on phase in onPhase below).
+  // "instant" (the default) keeps the legacy unconditional behaviour.
+  if (typingModeEffective !== "never") {
+    await retryTg(() => bot.api.sendChatAction(chatId, "typing"), 3, "sendChatAction", chatId, threadId, errorCooldownMs);
+  }
 
   // Immediate ack — user sees we received their message.
   // Deliberately placed BEFORE reUploadAttachments so the ack is instant,
@@ -744,14 +762,24 @@ async function processMessage(
     lastPhaseTime = Date.now();
     stallLevel = 0;
     try {
+      // H-1: typing refresh during tool/thinking phases is gated the same way
+      // as the initial typing indicator. "thinking" / "message" / "instant"
+      // all refresh; "never" stays silent.
+      const shouldRefreshTyping =
+        typingModeEffective !== "never" &&
+        (typingModeEffective === "instant" ||
+          (typingModeEffective === "thinking" && (phase === "thinking" || phase === "calling_tool")) ||
+          (typingModeEffective === "message" && phase === "composing"));
       if (phase === "thinking") {
         await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "🤔" }]).catch(() => { });
       } else if (phase === "calling_tool") {
         const emoji = toolEmoji(toolName);
         await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: emoji as any }]).catch(() => { });
-        await retryTg(() => bot.api.sendChatAction(chatId, "typing"), 3, "sendChatAction");
       } else if (phase === "composing") {
         await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "⚡" }]).catch(() => { });
+      }
+      if (shouldRefreshTyping) {
+        await retryTg(() => bot.api.sendChatAction(chatId, "typing"), 3, "sendChatAction");
       }
     } catch {
       // cosmetic, ok to fail silently

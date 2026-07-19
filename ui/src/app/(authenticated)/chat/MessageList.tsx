@@ -232,11 +232,20 @@ export function MessageList({
     trackNewTokens,
   } = useChatAutoscroll(isStreaming, activeSessionId);
 
-  // Sync token growth with the autoscroll hook (O(1) tracking)
+  // Sync token growth with the autoscroll hook (O(1) tracking). H1 fix:
+  // pass the total text length (sum of all `type: "text"` parts) so the
+  // badge reflects real text growth during streaming, not parts.length
+  // (which stays at 1 for the entire answer).
   useEffect(() => {
     if (messages.length > 0) {
       const last = messages[messages.length - 1];
-      trackNewTokens(last.id, last.parts.length);
+      let textLen = 0;
+      for (const p of last.parts) {
+        if (p.type === "text" || p.type === "reasoning") {
+          textLen += (p as { text: string }).text.length;
+        }
+      }
+      trackNewTokens(last.id, textLen);
     }
   }, [messages, trackNewTokens]);
 

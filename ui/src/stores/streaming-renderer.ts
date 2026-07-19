@@ -209,15 +209,23 @@ export function createStreamingRenderer(store: StoreAccess) {
    *
    * `abortLocalOnly` is a no-op if there is no controller; safe to call.
    */
-  function abortActiveStream(agent: string) {
+  function abortActiveStream(agent: string): Promise<void> {
     const sid = store.get().agents[agent]?.activeSessionId;
-    if (sid) {
-      apiPost(`/api/chat/${sid}/abort?agent=${encodeURIComponent(agent)}`).catch(() => {
-        // Backend may not have an active stream (already done / not started).
-        // Local abort below still cleans up UI state.
-      });
-    }
+    // C4 fix: return the POST promise so callers that need to wait for the
+    // backend to ack the abort (notably `interruptAndSend`) can do so before
+    // starting a new turn on the same session id. The previous fire-and-forget
+    // shape let the POST race past the new POST /api/chat and silently cancel
+    // the fresh turn.
+    const post = sid
+      ? apiPost(`/api/chat/${sid}/abort?agent=${encodeURIComponent(agent)}`)
+          .then(() => undefined)
+          .catch(() => {
+            // Backend may not have an active stream (already done / not started).
+            // Local abort below still cleans up UI state.
+          })
+      : Promise.resolve();
     abortLocalOnly(agent);
+    return post;
   }
 
   // ── Server-authoritative single connect path (T7/T8) ─────────────────────
@@ -257,6 +265,7 @@ export function createStreamingRenderer(store: StoreAccess) {
       streamError: null,
       connectionError: null,
       isLlmReconnecting: false,
+      transportReconnectAttempt: 0,
       replayTruncated: false,
     });
     recordEventActivity(agent);
@@ -302,6 +311,7 @@ export function createStreamingRenderer(store: StoreAccess) {
       update(agent, {
         connectionPhase: "error",
         isLlmReconnecting: false,
+        transportReconnectAttempt: 0,
         connectionError: "reconnect-failed",
         streamError: "Соединение потеряно. Не удалось переподключиться.",
       });
@@ -323,8 +333,14 @@ export function createStreamingRenderer(store: StoreAccess) {
       return;
     }
 
-    // Still within budget — show the reconnecting indicator during the wait.
-    update(agent, { connectionPhase: "submitted", isLlmReconnecting: true });
+    // Still within budget — show the reconnecting indicator during the wait,
+    // and surface the attempt number so the UI can show "attempt N/M" instead
+    // of a 30s blind spinner (H8 fix).
+    update(agent, {
+      connectionPhase: "submitted",
+      isLlmReconnecting: true,
+      transportReconnectAttempt: attempts,
+    });
     const delay = Math.min(
       RECONNECT_BASE_DELAY_MS * 2 ** (attempts - 1),
       RECONNECT_MAX_DELAY_MS,

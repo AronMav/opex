@@ -56,7 +56,22 @@ export function createNavigationActions(deps: ActionDeps) {
       // Must happen BEFORE multi-agent reuse check to ensure the previous agent's
       // connectionPhase is set to "idle" and its stream is aborted.
       renderer.cleanupAgent(prev);
-      update(prev, { connectionPhase: "idle" });
+      // H5 + H11 fix: departing-agent teardown — wipe the transient flags the
+      // previous agent accumulated so they don't leak back when the user
+      // returns. Without this:
+      //   - `streamError` / `connectionError` from a failed turn on A persisted
+      //     over whatever the user did next.
+      //   - `voiceTurnPending` on A survived the switch; coming back later, a
+      //     NON-voice text submit on A would still be voiced (the falling-edge
+      //     effect was bound to the wrong lifecycle).
+      // `connectionPhase: "idle"` is set below via update() — keep this in
+      // lockstep with it.
+      update(prev, {
+        connectionPhase: "idle",
+        streamError: null,
+        connectionError: null,
+        voiceTurnPending: false,
+      });
 
       // Check if current session is multi-agent and includes the new agent
       const prevState = get().agents[prev];
@@ -167,6 +182,12 @@ export function createNavigationActions(deps: ActionDeps) {
         messageSource: { mode: "history", sessionId },
         forceNewSession: false,
         renderLimit: 100,
+        // H4 fix: clear any error state carried over from the departing
+        // session. Without this a banner from session A persists over
+        // session B's content and misleads the user into thinking the
+        // newly-selected session errored.
+        streamError: null,
+        connectionError: null,
         // Clear per-stream token counts so the ContextBar shows the new
         // session's last_input_tokens from the session list (not stale live values).
         contextTokens: null,
@@ -207,6 +228,9 @@ export function createNavigationActions(deps: ActionDeps) {
         messageSource: { mode: "history", sessionId },
         forceNewSession: false,
         connectionPhase: "idle",
+        // H4 fix: same rationale as selectSession above.
+        streamError: null,
+        connectionError: null,
       });
       saveLastSession(agent, sessionId);
     },

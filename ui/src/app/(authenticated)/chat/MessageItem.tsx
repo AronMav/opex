@@ -80,7 +80,7 @@ function EmptyPartView() {
 
 // ── Part renderer dispatch ──────────────────────────────────────────────────
 
-function renderPart(part: MessagePart, index: number, streaming = false, isLastPart = false) {
+function renderPart(part: MessagePart, index: number, streaming = false, isLastPart = false, agentId?: string) {
   switch (part.type) {
     case "text":
       // Caret only on the LAST part of a streaming message: it means "text is
@@ -115,7 +115,10 @@ function renderPart(part: MessagePart, index: number, streaming = false, isLastP
       if (part.cardType === "agent-turn") return null;
       return <RichCardDataPartView key={`card-${part.cardType}-${index}`} data={{ cardType: part.cardType, ...part.data }} />;
     case "approval":
-      return <ApprovalCard key={`approval-${part.approvalId}`} part={part} />;
+      // H7 fix: thread the message's agentId through so the durable "Always
+      // allow" grant lands on the agent whose tool call triggered the
+      // approval (NOT necessarily the agent currently focused in the UI).
+      return <ApprovalCard key={`approval-${part.approvalId}`} part={part} agentId={agentId} />;
     case "clarify":
       return <ClarifyCard key={`clarify-${part.clarifyId}`} part={part} />;
     case "compression-divider":
@@ -133,11 +136,11 @@ function renderPart(part: MessagePart, index: number, streaming = false, isLastP
 
 // ── Parts rendering (no grouping — each part rendered individually) ────────
 
-function renderAllParts(parts: MessagePart[], streaming = false) {
+function renderAllParts(parts: MessagePart[], streaming = false, agentId?: string) {
   const visible = parts.filter(p => !(p.type === "text" && p.text.trim().length === 0));
   // isLastPart is computed on the FILTERED list — a trailing empty text part
   // must not steal "last" from the part the user actually sees.
-  return visible.map((part, i) => renderPart(part, i, streaming, i === visible.length - 1));
+  return visible.map((part, i) => renderPart(part, i, streaming, i === visible.length - 1, agentId));
 }
 
 // ── User message ────────────────────────────────────────────────────────────
@@ -322,7 +325,7 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
   if (hasParts) {
     renderedParts = _partsRenderCache.get(message);
     if (!renderedParts) {
-      renderedParts = renderAllParts(message.parts, !isComplete);
+      renderedParts = renderAllParts(message.parts, !isComplete, message.agentId || undefined);
       _partsRenderCache.set(message, renderedParts);
     }
   }

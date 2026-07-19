@@ -4,7 +4,6 @@ import React, { memo } from "react";
 import { cleanContent } from "@/lib/format";
 import { MessageContent } from "@/components/ui/message";
 import { StreamingCaret } from "@/components/ui/loader";
-import { useChatStore } from "@/stores/chat-store";
 import { useSmoothedText } from "@/hooks/use-smoothed-text";
 
 export interface HighlightRange {
@@ -60,9 +59,15 @@ function HighlightedText({ text, ranges, isActive }: { text: string; ranges: Hig
 }
 
 export const TextPart = memo(function TextPart({ text, highlightRanges, isActive, streaming }: TextPartProps) {
-  const isStreaming = useChatStore(
-    (s) => s.agents[s.currentAgent]?.connectionPhase === "streaming"
-  );
+  // H3 fix: drive the smoothed-text path off the PER-MESSAGE `streaming` prop
+  // (threaded from MessageItem, which checks message.status === "streaming")
+  // instead of the GLOBAL `connectionPhase` subscription. The global
+  // subscription caused every TextPart instance in the tree (including
+  // completed historical messages) to re-render on every phase transition —
+  // 200–400 extra re-renders per turn on a typical session. Historical
+  // messages never have `streaming=true`, so they short-circuit cheaply
+  // (useSmoothedText returns the text directly when `isStreaming=false`).
+  const isStreaming = !!streaming;
 
   // Hooks must run before any early return: toggling highlightRanges on/off
   // (search ↔ clear-search) otherwise changes the hook count between renders

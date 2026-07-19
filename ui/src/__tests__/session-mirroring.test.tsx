@@ -77,6 +77,7 @@ function seedStore() {
       turnLimitMessage: null,
       streamGeneration: 0,
       isLlmReconnecting: false,
+      transportReconnectAttempt: 0,
       selectedBranches: {},
       pendingMessage: null,
       contextTokens: null,

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useAuthStore } from "@/stores/auth-store";
 import {
@@ -59,6 +59,15 @@ export default function ChatPage() {
   const { t } = useTranslation();
   const { agents, refreshIfStale } = useAuthStore(
     useShallow((s) => ({ agents: s.agents, refreshIfStale: s.refreshIfStale })),
+  );
+  // H10: timer for the "focus composer after New chat" setTimeout — kept in a
+  // ref so the unmount cleanup can cancel it.
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (focusTimerRef.current !== null) clearTimeout(focusTimerRef.current);
+    },
+    [],
   );
 
   // ── Store (granular selectors to avoid re-renders during streaming) ──
@@ -240,9 +249,24 @@ export default function ChatPage() {
 
   const handleNewChat = useCallback(() => {
     useChatStore.getState().newChat();
-    // Focus composer input after new chat
-    setTimeout(() => {
-      const input = document.querySelector<HTMLTextAreaElement>('[role="textbox"], textarea[placeholder]');
+    // Focus composer input after new chat. H10 fix:
+    //   * Scope the selector to the chat composer so we don't accidentally
+    //     focus an unrelated textbox that happens to be mounted (sidebar
+    //     search, dialog input, etc.).
+    //   * Track the timer via a ref so cleanup on unmount cancels the focus
+    //     call — otherwise navigating away within the 100ms window would
+    //     focus a detached element.
+    //   * The 100ms delay survives into the React 19 commit phase without
+    //     resorting to a brittle polling loop.
+    if (focusTimerRef.current !== null) {
+      clearTimeout(focusTimerRef.current);
+    }
+    focusTimerRef.current = setTimeout(() => {
+      focusTimerRef.current = null;
+      const composer = document.querySelector<HTMLElement>("[data-composer-root]");
+      const input = composer?.querySelector<HTMLTextAreaElement>(
+        'textarea[placeholder], [role="textbox"]',
+      );
       input?.focus();
     }, 100);
   }, []);

@@ -112,6 +112,7 @@ describe("MessageItem re-render count (REF-05)", () => {
         turnLimitMessage: null,
         streamGeneration: 0,
         isLlmReconnecting: false,
+        transportReconnectAttempt: 0,
         selectedBranches: {},
         pendingMessage: null,
         contextTokens: null,

@@ -8,7 +8,7 @@ import { getLiveMessages } from "../../chat-types";
 import type { AgentState, CompressionDividerPart, ChatMessage } from "../../chat-types";
 import type { CompressionEvent, MessagesResponse } from "@/types/api";
 import { qk, patchSessionTitleInPages, type SessionsInfiniteData } from "@/lib/queries";
-import { apiDelete, apiPatch, getToken } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch } from "@/lib/api";
 import { saveLastSession } from "../../chat-persistence";
 import { getCachedHistoryMessages, convertHistory } from "../../chat-history";
 import { makeUpdate } from "./_shared";
@@ -182,10 +182,15 @@ export function createSessionCrudActions(deps: ActionDeps) {
           limit: "50",
           agent: agentName,
         });
-        const res: MessagesResponse = await fetch(
+        // C3 fix: go through apiGet (apiFetch under the hood) so the request
+        // gets auth handling (401 → /login redirect), a 30s timeout, HTML-body
+        // protection, and a single source of truth for token errors. The raw
+        // fetch here used to silently throw a SyntaxError on `.json()` when
+        // the token expired (backend returned the HTML login page) and left
+        // `isLoadingHistory=true` forever if the network stalled.
+        const res = await apiGet<MessagesResponse>(
           `/api/sessions/${st.activeSessionId}/messages?${params.toString()}`,
-          { headers: { Authorization: `Bearer ${getToken()}` } },
-        ).then((r) => r.json());
+        );
 
         const converted = convertHistory(res.messages ?? []);
         // segment_count comes from the session record; fall back to 1.

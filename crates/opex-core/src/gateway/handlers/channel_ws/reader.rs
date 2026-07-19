@@ -160,27 +160,31 @@ pub(super) async fn run(
                         } else if !inline::is_callback(&msg)
                             && engine.cfg().clarify_manager.has_any_pending()
                         {
-                            // Clarify-text: a clarify is pending. Spawn a short-lived
-                            // resolver (async DB lookup + owner-gate). If it does NOT
-                            // resolve a waiter, it enqueues the message as a turn.
+                            // H-4 fix: handle the clarify check INLINE instead
+                            // of spawning. The previous spawned task raced with
+                            // the next plain-text message — both ran async DB
+                            // lookups (`resolve_active_dm_session`) and could
+                            // enqueue out of receive order, producing the bug
+                            // where msg1 was treated as a normal turn even
+                            // though msg2 (which arrived later) had already
+                            // been consumed as the clarify response. Running
+                            // inline here serializes the clarify check + the
+                            // enqueue so a same-peer follow-up message sees
+                            // the post-clarify state.
                             let ct = state.channel_type.clone();
                             let fp = state.formatting_prompt.clone();
-                            let (ctx2, engine2, an, rid, m, tx) =
-                                (ctx.clone(), engine.clone(), agent_name.clone(), request_id.clone(), msg.clone(), out_tx.clone());
-                            let qmap = queue_map.clone();
-                            let inflight2 = inflight.clone();
-                            let timeout = ctx.cfg.config.limits.request_timeout_secs;
-                            tokio::spawn(async move {
-                                let consumed = inline::handle_clarify_text(
-                                    &ctx2, &engine2, &an, &ct, &rid, &m, &tx,
+                            let consumed = inline::handle_clarify_text(
+                                &ctx, &engine, &agent_name, &ct, &request_id, &msg, &out_tx,
+                            )
+                            .await;
+                            if !consumed {
+                                enqueue_turn(
+                                    &queue_map, &engine, &agent_name, &ct,
+                                    fp,
+                                    request_id.clone(), msg.clone(), ctx.cfg.config.limits.request_timeout_secs,
+                                    &out_tx, &inflight,
                                 ).await;
-                                if !consumed {
-                                    enqueue_turn(
-                                        &qmap, &engine2, &an, &ct, fp,
-                                        rid, m, timeout, &tx, &inflight2,
-                                    ).await;
-                                }
-                            });
+                            }
                         } else {
                             // Ordinary turn — register inflight at enqueue time then
                             // enqueue in receive order.

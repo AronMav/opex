@@ -235,14 +235,67 @@ async fn channel_ws_loop(
                     action_id: action_id.clone(),
                     action: dto,
                 };
-                if action_out
+                let writer_alive = action_out
                     .send(types::OutboundMsg::Wire(frame))
                     .await
-                    .is_err()
-                {
+                    .is_ok();
+                action_status.polling_diagnostics.record_outbound();
+
+                if !writer_alive {
+                    // H-3 fix: the writer is gone. DON'T break out of the loop
+                    // — that would drop the remaining buffered actions (up to
+                    // CHANNEL_ACTION_CAPACITY = 64) without persisting them.
+                    // They were already enqueued to the durable queue above
+                    // (enqueue_action), but the reader's ActionResult handler
+                    // is about to be torn down too, so any further action we
+                    // process here must also be persisted. Switch into
+                    // "drain-to-queue" mode: keep consuming rx, persist each
+                    // action, never send to the dead writer. The next
+                    // reconnect's `replay_outbound_queue` will deliver them.
+                    tracing::warn!(
+                        agent = %action_agent,
+                        "action_forwarder: writer dead — draining remaining actions to durable queue"
+                    );
+                    while let Some(action) = rx.recv().await {
+                        let crate::agent::channel_actions::ChannelAction {
+                            name, params, context, ..
+                        } = action;
+                        let action_id = uuid::Uuid::new_v4().to_string();
+                        let payload = serde_json::json!({
+                            "action": &name, "params": &params, "context": &context,
+                        });
+                        match crate::db::outbound::enqueue_action(
+                            &action_db, &action_agent, &channel_type, &name, &payload,
+                        )
+                        .await
+                        {
+                            Ok(qid) => {
+                                let mut g = action_oids.lock().await;
+                                if g.len() > 1000 {
+                                    let drop_count = g.len() / 4;
+                                    let keys: Vec<String> = g.keys().take(drop_count).cloned().collect();
+                                    for k in keys { g.remove(&k); }
+                                    tracing::warn!(dropped = drop_count, "outbound_ids overflow, partial eviction");
+                                }
+                                g.insert(action_id.clone(), qid);
+                                tracing::info!(
+                                    agent = %action_agent, action = %name, %action_id,
+                                    "drained action persisted for next reconnect",
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e, action_id = %action_id,
+                                    "drain-mode enqueue_action failed; action lost"
+                                );
+                            }
+                        };
+                        // Reply channel result is irrelevant in drain mode
+                        // (no adapter will ack it). Drop the reply sender
+                        // silently — `enqueue_action` made it durable.
+                    }
                     break;
                 }
-                action_status.polling_diagnostics.record_outbound();
 
                 // AUDIT-FF-007: mark_sent now uses the queue_id captured
                 // synchronously above. No polling required.
