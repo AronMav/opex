@@ -17,6 +17,7 @@ import { useVoiceReply } from "../hooks/use-voice-reply";
 import { useAgents } from "@/lib/queries";
 import { useCommands } from "@/hooks/use-commands";
 import { usePrompts } from "@/lib/prompts";
+import { saveDraft, loadDraft, clearDraft } from "./draft";
 import {
   Send,
   Square,
@@ -31,27 +32,15 @@ import {
 } from "lucide-react";
 
 // ── Draft persistence helpers ─────────────────────────────────────────────────
-
-const DRAFT_PREFIX = "opex.draft.";
+// Live in ./draft (pure, React-free) so lightweight callers can reuse them;
+// re-exported here to keep existing import sites working.
+export { saveDraft, loadDraft, clearDraft } from "./draft";
 
 // Maps the /think <level> word form to the numeric level accepted by
 // setThinkingLevel — replaces the old /think:N colon syntax.
 const THINK_LEVELS: Record<string, number> = {
   off: 0, minimal: 1, low: 2, medium: 3, high: 4, max: 5,
 };
-
-export function saveDraft(agent: string, text: string) {
-  if (text) localStorage.setItem(DRAFT_PREFIX + agent, text);
-  else localStorage.removeItem(DRAFT_PREFIX + agent);
-}
-
-export function loadDraft(agent: string): string {
-  return localStorage.getItem(DRAFT_PREFIX + agent) ?? "";
-}
-
-export function clearDraft(agent: string) {
-  localStorage.removeItem(DRAFT_PREFIX + agent);
-}
 
 // ── Composer ──────────────────────────────────────────────────────────────────
 

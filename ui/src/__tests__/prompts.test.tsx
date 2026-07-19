@@ -244,6 +244,7 @@ vi.mock("@/components/ui/rich-card", () => ({
 import { parsePrompts } from "@/lib/prompts";
 import { useChatStore } from "@/stores/chat-store";
 import { ChatWelcomeScreen } from "@/app/(authenticated)/chat/ChatWelcomeScreen";
+import { loadDraft } from "@/app/(authenticated)/chat/composer/draft";
 
 beforeEach(() => {
   mockPrompts = [];
@@ -376,11 +377,14 @@ describe("ChatWelcomeScreen prompt suggestions (Task 14)", () => {
     expect(screen.getByText("Create a new tool")).toBeInTheDocument();
   });
 
-  it("clicking a prompt-sourced suggestion sends its body (same click mechanic as the static chips)", () => {
+  it("clicking a prompt-sourced suggestion fills the composer draft instead of sending", () => {
     mockPrompts = [{ title: "p1", body: "Body for p1" }];
     const store = useChatStore.getState() as unknown as { sendMessage: ReturnType<typeof vi.fn> };
     render(<ChatWelcomeScreen />);
     fireEvent.click(screen.getByText("p1"));
-    expect(store.sendMessage).toHaveBeenCalledWith("Body for p1");
+    // Never auto-sends — the prompt lands in the composer as an editable draft.
+    expect(store.sendMessage).not.toHaveBeenCalled();
+    // currentAgent is mocked to "Agent1" in this suite's useChatStore stub.
+    expect(loadDraft("Agent1")).toBe("Body for p1");
   });
 });

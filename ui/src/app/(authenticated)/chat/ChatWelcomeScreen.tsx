@@ -6,6 +6,7 @@ import { useChatStore } from "@/stores/chat-store";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/stores/auth-store";
 import { usePrompts, useAgentPrompts } from "@/lib/prompts";
+import { fillComposer } from "./composer/draft";
 
 // Static so Tailwind's content scanner (regex over source text) always finds
 // these literal class names, even though they're applied by array index.
@@ -18,8 +19,9 @@ export function ChatWelcomeScreen() {
   const agentIconUrl = currentAgent ? agentIcons[currentAgent] || null : null;
 
   // First 3 entries of the prompt library replace the hardcoded suggestion
-  // chips when available — same click mechanic (sends immediately), just
-  // sourced text. Resolution: the agent's own prompt library
+  // chips when available — clicking one drops its text into the composer as an
+  // editable draft (does NOT send), so the user can tweak before firing.
+  // Resolution: the agent's own prompt library
   // (workspace/agents/{agent}/prompts.md) wins; else the shared
   // workspace/prompts.md; else the static suggestions (fail-soft).
   const { prompts: agentPrompts } = useAgentPrompts(currentAgent);
@@ -59,7 +61,7 @@ export function ChatWelcomeScreen() {
             key={s.key}
             variant="outline"
             size="sm"
-            onClick={() => useChatStore.getState().sendMessage(s.prompt)}
+            onClick={() => fillComposer(currentAgent ?? "", s.prompt)}
             className={`animate-in fade-in slide-in-from-bottom-1 duration-300 hover:bg-primary/10 hover:border-primary/30 hover:text-foreground ${SUGGESTION_DELAYS[i] ?? ""}`}
           >
             {s.label}

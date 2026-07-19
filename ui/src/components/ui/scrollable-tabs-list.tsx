@@ -14,8 +14,9 @@ function ScrollableTabsList({
         // One row, left-aligned. Triggers keep their natural width (`flex-none`
         // vs the base `flex-1`). FilterTabsList collapses inactive labels to
         // icons (via ResizeObserver) before this ever needs to scroll; the
-        // overflow-x-auto is only a last-resort fallback for extreme cases.
-        "max-w-full justify-start flex-nowrap overflow-x-auto scrollbar-none scroll-fade-x overscroll-x-contain",
+        // overflow-x-auto is only a last-resort fallback for extreme cases (no
+        // edge-fade mask — it dimmed the last tab's label/badge).
+        "max-w-full justify-start flex-nowrap overflow-x-auto scrollbar-none overscroll-x-contain",
         "[&>[data-slot=tabs-trigger]]:flex-none",
         className,
       )}
