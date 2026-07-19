@@ -326,6 +326,7 @@ pub async fn bootstrap<S: EventSink>(
             None,
             parent_message_id,
             None,
+            None, // user rows carry no tool-loop step index
         )
         .await?;
         prealloc_id

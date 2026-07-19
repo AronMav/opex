@@ -1576,6 +1576,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("save_message_ex_with_id");

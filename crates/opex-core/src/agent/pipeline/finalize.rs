@@ -492,6 +492,7 @@ pub async fn finalize<S: EventSink>(
                 thinking_json.as_ref(),
                 ctx.user_message_id,
                 None,
+                None, // final assistant row carries no tool-loop step index
             )
             .await
             {
@@ -567,6 +568,7 @@ pub async fn finalize<S: EventSink>(
                         None,
                         ctx.user_message_id,
                         None,
+                        None, // partial assistant row carries no tool-loop step index
                     )
                     .await;
                 } else {
@@ -668,6 +670,7 @@ pub async fn finalize<S: EventSink>(
                         None,
                         ctx.user_message_id,
                         None,
+                        None, // partial assistant row carries no tool-loop step index
                     )
                     .await;
                 } else {
@@ -1328,6 +1331,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1387,6 +1391,7 @@ mod tests {
             None,
             Some("call_xyz"),
             Some("test-agent"),
+            None,
             None,
             None,
             None,

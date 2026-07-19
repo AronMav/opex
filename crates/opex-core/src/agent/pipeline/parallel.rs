@@ -882,6 +882,7 @@ fn spawn_persist_message_row(
     tool_call_id: Option<&str>,
     parent_id: Option<Uuid>,
     parallel_batch_id: Option<ParallelBatchId>,
+    step_id: Option<i32>,
 ) {
     let db = db.clone();
     let agent_name = agent_name.to_string();
@@ -912,6 +913,7 @@ fn spawn_persist_message_row(
                 thinking_owned.as_ref(),
                 parent_id,
                 parallel_batch_id,
+                step_id,
             )
             .await
             {
@@ -979,6 +981,7 @@ pub(crate) fn spawn_persist_tool_message(
         Some(tool_call_id),
         parent_id,
         parallel_batch_id,
+        None, // tool rows carry no tool-loop step index
     );
 }
 
@@ -995,21 +998,15 @@ pub(crate) fn spawn_persist_tool_message(
 /// messages have no parent assistant — the chain is broken on reload. Detached
 /// spawn closes that gap.
 ///
-/// `step_id` — when `Some`, an UPDATE follows the insert to set the row's
-/// `step_id` column (added by migration 046). Lets analytics or per-step
-/// UI features query intermediate iterations by their tool-loop position.
-/// `None` is treated as "don't set" so legacy callers keep working.
+/// `step_id` — when `Some`, the tool-loop iteration index. Written atomically
+/// in the same INSERT as the row (m046 column), so analytics / per-step UI can
+/// query intermediate iterations by tool-loop position. `None` = don't set.
 ///
-/// TODO (post-D3, 2026-05-13): same latent race shape as the `parallel_batch_id`
-/// UPDATE that D3 eliminated — the 20ms lead-in `tokio::sleep` is racing the
-/// detached INSERT, and `UPDATE ... WHERE id = X` against a not-yet-committed
-/// row returns 0 rows affected with `Ok(())`, silently losing the step_id tag.
-/// Fix by following the D3 pattern: thread `step_id` into the INSERT signature
-/// of `save_message_ex_with_id` (add `step_id: Option<i32>` parameter and a new
-/// column to the INSERT), then drop this secondary UPDATE entirely. Out of
-/// scope for the D3 spec — see
-/// `docs/superpowers/specs/2026-05-13-session-active-path-truncation-design.md`
-/// §"Out of scope".
+/// D3-shape fix (2026-07-19): this used to be a follow-up `UPDATE ... WHERE
+/// id = X` fired after a 20ms `tokio::sleep`, racing the detached INSERT — an
+/// update against a not-yet-committed row returns 0 rows affected with
+/// `Ok(())`, silently dropping the tag. Threading `step_id` into the INSERT
+/// signature (mirroring how D3 handled `parallel_batch_id`) removes the race.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_persist_assistant_message(
     db: &sqlx::PgPool,
@@ -1034,27 +1031,8 @@ pub(crate) fn spawn_persist_assistant_message(
         None,
         parent_id,
         None, // assistant rows are never part of a parallel tool batch
+        step_id,
     );
-    if let Some(step) = step_id {
-        let db_clone = db.clone();
-        tokio::spawn(async move {
-            // Tiny delay so the insert above (also detached) gets a head start.
-            // Failures are non-fatal — step_id is metadata, not load-bearing.
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            for attempt in 0..3u32 {
-                match crate::db::sessions::update_message_step_id(&db_clone, id, step).await {
-                    Ok(()) => return,
-                    Err(_) if attempt < 2 => {
-                        tokio::time::sleep(std::time::Duration::from_millis(50 * (1 << attempt))).await;
-                    }
-                    Err(e) => {
-                        tracing::debug!(error = %e, msg_id = %id, "step_id update failed (non-fatal)");
-                        return;
-                    }
-                }
-            }
-        });
-    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -1609,6 +1587,7 @@ mod parallel_batch_persistence_tests {
             None,
             None,
             Some(batch),
+            None,
         )
         .await?;
 
@@ -1651,6 +1630,7 @@ mod parallel_batch_persistence_tests {
             None,
             None,
             None,
+            None,
         )
         .await?;
 
@@ -1674,6 +1654,7 @@ mod parallel_batch_persistence_tests {
                 None,
                 Some(assistant_id),
                 Some(batch),
+                None,
             )
             .await?;
         }
@@ -1691,6 +1672,7 @@ mod parallel_batch_persistence_tests {
             Some("Test"),
             None,
             Some(parallel_b),
+            None,
             None,
         )
         .await?;

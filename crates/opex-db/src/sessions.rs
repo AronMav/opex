@@ -558,6 +558,11 @@ pub async fn save_message_ex(
 ///
 /// Idempotent against retries: ON CONFLICT (id) DO NOTHING. The first
 /// insert wins; duplicate calls with the same id are no-ops.
+///
+/// `step_id` — the tool-loop iteration index, written atomically in this same
+/// INSERT (m046 column). Previously set by a follow-up UPDATE that raced the
+/// detached insert (0 rows affected → silently lost); threading it here removes
+/// that race. `None` for callers with no step to record.
 #[allow(clippy::too_many_arguments)]
 pub async fn save_message_ex_with_id(
     db: &PgPool,
@@ -571,10 +576,11 @@ pub async fn save_message_ex_with_id(
     thinking_blocks: Option<&serde_json::Value>,
     parent_id: Option<Uuid>,
     parallel_batch_id: Option<opex_types::ids::ParallelBatchId>,
+    step_id: Option<i32>,
 ) -> Result<()> {
     sqlx::query(
-        "INSERT INTO messages (id, session_id, role, content, tool_calls, tool_call_id, agent_id, thinking_blocks, parent_message_id, parallel_batch_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+        "INSERT INTO messages (id, session_id, role, content, tool_calls, tool_call_id, agent_id, thinking_blocks, parent_message_id, parallel_batch_id, step_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
          ON CONFLICT (id) DO NOTHING",
     )
     .bind(id)
@@ -587,17 +593,20 @@ pub async fn save_message_ex_with_id(
     .bind(thinking_blocks)
     .bind(parent_id)
     .bind(parallel_batch_id.map(|b| b.as_uuid()))
+    .bind(step_id)
     .execute(db)
     .await?;
 
     Ok(())
 }
 
-/// Set the step_id column for an existing message row. Used by the agent
-/// pipeline immediately after `save_message_ex_with_id` inserts an
-/// intermediate iteration row, so the row gets a queryable step number
-/// without bloating the main insert signature with a parameter most
-/// callers don't need.
+/// Set the step_id column for an existing message row.
+///
+/// NOTE: the hot path (intermediate iteration rows in `pipeline::parallel`)
+/// now threads `step_id` straight into `save_message_ex_with_id`'s INSERT, so
+/// this standalone UPDATE is no longer on that path — it raced the detached
+/// insert and silently lost the tag on a 0-row update. Retained for callers
+/// that legitimately update an already-committed row.
 ///
 /// No-op if the row doesn't exist (e.g. the insert lost a race).
 pub async fn update_message_step_id(
@@ -3550,5 +3559,52 @@ mod bookmark_tests {
             .await
             .expect("page 2");
         assert!(page2.is_empty(), "no more telegram sessions after the cursor");
+    }
+}
+
+#[cfg(test)]
+mod step_id_insert_tests {
+    use super::*;
+
+    // D3-shape fix (2026-07-19): step_id must be written atomically by the
+    // INSERT, not by a follow-up UPDATE that raced the detached insert (a 0-row
+    // update returned Ok and silently dropped the tag). Insert once with
+    // Some(step) and read the column straight back.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn save_message_ex_with_id_writes_step_id_in_the_insert(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "A", "u", "ui").await.unwrap();
+        let mid = Uuid::new_v4();
+        save_message_ex_with_id(
+            &pool, mid, sid, "assistant", "iteration text",
+            None, None, Some("A"), None, None, None, Some(3),
+        )
+        .await
+        .unwrap();
+
+        let step: Option<i32> = sqlx::query_scalar("SELECT step_id FROM messages WHERE id = $1")
+            .bind(mid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(step, Some(3), "step_id must be persisted by the INSERT itself");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn save_message_ex_with_id_leaves_step_id_null_when_none(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "A", "u", "ui").await.unwrap();
+        let mid = Uuid::new_v4();
+        save_message_ex_with_id(
+            &pool, mid, sid, "assistant", "no step",
+            None, None, Some("A"), None, None, None, None,
+        )
+        .await
+        .unwrap();
+
+        let step: Option<i32> = sqlx::query_scalar("SELECT step_id FROM messages WHERE id = $1")
+            .bind(mid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(step, None, "no step supplied → column stays NULL");
     }
 }
