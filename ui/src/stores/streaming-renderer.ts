@@ -17,6 +17,7 @@ import type {
 import { getCachedRawMessages, resolveActivePath } from "./chat-history";
 import { streamSessionManager } from "./stream-session";
 import { makeUpdate } from "./chat/actions/_shared";
+import { saveLastSession } from "./chat-persistence";
 
 // ── Store access interface ─────────────────────────────────────────────────
 // Typed against the ChatStore shape (type-only import — erased at runtime, so
@@ -421,9 +422,36 @@ export function createStreamingRenderer(store: StoreAccess) {
       messages: [{ role: "user", content: userText }],
     };
     if (apiAttachments.length > 0) body.attachments = apiAttachments;
+
+    // Session-id pre-allocation for NEW chats. When the user starts a fresh
+    // chat (`forceNew=true`, no prior `sessionId`), generate the UUID locally
+    // and persist it to localStorage BEFORE the POST fires. A refresh during
+    // the (potentially slow — URL/attachment enrichment) POST used to leave
+    // the UI with no knowledge of the new session; the user's message was
+    // lost from their perspective even though the backend eventually created
+    // the session. With pre-allocation:
+    //   - UI knows the session_id before POST → can saveLastSession immediately
+    //   - Backend honours the client-provided id (msg.context.client_session_id
+    //     → session_create_new_with_id) so the IDs match end-to-end
+    //   - On refresh, localStorage has the session_id → resume finds it in DB
+    // For EXISTING chats (`sessionId` already set) the path is unchanged.
+    let effectiveSessionId = sessionId;
+    if (forceNew && !sessionId) {
+      effectiveSessionId = uuid();
+      // Mirror agentState.activeSessionId so connect() / subsequent sends
+      // reference the same id without waiting for the 202.
+      update(agent, {
+        activeSessionId: effectiveSessionId,
+        forceNewSession: false,
+        messageSource: { mode: "live", messages: [userMsg] },
+      });
+      // Persist BEFORE the POST — refresh-safe.
+      saveLastSession(agent, effectiveSessionId);
+    }
+
     if (sessionId) {
+      // Existing-session path — leaf_message_id threading unchanged.
       body.session_id = sessionId;
-      // Send leaf_message_id — the tip of the currently viewed branch.
       const rawMsgs = getCachedRawMessages(sessionId, agent);
       if (rawMsgs.length > 0) {
         const branches = store.get().agents[agent]?.selectedBranches ?? {};
@@ -437,18 +465,32 @@ export function createStreamingRenderer(store: StoreAccess) {
           body.leaf_message_id = rawMsgs[rawMsgs.length - 1].id;
         }
       }
+    } else if (forceNew && effectiveSessionId) {
+      // New-chat pre-allocation: send the id together with force_new_session
+      // so the backend creates the session row with THIS UUID (not a
+      // server-generated one). Backend's POST handler routes the id through
+      // msg.context.client_session_id → session_create_new_with_id.
+      body.session_id = effectiveSessionId;
     }
     if (userMessageId) body.user_message_id = userMessageId;
     if (model) body.model = model;
     if (forceNew) {
       body.force_new_session = true;
-      update(agent, { forceNewSession: false });
+      // `forceNewSession` was already cleared above for the pre-allocation
+      // branch; clear it here too for the existing-session-with-force case
+      // (rare but defensive).
+      if (!effectiveSessionId || sessionId) {
+        update(agent, { forceNewSession: false });
+      }
     }
 
     // ── POST → 202 → connect ──
     try {
       const { session_id } = await startTurn(agent, body);
       // Persist last session (was wired via onSessionId → saveLastSession).
+      // For pre-allocated new-chat sessions the returned id SHOULD match
+      // `effectiveSessionId` — call saveLastSession anyway so any divergence
+      // (e.g. backend ignored the id due to a config gate) self-heals.
       _onSessionId?.(agent, session_id);
       connect(agent, session_id);
     } catch (err) {

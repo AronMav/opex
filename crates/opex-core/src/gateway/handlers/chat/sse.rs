@@ -140,7 +140,16 @@ pub(crate) async fn api_chat_sse(
         .as_deref()
         .or(req.id.as_deref())
         .and_then(|s| uuid::Uuid::from_str(s).ok());
-    let force_new_session = req.force_new_session && session_id.is_none();
+    // UI pre-allocation: when the client sends `session_id` together with
+    // `force_new_session=true` it has already saved that UUID to localStorage
+    // (so a refresh during POST can still find the session). Honour both: keep
+    // force_new_session set, and thread the client id through msg.context so
+    // the context builder uses `create_new_session_with_id` instead of
+    // generating a fresh UUID server-side. Previously the `&& session_id.is_none()`
+    // guard silently dropped the client id and forced a server-generated one,
+    // which defeated the pre-allocation.
+    let client_session_id_for_new = if req.force_new_session { session_id } else { None };
+    let force_new_session = req.force_new_session;
     let user_text_for_title = user_text.clone();
 
     // ── @-mention routing ──────────────────────────────────────────
@@ -179,7 +188,13 @@ pub(crate) async fn api_chat_sse(
         attachments: req.attachments,
         agent_id: engine.name().to_string(),
         channel: crate::agent::channel_kind::channel::UI.to_string(),
-        context: serde_json::json!({}),
+        // Thread the client-provided session id (if any) through to the context
+        // builder so a force_new_session branch can honour the pre-allocated UUID.
+        context: if let Some(cid) = client_session_id_for_new {
+            serde_json::json!({ "client_session_id": cid.to_string() })
+        } else {
+            serde_json::json!({})
+        },
         timestamp: chrono::Utc::now(),
         formatting_prompt: None,
         tool_policy_override: None,
@@ -217,7 +232,16 @@ pub(crate) async fn api_chat_sse(
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
-    let boot = match engine.bootstrap_sse(&msg, session_id, force_new_session, model_override).await {
+    // When `force_new_session=true`, do NOT pass the (possibly client-provided)
+    // session_id as `resume_session_id` — context_builder's first branch would
+    // try to resume it (and fail because the session doesn't exist yet). The
+    // client-provided id is threaded via `msg.context.client_session_id` and
+    // context_builder's `force_new_session` branch honours it via
+    // `session_create_new_with_id`. The resume path stays unchanged for the
+    // existing-session case (force_new_session=false + session_id=Some).
+    let resume_session_id = if force_new_session { None } else { session_id };
+
+    let boot = match engine.bootstrap_sse(&msg, resume_session_id, force_new_session, model_override).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!(error = %e, "SSE bootstrap error (agent: {agent_name})");

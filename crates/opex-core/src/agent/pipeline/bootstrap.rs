@@ -236,14 +236,67 @@ pub async fn bootstrap<S: EventSink>(
         &start_event,
     );
 
-    // 6. Enrich + persist user message
-    //    Calls crate::agent::pipeline::subagent::enrich_message_text which:
-    //    - redacts PII (emails/phones) before sending to external LLM,
-    //    - transcribes voice attachments via toolgate,
-    //    - describes image/document attachments via vision,
-    //    - auto-fetches URLs mentioned in the text through SSRF-safe client.
-    //    Previously lost during the pipeline refactor; restored 2026-04-20.
+    // 6. Persist user message BEFORE enrichment.
+    //
+    // Architectural fix: enrichment (URL fetch / voice transcription / vision)
+    // can take seconds. The previous order did enrichment FIRST and only then
+    // INSERTed the user row, which meant a refresh during enrichment saw an
+    // orphan session in the DB (no user message) and the UI rendered an empty
+    // chat. With client-side session_id pre-allocation + early user_message
+    // persist, a refresh during enrichment now finds both the session AND the
+    // user message — the UI can render the user's text immediately and
+    // auto-resume the live stream once the engine task starts emitting.
+    //
+    // The ORIGINAL text is persisted (enrichment output is LLM context only —
+    // it would pollute the UI with fetched URL contents / PII-redacted marks).
+    // The enriched text is pushed into the in-memory `messages` vec below for
+    // the LLM call only.
     let user_text = ctx.msg.text.clone().unwrap_or_default();
+    let sender_agent_id = extract_sender_agent_id(&ctx.msg.user_id);
+    // parent_message_id = leaf_message_id: threads the new user message onto
+    // the active conversation path so reload-from-active-path can find it.
+    //
+    // If the UI didn't send leaf_message_id (stale cache / race between reload
+    // and fetch-messages), fall back to the session's latest completed message
+    // so the new turn stays anchored to a real chain instead of floating as a
+    // root orphan.
+    let parent_message_id = match ctx.msg.leaf_message_id {
+        Some(id) => Some(id),
+        None => sm.latest_leaf_message_id(session_id).await.unwrap_or(None),
+    };
+    let user_message_id: uuid::Uuid = if let Some(prealloc_id) = ctx.msg.user_message_id {
+        crate::db::sessions::save_message_ex_with_id(
+            &engine.cfg().db,
+            prealloc_id,
+            session_id,
+            "user",
+            &user_text,
+            None,
+            None,
+            sender_agent_id,
+            None,
+            parent_message_id,
+            None,
+            None, // user rows carry no tool-loop step index
+        )
+        .await?;
+        prealloc_id
+    } else {
+        sm.save_message_ex(
+            session_id,
+            "user",
+            &user_text,
+            None,
+            None,
+            sender_agent_id,
+            None,
+            parent_message_id,
+        )
+        .await?
+    };
+
+    // 7. Enrich (slow) — runs AFTER the user message is durable so a refresh
+    //    during enrichment still finds the conversation in a consistent state.
     let toolgate_url = engine
         .cfg()
         .app_config
@@ -289,59 +342,6 @@ pub async fn bootstrap<S: EventSink>(
             format!("{ctx_inject}\n\n{enriched_text}")
         }
         _ => enriched_text,
-    };
-
-    let sender_agent_id = extract_sender_agent_id(&ctx.msg.user_id);
-    // parent_message_id = leaf_message_id: threads the new user message onto
-    // the active conversation path so reload-from-active-path can find it.
-    // user_message_id is then used as parent for the assistant reply in finalize.
-    //
-    // If the UI didn't send leaf_message_id (stale cache / race between reload
-    // and fetch-messages), fall back to the session's latest completed message
-    // so the new turn stays anchored to a real chain instead of floating as a
-    // root orphan. Without this fallback, reload-during-stream would leave the
-    // user message invisible in active_path (seen 2026-04-20).
-    // When user_message_id is provided the client pre-allocated the UUID so the
-    // optimistic message in the live overlay has the same ID as the DB row
-    // (symmetric to the assistant message pre-allocation in execute.rs). We save
-    // with save_message_ex_with_id (ON CONFLICT DO NOTHING) so the fork path is
-    // safe: if the message was already inserted by POST /fork, the insert is a
-    // no-op and we reuse the same UUID — no duplicate, no error.
-    let parent_message_id = match ctx.msg.leaf_message_id {
-        Some(id) => Some(id),
-        None => sm.latest_leaf_message_id(session_id).await.unwrap_or(None),
-    };
-    // Store the original user text in DB — enriched_text is LLM context only
-    // and must not be persisted (URL fetched content would show in the UI).
-    let user_message_id: uuid::Uuid = if let Some(prealloc_id) = ctx.msg.user_message_id {
-        crate::db::sessions::save_message_ex_with_id(
-            &engine.cfg().db,
-            prealloc_id,
-            session_id,
-            "user",
-            &user_text,
-            None,
-            None,
-            sender_agent_id,
-            None,
-            parent_message_id,
-            None,
-            None, // user rows carry no tool-loop step index
-        )
-        .await?;
-        prealloc_id
-    } else {
-        sm.save_message_ex(
-            session_id,
-            "user",
-            &user_text,
-            None,
-            None,
-            sender_agent_id,
-            None,
-            parent_message_id,
-        )
-        .await?
     };
 
     // 7. LoopDetector: warm from timeline ONLY when this is a true continuation

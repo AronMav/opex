@@ -425,6 +425,22 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
             .await
     }
 
+    async fn session_create_new_with_id(
+        &self,
+        id: Uuid,
+        user_id: &str,
+        channel: &str,
+    ) -> Result<Uuid> {
+        opex_db::sessions::create_new_session_with_id(
+            &self.cfg().db,
+            id,
+            &self.cfg().agent.name,
+            user_id,
+            channel,
+        )
+        .await
+    }
+
     async fn session_get_or_create(
         &self,
         user_id: &str,

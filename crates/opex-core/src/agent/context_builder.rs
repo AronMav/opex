@@ -97,6 +97,20 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     // Session management
     async fn session_resume(&self, sid: Uuid) -> Result<Uuid>;
     async fn session_create_new(&self, user_id: &str, channel: &str) -> Result<Uuid>;
+    /// Create a new session with a client-provided id (UI pre-allocation so a
+    /// refresh during POST can still find the session in localStorage). Default
+    /// impl falls back to `session_create_new` (ignoring the id) for backwards
+    /// compat with test doubles that haven't been updated.
+    async fn session_create_new_with_id(
+        &self,
+        id: Uuid,
+        user_id: &str,
+        channel: &str,
+    ) -> Result<Uuid> {
+        // Default: ignore the provided id (preserves existing test double behaviour).
+        let _ = id;
+        self.session_create_new(user_id, channel).await
+    }
     async fn session_get_or_create(
         &self,
         user_id: &str,
@@ -295,7 +309,22 @@ impl ContextBuilder for DefaultContextBuilder {
             };
             (id, mode)
         } else if force_new_session {
-            let id = deps.session_create_new(&msg.user_id, &msg.channel).await?;
+            // UI pre-allocation: if the client generated a session_id locally
+            // (so it can write localStorage BEFORE the POST returns, making a
+            // mid-POST refresh recoverable), honour it. The id is stamped on
+            // `msg.context.client_session_id` by the POST handler when the
+            // request carries `session_id` together with `force_new_session`.
+            let client_sid = msg
+                .context
+                .get("client_session_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok());
+            let id = if let Some(cid) = client_sid {
+                deps.session_create_new_with_id(cid, &msg.user_id, &msg.channel)
+                    .await?
+            } else {
+                deps.session_create_new(&msg.user_id, &msg.channel).await?
+            };
             (id, opex_db::ReentryMode::NewSession)
         } else {
             let dm_scope = deps.agent_dm_scope().to_string();

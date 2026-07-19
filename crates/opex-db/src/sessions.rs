@@ -311,6 +311,32 @@ pub async fn create_new_session(
     Ok(row.get("id"))
 }
 
+/// Create a brand-new session with a client-provided UUID. Used when the UI
+/// pre-allocates the session_id so a refresh during POST can still find the
+/// session in localStorage and resume it. The ID is honoured as-is — callers
+/// MUST generate a fresh UUIDv4 and never reuse an existing session's id.
+/// Returns the same UUID on success.
+pub async fn create_new_session_with_id(
+    db: &PgPool,
+    id: Uuid,
+    agent_id: &str,
+    user_id: &str,
+    channel: &str,
+) -> Result<Uuid> {
+    sqlx::query(
+        "INSERT INTO sessions (id, agent_id, user_id, channel, participants) \
+         VALUES ($1, $2, $3, $4, ARRAY[$2]) \
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(id)
+    .bind(agent_id)
+    .bind(user_id)
+    .bind(channel)
+    .execute(db)
+    .await?;
+    Ok(id)
+}
+
 /// Transaction variant of [`create_new_session`] — same insert, executed on
 /// the caller's transaction so it commits atomically with sibling writes
 /// (e.g. Stage C `approve_proposal`: status flip + session + goal in one tx).
