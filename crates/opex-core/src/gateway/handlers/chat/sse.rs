@@ -354,19 +354,25 @@ pub(crate) async fn api_chat_sse(
         // running on `bus.bg_tasks` (TaskTracker) and the converter buffers
         // every emitted event into StreamRegistry — a later GET /stream
         // replays them. Bootstrap failure is surfaced as an Error event so the
-        // UI sees it via the stream instead of a hanging 202.
+        // UI sees it via the stream instead of a hanging 202, AND marks the
+        // session `failed` + the stream `finished` so neither orphan-leaks.
         let ui_tx = bus.ui_event_tx.clone();
         let agent_for_broadcast = msg.agent_id.clone();
         let engine_cancel = pipeline_cancel.clone();
         let engine_for_task = engine.clone();
         let boot_msg = msg.clone();
+        let db_for_task = infra.db.clone();
+        let registry_for_task = bus.stream_registry.clone();
         let request_span = tracing::info_span!("sse_engine_turn");
         let engine_handle = bus.bg_tasks.spawn(
             async move {
                 let current_agent_name = engine_for_task.name().to_string();
                 // Bootstrap INSIDE the task — no longer awaited by the POST
                 // handler. If this fails, emit Error+Finish so the stream
-                // surfaces it instead of hanging.
+                // surfaces it instead of hanging, mark the session `failed` so
+                // the orphan row from the POST handler's create_new_session_with_id
+                // doesn't leak, and mark the registry entry `finished` so
+                // GET /stream subscribers don't block forever.
                 let boot = match engine_for_task
                     .bootstrap_sse(&boot_msg, resume_session_id, force_new_session, model_override)
                     .await
@@ -374,6 +380,13 @@ pub(crate) async fn api_chat_sse(
                     Ok(b) => b,
                     Err(e) => {
                         tracing::error!(error = %e, "SSE bootstrap error (agent: {})", current_agent_name);
+                        let sid_str = resp_session_id.to_string();
+                        // Mark session failed (best-effort — a DB error here is
+                        // non-fatal; the stream error event below is the
+                        // user-visible signal).
+                        if let Err(e2) = opex_db::sessions::mark_session_failed(&db_for_task, resp_session_id).await {
+                            tracing::warn!(error = %e2, session_id = %resp_session_id, "failed to mark session failed after bootstrap error");
+                        }
                         let _ = engine_event_tx
                             .send_async(StreamEvent::Error(e.to_string()))
                             .await;
@@ -383,6 +396,11 @@ pub(crate) async fn api_chat_sse(
                                 continuation: false,
                             })
                             .await;
+                        // Mark the registry entry finished so a waiting GET
+                        // /stream subscriber unblocks (converter would
+                        // normally do this, but the converter's finish path
+                        // only fires when execute_sse returns).
+                        registry_for_task.mark_finished(&sid_str).await;
                         return;
                     }
                 };
