@@ -19,8 +19,13 @@ export class StreamSession {
     this.agent = agent;
     this.generation = generation;
     this.#controller = new AbortController();
-    const currentAgent = useChatStore.getState().agents[agent];
-    this.buffer = new StreamBuffer(currentAgent?.activeSessionId ?? null);
+    // Seed the responding agent with THIS agent's name — not the session id.
+    // currentRespondingAgent becomes the live message's agentId (see commit());
+    // until the first SSE start/text-start carries an explicit agentName, any
+    // committed part must attribute to the real agent. Passing activeSessionId
+    // (a UUID) here made displayAgentName mask it as the generic "Агент" label
+    // and MessageList draw a spurious agent-transition divider.
+    this.buffer = new StreamBuffer(this.agent);
   }
 
   get signal(): AbortSignal {

@@ -126,6 +126,25 @@ describe("StreamSession", () => {
       expect(msgs[0].parts[0].type).toBe("tool");
     });
 
+    it("commit() attributes the live message to the agent name, not the session UUID", () => {
+      // Regression: activeSessionId (a UUID) leaked into the buffer's initial
+      // responding-agent, so a part committed before the first SSE agentName got
+      // agentId = <session UUID> — displayAgentName then masked it as the generic
+      // "Агент" label and MessageList drew a spurious agent-transition divider.
+      useChatStore.setState((draft: any) => {
+        draft.agents.Arty.activeSessionId = "16ba9b12-421d-4bda-ac33-74724c537e1a";
+      });
+      const s = streamSessionManager.start("Arty");
+      useChatStore.setState((draft: any) => {
+        draft.agents.Arty.messageSource = { mode: "live", messages: [] };
+      });
+      s.buffer.parser.processDelta("hi");
+      s.commit();
+      const msgs = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].agentId).toBe("Arty");
+    });
+
     it("commit() writes message and connectionPhase atomically", () => {
       const s = streamSessionManager.start("Arty");
       useChatStore.setState((draft: any) => {
