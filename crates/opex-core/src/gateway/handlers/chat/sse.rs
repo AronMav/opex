@@ -313,6 +313,46 @@ pub(crate) async fn api_chat_sse(
                 .into_response();
         }
 
+        // Persist the user message BEFORE the engine task spawns. Otherwise an
+        // F5 between spawn and bootstrap reaching save_message_ex_with_id
+        // (bootstrap does ~10 setup steps before persist) leaves the session
+        // with no user row — the user's message vanishes on reload. With
+        // pre-allocated user_message_id + ON CONFLICT DO NOTHING in
+        // save_message_ex_with_id, the later bootstrap persist becomes a no-op
+        // (same UUID) so we don't duplicate. parent_message_id follows the
+        // same rule bootstrap uses (msg.leaf_message_id, else session's latest
+        // leaf — None for a fresh session).
+        let parent_message_id = match msg.leaf_message_id {
+            Some(id) => Some(id),
+            None => {
+                let sm = crate::agent::session_manager::SessionManager::new(infra.db.clone());
+                sm.latest_leaf_message_id(resp_session_id).await.unwrap_or(None)
+            }
+        };
+        if let Err(e) = opex_db::sessions::save_message_ex_with_id(
+            &infra.db,
+            resp_user_message_id,
+            resp_session_id,
+            "user",
+            &user_text,
+            None,
+            None,
+            None,
+            None,
+            parent_message_id,
+            None,
+            None,
+        )
+        .await
+        {
+            tracing::error!(error = %e, "preallocated user_message persist failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+
         // Register the stream BEFORE responding so a subsequent GET /{id}/stream
         // finds it. The engine task will populate the buffer.
         let Some(job_id) = bus
