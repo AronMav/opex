@@ -231,6 +231,18 @@ export function ChatThread({
   // which would otherwise suppress showThinking. Bypass lastAssistantHasText
   // when live mode has no overlay content yet (no events streamed yet).
   const isLiveEmpty = isLive && !liveHasContent;
+  // Resume-window: after F5 the engine may already be running on the backend
+  // while our GET /stream is still waiting for its first live event. We're in
+  // "history" mode (selectSession set it) with phase=streaming + engineRunning,
+  // but `lastAssistantHasText` is true (past turn's reply in history). Without
+  // this bypass, showThinking collapses to false and the user sees no
+  // "thinking" indicator even though the model is calling tools. Mirrors the
+  // isLiveEmpty bypass — once the first live event lands, session.commit()
+  // flips messageSource to "live" and the normal path takes over.
+  const isResumeWaitingForStream = isHistory
+    && !liveHasContent
+    && (connectionPhase === "streaming" || connectionPhase === "submitted")
+    && engineRunning;
   // T8 (minor a): the "submitted" pre-first-byte window (e.g. mid-stream F5,
   // where messageSource is still "history" with a text-bearing tail) must show
   // the thinking indicator regardless of the history tail — otherwise a
@@ -240,7 +252,7 @@ export function ChatThread({
     && !lastMsgIsOtherAgent
     && (
       connectionPhase === "submitted"
-      || ((isLiveEmpty || !lastAssistantHasText)
+      || ((isLiveEmpty || isResumeWaitingForStream || !lastAssistantHasText)
           && (connectionPhase === "streaming" || engineRunning))
     );
 
