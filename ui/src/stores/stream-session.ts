@@ -141,6 +141,11 @@ export class StreamSession {
       const st = draft.agents[this.agent];
       if (!st) return;
       st.connectionPhase = "idle";
+      // M1 fix: also clear the public reconnect-attempt field so any
+      // ReconnectingIndicator that was visible collapses on dispose
+      // (agent switch, navigation, teardown). Previously only the
+      // internal _reconnectAttempts counter was cleared by the caller.
+      st.transportReconnectAttempt = 0;
       st.streamGeneration = (st.streamGeneration ?? 0) + 1;
     });
   }

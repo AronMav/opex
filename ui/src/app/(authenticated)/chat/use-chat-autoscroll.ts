@@ -126,7 +126,15 @@ export function useChatAutoscroll(
       }, 100);
       return () => clearTimeout(t);
     }
-  }, [activeSessionId, scrollerEl]);
+    // H1 fix: removed scrollerEl from deps. Including it caused a race: if
+    // Virtuoso re-emitted the scroller ref during the 100ms window (common on
+    // session switch), React cleared the timer via cleanup and re-ran the
+    // effect — but activeSessionId had already matched prevSessionId, so the
+    // inner `if` was false and no new timer was scheduled. Scroll-to-bottom
+    // was silently dropped. scrollerEl is read inside the timeout closure,
+    // which captures the latest value at fire time anyway.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId]);
 
   const scrollToBottom = useCallback(() => {
     shouldFollowRef.current = true;

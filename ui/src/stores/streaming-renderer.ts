@@ -65,7 +65,13 @@ export function createStreamingRenderer(store: StoreAccess) {
   // whose stream has been silent for longer than the threshold while it
   // remains in an active phase.
   const ACTIVITY_WATCHDOG_INTERVAL_MS = 5_000;
-  const ACTIVITY_WATCHDOG_STALE_MS = 30_000;
+  // M3: 60s threshold (was 30s). Long tool calls (code_exec, summarize_video,
+  // slow MCP servers) can legitimately produce 30s+ gaps between
+  // tool-input-available and tool-output-available — a 30s threshold would
+  // force a spurious reconnect mid-tool, freezing the live caret and
+  // flashing "Reconnecting". 60s tolerates a single slow tool while still
+  // catching a truly dead socket well within the user's patience.
+  const ACTIVITY_WATCHDOG_STALE_MS = 60_000;
 
   // ── Fix I: bounded reconnect (backoff + cap) ─────────────────────────────
   // `onConnectionLost` previously re-`connect`ed immediately with no delay,
@@ -277,15 +283,15 @@ export function createStreamingRenderer(store: StoreAccess) {
         // later drop gets a fresh reconnect budget (the cap targets a
         // stream that NEVER connects, not intermittent mid-turn drops).
         _reconnectAttempts.delete(agent);
-        update(agent, { connectionPhase: "streaming" });
+        // M1 fix: also reset the publicly-read field so
+        // ReconnectingIndicator collapses immediately.
+        update(agent, { connectionPhase: "streaming", transportReconnectAttempt: 0 });
       },
       onFinished: () => {
         _reconnectAttempts.delete(agent);
         clearReconnectTimer(agent);
-        // Turn is over. Query invalidation + refetch + history settle are
-        // owned EXCLUSIVELY by stream-processor's post-finally; here we only
-        // idle the phase and reset the reconnect budget.
-        update(agent, { connectionPhase: "idle" });
+        // M1 fix: same — clear the public field.
+        update(agent, { connectionPhase: "idle", transportReconnectAttempt: 0 });
       },
       onConnectionLost: () => scheduleReconnect(agent, sessionId),
       onEventActivity: () => recordEventActivity(agent),
@@ -546,7 +552,11 @@ export function createStreamingRenderer(store: StoreAccess) {
       // finished envelope if the turn already ended while hidden).
       if (last !== 0 && now - last < staleMs) continue;
       try {
-        connect(agent, sid);
+        // C1 fix: pass isRetry=true so the reconnect-budget cap is honoured.
+        // With the default (false), connect() would _reconnectAttempts.delete()
+        // on every watchdog tick, defeating the RECONNECT_MAX_RETRIES cap and
+        // looping forever against a hung backend that accepts but never sends.
+        connect(agent, sid, true);
       } catch (e) {
         if (process.env.NODE_ENV !== "production") {
           console.warn("[streaming-renderer] tab-lifecycle reattach failed", e);

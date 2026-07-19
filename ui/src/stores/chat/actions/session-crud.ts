@@ -171,6 +171,46 @@ export function createSessionCrudActions(deps: ActionDeps) {
 
       const liveMessages = getLiveMessages(st.messageSource);
       const firstMsg = liveMessages.find((m) => !m.id.startsWith("compression-divider-"));
+      // H2 fix: in history mode getLiveMessages returns [] → firstMsg is
+      // undefined → early-return with no error. Previously this left the
+      // "Load earlier" button permanently clickable-but-dead when the user
+      // returned to a session where hasMoreHistory was carried over from a
+      // prior live-mode load. Fall through to the cached history messages
+      // instead so the cursor pagination can proceed.
+      if (!firstMsg && st.messageSource.mode === "history") {
+        // Use the cached raw messages from React Query (same source
+        // loadEarlierMessages uses) to find the pagination cursor.
+        const cached = getCachedHistoryMessages(st.activeSessionId, agentName);
+        const cachedFirst = cached.find((m) => !m.id.startsWith("compression-divider-"));
+        if (!cachedFirst) return; // genuinely nothing to paginate
+        // Fall through with the cached cursor.
+        set((draft) => { draft.agents[agentName].isLoadingHistory = true; });
+        try {
+          const params = new URLSearchParams({
+            before_id: cachedFirst.id,
+            limit: "50",
+            agent: agentName,
+          });
+          const res = await apiGet<MessagesResponse>(
+            `/api/sessions/${st.activeSessionId}/messages?${params.toString()}`,
+          );
+          const converted = convertHistory(res.messages ?? []);
+          const totalSegments = (get().agents[agentName] as AgentState & { sessionSegmentCount?: number })?.sessionSegmentCount ?? 1;
+          const withDividers = insertCompressionDividers(converted, res.compression_events ?? [], totalSegments);
+          // In history mode, prepend to the React Query cache via invalidation
+          // (the cache is the source of truth for history mode rendering).
+          queryClient.invalidateQueries({ queryKey: qk.sessionMessages(st.activeSessionId) });
+          update(agentName, {
+            hasMoreHistory: res.has_more ?? false,
+            isLoadingHistory: false,
+          });
+        } catch (_e) {
+          const { toast } = await import("sonner");
+          toast.error("Не удалось загрузить историю сообщений");
+          set((draft) => { draft.agents[agentName].isLoadingHistory = false; });
+        }
+        return;
+      }
       if (!firstMsg) return;
 
       set((draft) => { draft.agents[agentName].isLoadingHistory = true; });
