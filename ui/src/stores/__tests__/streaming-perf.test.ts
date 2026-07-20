@@ -191,8 +191,11 @@ vi.mock("@/stores/chat-store", async (importOriginal) => {
 });
 
 vi.mock("@/stores/auth-store", () => ({
-  useAuthStore: vi.fn((selector: (s: { agentIcons: Record<string, string> }) => unknown) =>
-    selector({ agentIcons: {} })
+  // `agents` is required: MessageItem reads it as `knownAgents` and passes it to
+  // displayAgentName, which does `knownAgents.includes(...)` — an undefined here
+  // throws during render (WS6 wiring, b8bb44af).
+  useAuthStore: vi.fn((selector: (s: { agentIcons: Record<string, string>; agents: string[] }) => unknown) =>
+    selector({ agentIcons: {}, agents: [] })
   ),
 }));
 
