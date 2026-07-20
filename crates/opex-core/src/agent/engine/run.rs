@@ -156,7 +156,7 @@ impl AgentEngine {
         }
 
         let mut s = sink::NoopSink::new();
-        const BOOTSTRAP_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+        const BOOTSTRAP_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
         let mut boot = match tokio::time::timeout(
             BOOTSTRAP_HARD_TIMEOUT,
             bootstrap::bootstrap(
@@ -1168,7 +1168,7 @@ impl AgentEngine {
     ) -> Result<String> {
         let mut s = sink::NoopSink::new();
 
-        const BOOTSTRAP_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+        const BOOTSTRAP_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
         let boot = match tokio::time::timeout(
             BOOTSTRAP_HARD_TIMEOUT,
             bootstrap::bootstrap(
