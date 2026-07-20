@@ -32,8 +32,8 @@ impl ToolgateClient {
     /// This is deliberate: after a toolgate restart the old connections in the
     /// pool are dead (server-side closed), and reqwest's default pool has no
     /// mechanism to detect this before sending. Each retry would reuse the same
-    /// dead connection, wait the full 60s `timeout`, then retry — 3×60s = 3 min
-    /// of silence per chat turn. With pooling disabled, a dead toolgate fails
+    /// dead connection, wait the full `timeout`, then retry — 3×timeout of
+    /// silence per chat turn. With pooling disabled, a dead toolgate fails
     /// fast at `connect_timeout` (5s), and each retry opens a fresh connection
     /// that either succeeds immediately or fails quickly. Embedding calls are
     /// infrequent enough (1–2 per turn) that connection reuse provides no
@@ -41,11 +41,15 @@ impl ToolgateClient {
     ///
     /// `tcp_keepalive(15s)` gives the OS a chance to detect a genuinely dead
     /// peer mid-request (e.g. toolgate process killed without closing sockets)
-    /// without waiting for the full 60s request timeout.
+    /// without waiting for the full request timeout.
+    ///
+    /// `timeout(10s)` — embedding is a fast operation (1–2s normally). 10s is
+    /// generous enough for a slow provider round-trip but short enough that 3
+    /// retries (30s worst case) don't block bootstrap indefinitely.
     pub fn new(base_url: impl Into<String>, requested_dimensions: u32) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(60))
+            .timeout(Duration::from_secs(10))
             .pool_max_idle_per_host(0)
             .tcp_keepalive(Duration::from_secs(15))
             .build()
