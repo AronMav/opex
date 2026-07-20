@@ -21,8 +21,8 @@ Bridge-таймаут 300s фиксированный (`bridge.ts:98-103`), core
 ### A4. Двойной учёт abort-usage на пути SSE `Interrupted("sink_closed")` — FRESH-DEFECT
 `record_usage` фиксирует реальный usage завершённого вызова (`execute.rs:582-611`), затем emit `Finish` падает `Closed` → `Interrupted` → `spawn_record_aborted_usage` пишет ВТОРУЮ строку (len/4). Docstring «record_usage never fires for it» неверен для этой арки. Канальный путь чист (ChannelStatusSink глотает не-TextDelta). Фикс: флаг `usage_recorded_for_final_call` в finalize. `finalize.rs:689-701`. CONF: механизм HIGH, частота LOW-MED.
 
-### A5. Ещё два YAML-тула на reserved-секрете — BROKEN (копии core_get_skills_repairs)
-Серверные `~/opex/workspace/tools/core_get_backup.yaml` + `core_get_config.yaml` → `auth: bearer_env OPEX_AUTH_TOKEN` → reserved-гард (`yaml_tools.rs:27-28`) валит каждый вызов. Решение как в v1: удалить или выделенный не-reserved секрет (решение оператора). CONF HIGH.
+### A5. Ещё два YAML-тула на reserved-секрете — FIXED
+Серверные `~/opex/workspace/tools/core_get_backup.yaml` + `core_get_config.yaml` → `auth: bearer_env OPEX_AUTH_TOKEN` → reserved-гард (`yaml_tools.rs:27-28`) валил каждый вызов. Фикс: добавлен `bearer_internal` auth type, который берёт текущий core token (`gateway::shared_token`) и разрешён только для loopback/internal endpoint'ов; оба YAML-файла на сервере переключены на `bearer_internal`. stale-ссылка `core_get_skills_repairs` (не было YAML-файла) удалена из `heartbeat-maintenance.md`. CONF HIGH.
 
 ### A6. Хвосты Ланы: скилл с триггером `- never` инжектит мусор в промпты — DEAD-опасный
 `lana-agent-config-read.md` (active, тело «TEMP», триггер `- never`): триггеры = substring → английское слово «never» в любом сообщении матчит и инжектит «TEMP» в системный промпт. + `lana-config-20260716.md` (тоже TEMP) + **профиль Lana остался в БД `profiles`** (агент вычищен). Удалить всё. CONF HIGH.
