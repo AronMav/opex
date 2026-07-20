@@ -20,16 +20,44 @@ pub(crate) fn routes() -> Router<AppState> {
 }
 
 /// Handle restart/start/stop/status/logs for a native managed process.
+///
+/// `restart`/`rebuild` are fire-and-forget: they spawn into the process-wide
+/// task tracker and return 202 immediately. Starting/stopping native services
+/// can take seconds (SIGTERM grace period + re-spawn) and must not block the
+/// HTTP client. Other actions remain synchronous because they are fast or
+/// inherently query-only.
 async fn handle_managed_action(
     pm: &Arc<ProcessManager>,
+    bg_tasks: &std::sync::Arc<tokio_util::task::TaskTracker>,
     name: &str,
     action: &str,
 ) -> (StatusCode, Json<Value>) {
     match action {
-        "restart" | "rebuild" => match pm.restart(name).await {
-            Ok(()) => (StatusCode::OK, Json(json!({"ok": true, "action": action, "service": name, "managed": true}))),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"ok": false, "error": e.to_string()}))),
-        },
+        "restart" | "rebuild" => {
+            let pm = pm.clone();
+            let bg_name = name.to_string();
+            let bg_action = action.to_string();
+            bg_tasks.spawn(async move {
+                if let Err(e) = pm.restart(&bg_name).await {
+                    tracing::error!(
+                        service = %bg_name,
+                        action = %bg_action,
+                        error = %e,
+                        "background service restart failed"
+                    );
+                } else {
+                    tracing::info!(
+                        service = %bg_name,
+                        action = %bg_action,
+                        "background service restart completed"
+                    );
+                }
+            });
+            (
+                StatusCode::ACCEPTED,
+                Json(json!({"ok": true, "action": action, "service": name, "managed": true, "queued": true})),
+            )
+        }
         "start" => match pm.start(name).await {
             Ok(()) => (StatusCode::OK, Json(json!({"ok": true, "action": "start", "service": name, "managed": true}))),
             Err(e) => (StatusCode::CONFLICT, Json(json!({"ok": false, "error": e.to_string()}))),
@@ -86,7 +114,7 @@ pub(crate) async fn api_service_action(
     // Managed native processes take priority over Docker
     if let Some(ref pm) = infra.process_manager
         && pm.is_managed(&name) {
-            let (status, body) = handle_managed_action(pm, &name, &action).await;
+            let (status, body) = handle_managed_action(pm, &infra.bg_tasks, &name, &action).await;
             return (status, body).into_response();
         }
 
@@ -342,6 +370,30 @@ pub(crate) async fn api_service_action(
         _ => unreachable!(),
     };
 
+    // Restart/rebuild/start can take many seconds (container stop + start +
+    // health window). Return 202 immediately and run the action in the
+    // background task tracker. Stop remains synchronous because it is fast.
+    if matches!(action.as_str(), "restart" | "rebuild" | "start") {
+        let bg_tasks = infra.bg_tasks.clone();
+        let bg_name = name.clone();
+        let bg_action = action.clone();
+        let compose_file = compose_file.clone();
+        bg_tasks.spawn(async move {
+            run_docker_action(
+                &compose_file,
+                &bg_name,
+                &bg_action,
+                timeout,
+            )
+            .await;
+        });
+        return (
+            StatusCode::ACCEPTED,
+            Json(json!({"ok": true, "action": action, "service": name, "queued": true})),
+        )
+            .into_response();
+    }
+
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(timeout),
         tokio::process::Command::new("docker").args(&args).output(),
@@ -358,32 +410,14 @@ pub(crate) async fn api_service_action(
             } else {
                 tracing::warn!(service = %name, action = %action, stderr = %stderr, "docker service action failed");
             }
-
-            // Post-action health check for restart/rebuild/start
-            let health = if ok && matches!(action.as_str(), "restart" | "rebuild" | "start") {
-                // Wait a moment for the container to start, then check health
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                docker_compose_ps(&compose_file, &name).await.map(|v| json!({
-                    "state": v.get("State").or(v.get("state")).and_then(|s| s.as_str()).unwrap_or("unknown"),
-                    "health": v.get("Health").or(v.get("health")).and_then(|s| s.as_str()).unwrap_or(""),
-                    "status": v.get("Status").or(v.get("status")).and_then(|s| s.as_str()).unwrap_or(""),
-                }))
-            } else {
-                None
-            };
-
-            let mut resp = json!({
-                "ok": ok,
-                "exit_code": output.status.code(),
-                "stdout": stdout,
-                "stderr": stderr,
-            });
-            if let Some(h) = health {
-                resp.as_object_mut().expect("resp is always an object (constructed with json!({}))").insert("health_check".to_string(), h);
-            }
             (
                 if ok { StatusCode::OK } else { StatusCode::INTERNAL_SERVER_ERROR },
-                Json(resp),
+                Json(json!({
+                    "ok": ok,
+                    "exit_code": output.status.code(),
+                    "stdout": stdout,
+                    "stderr": stderr,
+                })),
             )
                 .into_response()
         }
@@ -406,8 +440,64 @@ pub(crate) async fn api_service_action(
     }
 }
 
+/// Run a docker-compose action and log the outcome. Used as a background task
+/// for restart/rebuild/start so the HTTP caller is not blocked.
+async fn run_docker_action(
+    compose_file: &str,
+    name: &str,
+    action: &str,
+    timeout: u64,
+) {
+    let args: Vec<String> = match action {
+        "rebuild" => ["compose", "-f", compose_file, "up", "-d", "--build", "--no-deps", name]
+            .iter().map(|s| (*s).to_string()).collect(),
+        "restart" => ["compose", "-f", compose_file, "restart", name]
+            .iter().map(|s| (*s).to_string()).collect(),
+        "start" => ["compose", "-f", compose_file, "start", name]
+            .iter().map(|s| (*s).to_string()).collect(),
+        _ => return,
+    };
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout),
+        tokio::process::Command::new("docker").args(&args).output(),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(output)) => {
+            let ok = output.status.success();
+            let stdout: String = String::from_utf8_lossy(&output.stdout).chars().take(4000).collect();
+            let stderr: String = String::from_utf8_lossy(&output.stderr).chars().take(4000).collect();
+            if ok {
+                tracing::info!(service = %name, action = %action, stdout = %stdout, "background docker service action succeeded");
+                // Best-effort post-action health check
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                if let Some(v) = docker_compose_ps(compose_file, name).await {
+                    let state = v.get("State").or(v.get("state")).and_then(|s| s.as_str()).unwrap_or("unknown");
+                    let health = v.get("Health").or(v.get("health")).and_then(|s| s.as_str()).unwrap_or("");
+                    let status = v.get("Status").or(v.get("status")).and_then(|s| s.as_str()).unwrap_or("");
+                    tracing::info!(service = %name, state, health, status, "background docker health check");
+                }
+            } else {
+                tracing::warn!(service = %name, action = %action, stderr = %stderr, "background docker service action failed");
+            }
+        }
+        Ok(Err(e)) => {
+            tracing::error!(service = %name, action = %action, error = %e, "background docker command spawn failed");
+        }
+        Err(_) => {
+            tracing::error!(service = %name, action = %action, timeout_secs = timeout, "background docker command timed out");
+        }
+    }
+}
+
 /// POST /api/containers/{name}/restart — restart any Docker container by name.
+/// Returns 202 immediately and performs the restart in the background task
+/// tracker. Container restart can take seconds and should not block the HTTP
+/// caller.
 pub(crate) async fn api_container_restart(
+    State(infra): State<InfraServices>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     // Whitelist of containers that may be restarted (from docker-compose.yml).
@@ -437,21 +527,29 @@ pub(crate) async fn api_container_restart(
             .into_response();
     }
 
-    tracing::info!(container = %name, "container restart requested");
-    let output = tokio::process::Command::new("docker")
-        .args(["restart", &name])
-        .output()
-        .await;
-    match output {
-        Ok(o) if o.status.success() => {
-            Json(json!({"ok": true, "container": name})).into_response()
+    tracing::info!(container = %name, "container restart requested; queuing background restart");
+    let name_clone = name.clone();
+    infra.bg_tasks.spawn(async move {
+        match tokio::process::Command::new("docker")
+            .args(["restart", &name_clone])
+            .output()
+            .await
+        {
+            Ok(o) if o.status.success() => {
+                tracing::info!(container = %name_clone, "background container restart succeeded");
+            }
+            Ok(o) => {
+                let err = String::from_utf8_lossy(&o.stderr);
+                tracing::warn!(container = %name_clone, stderr = %err, "background container restart failed");
+            }
+            Err(e) => {
+                tracing::error!(container = %name_clone, error = %e, "background container restart spawn failed");
+            }
         }
-        Ok(o) => {
-            let err = String::from_utf8_lossy(&o.stderr);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"ok": false, "error": err.to_string()}))).into_response()
-        }
-        Err(e) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"ok": false, "error": e.to_string()}))).into_response()
-        }
-    }
+    });
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({"ok": true, "container": name, "queued": true})),
+    )
+        .into_response()
 }

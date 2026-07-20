@@ -45,7 +45,7 @@ pub(crate) fn http_client() -> &'static reqwest::Client {
             .pool_max_idle_per_host(0)
             .tcp_keepalive(std::time::Duration::from_secs(15))
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
+            .expect("failed to build sync handler HTTP client: invalid timeout/pool configuration")
     })
 }
 

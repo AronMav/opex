@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use sqlx::PgPool;
+use tokio_util::task::TaskTracker;
 
 use crate::agent::memory_service::MemoryService;
 use crate::memory::EmbeddingService;
@@ -34,6 +35,10 @@ pub struct InfraServices {
     /// Защищает `POST /api/memory/reindex` от concurrent выполнения.
     /// Per-process — Core инстанс один на Pi.
     pub reindex_mutex: Arc<tokio::sync::Mutex<()>>,
+    /// Process-wide task tracker for fire-and-forget background work started
+    /// by infrastructure handlers (service restarts, backup/restore jobs, etc.).
+    /// Ensures graceful shutdown waits for in-flight work.
+    pub bg_tasks: Arc<TaskTracker>,
 }
 
 impl InfraServices {
@@ -47,6 +52,7 @@ impl InfraServices {
         process_manager: Option<Arc<crate::process_manager::ProcessManager>>,
         metrics: Arc<crate::metrics::MetricsRegistry>,
         secrets: Arc<crate::secrets::SecretsManager>,
+        bg_tasks: Arc<TaskTracker>,
     ) -> Self {
         Self {
             db,
@@ -58,6 +64,7 @@ impl InfraServices {
             metrics,
             secrets,
             reindex_mutex: Arc::new(tokio::sync::Mutex::new(())),
+            bg_tasks,
         }
     }
 
@@ -161,6 +168,7 @@ impl InfraServices {
             metrics: Arc::new(crate::metrics::MetricsRegistry::new()),
             secrets: Arc::new(crate::secrets::SecretsManager::new_noop()),
             reindex_mutex: Arc::new(tokio::sync::Mutex::new(())),
+            bg_tasks: Arc::new(TaskTracker::new()),
         }
     }
 }

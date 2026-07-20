@@ -737,6 +737,7 @@ async fn main() -> Result<()> {
             process_manager.clone(),
             metrics.clone(),
             secrets_manager.clone(),
+            bg_tasks.clone(),
         ),
         channels: gateway::clusters::ChannelBus::new(
             Arc::new(tokio::sync::RwLock::new(Vec::new())),

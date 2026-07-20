@@ -514,29 +514,40 @@ async fn cleanup_old_backups_v3(now: chrono::DateTime<chrono::Utc>, retention_da
 }
 
 /// Create a backup: pg_dump + workspace + config + secrets, bundle as .tar.gz.
+/// Runs in the background task tracker and returns 202 immediately. The caller
+/// can poll `GET /api/backup` to see when the new archive appears.
 pub(crate) async fn api_create_backup(
+    State(infra): State<InfraServices>,
     State(auth): State<AuthServices>,
     State(agents): State<AgentCore>,
     State(cfg_svc): State<ConfigServices>,
 ) -> impl IntoResponse {
-    let now = chrono::Utc::now();
     let retention = cfg_svc.config.backup.retention_days as i64;
     let container = cfg_svc.config.backup.postgres_container.clone();
-    match create_backup_internal(&auth.secrets, &agents.deps, retention, &container).await {
-        Ok(filename) => {
-            let filepath = format!("{BACKUP_DIR}/{filename}");
-            Json(json!({
-                "ok": true,
-                "filename": filename,
-                "path": filepath,
-                "created_at": now,
-            })).into_response()
+    let secrets = auth.secrets.clone();
+    let deps = agents.deps.clone();
+    let bg_tasks = infra.bg_tasks.clone();
+
+    bg_tasks.spawn(async move {
+        match create_backup_internal(&secrets, &deps, retention, &container).await {
+            Ok(filename) => {
+                tracing::info!(filename = %filename, "background backup completed");
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "background backup failed");
+            }
         }
-        Err(e) => {
-            (StatusCode::INTERNAL_SERVER_ERROR,
-             Json(json!({"error": e.to_string()}))).into_response()
-        }
-    }
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "ok": true,
+            "queued": true,
+            "message": "backup is running in the background; poll GET /api/backup",
+        })),
+    )
+        .into_response()
 }
 
 // ── GET /api/backup ──────────────────────────────────────────────────────────
@@ -650,6 +661,11 @@ pub(crate) async fn api_delete_backup(Path(filename): Path<String>) -> impl Into
 ///   - `secrets.json`   — plaintext secrets array
 ///   - `workspace/`     — workspace directory tree (optional)
 ///   - `config/`        — agent configs (optional)
+///
+/// The restore body is staged to disk synchronously (to enforce the size cap
+/// and pre-check the archive), then the destructive restore itself is run in
+/// the background task tracker. The handler returns 202 as soon as the
+/// archive is staged and validated.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn api_restore(
     State(infra): State<InfraServices>,
@@ -712,11 +728,8 @@ pub(crate) async fn api_restore(
         }))).into_response();
     }
 
-    let container = discover_postgres_container(
-        &cfg_svc.config.backup.postgres_container
-    ).await;
-
-    // Write .tar.gz to temp file
+    // Write .tar.gz to a staging file, run lightweight validation, then hand
+    // off the validated archive path to the background tracker.
     let tmpdir = std::env::temp_dir()
         .join(format!("opex-restore-{}", uuid::Uuid::new_v4()));
     if let Err(e) = tokio::fs::create_dir_all(&tmpdir).await {
@@ -730,7 +743,7 @@ pub(crate) async fn api_restore(
             Json(json!({"error": format!("write tar: {e}")}))).into_response();
     }
 
-    // Extract tar
+    // Extract tar and validate manifest/db.dump before accepting the job.
     let extract_dir = tmpdir.join("extracted");
     if let Err(e) = tokio::fs::create_dir_all(&extract_dir).await {
         let _ = tokio::fs::remove_dir_all(&tmpdir).await;
@@ -758,7 +771,6 @@ pub(crate) async fn api_restore(
         Ok(_) => {}
     }
 
-    // Validate manifest
     let manifest_path = extract_dir.join("manifest.json");
     let manifest: serde_json::Value = match tokio::fs::read(&manifest_path).await {
         Ok(b) => match serde_json::from_slice(&b) {
@@ -781,7 +793,6 @@ pub(crate) async fn api_restore(
             Json(json!({"error": "unsupported backup format: missing version"}))).into_response();
     }
 
-    // Pre-check: db.dump must exist before we disrupt anything
     let dump_path = extract_dir.join("db.dump");
     if !dump_path.exists() {
         let _ = tokio::fs::remove_dir_all(&tmpdir).await;
@@ -790,8 +801,104 @@ pub(crate) async fn api_restore(
         }))).into_response();
     }
 
-    // Snapshot workspace for rollback
-    let workspace_bak = tmpdir.join("workspace.bak.tar.gz");
+    // Move the archive to a long-lived job staging path so the handler can
+    // return 202 before the multi-minute pg_restore completes.
+    let job_id = uuid::Uuid::new_v4().to_string();
+    let job_id_for_spawn = job_id.clone();
+    let job_dir = std::path::Path::new("restore-jobs").join(&job_id);
+    if let Err(e) = tokio::fs::create_dir_all(&job_dir).await {
+        let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+        return (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("job dir: {e}")}))).into_response();
+    }
+    let staged_tar = job_dir.join("restore.tar.gz");
+    if let Err(e) = tokio::fs::rename(&tar_path, &staged_tar).await {
+        let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+        let _ = tokio::fs::remove_dir_all(&job_dir).await;
+        return (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("stage archive: {e}")}))).into_response();
+    }
+    // tmpdir is now empty of the tarball; keep the rest for the worker or clean it lazily.
+    let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+
+    let container_cfg = cfg_svc.config.backup.postgres_container.clone();
+    let db = infra.db.clone();
+    let bg_tasks = infra.bg_tasks.clone();
+
+    bg_tasks.spawn(async move {
+        let job_id = job_id_for_spawn;
+        tracing::warn!(%job_id, "RESTORE initiated from pg_dump backup (v3)");
+        match run_restore_from_staged_archive(
+            &staged_tar,
+            &job_dir,
+            &container_cfg,
+            agents,
+            infra,
+            auth,
+            bus,
+            cfg_svc,
+            status,
+            handlers,
+            db,
+        ).await {
+            Ok(restarted) => {
+                tracing::warn!(agents = ?restarted, %job_id, "RESTORE complete (pg_dump v3)");
+                let _ = tokio::fs::remove_dir_all(&job_dir).await;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, %job_id, "RESTORE failed; staged archive preserved in restore-jobs");
+            }
+        }
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "ok": true,
+            "queued": true,
+            "job_id": job_id,
+            "message": "restore is running in the background; check logs for completion",
+        })),
+    )
+        .into_response()
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_restore_from_staged_archive(
+    staged_tar: &std::path::Path,
+    job_dir: &std::path::Path,
+    postgres_container: &str,
+    agents: AgentCore,
+    infra: InfraServices,
+    auth: AuthServices,
+    bus: crate::gateway::clusters::ChannelBus,
+    cfg_svc: crate::gateway::clusters::ConfigServices,
+    status: crate::gateway::clusters::StatusMonitor,
+    handlers: crate::agent::handler_registry::HandlerRegistry,
+    db: sqlx::PgPool,
+) -> anyhow::Result<Vec<String>> {
+    // Extract the staged archive into the job dir.
+    let extract_dir = job_dir.join("extracted");
+    tokio::fs::create_dir_all(&extract_dir).await?;
+    let tar_out = tokio::process::Command::new("tar")
+        .args(["xzf"])
+        .arg(staged_tar)
+        .arg("-C")
+        .arg(&extract_dir)
+        .output().await
+        .context("tar extract staged archive failed")?;
+    if !tar_out.status.success() {
+        anyhow::bail!("tar extract failed: {}", String::from_utf8_lossy(&tar_out.stderr));
+    }
+
+    let container = discover_postgres_container(postgres_container).await;
+    let dump_path = extract_dir.join("db.dump");
+    if !dump_path.exists() {
+        anyhow::bail!("staged archive missing db.dump");
+    }
+
+    // Snapshot workspace/config for rollback.
+    let workspace_bak = job_dir.join("workspace.bak.tar.gz");
     let workspace_bak_ok = tokio::process::Command::new("tar")
         .args(["czf"])
         .arg(&workspace_bak)
@@ -803,10 +910,7 @@ pub(crate) async fn api_restore(
         tracing::warn!("workspace snapshot for rollback failed — rollback will not be available if restore fails");
     }
 
-    // Snapshot config for rollback too (F091): config restore is as critical as
-    // workspace — a failed copy must be rolled back and surfaced, not silently
-    // reported as success.
-    let config_bak = tmpdir.join("config.bak.tar.gz");
+    let config_bak = job_dir.join("config.bak.tar.gz");
     let config_bak_ok = tokio::process::Command::new("tar")
         .args(["czf"])
         .arg(&config_bak)
@@ -817,8 +921,6 @@ pub(crate) async fn api_restore(
     if !config_bak_ok {
         tracing::warn!("config snapshot for rollback failed — rollback will not be available if restore fails");
     }
-
-    tracing::warn!("RESTORE initiated from pg_dump backup (v3)");
 
     // Stop all running agents
     {
@@ -837,11 +939,7 @@ pub(crate) async fn api_restore(
         tracing::error!("pg_restore failed: {e}");
         let restarted = restart_agents_from_disk(&agents, &infra, &auth, &bus, &cfg_svc, &status, &handlers).await
             .unwrap_or_default();
-        let _ = tokio::fs::remove_dir_all(&tmpdir).await;
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
-            "error": format!("pg_restore failed: {e}"),
-            "agents_restarted_from_old_state": restarted,
-        }))).into_response();
+        anyhow::bail!("pg_restore failed: {e}; old-state agents restarted: {:?}", restarted);
     }
 
     // Restore secrets
@@ -849,25 +947,16 @@ pub(crate) async fn api_restore(
         .unwrap_or_default();
     let plaintext_secrets: Vec<crate::secrets::PlaintextSecret> =
         serde_json::from_slice(&secrets_bytes).unwrap_or_default();
-    let secret_count = plaintext_secrets.len();
+    let _secret_count = plaintext_secrets.len();
     if let Err(e) = auth.secrets.restore_plaintext(plaintext_secrets).await {
         let restarted = restart_agents_from_disk(&agents, &infra, &auth, &bus, &cfg_svc, &status, &handlers).await
             .unwrap_or_default();
-        let _ = tokio::fs::remove_dir_all(&tmpdir).await;
-        return (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "error": format!("secrets restore failed: {e}"),
-                "agents_restarted": restarted,
-            }))).into_response();
+        anyhow::bail!("secrets restore failed: {e}; agents restarted: {restarted:?}");
     }
 
     // Restore workspace and config
     let workspace_src = extract_dir.join("workspace");
     if workspace_src.exists() {
-        // F090: faithful restore — clear the live dir so files absent from the
-        // backup are removed (not merged). Only when the rollback snapshot exists,
-        // so a mid-restore failure can restore the prior state; else fall back to
-        // merge rather than clearing with no safety net.
         if workspace_bak_ok
             && let Err(e) = clear_dir_contents(std::path::Path::new("workspace")).await
         {
@@ -875,32 +964,23 @@ pub(crate) async fn api_restore(
         }
         let workspace_src_str = workspace_src.to_string_lossy().into_owned();
         if let Err(e) = copy_dir_to(&workspace_src_str, std::path::Path::new("workspace")).await {
-            // Rollback workspace from snapshot (only if snapshot was created successfully)
             if workspace_bak_ok {
                 let _ = tokio::process::Command::new("tar")
                     .args(["xzf"]).arg(&workspace_bak).args(["-C", "."]).output().await;
             } else {
                 tracing::error!("workspace rollback skipped: snapshot was not created");
             }
-            let _ = tokio::fs::remove_dir_all(&tmpdir).await;
-            return (StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("workspace restore failed: {e}")}))).into_response();
+            anyhow::bail!("workspace restore failed: {e}");
         }
     }
     let config_src = extract_dir.join("config");
     if config_src.exists() {
-        // F090: faithful restore — clear config/ so a stale agent TOML (e.g. an
-        // agent created after the backup) doesn't survive and get restarted from
-        // disk with no DB backing. Gated on the snapshot for rollback safety.
         if config_bak_ok
             && let Err(e) = clear_dir_contents(std::path::Path::new("config")).await
         {
             tracing::warn!(error = %e, "config clear-before-restore failed — copying as merge");
         }
         let config_src_str = config_src.to_string_lossy().into_owned();
-        // F091: check the config copy (was `let _ = ...`). A failed copy left the
-        // system half-restored yet returned {"ok":true}; mirror the workspace path
-        // — roll back from the snapshot and return 500.
         if let Err(e) = copy_dir_to(&config_src_str, std::path::Path::new("config")).await {
             if config_bak_ok {
                 let _ = tokio::process::Command::new("tar")
@@ -908,14 +988,12 @@ pub(crate) async fn api_restore(
             } else {
                 tracing::error!("config rollback skipped: snapshot was not created");
             }
-            let _ = tokio::fs::remove_dir_all(&tmpdir).await;
-            return (StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("config restore failed: {e}")}))).into_response();
+            anyhow::bail!("config restore failed: {e}");
         }
     }
 
     // Mark setup complete
-    let _ = opex_db::sys_flags::upsert(&infra.db, "setup_complete", json!(true))
+    let _ = opex_db::sys_flags::upsert(&db, "setup_complete", json!(true))
         .await
         .inspect_err(|e| tracing::warn!(%e, "restore: set setup_complete failed"));
 
@@ -924,17 +1002,7 @@ pub(crate) async fn api_restore(
         &agents, &infra, &auth, &bus, &cfg_svc, &status, &handlers
     ).await.unwrap_or_default();
 
-    let _ = tokio::fs::remove_dir_all(&tmpdir).await;
-    tracing::warn!(agents = ?restarted, "RESTORE complete (pg_dump v3)");
-
-    Json(json!({
-        "ok": true,
-        "restored": {
-            "db": "pg_restore ok",
-            "secrets": secret_count,
-        },
-        "restarted_agents": restarted,
-    })).into_response()
+    Ok(restarted)
 }
 
 #[cfg(test)]

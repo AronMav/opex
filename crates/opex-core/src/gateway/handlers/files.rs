@@ -231,17 +231,34 @@ async fn menu_run_core(
         language: lang,
         params,
     };
-    let outcome = crate::agent::file_handler_sync::run_sync_handler_inline(
-        &infra.db,
-        crate::agent::file_handler_sync::http_client(),
-        toolgate_url,
-        &config.config.gateway.listen,
-        crate::uploads::web_uploads_base(),
-        &key,
-        config.config.uploads.signed_url_ttl_secs,
-        sync_req,
+    let outcome = match tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        crate::agent::file_handler_sync::run_sync_handler_inline(
+            &infra.db,
+            crate::agent::file_handler_sync::http_client(),
+            toolgate_url,
+            &config.config.gateway.listen,
+            crate::uploads::web_uploads_base(),
+            &key,
+            config.config.uploads.signed_url_ttl_secs,
+            sync_req,
+        ),
     )
-    .await;
+    .await
+    {
+        Ok(o) => o,
+        Err(_) => {
+            tracing::warn!(
+                session_id = %session_id,
+                agent = %agent,
+                handler = %handler_id,
+                "sync file handler exceeded 60s gateway timeout"
+            );
+            crate::agent::file_scenario::outcome::ScenarioOutcome::failed(
+                "sync file handler timed out (60s)".to_string(),
+            )
+        }
+    };
 
     // On Ok: persist provenance-wrapped message (mirrors the async deliver
     // path) + best-effort UI-bus broadcast of any artifacts. The full outcome
