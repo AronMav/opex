@@ -39,18 +39,20 @@ impl ToolgateClient {
     /// infrequent enough (1–2 per turn) that connection reuse provides no
     /// meaningful throughput gain.
     ///
-    /// `tcp_keepalive(15s)` gives the OS a chance to detect a genuinely dead
-    /// peer mid-request (e.g. toolgate process killed without closing sockets)
-    /// without waiting for the full request timeout.
-    ///
-    /// `timeout(10s)` — embedding is a fast operation (1–2s normally). 10s is
+    /// `timeout(15s)` — embedding is a fast operation (1–2s normally). 15s is
     /// generous enough for a slow provider round-trip but short enough that 3
-    /// retries (30s worst case) don't block bootstrap indefinitely.
+    /// retries (45s worst case) don't block bootstrap indefinitely.
+    ///
+    /// `pool_max_idle_per_host(8)` — keep up to 8 idle connections to toolgate
+    /// for reuse. This avoids the "connection refused" storm when multiple
+    /// embedding calls hit toolgate concurrently and each opens a fresh TCP
+    /// connection. The original `pool_max_idle_per_host(0)` (no reuse) caused
+    /// transient connection failures under concurrent load.
     pub fn new(base_url: impl Into<String>, requested_dimensions: u32) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(10))
-            .pool_max_idle_per_host(0)
+            .timeout(Duration::from_secs(15))
+            .pool_max_idle_per_host(8)
             .tcp_keepalive(Duration::from_secs(15))
             .build()
             .unwrap_or_default();
