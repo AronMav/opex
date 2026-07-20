@@ -545,6 +545,40 @@ pub async fn save_message(
 
 /// Save a message with optional per-message `agent_id` (for multi-agent discuss sessions).
 #[allow(clippy::too_many_arguments)]
+/// Strip the NUL byte (0x00) from text bound for a Postgres `text` column.
+///
+/// Postgres cannot store NUL in `text`/`varchar` — an INSERT with one fails with
+/// `invalid byte sequence for encoding "UTF8": 0x00`. For a message row that is
+/// catastrophic: the row never persists, so every later row that references it
+/// via `parent_message_id` FK-fails, cascading a whole turn into `interrupted`.
+/// Tool output is the usual source (binary sniffed as text, a truncated UTF-8
+/// sequence). Strip NULs at the storage boundary so a message is ALWAYS
+/// persistable. Returns a borrowed str for the common clean case (zero alloc).
+pub(crate) fn sanitize_pg_text(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.contains('\0') {
+        std::borrow::Cow::Owned(s.replace('\0', ""))
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
+/// True when message `id` exists AND belongs to `session_id`.
+///
+/// Used to validate a client-supplied leaf/parent pointer before threading it
+/// into the `parent_message_id` FK column — a dangling id must never reach the
+/// INSERT (it would FK-fail the whole send).
+pub async fn message_exists_in_session(db: &PgPool, id: Uuid, session_id: Uuid) -> Result<bool> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM messages WHERE id = $1 AND session_id = $2)",
+    )
+    .bind(id)
+    .bind(session_id)
+    .fetch_one(db)
+    .await?;
+    Ok(exists)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn save_message_ex(
     db: &PgPool,
     session_id: Uuid,
@@ -556,13 +590,14 @@ pub async fn save_message_ex(
     thinking_blocks: Option<&serde_json::Value>,
     parent_id: Option<Uuid>,
 ) -> Result<Uuid> {
+    let content = sanitize_pg_text(content);
     let id = sqlx::query_scalar(
         "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, agent_id, thinking_blocks, parent_message_id) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
     )
     .bind(session_id)
     .bind(role)
-    .bind(content)
+    .bind(content.as_ref())
     .bind(tool_calls)
     .bind(tool_call_id)
     .bind(agent_id)
@@ -604,6 +639,7 @@ pub async fn save_message_ex_with_id(
     parallel_batch_id: Option<opex_types::ids::ParallelBatchId>,
     step_id: Option<i32>,
 ) -> Result<()> {
+    let content = sanitize_pg_text(content);
     sqlx::query(
         "INSERT INTO messages (id, session_id, role, content, tool_calls, tool_call_id, agent_id, thinking_blocks, parent_message_id, parallel_batch_id, step_id) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
@@ -612,7 +648,7 @@ pub async fn save_message_ex_with_id(
     .bind(id)
     .bind(session_id)
     .bind(role)
-    .bind(content)
+    .bind(content.as_ref())
     .bind(tool_calls)
     .bind(tool_call_id)
     .bind(agent_id)
@@ -3635,5 +3671,71 @@ mod step_id_insert_tests {
             .await
             .unwrap();
         assert_eq!(step, None, "no step supplied → column stays NULL");
+    }
+}
+
+#[cfg(test)]
+mod persist_robustness_tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_pg_text_strips_nul_and_borrows_when_clean() {
+        assert_eq!(sanitize_pg_text("clean text"), "clean text");
+        // Borrowed (no alloc) for the clean case.
+        assert!(matches!(sanitize_pg_text("clean"), std::borrow::Cow::Borrowed(_)));
+        assert_eq!(sanitize_pg_text("a\0b\0c"), "abc");
+        assert!(matches!(sanitize_pg_text("a\0b"), std::borrow::Cow::Owned(_)));
+    }
+
+    // A message whose content carries a NUL byte must still persist (stripped),
+    // not error with `invalid byte sequence for encoding "UTF8": 0x00` — an
+    // un-persistable row breaks the parent_message_id chain for the whole turn.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn save_message_ex_persists_content_with_nul_byte(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "A", "u", "ui").await.unwrap();
+        let id = save_message_ex(&pool, sid, "tool", "out\0put\0", None, None, Some("A"), None, None)
+            .await
+            .expect("NUL content must persist (stripped), not error");
+        let stored: String = sqlx::query_scalar("SELECT content FROM messages WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(stored, "output");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn save_message_ex_with_id_persists_content_with_nul_byte(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "A", "u", "ui").await.unwrap();
+        let id = Uuid::new_v4();
+        save_message_ex_with_id(
+            &pool, id, sid, "tool", "x\0y", None, Some("call_1"), Some("A"), None, None, None, None,
+        )
+        .await
+        .expect("NUL content must persist (stripped)");
+        let stored: String = sqlx::query_scalar("SELECT content FROM messages WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(stored, "xy");
+    }
+
+    // Existence guard used to validate a client-supplied leaf before it becomes
+    // an FK parent: true only when the id exists AND is in the given session.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn message_exists_in_session_checks_id_and_session(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "A", "u", "ui").await.unwrap();
+        let other = create_new_session(&pool, "A", "u", "ui").await.unwrap();
+        let mid = save_message_ex(&pool, sid, "user", "hi", None, None, Some("A"), None, None)
+            .await
+            .unwrap();
+
+        assert!(message_exists_in_session(&pool, mid, sid).await.unwrap(), "real message in its session");
+        assert!(!message_exists_in_session(&pool, mid, other).await.unwrap(), "wrong session → false");
+        assert!(
+            !message_exists_in_session(&pool, Uuid::new_v4(), sid).await.unwrap(),
+            "non-existent id → false"
+        );
     }
 }

@@ -162,6 +162,13 @@ impl SessionManager {
         Ok(row.map(|r| r.get::<Uuid, _>("id")))
     }
 
+    /// True when message `id` exists AND belongs to `session_id`. Used to
+    /// validate a client-supplied leaf pointer before threading it into the
+    /// `parent_message_id` FK column (a dangling id would FK-fail the send).
+    pub async fn message_exists_in_session(&self, id: Uuid, session_id: Uuid) -> Result<bool> {
+        crate::db::sessions::message_exists_in_session(&self.db, id, session_id).await
+    }
+
     /// Log a session lifecycle event to the timeline (fire-and-forget pattern).
     pub async fn log_timeline_event(
         &self,

@@ -256,13 +256,18 @@ pub async fn bootstrap<S: EventSink>(
     // parent_message_id = leaf_message_id: threads the new user message onto
     // the active conversation path so reload-from-active-path can find it.
     //
-    // If the UI didn't send leaf_message_id (stale cache / race between reload
-    // and fetch-messages), fall back to the session's latest completed message
-    // so the new turn stays anchored to a real chain instead of floating as a
-    // root orphan.
+    // Server-authoritative resolution: the client's leaf_message_id is a HINT,
+    // not gospel. It can dangle — an optimistic client UUID that never reached
+    // the DB, a prior turn that failed to persist (e.g. a tool row with a NUL
+    // byte broke the chain and the session went `interrupted`), or a branch
+    // race. A dangling id threaded straight into the `parent_message_id` FK
+    // would make THIS INSERT fail (`messages_parent_message_id_fkey`) and crash
+    // the whole send. So we VALIDATE it exists in this session; if it doesn't
+    // (or the UI sent none), fall back to the real persisted leaf, else NULL
+    // (root). The new turn always anchors to a row that actually exists.
     let parent_message_id = match ctx.msg.leaf_message_id {
-        Some(id) => Some(id),
-        None => sm.latest_leaf_message_id(session_id).await.unwrap_or(None),
+        Some(id) if sm.message_exists_in_session(id, session_id).await.unwrap_or(false) => Some(id),
+        _ => sm.latest_leaf_message_id(session_id).await.unwrap_or(None),
     };
     let user_message_id: uuid::Uuid = if let Some(prealloc_id) = ctx.msg.user_message_id {
         crate::db::sessions::save_message_ex_with_id(
