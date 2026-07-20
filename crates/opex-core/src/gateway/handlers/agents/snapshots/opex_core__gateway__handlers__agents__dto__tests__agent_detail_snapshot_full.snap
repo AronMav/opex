@@ -86,7 +86,9 @@ expression: dto
     "enabled": false,
     "threshold": 0.15,
     "min_history": 6,
-    "baseline_turns": 3,
+    "baseline_turns": 8,
+    "z_fire": 2.5,
+    "z_release": 1.0,
     "correct": false
   },
   "initiative": {
