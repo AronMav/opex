@@ -28,6 +28,12 @@ use crate::agent::file_scenario::outcome::ScenarioOutcome;
 /// plus the up-to-50MB buffered upload in memory — there is no global tower
 /// TimeoutLayer on these internal calls.
 ///
+/// `pool_max_idle_per_host(0)` disables keep-alive pooling — same rationale as
+/// the embedding client (opex-embedding/src/client.rs): after a toolgate restart
+/// the old connections in the pool are dead, and each retry would reuse the same
+/// dead connection, waiting the full timeout. With pooling disabled, a dead
+/// toolgate fails fast at `connect_timeout` (5s).
+///
 /// Mirrors `file_handler_worker`'s client but allows for the longer ceiling of
 /// a sync PDF parse / vision description (300s vs 120s for the async dispatch).
 pub(crate) fn http_client() -> &'static reqwest::Client {
@@ -36,6 +42,8 @@ pub(crate) fn http_client() -> &'static reqwest::Client {
         reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(5))
             .timeout(std::time::Duration::from_secs(300))
+            .pool_max_idle_per_host(0)
+            .tcp_keepalive(std::time::Duration::from_secs(15))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new())
     })

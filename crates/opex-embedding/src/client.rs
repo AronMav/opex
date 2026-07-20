@@ -26,10 +26,28 @@ pub struct ToolgateClient {
 impl ToolgateClient {
     /// `base_url` example: `"http://localhost:9011"` (без `/v1`).
     /// Пустой `base_url` → клиент считается non-configured (`is_configured()==false`).
+    ///
+    /// Connection-pool hygiene (2026-07-20): `pool_max_idle_per_host(0)` disables
+    /// keep-alive pooling entirely — every request opens a fresh TCP connection.
+    /// This is deliberate: after a toolgate restart the old connections in the
+    /// pool are dead (server-side closed), and reqwest's default pool has no
+    /// mechanism to detect this before sending. Each retry would reuse the same
+    /// dead connection, wait the full 60s `timeout`, then retry — 3×60s = 3 min
+    /// of silence per chat turn. With pooling disabled, a dead toolgate fails
+    /// fast at `connect_timeout` (5s), and each retry opens a fresh connection
+    /// that either succeeds immediately or fails quickly. Embedding calls are
+    /// infrequent enough (1–2 per turn) that connection reuse provides no
+    /// meaningful throughput gain.
+    ///
+    /// `tcp_keepalive(15s)` gives the OS a chance to detect a genuinely dead
+    /// peer mid-request (e.g. toolgate process killed without closing sockets)
+    /// without waiting for the full 60s request timeout.
     pub fn new(base_url: impl Into<String>, requested_dimensions: u32) -> Self {
         let http = reqwest::Client::builder()
-            // 60s tolerates cold-start of CPU-only embedding models on Pi/ARM64.
+            .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(60))
+            .pool_max_idle_per_host(0)
+            .tcp_keepalive(Duration::from_secs(15))
             .build()
             .unwrap_or_default();
         Self {
