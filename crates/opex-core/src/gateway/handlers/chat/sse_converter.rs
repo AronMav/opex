@@ -154,7 +154,12 @@ pub(super) async fn run_converter(
     // against tool loops or sync blocks that ignore the cancel token
     // (code_exec, workspace_write, std::sync::Mutex contention). This is the
     // ONLY hard-abort path — a client disconnect never aborts the engine.
-    const CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+    // Backstop only: the engine now observes the cancel token MID-STREAM
+    // (forward_chunks_into_sink drops the provider future on cancel), so a user
+    // Stop halts generation within a tick and the engine emits its aborted
+    // Finish promptly. This grace is the last-resort window for a genuinely
+    // wedged engine that ignores the token — 5s, not 30s.
+    const CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
     let mut logged_cancel_drain = false;
     let mut cancel_deadline: Option<tokio::time::Instant> = None;
     loop {

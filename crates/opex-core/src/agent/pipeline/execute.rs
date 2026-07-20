@@ -457,8 +457,32 @@ pub async fn execute<S: EventSink>(
         );
 
         // 5. Drive the LLM future and the chunk forwarder concurrently.
-        let (llm_result, partial, sink_fatal) =
-            forward_chunks_into_sink(llm_fut, chunk_rx, sink).await;
+        //    `&cancel` is threaded in so a user Stop / shutdown mid-stream drops
+        //    the LLM future immediately (cancelling the provider HTTP stream)
+        //    rather than running the whole response to completion.
+        let (llm_result_opt, partial, sink_fatal) =
+            forward_chunks_into_sink(llm_fut, chunk_rx, sink, &cancel).await;
+        // User cancel mid-stream (`None`): the provider stream was dropped. Persist
+        // what we streamed and interrupt — this is a deliberate stop, NOT a failure,
+        // so it must NOT feed the fallback/session-recovery layers below.
+        let llm_result = match llm_result_opt {
+            None => {
+                tracing::info!(
+                    session_id = %bootstrap_outcome.session_id,
+                    partial_len = partial.len(),
+                    "execute: user cancel mid-stream — interrupting with partial text"
+                );
+                return Ok(ExecuteOutcome {
+                    status: ExecuteStatus::Interrupted("cancel_token"),
+                    final_text: partial,
+                    thinking_json: None,
+                    messages_len_at_end: messages.len(),
+                    final_parent_msg_id: user_message_id,
+                    assistant_message_id: assistant_msg_id,
+                });
+            }
+            Some(r) => r,
+        };
         if let Some(e) = sink_fatal {
             // H2 fix: do NOT bubble Err — that would skip finalize and lose the
             // partial text the sink already streamed. Return an Interrupted
@@ -1426,7 +1450,8 @@ pub(crate) async fn forward_chunks_into_sink<S, F, T, E>(
     llm_fut: F,
     mut chunk_rx: tokio::sync::mpsc::Receiver<String>,
     sink: &mut S,
-) -> (Result<T, E>, String, Option<anyhow::Error>)
+    cancel: &CancellationToken,
+) -> (Option<Result<T, E>>, String, Option<anyhow::Error>)
 where
     S: EventSink,
     F: std::future::Future<Output = Result<T, E>>,
@@ -1474,12 +1499,20 @@ where
         }
     }
 
-    let res = loop {
+    let res: Option<Result<T, E>> = loop {
         tokio::select! {
             // Bias the branch order so we drain pending chunks before polling
             // llm_fut again — otherwise a fast LLM that ships tokens and
             // resolves in the same tick could starve the chunk branch.
             biased;
+            // Highest priority: explicit cancel (user Stop / shutdown). Break out
+            // WITHOUT resolving llm_fut — returning from this fn drops the pinned
+            // future, which cancels the in-flight provider HTTP stream (reqwest
+            // aborts the request on drop). Generation halts within a tick instead
+            // of running the whole response to completion or waiting on the SSE
+            // converter's 5s cancel-grace hard-abort. `partial` accumulated so far
+            // is preserved and returned for finalize (persist + resumability).
+            _ = cancel.cancelled() => break None,
             maybe_chunk = chunk_rx.recv() => {
                 match maybe_chunk {
                     Some(chunk) => emit_chunk(sink, chunk, &mut partial, &mut first_err).await,
@@ -1495,7 +1528,7 @@ where
                 while let Ok(chunk) = chunk_rx.try_recv() {
                     emit_chunk(sink, chunk, &mut partial, &mut first_err).await;
                 }
-                break res;
+                break Some(res);
             }
         }
     };
@@ -1580,7 +1613,8 @@ mod tests {
         // Run the forwarder and the "signal-done" side in parallel.
         let forward = tokio::spawn(async move {
             let mut s = sink;
-            let out = forward_chunks_into_sink(llm_fut, chunk_rx, &mut s).await;
+            let cancel = CancellationToken::new();
+            let out = forward_chunks_into_sink(llm_fut, chunk_rx, &mut s, &cancel).await;
             (out, s)
         });
 
@@ -1592,7 +1626,7 @@ mod tests {
 
         let ((llm_result, partial, sink_err), sink) = forward.await.unwrap();
         assert!(sink_err.is_none(), "no fatal sink error expected");
-        assert!(llm_result.is_ok(), "llm future must resolve Ok");
+        assert!(matches!(llm_result, Some(Ok(_))), "llm future must resolve Ok (not cancelled)");
         assert_eq!(partial, "Hello world");
 
         let deltas = text_deltas(&sink);
@@ -1648,7 +1682,8 @@ mod tests {
         let sink = MockSink::new();
         let (out, sink) = {
             let mut s = sink;
-            let out = forward_chunks_into_sink(llm_fut, chunk_rx, &mut s).await;
+            let cancel = CancellationToken::new();
+            let out = forward_chunks_into_sink(llm_fut, chunk_rx, &mut s, &cancel).await;
             (out, s)
         };
 
@@ -1707,7 +1742,8 @@ mod tests {
         let shared_probe = shared.clone();
 
         let forward = tokio::spawn(async move {
-            forward_chunks_into_sink(llm_fut, chunk_rx, &mut sink).await
+            let cancel = CancellationToken::new();
+            forward_chunks_into_sink(llm_fut, chunk_rx, &mut sink, &cancel).await
         });
 
         // Let the forwarder tick, observe the sink BEFORE the LLM future
@@ -1734,9 +1770,45 @@ mod tests {
         done_tx.send(()).unwrap();
         let (llm_result, partial, sink_err) = forward.await.unwrap();
         assert!(sink_err.is_none());
-        let resp = llm_result.expect("llm future ok");
+        let resp = llm_result.expect("not cancelled").expect("llm future ok");
         assert_eq!(resp.tool_calls.len(), 1, "fixture returns one tool call");
         assert_eq!(partial, "Let me think. ");
+    }
+
+    /// P1 fix: an in-flight cancel MUST stop driving the LLM future immediately
+    /// and return `None` (cancelled) with the partial accumulated so far — NOT
+    /// run the future to completion. This is what makes the user Stop halt
+    /// generation within a tick instead of after the whole response.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancel_mid_stream_returns_none_with_partial() {
+        let (chunk_tx, chunk_rx) = mpsc::channel::<String>(1024);
+        let cancel = CancellationToken::new();
+        let cancel_for_fut = cancel.clone();
+
+        // LLM future: stream one chunk, then hang forever (never resolves) — the
+        // only way out is the cancel arm. If cancel were NOT observed mid-stream
+        // this test would hang.
+        let llm_fut = async move {
+            chunk_tx.send("partial answer".to_string()).await.unwrap();
+            // Signal readiness then block indefinitely.
+            cancel_for_fut.cancelled().await; // provider "keeps generating" until dropped
+            std::future::pending::<()>().await;
+            Ok::<LlmResponse, anyhow::Error>(mk_response(vec![]))
+        };
+
+        let mut sink = MockSink::new();
+        // Fire cancel shortly after the chunk is emitted.
+        let cancel_trigger = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            cancel_trigger.cancel();
+        });
+
+        let (llm_result, partial, sink_err) =
+            forward_chunks_into_sink(llm_fut, chunk_rx, &mut sink, &cancel).await;
+        assert!(llm_result.is_none(), "cancel mid-stream must return None (not resolve the future)");
+        assert!(sink_err.is_none());
+        assert_eq!(partial, "partial answer", "partial streamed before cancel must be preserved");
     }
 
     // `loop_nudge_*` tests moved to `pipeline::tool_loop_helpers::tests`.
