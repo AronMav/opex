@@ -15,6 +15,24 @@ app = FastAPI()
 COMMAND = json.loads(os.environ.get("MCP_COMMAND", '["echo","no MCP_COMMAND configured"]'))
 
 
+def _infer_working_dir(command):
+    """Return the MCP server's intended root directory, if any.
+
+    Filesystem MCP servers (e.g. `mcp/filesystem`) receive the allowed
+    directory as their last argument, and relative paths in tool calls are
+    resolved against the subprocess working directory. Git MCP servers
+    receive `--repository /src`. If the last command token is an absolute
+    path, use it as cwd so relative paths land inside the container mount
+    instead of the bridge's own `/bridge` directory.
+    """
+    if not command:
+        return None
+    last = command[-1]
+    if isinstance(last, str) and last.startswith("/") and last not in ("/", "/bridge"):
+        return last
+    return None
+
+
 async def stdio_call(method: str, params: dict, req_id):
     """Spawn MCP subprocess, run the initialize handshake, and return the
     response line matching `req_id`.
@@ -39,11 +57,17 @@ async def stdio_call(method: str, params: dict, req_id):
     ]
     stdin_data = ("\n".join(json.dumps(m) for m in messages) + "\n").encode()
 
+    cwd = _infer_working_dir(COMMAND)
+    kwargs = {}
+    if cwd is not None:
+        kwargs["cwd"] = cwd
+
     proc = await asyncio.create_subprocess_exec(
         *COMMAND,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **kwargs,
     )
 
     async def _write_then_read():
