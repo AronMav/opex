@@ -39,9 +39,12 @@ impl ToolgateClient {
     /// infrequent enough (1–2 per turn) that connection reuse provides no
     /// meaningful throughput gain.
     ///
-    /// `timeout(15s)` — embedding is a fast operation (1–2s normally). 15s is
-    /// generous enough for a slow provider round-trip but short enough that 3
-    /// retries (45s worst case) don't block bootstrap indefinitely.
+    /// `timeout(8s)` — embedding is a fast operation (1–2s normally). 8s is
+    /// generous enough for a slow provider round-trip but short enough that 2
+    /// retries (16s worst case) don't block bootstrap indefinitely. The
+    /// bootstrap context builder additionally wraps embedding-dependent
+    /// enhancements in an 8s fail-soft timeout, so a hung provider degrades
+    /// gracefully rather than stalling the agent's reply.
     ///
     /// `pool_max_idle_per_host(8)` — keep up to 8 idle connections to toolgate
     /// for reuse. This avoids the "connection refused" storm when multiple
@@ -51,7 +54,7 @@ impl ToolgateClient {
     pub fn new(base_url: impl Into<String>, requested_dimensions: u32) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(8))
             .pool_max_idle_per_host(8)
             .tcp_keepalive(Duration::from_secs(15))
             .build()

@@ -342,7 +342,11 @@ impl ContextBuilder for DefaultContextBuilder {
 
         // Stage B: persona-drift probe (detect+log, fail-soft; correction anchor
         // injected at the tail of the system prompt below when it fires).
-        let drift_anchor = deps.drift_probe(&history, session_id).await;
+        let drift_anchor = fail_soft_enhancement(
+            "drift_probe",
+            || deps.drift_probe(&history, session_id),
+            None,
+        ).await;
 
         // T17: conversation-history size estimate (chars/4 heuristic, same as
         // the system-prompt estimate below) — captured pre-repair, before any
@@ -419,7 +423,11 @@ impl ContextBuilder for DefaultContextBuilder {
         );
 
         // Soul: SELF portrait — сразу после workspace-промпта (spec §4)
-        let (self_block, l1_block) = deps.soul_blocks(&user_text, session_id).await;
+        let (self_block, l1_block) = fail_soft_enhancement(
+            "soul_blocks",
+            || deps.soul_blocks(&user_text, session_id),
+            (None, None),
+        ).await;
         let pre_self_len = system_prompt.len();
         if let Some(b) = self_block {
             system_prompt.push_str(&b);
@@ -531,8 +539,12 @@ impl ContextBuilder for DefaultContextBuilder {
             ).await;
 
             if !candidates.is_empty() {
-                let top1 = deps.select_top_k_tools_semantic(
-                    candidates, &user_text, 1,
+                let top1 = fail_soft_enhancement(
+                    "tool_trigger_hint",
+                    || deps.select_top_k_tools_semantic(
+                        candidates, &user_text, 1,
+                    ),
+                    vec![],
                 ).await;
                 if let Some(t) = top1.first()
                     && shares_significant_token(&user_text, &t.name, &t.description)
@@ -778,9 +790,12 @@ impl ContextBuilder for DefaultContextBuilder {
             } else if let Some(max_k) = deps.agent_max_tools_in_context() {
                 // Legacy dynamic top-K path — only when dispatcher is OFF.
                 if all_tools.len() > max_k && !user_text.is_empty() {
-                    all_tools = deps
-                        .select_top_k_tools_semantic(all_tools, &user_text, max_k)
-                        .await;
+                    let tools_fallback = all_tools.clone();
+                    all_tools = fail_soft_enhancement(
+                        "legacy_top_k_tools",
+                        || deps.select_top_k_tools_semantic(all_tools, &user_text, max_k),
+                        tools_fallback,
+                    ).await;
                 }
             }
 
@@ -882,6 +897,38 @@ pub mod mock {
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
+
+/// Hard ceiling for optional context-enhancement steps that call the embedding
+/// service (drift probe, soul biography, semantic tool selection). These are
+/// quality-of-life features, not prerequisites for answering the user. If the
+/// embedding backend is slow or down, we MUST degrade gracefully instead of
+/// stalling the turn indefinitely.
+const CONTEXT_ENHANCEMENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Run an optional enhancement future under a tight timeout. On timeout or
+/// panic it returns `fallback` and logs a warning. The caller (bootstrap) keeps
+/// going with a degraded but valid context.
+async fn fail_soft_enhancement<T, F, Fut>(
+    name: &'static str,
+    f: F,
+    fallback: T,
+) -> T
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
+    match tokio::time::timeout(CONTEXT_ENHANCEMENT_TIMEOUT, f()).await {
+        Ok(v) => v,
+        Err(_) => {
+            tracing::warn!(
+                phase = name,
+                timeout_secs = CONTEXT_ENHANCEMENT_TIMEOUT.as_secs(),
+                "context enhancement timed out; using fallback"
+            );
+            fallback
+        }
+    }
+}
 
 /// Check whether the user message shares a non-trivial token (≥3 chars, not a stop word)
 /// with the candidate tool's name or description. Used by trigger-hint logic as a
