@@ -32,8 +32,6 @@ axum = { workspace = true }
 tower-http = { workspace = true }
 sqlx = { workspace = true }
 reqwest = { workspace = true }
-infer = { workspace = true }
-mime_guess = { workspace = true }
 bollard = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -110,8 +108,6 @@ dunce = "1.0"
 # Used by the backup-restore size-cap path to avoid loading the whole body. No openssl.
 # `serde` feature enables JsonReader::deserialize_next<T: DeserializeOwned> — the
 # section-by-section walker lets us bound peak RSS to the largest single section.
-struson = { workspace = true }
-
 # Phase 64 SEC-03: HKDF-SHA256 for domain-separated upload-HMAC key derivation.
 # Pairs with existing `sha2 = "0.10"` and `hmac = "0.12"`. Pure Rust. No openssl.
 hkdf = "0.12"
@@ -162,6 +158,9 @@ default = []
 otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 ts-gen = ["dep:ts-rs", "dep:inventory", "opex-types/ts-gen", "opex-db/ts-gen"]
 gemini-cloudcode = ["dep:dirs", "dep:fs2", "dep:webbrowser"]
+
+[package.metadata.cargo-machete]
+ignored = ["webbrowser"]
 
 # Systemd watchdog (Linux-only)
 [target.'cfg(target_os = "linux")'.dependencies]

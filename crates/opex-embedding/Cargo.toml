@@ -9,9 +9,7 @@ license = { workspace = true }
 # Не передаём свои features чтобы не конфликтовать с workspace-overrides reqwest
 # (rustls-tls, http2, etc.). Workspace набор шире чем нужно, но безопасен.
 anyhow = { workspace = true }
-async-trait = { workspace = true }
 reqwest = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

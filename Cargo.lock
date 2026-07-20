@@ -292,17 +292,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cfb"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d38f2da7a0a2c4ccf0065be06397cc26a81f4e528be095826eee9d4adbb8c60f"
-dependencies = [
- "byteorder",
- "fnv",
- "uuid",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1440,15 +1429,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "infer"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc150e5ce2330295b8616ce0e3f53250e53af31759a9dbedad1621ba29151847"
-dependencies = [
- "cfb",
-]
-
-[[package]]
 name = "inotify"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2101,12 +2081,10 @@ dependencies = [
  "hmac",
  "http",
  "if-addrs 0.14.0",
- "infer",
  "insta",
  "inventory",
  "lru",
  "mdns-sd",
- "mime_guess",
  "notify",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -2130,7 +2108,6 @@ dependencies = [
  "serial_test",
  "sha2",
  "sqlx",
- "struson",
  "subtle",
  "tempfile",
  "testcontainers",
@@ -2179,9 +2156,7 @@ name = "opex-embedding"
 version = "0.34.1"
 dependencies = [
  "anyhow",
- "async-trait",
  "reqwest",
- "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
@@ -2217,7 +2192,6 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "opex-embedding",
- "reqwest",
  "sd-notify",
  "serde",
  "serde_json",
