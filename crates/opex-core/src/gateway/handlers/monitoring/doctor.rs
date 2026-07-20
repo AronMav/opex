@@ -64,6 +64,8 @@ fn classify_degraded_error(error: &str) -> &'static str {
         || e.contains("access denied - path outside allowed directories: /bridge")
         || e.contains("access denied - path outside allowed directories: /home/aronmav/opex/workspace")
         || e.contains("access denied - path outside allowed directories: /home/opex/workspace")
+        || e.contains("access denied - path outside allowed directories: /home/aronmav/opex-src")
+        || e.contains("access denied - path outside allowed directories: /home/aronmav/opex/toolgate")
         || e.contains("mcp tool error: /bridge")
     {
         return "code_fixed";
