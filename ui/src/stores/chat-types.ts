@@ -51,6 +51,9 @@ export interface FilePart {
   type: "file";
   url: string;
   mediaType: string;
+  /** Original filename when known (user uploads). Absent for assistant-generated
+   *  artifacts (tool outputs, __file__: markers) — UI falls back to a MIME-based label. */
+  filename?: string;
 }
 
 export type ToolPartState =

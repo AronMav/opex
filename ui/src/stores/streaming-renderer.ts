@@ -395,19 +395,24 @@ export function createStreamingRenderer(store: StoreAccess) {
       file_name: string;
       mime_type: string;
     }> = [];
-    if (attachments && attachments.length > 0) {
-      for (const att of attachments) {
-        for (const content of att.content) {
-          userParts.push({ type: "file", url: content.data, mediaType: content.mimeType });
-          apiAttachments.push({
-            url: content.data,
-            media_type: content.mimeType.startsWith("image/") ? "image" : "document",
-            file_name: content.filename ?? att.name,
-            mime_type: content.mimeType,
-          });
+      if (attachments && attachments.length > 0) {
+        for (const att of attachments) {
+          for (const content of att.content) {
+            userParts.push({
+              type: "file",
+              url: content.data,
+              mediaType: content.mimeType,
+              filename: content.filename ?? att.name,
+            });
+            apiAttachments.push({
+              url: content.data,
+              media_type: content.mimeType.startsWith("image/") ? "image" : "document",
+              file_name: content.filename ?? att.name,
+              mime_type: content.mimeType,
+            });
+          }
         }
       }
-    }
     if (userParts.length === 0) userParts.push({ type: "text", text: "" });
 
     const userMsg: ChatMessage = {

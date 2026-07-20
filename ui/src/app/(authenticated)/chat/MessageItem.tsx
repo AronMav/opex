@@ -109,7 +109,7 @@ function renderPart(part: MessagePart, index: number, streaming = false, isLastP
       );
     }
     case "file":
-      return <FileDataPartView key={`file-${part.url}`} data={{ url: part.url, mediaType: part.mediaType }} />;
+      return <FileDataPartView key={`file-${part.url}`} data={{ url: part.url, mediaType: part.mediaType, filename: part.filename }} />;
     case "rich-card":
       // Skip agent-turn rich cards — AgentTransitionDivider in MessageList replaces this
       if (part.cardType === "agent-turn") return null;
