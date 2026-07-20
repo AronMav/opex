@@ -373,6 +373,7 @@ pub async fn save_binary_to_uploads(
         &media_type,
         data,
         retention_days,
+        None, // no original filename for tool outputs
     )
     .await?;
 

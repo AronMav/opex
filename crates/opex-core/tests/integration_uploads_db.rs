@@ -78,6 +78,7 @@ async fn tool_output_with_retention_then_cleanup() {
         "audio/mp3",
         b"audio-content",
         30,
+        None,
     )
     .await
     .expect("insert tool_output");

@@ -124,6 +124,15 @@ pub(crate) async fn api_media_upload(
     }
 
     let retention_days = cfg.config.cleanup.uploads_retention_days;
+    // Preserve the original client-side filename (from the multipart field's
+    // Content-Disposition) so downloads keep their real name instead of the
+    // row UUID. Sanitize before persisting — strip path components (clients
+    // may send absolute paths) and cap length.
+    let safe_filename = file_name
+        .split(['/', '\\'])
+        .next_back()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.chars().take(255).collect::<String>());
     let id = match crate::db::uploads::insert_with_retention(
         &infra.db,
         "client_upload",
@@ -131,6 +140,7 @@ pub(crate) async fn api_media_upload(
         &mime,
         &data,
         retention_days,
+        safe_filename.as_deref(),
     )
     .await
     {

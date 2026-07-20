@@ -14,7 +14,7 @@ use uuid::Uuid;
 pub const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]   // id/expires_at part of the query shape; reserved for diagnostics
+#[allow(dead_code)]   // id/expires_at/filename part of the query shape; reserved for diagnostics
 pub struct UploadRow {
     pub id: Uuid,
     pub mime: String,
@@ -22,6 +22,10 @@ pub struct UploadRow {
     pub sha256: Vec<u8>,
     pub size_bytes: i64,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Original client-side filename when known (user uploads). Absent for
+    /// tool_output binaries and agent icons. Surfaced in Content-Disposition
+    /// by `uploads_serve` so downloads keep their original name.
+    pub filename: Option<String>,
 }
 
 /// Insert or replace the icon for an agent. Returns the new row id.
@@ -66,6 +70,11 @@ pub async fn upsert_agent_icon(
 }
 
 /// Insert a tool_output or client_upload row with retention TTL. Returns the row id.
+///
+/// `filename` is the original client-side filename (user uploads) — surfaced in
+/// the serve endpoint's Content-Disposition so downloads keep their real name
+/// instead of the row UUID. Pass `None` for tool outputs / icons / anything
+/// that lacks a meaningful name.
 pub async fn insert_with_retention(
     pool: &PgPool,
     owner_type: &str,
@@ -73,6 +82,7 @@ pub async fn insert_with_retention(
     mime: &str,
     data: &[u8],
     retention_days: u32,
+    filename: Option<&str>,
 ) -> Result<Uuid> {
     if owner_type != "tool_output" && owner_type != "client_upload" {
         return Err(anyhow!("owner_type must be tool_output or client_upload"));
@@ -86,8 +96,8 @@ pub async fn insert_with_retention(
 
     sqlx::query(
         r#"
-        INSERT INTO uploads (id, owner_type, owner_id, mime, data, sha256, size_bytes, expires_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + ($8::INT * INTERVAL '1 day'))
+        INSERT INTO uploads (id, owner_type, owner_id, mime, data, sha256, size_bytes, expires_at, filename)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + ($8::INT * INTERVAL '1 day'), $9)
         "#,
     )
     .bind(id)
@@ -98,6 +108,7 @@ pub async fn insert_with_retention(
     .bind(&sha)
     .bind(size)
     .bind(i32::try_from(retention_days).unwrap_or(30))
+    .bind(filename)
     .execute(pool)
     .await?;
 
@@ -108,7 +119,7 @@ pub async fn insert_with_retention(
 pub async fn get_by_id(pool: &PgPool, id: Uuid) -> Result<Option<UploadRow>> {
     let row = sqlx::query(
         r#"
-        SELECT id, mime, data, sha256, size_bytes, expires_at
+        SELECT id, mime, data, sha256, size_bytes, expires_at, filename
         FROM uploads
         WHERE id = $1 AND (expires_at IS NULL OR expires_at > NOW())
         "#,
@@ -124,6 +135,7 @@ pub async fn get_by_id(pool: &PgPool, id: Uuid) -> Result<Option<UploadRow>> {
         sha256: r.try_get("sha256").unwrap(),
         size_bytes: r.try_get("size_bytes").unwrap(),
         expires_at: r.try_get("expires_at").ok().flatten(),
+        filename: r.try_get("filename").ok().flatten(),
     }))
 }
 
@@ -250,7 +262,7 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn insert_with_retention_sets_expires_at(pool: PgPool) {
-        let id = insert_with_retention(&pool, "tool_output", Some("msg-uuid"), "audio/mp3", b"audio-bytes", 30).await.unwrap();
+        let id = insert_with_retention(&pool, "tool_output", Some("msg-uuid"), "audio/mp3", b"audio-bytes", 30, None).await.unwrap();
         let row = get_by_id(&pool, id).await.unwrap().unwrap();
         assert!(row.expires_at.is_some());
 
@@ -262,8 +274,35 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn insert_with_retention_rejects_unknown_owner_type(pool: PgPool) {
-        let result = insert_with_retention(&pool, "bogus", None, "image/png", b"x", 30).await;
+        let result = insert_with_retention(&pool, "bogus", None, "image/png", b"x", 30, None).await;
         assert!(result.is_err());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn insert_with_retention_persists_filename(pool: PgPool) {
+        // The client-side filename survives the round-trip so the serve
+        // endpoint can ship it in Content-Disposition (fix for downloads
+        // landing as their UUID instead of the original name).
+        let id = insert_with_retention(
+            &pool,
+            "client_upload",
+            None,
+            "application/json",
+            b"{}",
+            30,
+            Some("chroma_api.json"),
+        )
+        .await
+        .unwrap();
+        let row = get_by_id(&pool, id).await.unwrap().unwrap();
+        assert_eq!(row.filename.as_deref(), Some("chroma_api.json"));
+
+        // None stays None (tool_output / icon paths).
+        let id2 = insert_with_retention(&pool, "tool_output", None, "image/png", b"x", 30, None)
+            .await
+            .unwrap();
+        let row2 = get_by_id(&pool, id2).await.unwrap().unwrap();
+        assert!(row2.filename.is_none());
     }
 
     #[sqlx::test(migrations = "../../migrations")]

@@ -1219,7 +1219,7 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn owner_gate_accepts_client_upload_and_yields_mime(pool: sqlx::PgPool) {
-        // `insert_with_retention(pool, owner_type, owner_id: Option<&str>, mime, data: &[u8], retention_days)`.
+        // `insert_with_retention(pool, owner_type, owner_id, mime, data, retention_days, filename)`.
         // Pass a byte slice (`b"OggSfake"` coerces to `&[u8]`) — the `data` param is `&[u8]`,
         // an owned `Vec<u8>` does NOT auto-coerce there.
         let id = crate::db::uploads::insert_with_retention(
@@ -1229,6 +1229,7 @@ mod tests {
             "audio/ogg",
             b"OggSfake",
             30,
+            None,
         )
         .await
         .unwrap();
