@@ -1234,9 +1234,34 @@ async fn init_mcp_registry(container_manager: Option<Arc<containers::ContainerMa
     let mcp_map = crate::tools::mcp_workspace::load_mcp_map(crate::config::MCP_DIR).await;
     let cache_dir = std::path::Path::new(crate::config::MCP_DIR).join(".cache");
 
+    // Canonicalize workspace and (optionally) the deploy source tree so the MCP
+    // path rewriter can translate host paths to container mounts.
+    let workspace_dir = std::fs::canonicalize(crate::config::WORKSPACE_DIR)
+        .unwrap_or_else(|_| std::path::PathBuf::from(crate::config::WORKSPACE_DIR));
+    let source_dir = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| {
+            // `opex-src` is typically a sibling of the runtime directory.
+            let src = cwd.parent()?.join("opex-src");
+            if src.is_dir() { Some(src) } else { None }
+        })
+        .or_else(|| {
+            // Fallback: look for a directory named `opex-src` in the parent of
+            // the workspace dir.
+            let src = std::path::Path::new(crate::config::WORKSPACE_DIR)
+                .parent()?
+                .join("opex-src");
+            if src.is_dir() { Some(src) } else { None }
+        });
+
     // Always create the registry — URL-based MCPs work without Docker.
     let has_docker = container_manager.is_some();
-    let registry = Arc::new(mcp::McpRegistry::new(container_manager, cache_dir));
+    let registry = Arc::new(mcp::McpRegistry::with_source_dir(
+        container_manager,
+        cache_dir,
+        workspace_dir,
+        source_dir.as_deref().unwrap_or(std::path::Path::new(crate::config::WORKSPACE_DIR)),
+    ));
     tracing::info!(has_docker, mcp_count = mcp_map.len(), "MCP registry initialized");
 
     // Load on-demand tool definitions from the file cache so the LLM sees them

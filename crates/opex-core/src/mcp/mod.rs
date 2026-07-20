@@ -1,16 +1,25 @@
 use anyhow::Result;
 use opex_types::ToolDefinition;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
 use crate::containers::ContainerManager;
 
+mod path_rewrite;
+
 /// Validates an MCP name: only `[a-zA-Z0-9_-]+` characters allowed.
 fn is_valid_mcp_name(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Best-effort canonicalization. Falls back to the absolute, non-canonical
+/// path if the filesystem entry does not yet exist (e.g. during tests or before
+/// the workspace dir is created).
+fn canonicalize_or_abs(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Manages MCP discovery and tool call routing.
@@ -22,20 +31,60 @@ pub struct McpRegistry {
     http_client: reqwest::Client,
     /// Directory for persisting per-MCP tool definition caches.
     cache_dir: PathBuf,
+    /// Host workspace root, canonicalized. Used to rewrite host paths sent to
+    /// filesystem/git MCP containers into their container mount points.
+    workspace_dir: PathBuf,
+    /// Optional host source-tree root (e.g. `~/opex-src`), canonicalized. Mapped
+    /// to `/src` inside the `mcp-git` container so git tools can inspect the
+    /// deploy source repo without exposing arbitrary host paths.
+    source_mount_dir: Option<PathBuf>,
 }
 
 impl McpRegistry {
-    pub fn new(container_manager: Option<Arc<ContainerManager>>, cache_dir: impl Into<PathBuf>) -> Self {
+    #[cfg(test)]
+    pub fn new(
+        container_manager: Option<Arc<ContainerManager>>,
+        cache_dir: impl Into<PathBuf>,
+        workspace_dir: impl AsRef<Path>,
+    ) -> Self {
+        Self::with_optional_source_dir(container_manager, cache_dir, workspace_dir, None::<PathBuf>)
+    }
+
+    /// Constructor that also accepts the host source-tree mount directory.
+    pub fn with_source_dir(
+        container_manager: Option<Arc<ContainerManager>>,
+        cache_dir: impl Into<PathBuf>,
+        workspace_dir: impl AsRef<Path>,
+        source_mount_dir: impl AsRef<Path>,
+    ) -> Self {
+        Self::with_optional_source_dir(
+            container_manager,
+            cache_dir,
+            workspace_dir,
+            Some(source_mount_dir),
+        )
+    }
+
+    fn with_optional_source_dir<S: AsRef<Path>>(
+        container_manager: Option<Arc<ContainerManager>>,
+        cache_dir: impl Into<PathBuf>,
+        workspace_dir: impl AsRef<Path>,
+        source_mount_dir: Option<S>,
+    ) -> Self {
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()
             .unwrap_or_default();
+        let workspace_dir = canonicalize_or_abs(workspace_dir.as_ref());
+        let source_mount_dir = source_mount_dir.map(|p| canonicalize_or_abs(p.as_ref()));
         Self {
             container_manager,
             tool_cache: Arc::new(RwLock::new(HashMap::new())),
             http_client,
             cache_dir: cache_dir.into(),
+            workspace_dir,
+            source_mount_dir,
         }
     }
 
@@ -54,7 +103,24 @@ impl McpRegistry {
             tool_cache: Arc::new(RwLock::new(HashMap::new())),
             http_client,
             cache_dir: cache_dir.into(),
+            workspace_dir: std::env::temp_dir(),
+            source_mount_dir: None,
         }
+    }
+
+    fn rewrite_arguments(
+        &self,
+        mcp_name: &str,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        path_rewrite::rewrite_tool_arguments(
+            mcp_name,
+            tool_name,
+            arguments,
+            &self.workspace_dir,
+            self.source_mount_dir.as_deref(),
+        )
     }
 
     // ── File-cache helpers ──────────────────────────────────────────────────────
@@ -229,6 +295,13 @@ impl McpRegistry {
         if let Some(obj) = mcp_arguments.as_object_mut() {
             obj.remove("_context");
         }
+
+        // Filesystem/git MCP containers only see their container mounts
+        // (`/workspace`, `/src`). Host paths like `/home/aronmav/opex/...`
+        // or relative paths resolved against `/bridge` must be rewritten
+        // before forwarding, otherwise every call is rejected with
+        // "Access denied - path outside allowed directories" or similar.
+        mcp_arguments = self.rewrite_arguments(mcp_name, tool_name, &mcp_arguments)?;
 
         // Retry delays for the startup gap: 300ms → 700ms → 1500ms
         const RETRY_DELAYS_MS: [u64; 3] = [300, 700, 1500];
@@ -475,7 +548,7 @@ mod tests {
             crate::containers::ContainerManager::new("http://127.0.0.1:1", HashMap::new())
                 .expect("ContainerManager::new should succeed for test"),
         );
-        McpRegistry::new(Some(cm), cache_dir)
+        McpRegistry::new(Some(cm), cache_dir, std::env::temp_dir())
     }
 
     fn make_tools() -> Vec<ToolDefinition> {

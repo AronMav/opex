@@ -258,9 +258,12 @@ services:
       GIT_COMMITTER_NAME: "Opex Agent"
       GIT_COMMITTER_EMAIL: "opex@aronmav.ru"
     volumes:
-      # Без workspace-тома git-серверу физически нечего читать — каждая
-      # операция падала NoSuchPathError (текст ошибки = путь).
+      # Workspace mount lets git operate on workspace repositories (e.g. zettelkasten).
       - ~/opex/workspace:/workspace:rw
+      # Source tree mount: the deploy git repo lives in ~/opex-src, not inside
+      # the runtime workspace. Expose it read-only as /src and make it the
+      # default repository in docker/mcp/git/Dockerfile.
+      - ~/opex-src:/src:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     profiles: [ "on-demand" ]
