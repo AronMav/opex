@@ -543,8 +543,6 @@ pub async fn save_message(
     save_message_ex(db, session_id, role, content, tool_calls, tool_call_id, None, None, None).await
 }
 
-/// Save a message with optional per-message `agent_id` (for multi-agent discuss sessions).
-#[allow(clippy::too_many_arguments)]
 /// Strip the NUL byte (0x00) from text bound for a Postgres `text` column.
 ///
 /// Postgres cannot store NUL in `text`/`varchar` — an INSERT with one fails with
@@ -578,6 +576,7 @@ pub async fn message_exists_in_session(db: &PgPool, id: Uuid, session_id: Uuid) 
     Ok(exists)
 }
 
+/// Save a message with optional per-message `agent_id` (for multi-agent discuss sessions).
 #[allow(clippy::too_many_arguments)]
 pub async fn save_message_ex(
     db: &PgPool,

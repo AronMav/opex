@@ -259,6 +259,14 @@ export function createStreamingRenderer(store: StoreAccess) {
     // "streaming" until the envelope settles it, or the no-downgrade guards
     // would freeze it "complete" while text keeps appending.
     abortLocalOnly(agent, { settleMessages: false });
+    // Cancel any pending SCHEDULED reconnect for this agent — this connect
+    // supersedes it. Without this, an out-of-band connect (activity watchdog,
+    // visibility/online/pageshow reattach, or a new send) that races a
+    // scheduleReconnect leaves the old backoff timer armed; it later fires and
+    // tears down the now-healthy stream, churning "Reconnecting". The retry
+    // path already self-deletes its timer before calling connect(), so this is
+    // a no-op there.
+    clearReconnectTimer(agent);
     // Fix I: a fresh (non-retry) connect — new send, resume, or visibility
     // recovery — starts with a clean reconnect budget. Retries preserve the
     // running count so the cap is actually reached under persistent failure.
