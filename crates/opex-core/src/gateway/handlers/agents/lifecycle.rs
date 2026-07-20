@@ -282,6 +282,7 @@ pub async fn start_agent_from_config(
                 secrets: auth.secrets.clone(),
                 mcp: deps.mcp.clone(),
                 http_client: reqwest::Client::builder()
+                    .connect_timeout(std::time::Duration::from_secs(5))
                     .timeout(std::time::Duration::from_secs(120))
                     .build()
                     .unwrap_or_default(),

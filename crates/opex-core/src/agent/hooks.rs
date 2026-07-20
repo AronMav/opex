@@ -102,6 +102,7 @@ impl HookRegistry {
             // Plain client (no SSRF resolver) for admin-opted-in internal hooks.
             self.http_client_internal = reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(30))
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .ok();

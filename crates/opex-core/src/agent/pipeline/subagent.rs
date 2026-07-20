@@ -138,6 +138,8 @@ async fn fetch_via_toolgate_web(
 /// Falls back to cloning `base` only if the builder fails (never in practice).
 fn no_redirect_client(base: &reqwest::Client) -> reqwest::Client {
     reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap_or_else(|_| base.clone())

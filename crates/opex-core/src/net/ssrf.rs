@@ -285,6 +285,7 @@ pub fn ssrf_http_client(timeout: std::time::Duration) -> reqwest::Client {
 pub fn select_ssrf_aware_client(endpoint: &str, timeout: std::time::Duration) -> reqwest::Client {
     if is_internal_endpoint(endpoint) {
         reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
             .timeout(timeout)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new())

@@ -156,16 +156,30 @@ impl AgentEngine {
         }
 
         let mut s = sink::NoopSink::new();
-        let mut boot = bootstrap::bootstrap(
-            self,
-            BootstrapContext {
-                msg,
-                resume_session_id,
-                force_new_session,
-            },
-            &mut s,
+        const BOOTSTRAP_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+        let mut boot = match tokio::time::timeout(
+            BOOTSTRAP_HARD_TIMEOUT,
+            bootstrap::bootstrap(
+                self,
+                BootstrapContext {
+                    msg,
+                    resume_session_id,
+                    force_new_session,
+                },
+                &mut s,
+            ),
         )
-        .await?;
+        .await
+        {
+            Ok(Ok(b)) => b,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                anyhow::bail!(
+                    "bootstrap exceeded {}s hard timeout; toolgate or embedding may be unresponsive",
+                    BOOTSTRAP_HARD_TIMEOUT.as_secs()
+                );
+            }
+        };
         boot.turn_model_override = model_override;
         Ok(boot)
     }
@@ -1154,16 +1168,30 @@ impl AgentEngine {
     ) -> Result<String> {
         let mut s = sink::NoopSink::new();
 
-        let boot = bootstrap::bootstrap(
-            self,
-            BootstrapContext {
-                msg,
-                resume_session_id,
-                force_new_session,
-            },
-            &mut s,
+        const BOOTSTRAP_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+        let boot = match tokio::time::timeout(
+            BOOTSTRAP_HARD_TIMEOUT,
+            bootstrap::bootstrap(
+                self,
+                BootstrapContext {
+                    msg,
+                    resume_session_id,
+                    force_new_session,
+                },
+                &mut s,
+            ),
         )
-        .await?;
+        .await
+        {
+            Ok(Ok(b)) => b,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                anyhow::bail!(
+                    "bootstrap exceeded {}s hard timeout; toolgate or embedding may be unresponsive",
+                    BOOTSTRAP_HARD_TIMEOUT.as_secs()
+                );
+            }
+        };
 
         let BootstrapOutcome {
             session_id,

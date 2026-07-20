@@ -24,6 +24,14 @@ pub(crate) fn routes() -> Router<AppState> {
 /// Shared reqwest client for Toolgate HTTP calls (voices + synthesize).
 static TOOLGATE_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
 
+fn toolgate_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .pool_max_idle_per_host(0)
+        .build()
+        .expect("toolgate client builder")
+}
+
 /// Return the current canvas state for a given agent (or null if empty).
 pub(crate) async fn api_canvas_state(
     State(agents): State<AgentCore>,
@@ -73,7 +81,7 @@ pub(crate) async fn api_tts_voices(
         return Json(json!({"voices": []})).into_response();
     };
     let url = format!("{}/audio/voices", base.trim_end_matches('/'));
-    let client = TOOLGATE_CLIENT.get_or_init(reqwest::Client::new);
+    let client = TOOLGATE_CLIENT.get_or_init(toolgate_client);
     // Optional provider override: ?provider=<name> → X-Opex-Provider header.
     // toolgate's require_provider("tts") honors this header and uses the named
     // provider instead of the global active one — letting the UI fetch voice
@@ -155,7 +163,7 @@ pub(crate) async fn api_tts_synthesize(
         None => Vec::new(),
     };
 
-    let client = TOOLGATE_CLIENT.get_or_init(reqwest::Client::new);
+    let client = TOOLGATE_CLIENT.get_or_init(toolgate_client);
     let attempts: Vec<Option<&crate::db::profiles::SlotEntry>> = if chain.is_empty() {
         vec![None]
     } else {
