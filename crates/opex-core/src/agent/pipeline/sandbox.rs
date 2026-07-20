@@ -150,6 +150,7 @@ async fn execute_host_code(code: &str, language: &str, packages: &[String]) -> S
     use tokio::process::Command;
 
     let timeout = std::time::Duration::from_secs(120);
+    let pip_timeout = std::time::Duration::from_secs(60);
 
     // Install packages if requested (avoid shell to prevent command injection via package names)
     if !packages.is_empty() && language == "python" {
@@ -168,13 +169,14 @@ async fn execute_host_code(code: &str, language: &str, packages: &[String]) -> S
         // Surface pip failures: swallowing the result let a failed install fall
         // through to a bare `ModuleNotFoundError` from the run below, hiding the
         // real cause (bad package name, network, resolver conflict) from the model.
-        match cmd.output().await {
-            Ok(o) if !o.status.success() => {
+        match tokio::time::timeout(pip_timeout, cmd.output()).await {
+            Ok(Ok(o)) if !o.status.success() => {
                 let stderr: String = String::from_utf8_lossy(&o.stderr).chars().take(1500).collect();
                 return format!("Error: pip install failed ({}):\n{}", o.status, stderr.trim());
             }
-            Ok(_) => {}
-            Err(e) => return format!("Error: could not run pip: {}", e),
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => return format!("Error: could not run pip: {}", e),
+            Err(_) => return "Error: pip install timed out (60s)".to_string(),
         }
     }
 

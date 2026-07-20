@@ -377,9 +377,20 @@ pub async fn bootstrap<S: EventSink>(
     let loop_config = engine.tool_loop_config();
     let loop_detector = if reentry_mode.warm_loop_detector() {
         let timeline_events =
-            crate::db::session_timeline::load_tool_events(&engine.cfg().db, session_id)
-                .await
-                .unwrap_or_default();
+            match crate::db::session_timeline::load_tool_events(&engine.cfg().db,
+                session_id,
+            ).await
+            {
+                Ok(events) => events,
+                Err(e) => {
+                    tracing::warn!(
+                        session = %session_id,
+                        error = %e,
+                        "failed to load timeline tool events; LoopDetector warm-up skipped"
+                    );
+                    vec![]
+                }
+            };
         if !timeline_events.is_empty() {
             tracing::debug!(
                 session = %session_id,
@@ -455,9 +466,20 @@ pub async fn bootstrap<S: EventSink>(
     // Load compaction state from DB so proactive compression in execute() can
     // resume where the previous session turn left off (anti-thrash counters, summary).
     let compaction_state =
-        crate::db::compaction::get_compaction_state(&engine.cfg().db, session_id)
-            .await
-            .unwrap_or(None);
+        match crate::db::compaction::get_compaction_state(&engine.cfg().db,
+            session_id,
+        ).await
+        {
+            Ok(state) => state,
+            Err(e) => {
+                tracing::warn!(
+                    session = %session_id,
+                    error = %e,
+                    "failed to load compaction state; starting fresh"
+                );
+                None
+            }
+        };
     let compressor =
         crate::agent::compressor::Compressor::load(compaction_state, context_limit);
 

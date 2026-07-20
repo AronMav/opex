@@ -186,10 +186,15 @@ impl SseStreamWriter {
         } else {
             None
         };
-        let id = self
-            .current_text_id
-            .clone()
-            .expect("current_text_id set above");
+        let id = match self.current_text_id.clone() {
+            Some(id) => id,
+            None => {
+                tracing::error!("build_text_delta called without an open text block");
+                let id = format!("text-orphan-{}", self.text_id_counter);
+                self.text_id_counter += 1;
+                id
+            }
+        };
         let delta_frame = self.frame(&SseEvent::TextDelta { id, delta });
         (start_frame, delta_frame)
     }

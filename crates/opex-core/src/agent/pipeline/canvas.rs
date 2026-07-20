@@ -82,6 +82,7 @@ pub async fn br_post(
     let resp = http_client
         .post(format!("{br_url}{path}"))
         .json(&body)
+        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .map_err(|e| format!("Cannot reach browser-renderer: {e}"))?;

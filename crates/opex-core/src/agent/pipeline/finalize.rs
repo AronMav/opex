@@ -114,6 +114,77 @@ pub(crate) fn notify_loop_detected(
     }
 }
 
+// ── Safe persistence / sink helpers ───────────────────────────────────────────
+
+/// Persist an assistant message, logging on failure. The turn must not fail
+/// just because the final DB write errored; the user already saw the reply in
+/// the stream.
+async fn persist_assistant_message(
+    sm: &SessionManager,
+    db: &PgPool,
+    session_id: Uuid,
+    preallocated_id: Uuid,
+    text: &str,
+    agent_name: &str,
+    user_message_id: Option<Uuid>,
+) {
+    let res: anyhow::Result<()> = if preallocated_id != uuid::Uuid::nil() {
+        crate::db::sessions::save_message_ex_with_id(
+            db,
+            preallocated_id,
+            session_id,
+            "assistant",
+            text,
+            None,
+            None,
+            Some(agent_name),
+            None,
+            user_message_id,
+            None,
+            None,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(e))
+    } else {
+        sm.save_message_ex(
+            session_id,
+            "assistant",
+            text,
+            None,
+            None,
+            Some(agent_name),
+            None,
+            user_message_id,
+        )
+        .await
+        .map(|_| ())
+    };
+    if let Err(e) = res {
+        tracing::error!(
+            session_id = %session_id,
+            preallocated_id = %preallocated_id,
+            error = %e,
+            "failed to persist assistant message"
+        );
+    }
+}
+
+/// Emit a stream event, logging on failure. Mandatory frames (Error/Finish)
+/// being dropped can hang the UI, so we at least leave a trace in logs.
+async fn emit_stream_event<S: EventSink>(
+    sink: &mut S,
+    event: StreamEvent,
+    context: &'static str,
+) {
+    if let Err(e) = sink.emit(PipelineEvent::Stream(event)).await {
+        tracing::warn!(
+            context,
+            error = %e,
+            "failed to emit stream event"
+        );
+    }
+}
+
 // ── Failure classification + recording ────────────────────────────────────────
 
 /// Classify a failure reason string into a stable `failure_kind` enum value.
@@ -562,40 +633,15 @@ pub async fn finalize<S: EventSink>(
         }
         FinalizeOutcome::Failed { partial, reason } => {
             if !partial.is_empty() {
-                // Use the pre-allocated UUID (ON CONFLICT DO NOTHING) so the partial
-                // assistant message has the same ID the frontend buffered in the live
-                // overlay. Nil UUID means MessageStart was never emitted (pre-loop
-                // cancel) — fall back to auto-generated ID in that case.
-                if ctx.assistant_message_id != uuid::Uuid::nil() {
-                    let _ = crate::db::sessions::save_message_ex_with_id(
-                        &ctx.db,
-                        ctx.assistant_message_id,
-                        ctx.session_id,
-                        "assistant",
-                        partial,
-                        None,
-                        None,
-                        Some(agent_name_ref),
-                        None,
-                        ctx.user_message_id,
-                        None,
-                        None, // partial assistant row carries no tool-loop step index
-                    )
-                    .await;
-                } else {
-                    let _ = sm
-                        .save_message_ex(
-                            ctx.session_id,
-                            "assistant",
-                            partial,
-                            None,
-                            None,
-                            Some(agent_name_ref),
-                            None,
-                            ctx.user_message_id,
-                        )
-                        .await;
-                }
+                persist_assistant_message(
+                    &sm,
+                    &ctx.db,
+                    ctx.session_id,
+                    ctx.assistant_message_id,
+                    partial,
+                    agent_name_ref,
+                    ctx.user_message_id,
+                ).await;
             }
             lifecycle_guard.fail(reason).await;
             // Structured failure log: persist diagnostic row in the background.
@@ -609,20 +655,24 @@ pub async fn finalize<S: EventSink>(
                 ctx.llm_model.clone(),
                 &ctx.bg_tasks,
             );
-            let _ = sink
-                .emit(PipelineEvent::Stream(StreamEvent::Error(reason.clone())))
-                .await;
+            emit_stream_event(
+                sink,
+                StreamEvent::Error(reason.clone()),
+                "finalize_failed_error",
+            ).await;
             // Always close the SSE stream with Finish — the frontend uses it as
             // the only reliable signal of "no more events coming". Without this,
             // a Failed turn (subagent timeout, tool error, ...) leaves the live
             // stream half-open and the UI keeps the loader animation running
             // until reconnect retries are exhausted.
-            let _ = sink
-                .emit(PipelineEvent::Stream(StreamEvent::Finish {
+            emit_stream_event(
+                sink,
+                StreamEvent::Finish {
                     finish_reason: "error".to_string(),
                     continuation: false,
-                }))
-                .await;
+                },
+                "finalize_failed_finish",
+            ).await;
             // UI notification (DB + WS broadcast) — surfaces the failure in the bell
             // icon + notification list. Specialized reasons get their own notification
             // kind (loop_detected, iteration_limit) rather than the generic agent_error.
@@ -668,36 +718,15 @@ pub async fn finalize<S: EventSink>(
         }
         FinalizeOutcome::Interrupted { partial, reason } => {
             if !partial.is_empty() {
-                if ctx.assistant_message_id != uuid::Uuid::nil() {
-                    let _ = crate::db::sessions::save_message_ex_with_id(
-                        &ctx.db,
-                        ctx.assistant_message_id,
-                        ctx.session_id,
-                        "assistant",
-                        partial,
-                        None,
-                        None,
-                        Some(agent_name_ref),
-                        None,
-                        ctx.user_message_id,
-                        None,
-                        None, // partial assistant row carries no tool-loop step index
-                    )
-                    .await;
-                } else {
-                    let _ = sm
-                        .save_message_ex(
-                            ctx.session_id,
-                            "assistant",
-                            partial,
-                            None,
-                            None,
-                            Some(agent_name_ref),
-                            None,
-                            ctx.user_message_id,
-                        )
-                        .await;
-                }
+                persist_assistant_message(
+                    &sm,
+                    &ctx.db,
+                    ctx.session_id,
+                    ctx.assistant_message_id,
+                    partial,
+                    agent_name_ref,
+                    ctx.user_message_id,
+                ).await;
             }
             lifecycle_guard.interrupt(reason).await;
             // Abort-usage accounting (m025): the interrupted final LLM call never
@@ -716,12 +745,14 @@ pub async fn finalize<S: EventSink>(
             // Close SSE stream cleanly. Without Finish the frontend would keep
             // the loader running and trigger reconnect attempts even though the
             // turn is fully finalized in DB.
-            let _ = sink
-                .emit(PipelineEvent::Stream(StreamEvent::Finish {
+            emit_stream_event(
+                sink,
+                StreamEvent::Finish {
                     finish_reason: "interrupted".to_string(),
                     continuation: false,
-                }))
-                .await;
+                },
+                "finalize_interrupted_finish",
+            ).await;
             if let Some(sr_cfg) = &ctx.skill_review
                 && sr_cfg.enabled {
                     spawn_skill_review(

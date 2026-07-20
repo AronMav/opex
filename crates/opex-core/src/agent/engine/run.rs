@@ -156,7 +156,7 @@ impl AgentEngine {
         }
 
         let mut s = sink::NoopSink::new();
-        const BOOTSTRAP_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+        const BOOTSTRAP_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
         let mut boot = match tokio::time::timeout(
             BOOTSTRAP_HARD_TIMEOUT,
             bootstrap::bootstrap(
@@ -233,7 +233,7 @@ impl AgentEngine {
             claude_md_content,
             turn_model_override,
         } = boot;
-        let mut lifecycle_guard = lifecycle_guard.expect("bootstrap always sets lifecycle_guard");
+        let mut lifecycle_guard = lifecycle_guard.ok_or_else(|| anyhow::anyhow!("bootstrap did not set lifecycle_guard"))?;
         // T2: ownership-gate this turn's terminal run_status writes against
         // same-session supersede. `stream_job_id` is `Some` only on the real
         // POST /api/chat path (set after `register_with_token`); `None` for the
@@ -575,7 +575,7 @@ impl AgentEngine {
             claude_md_content,
             turn_model_override,
         } = boot;
-        let mut lifecycle_guard = lifecycle_guard.expect("set by bootstrap");
+        let mut lifecycle_guard = lifecycle_guard.ok_or_else(|| anyhow::anyhow!("bootstrap did not set lifecycle_guard"))?;
         let mut compressor = compressor;
         let boot_for_execute = BootstrapOutcome {
             lifecycle_guard: None,
@@ -905,7 +905,7 @@ impl AgentEngine {
             claude_md_content,
             turn_model_override,
         } = boot;
-        let mut lifecycle_guard = lifecycle_guard.expect("set by bootstrap");
+        let mut lifecycle_guard = lifecycle_guard.ok_or_else(|| anyhow::anyhow!("bootstrap did not set lifecycle_guard"))?;
         let mut compressor = compressor;
         let boot_for_execute = BootstrapOutcome {
             lifecycle_guard: None,
@@ -1168,7 +1168,7 @@ impl AgentEngine {
     ) -> Result<String> {
         let mut s = sink::NoopSink::new();
 
-        const BOOTSTRAP_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+        const BOOTSTRAP_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
         let boot = match tokio::time::timeout(
             BOOTSTRAP_HARD_TIMEOUT,
             bootstrap::bootstrap(
@@ -1211,7 +1211,7 @@ impl AgentEngine {
             // Cron/goal RPC turns run the LLM loop unconditionally — the async-video
             // short-circuit is a live-user-turn affordance only.
         } = boot;
-        let mut lifecycle_guard = lifecycle_guard.expect("bootstrap always sets lifecycle_guard");
+        let mut lifecycle_guard = lifecycle_guard.ok_or_else(|| anyhow::anyhow!("bootstrap did not set lifecycle_guard"))?;
         let mut compressor = compressor;
 
         // Build behaviour layers for the cron-style call site.

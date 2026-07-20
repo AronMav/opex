@@ -49,13 +49,24 @@ impl AgentEngine {
 
     async fn load_channel_info_from_db(&self) -> Vec<workspace::ChannelInfo> {
         let has_connected_channel = self.state().channel_router.is_some();
-        let rows = sqlx::query_as::<_, (sqlx::types::Uuid, String, String, String)>(
+        let agent_name = self.cfg().agent.name.clone();
+        let rows = match sqlx::query_as::<_, (sqlx::types::Uuid, String, String, String)>(
             "SELECT id, channel_type, display_name, status FROM agent_channels WHERE agent_name = $1",
         )
-        .bind(&self.cfg().agent.name)
+        .bind(&agent_name)
         .fetch_all(&self.cfg().db)
         .await
-        .unwrap_or_default();
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(
+                    agent = %agent_name,
+                    error = %e,
+                    "failed to load channel info from DB; assuming no channels"
+                );
+                vec![]
+            }
+        };
 
         rows.into_iter().map(|(id, ch_type, name, status)| {
             workspace::ChannelInfo {
@@ -98,7 +109,7 @@ impl AgentEngine {
         force_new_session: bool,
     ) -> Result<crate::agent::context_builder::ContextSnapshot> {
         let cb = self.context_builder.get()
-            .expect("context_builder not initialized — call set_context_builder after engine Arc creation");
+            .ok_or_else(|| anyhow::anyhow!("context_builder not initialized — call set_context_builder after engine Arc creation"))?;
         crate::agent::pipeline::context::build_context(cb.as_ref(), msg, include_tools, resume_session_id, force_new_session).await
     }
 
@@ -401,17 +412,32 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
             return None;
         }
         let db = &self.cfg().db;
-        let focus = crate::db::agent_plans::get_or_create(db, agent)
-            .await
+
+        let plan_result = crate::db::agent_plans::get_or_create(db, agent).await;
+        if let Err(e) = &plan_result {
+            tracing::warn!(
+                agent,
+                error = %e,
+                "failed to load agent plan for initiative block"
+            );
+        }
+        let focus = plan_result
             .ok()
             .and_then(|p| p.current_focus)
             .unwrap_or_default();
-        let goals: Vec<String> = crate::db::session_goals::list_active_by_agent_and_origin(db, agent, "initiative")
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(|g| g.goal_text)
-            .collect();
+
+        let goals: Vec<String> = match crate::db::session_goals::list_active_by_agent_and_origin(db, agent, "initiative").await {
+            Ok(rows) => rows.into_iter().map(|g| g.goal_text).collect(),
+            Err(e) => {
+                tracing::warn!(
+                    agent,
+                    error = %e,
+                    "failed to load initiative goals"
+                );
+                vec![]
+            }
+        };
+
         crate::agent::initiative::render_focus_block(&focus, &goals)
     }
 

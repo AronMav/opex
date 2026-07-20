@@ -180,10 +180,16 @@ pub(super) async fn handle_approval_callback(
         return false;
     }
     let text = msg.text.as_deref().unwrap_or("");
-    let approval_id_str = text
+    let approval_id_str = match text
         .strip_prefix("approve:")
         .or_else(|| text.strip_prefix("reject:"))
-        .expect("approval_matches guaranteed a known prefix");
+    {
+        Some(s) => s,
+        None => {
+            tracing::warn!(text = %text, "approval callback matched but had no known prefix");
+            return false;
+        }
+    };
     let approved = text.starts_with("approve:");
     let user_id = msg.user_id.clone();
 
@@ -574,8 +580,13 @@ pub(super) async fn handle_clarify_callback(
         return false;
     }
     let text = msg.text.as_deref().unwrap_or("");
-    let (clarify_id, slot) = parse_clarify_callback(text)
-        .expect("clarify_cb_matches guaranteed a valid clarify callback");
+    let (clarify_id, slot) = match parse_clarify_callback(text) {
+        Some(v) => v,
+        None => {
+            tracing::warn!(text = %text, "clarify callback matched but could not be parsed");
+            return false;
+        }
+    };
     let user_id = msg.user_id.clone();
 
     // Owner gate — same pattern as approval callbacks.

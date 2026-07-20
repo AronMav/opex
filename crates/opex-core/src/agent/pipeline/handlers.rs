@@ -279,6 +279,7 @@ async fn br_post(
     let resp = client
         .post(&url)
         .json(&body)
+        .timeout(std::time::Duration::from_secs(60))
         .send()
         .await
         .map_err(|e| format!("browser-renderer request failed: {e}"))?;

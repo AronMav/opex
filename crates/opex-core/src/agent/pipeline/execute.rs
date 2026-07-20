@@ -1048,10 +1048,20 @@ pub async fn execute<S: EventSink>(
         // the engine task was aborted between batch return and the for-loop
         // below (e.g. SSE client disconnect). See parallel.rs::ToolPersistCtx
         // and `spawn_persist_tool_message`.
-        let tool_executor = engine
-            .tool_executor
-            .get()
-            .expect("tool_executor not initialized");
+        let tool_executor = match engine.tool_executor.get() {
+            Some(te) => te,
+            None => {
+                tracing::error!(session = %session_id, "tool_executor not initialized; aborting turn");
+                return Ok(ExecuteOutcome {
+                    status: ExecuteStatus::Failed("tool_executor not initialized".to_string()),
+                    final_text,
+                    thinking_json: None,
+                    messages_len_at_end: messages.len(),
+                    final_parent_msg_id: last_msg_id,
+                    assistant_message_id: assistant_msg_id,
+                });
+            }
+        };
 
         // Cancel check immediately before tool dispatch so a user pressing Stop
         // during a long tool run (code_exec, heavy workspace_write) gets an
@@ -1082,8 +1092,14 @@ pub async fn execute<S: EventSink>(
             agent_name: agent_name.as_str(),
             initial_parent: Some(last_msg_id),
         };
-        let outcome = tool_executor
-            .execute_batch(
+        // Wall-clock ceiling for the whole tool batch. Each tool already has
+        // its own per-call timeout (120 s default, 600 s for the `agent` tool
+        // safety net), but sequential tools could otherwise sum arbitrarily.
+        const TOOL_BATCH_HARD_TIMEOUT: std::time::Duration =
+            std::time::Duration::from_secs(600);
+        let outcome = match tokio::time::timeout(
+            TOOL_BATCH_HARD_TIMEOUT,
+            tool_executor.execute_batch(
                 &response.tool_calls,
                 &incoming_context, // chat_id/message_id from originating channel (Telegram, etc.)
                 session_id,
@@ -1094,8 +1110,29 @@ pub async fn execute<S: EventSink>(
                 Some(&persist_ctx),
                 parallel_batch_id,
                 &[], // top-level (handle_sse / handle_with_status), not a subagent
-            )
-            .await;
+            ),
+        )
+        .await
+        {
+            Ok(o) => o,
+            Err(_) => {
+                tracing::error!(
+                    session = %session_id,
+                    tools = response.tool_calls.len(),
+                    "tool batch exceeded {}s hard timeout",
+                    TOOL_BATCH_HARD_TIMEOUT.as_secs()
+                );
+                return Ok(ExecuteOutcome {
+                    status: ExecuteStatus::Failed("tool_batch_timeout".to_string()),
+                    final_text,
+                    thinking_json: None,
+                    messages_len_at_end: messages.len(),
+                    final_parent_msg_id: last_msg_id,
+                    assistant_message_id: assistant_msg_id,
+                });
+            }
+        };
+
         // Always emit ToolResult for completed tools, even if a loop break
         // happened mid-batch. Otherwise the frontend's per-tool spinner stays
         // forever for any tool that finished but landed in the same batch

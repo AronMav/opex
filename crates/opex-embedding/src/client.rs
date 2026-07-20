@@ -58,7 +58,7 @@ impl ToolgateClient {
             .pool_max_idle_per_host(8)
             .tcp_keepalive(Duration::from_secs(15))
             .build()
-            .unwrap_or_default();
+            .expect("failed to build embedding HTTP client: invalid timeout/pool configuration");
         Self {
             http,
             base_url: base_url.into().trim_end_matches('/').to_string(),

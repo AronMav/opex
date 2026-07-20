@@ -286,8 +286,17 @@ pub(crate) async fn api_chat_sse(
 
     // Preallocated path: create session row + register stream + spawn detached engine task + 202.
     if let Some(resp_session_id) = preallocated_session_id {
-        let resp_user_message_id =
-            preallocated_user_message_id.expect("user_message_id is set whenever session_id is");
+        let resp_user_message_id = match preallocated_user_message_id {
+            Some(id) => id,
+            None => {
+                tracing::error!("preallocated session_id without user_message_id — client invariant violated");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "preallocated session_id without user_message_id"})),
+                )
+                    .into_response();
+            }
+        };
 
         // Create the session row BEFORE register_with_token — the stream_jobs
         // table has a FK on session_id, so an INSERT there for a not-yet-created
