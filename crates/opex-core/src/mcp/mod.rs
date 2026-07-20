@@ -220,12 +220,22 @@ impl McpRegistry {
         })?;
         let base_url = cm.ensure_running(mcp_name).await?;
 
+        // OPEX injects an internal `_context` object (session_id, chat_id,
+        // subagent_depth, etc.) into every tool call for routing/audit. MCP
+        // servers validate their tool schemas strictly and reject unknown
+        // parameters such as `_context` (observed with context7's
+        // resolve-library-id / query-docs). Strip it before forwarding.
+        let mut mcp_arguments = arguments.clone();
+        if let Some(obj) = mcp_arguments.as_object_mut() {
+            obj.remove("_context");
+        }
+
         // Retry delays for the startup gap: 300ms → 700ms → 1500ms
         const RETRY_DELAYS_MS: [u64; 3] = [300, 700, 1500];
         let payload = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "tools/call",
-            "params": { "name": tool_name, "arguments": arguments },
+            "params": { "name": tool_name, "arguments": mcp_arguments },
             "id": 2
         });
 

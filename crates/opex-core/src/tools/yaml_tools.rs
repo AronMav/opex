@@ -102,7 +102,14 @@ fn default_string_type() -> String {
 /// Authentication configuration for the tool endpoint.
 #[derive(Debug, Clone, Deserialize)]
 pub struct YamlAuth {
-    /// `bearer_env` | `basic_env` | `api_key_header` | `api_key_query` | custom | `oauth_refresh` | `oauth_provider` | none
+    /// `bearer_env` | `bearer_internal` | `basic_env` | `api_key_header` |
+    /// `api_key_query` | custom | `oauth_refresh` | `oauth_provider` | none
+    ///
+    /// `bearer_internal` uses the running core's own auth token and is only
+    /// permitted for loopback/internal endpoints (SSRFF-safe). This lets
+    /// admin-authored tools call back into Core (`/api/backup`, `/api/config`)
+    /// without exposing `OPEX_AUTH_TOKEN` through the generic env resolver,
+    /// where it is blocked as a reserved secret name.
     ///
     /// Canonical YAML key is `type`; `auth_type` is accepted as an alias so a
     /// tool authored (e.g. via `tool_create`) with `auth_type:` isn't silently
@@ -790,6 +797,23 @@ impl YamlToolDef {
                         let token = resolve_env(key, env_resolver).await?;
                         auth_headers.push(("Authorization".into(), format!("Bearer {token}")));
                     }
+                }
+                "bearer_internal" => {
+                    // Use the running core's own Bearer token for callbacks to
+                    // localhost/internal endpoints. Security gate: only allowed
+                    // for endpoints that are already trusted (loopback or admin-
+                    // configured internal services) so the token cannot be
+                    // exfiltrated to arbitrary external URLs.
+                    if !crate::tools::ssrf::is_internal_endpoint(&url) {
+                        anyhow::bail!(
+                            "auth type 'bearer_internal' is only permitted for loopback/internal endpoints; \
+                             endpoint '{}' is not internal",
+                            url
+                        );
+                    }
+                    let token = crate::gateway::shared_token()
+                        .ok_or_else(|| anyhow::anyhow!("core shared token not available"))?;
+                    auth_headers.push(("Authorization".into(), format!("Bearer {token}")));
                 }
                 "basic_env" => {
                     let user = auth.username_key.as_deref().unwrap_or("");

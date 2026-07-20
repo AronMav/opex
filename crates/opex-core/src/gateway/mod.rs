@@ -52,6 +52,13 @@ static REQ_LIMITER: OnceLock<Arc<RequestRateLimiter>> = OnceLock::new();
 static CSP_LIMITER: OnceLock<Arc<handlers::csp::CspReportRateLimiter>> = OnceLock::new();
 static WEBHOOK_LIMITER: OnceLock<Arc<RequestRateLimiter>> = OnceLock::new();
 
+/// Return the currently configured core auth token, if the gateway has been
+/// initialized. Used by internal callers (e.g. YAML tools with
+/// `auth: { type: bearer_internal }`) that need to call back into Core.
+pub fn shared_token() -> Option<Arc<str>> {
+    SHARED_TOKEN.get().cloned()
+}
+
 /// Returns the auth rate limiter, or `None` before the router has been
 /// constructed (e.g. early startup / tests that skip the gateway).
 pub(crate) fn auth_limiter_opt() -> Option<Arc<AuthRateLimiter>> {

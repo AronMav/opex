@@ -224,6 +224,18 @@ impl AgentEngine {
                 _ => arguments,
             };
 
+            // 0. Reject malformed/invalid tool names before any dispatch or
+            // audit so a corrupted tool name (e.g. a `__file__:` marker leaked
+            // into the name field) cannot pollute the tool-quality log or
+            // reach filesystem/HTTP dispatch.
+            if !crate::agent::dispatcher::lookup::is_valid_tool_name(name) {
+                return format!(
+                    "Error: tool name '{}' is not a valid identifier; \
+                     use tool_use(action='search') to find the correct tool name",
+                    name
+                );
+            }
+
             // 1. System tools (registry)
             let available = self.available_tool_names().await;
             let dispatch_session_id = arguments
