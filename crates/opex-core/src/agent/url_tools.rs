@@ -47,27 +47,41 @@ pub(crate) fn extract_upload_id(att_url: &str) -> Option<&str> {
 
 /// Append media attachment hints to the enriched text for the LLM.
 ///
-/// For audio/video/document attachments the hint points the model at the
+/// For audio/video/image/document attachments the hint points the model at the
 /// `file_handler` tool (action=list to fetch the applicable handlers, action=run
 /// to execute the user's choice) — the same model-driven menu used for links.
-/// Images are just described inline.
+/// The model MUST NOT try to read the bytes itself (it has no multimodal
+/// channel — `Message.content` is `String`); all media is processed out-of-band
+/// through toolgate handlers (`describe`, `transcribe`, `extract_document`,
+/// `save`) or, for images, the `analyze_image` capability tool when a vision
+/// provider is configured.
 pub(crate) fn enrich_with_attachments(text: &mut String, attachments: &[opex_types::MediaAttachment]) {
     use opex_types::MediaType;
-    // Model-driven handler menu for a handleable upload (audio/video/document).
+    // Model-driven handler menu for a handleable upload. Explicitly forbids
+    // the model from attempting to "read" the bytes itself (which would emit
+    // fake "this model does not support image input" errors on text-only LLMs).
     let menu = |kind: &str, extra: &str, url: &str| -> String {
         match extract_upload_id(url) {
             Some(id) => format!(
-                "[Пользователь прислал {kind}{extra} (upload_id: {id}). НЕ обрабатывай сам. \
-                 Вызови инструмент file_handler с action=\"list\" и upload_id=\"{id}\", покажи \
-                 доступные обработчики и по выбору пользователя вызови file_handler с \
-                 action=\"run\", тем же upload_id и выбранным handler_id.]"
+                "[Пользователь прислал {kind}{extra} (upload_id: {id}). НЕ пытайся прочитать \
+                 это сама — у тебя нет прямого доступа к байтам файла. Вызови инструмент \
+                 file_handler с action=\"list\" и upload_id=\"{id}\", покажи доступные \
+                 обработчики и по выбору пользователя вызови file_handler с action=\"run\", \
+                 тем же upload_id и выбранным handler_id.]"
             ),
             None => format!("[User sent a {kind}{extra}: {url}]"),
         }
     };
     for att in attachments {
         let hint = match att.media_type {
-            MediaType::Image => format!("[User attached an image: {}]", att.url),
+            // Images use the same menu hint — `describe` (vision) and `save`
+            // are exposed by `file_handler` after the sync-execution fix.
+            // If `analyze_image` is available as a capability tool the model
+            // may pick that instead, but the hint must not assume it.
+            MediaType::Image => {
+                let name = att.file_name.as_deref().unwrap_or("image");
+                menu("изображение", &format!(" «{name}»"), &att.url)
+            }
             MediaType::Audio => menu("голосовое сообщение", "", &att.url),
             MediaType::Video => menu("видео", "", &att.url),
             MediaType::Document => {
@@ -139,7 +153,9 @@ mod tests {
     }
 
     #[test]
-    fn enrich_with_attachments_single_image() {
+    fn enrich_with_attachments_image_without_upload_id_falls_back_to_url() {
+        // An image without an /api/uploads/{id} URL can't be routed through
+        // file_handler (no upload_id to pass) — keep the bare inline note.
         let mut text = String::new();
         let att = opex_types::MediaAttachment {
             url: "https://example.com/img.jpg".to_string(),
@@ -149,7 +165,40 @@ mod tests {
             file_size: None,
         };
         enrich_with_attachments(&mut text, &[att]);
-        assert_eq!(text, "[User attached an image: https://example.com/img.jpg]");
+        assert!(
+            text.contains("https://example.com/img.jpg"),
+            "image url survives in hint: {text}"
+        );
+        assert!(
+            !text.contains("file_handler"),
+            "no upload_id → no file_handler menu: {text}"
+        );
+    }
+
+    #[test]
+    fn enrich_with_attachments_image_with_upload_id_routes_via_file_handler() {
+        // The fix for the "this model does not support image input" leak: an
+        // image upload MUST point at file_handler so the model does not try
+        // to read the bytes itself.
+        let mut text = String::new();
+        let att = opex_types::MediaAttachment {
+            url: "https://host/api/uploads/44444444-4444-4444-8444-444444444444?sig=x".to_string(),
+            media_type: opex_types::MediaType::Image,
+            file_name: Some("photo.png".to_string()),
+            mime_type: None,
+            file_size: None,
+        };
+        enrich_with_attachments(&mut text, &[att]);
+        assert!(text.contains("file_handler"), "image hint points at file_handler: {text}");
+        assert!(
+            text.contains("44444444-4444-4444-8444-444444444444"),
+            "image hint carries the upload_id: {text}"
+        );
+        assert!(text.contains("photo.png"), "image hint keeps the filename: {text}");
+        assert!(
+            text.contains("НЕ пытайся прочитать"),
+            "image hint forbids the model from reading bytes itself: {text}"
+        );
     }
 
     #[test]
@@ -171,8 +220,8 @@ mod tests {
         };
         enrich_with_attachments(&mut text, &[att1, att2]);
         assert!(
-            text.contains("[User attached an image: https://example.com/img.jpg]"),
-            "image hint unchanged: {text}"
+            text.contains("https://example.com/img.jpg"),
+            "image url survives: {text}"
         );
         // Audio upload → file_handler menu with the extracted upload_id.
         assert!(text.contains("file_handler"), "audio hint points at file_handler: {text}");
