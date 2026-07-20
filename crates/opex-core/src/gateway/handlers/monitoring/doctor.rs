@@ -42,6 +42,164 @@ fn probe_status_reachable(status: u16) -> bool {
     (200..300).contains(&status) || matches!(status, 401 | 403 | 404 | 405)
 }
 
+// ── Degraded-tool classification helper ───────────────────────────────────────
+
+/// Classify a degraded tool's `last_error` string into a remediation bucket.
+///
+/// Categories:
+/// - `code_fixed`    — errors that should not reproduce with the current code
+///   (path rewriting, `_context` stripping, `bearer_internal` auth, etc.).
+/// - `config_needed` — operator configuration issues (API keys, mounts, provider
+///   URLs, tool schemas).
+/// - `operator_service` — third-party or auxiliary service failures (browser
+///   timeouts, fetch robots.txt, MCP process hangs, network SSL).
+/// - `unknown`       — anything that does not match the heuristics above.
+fn classify_degraded_error(error: &str) -> &'static str {
+    let e = error.to_lowercase();
+
+    // Code-fixed signatures (most specific first).
+    if e.contains("env var 'opex_auth_token' is reserved")
+        || (e.contains("unexpected keyword argument") && e.contains("_context"))
+        || e.contains("__file__:")
+        || e.contains("access denied - path outside allowed directories: /bridge")
+        || e.contains("access denied - path outside allowed directories: /home/aronmav/opex/workspace")
+        || e.contains("access denied - path outside allowed directories: /home/opex/workspace")
+        || e.contains("mcp tool error: /bridge")
+    {
+        return "code_fixed";
+    }
+
+    // Operator-service / transient third-party failures.
+    if e.contains("mcp process timeout")
+        || e.contains("no valid json response from mcp")
+        || e.contains("failed to fetch robots.txt")
+        || e.contains("page.goto: timeout")
+        || e.contains("ssl:")
+        || e.contains("certificate verify failed")
+        || e.contains("handshake failure")
+        || e.contains("connection issue")
+        || e.contains("no valid session id provided")
+    {
+        return "operator_service";
+    }
+
+    // Configuration / credential / schema issues.
+    if e.contains("api key provided is invalid")
+        || e.contains("api credential")
+        || e.contains("env var 'gismeteo_token' not set")
+        || e.contains("required parameter")
+        || e.contains("input validation error")
+        || e.contains("download image: 400 bad request")
+        || e.contains("imagegen error")
+        || e.contains("unprocessable entity")
+        || e.contains("its_error")
+        || e.contains("server error '500 internal server error'")
+        || e.contains("http 502 bad gateway")
+        || e.contains("http 503 service unavailable")
+        || e.contains("http 401 unauthorized")
+        || e.contains("note already exists")
+        || e.contains("does not exist. use tool_list")
+    {
+        return "config_needed";
+    }
+
+    "unknown"
+}
+
+#[cfg(test)]
+mod classify_tests {
+    use super::classify_degraded_error;
+
+    #[test]
+    fn reserved_auth_token_is_code_fixed() {
+        assert_eq!(
+            classify_degraded_error("env var 'OPEX_AUTH_TOKEN' is reserved and cannot be used"),
+            "code_fixed"
+        );
+    }
+
+    #[test]
+    fn context_keyword_argument_is_code_fixed() {
+        assert_eq!(
+            classify_degraded_error("1 validation error for call[x]\n_context\n  Unexpected keyword argument"),
+            "code_fixed"
+        );
+    }
+
+    #[test]
+    fn bridge_path_is_code_fixed() {
+        assert_eq!(
+            classify_degraded_error("MCP tool error: Error: Access denied - path outside allowed directories: /bridge/agents/x not in /workspace"),
+            "code_fixed"
+        );
+    }
+
+    #[test]
+    fn invalid_api_key_is_config_needed() {
+        assert_eq!(
+            classify_degraded_error("tool 'commodity_price' returned HTTP 401 Unauthorized: API Key provided is invalid"),
+            "config_needed"
+        );
+    }
+
+    #[test]
+    fn missing_env_token_is_config_needed() {
+        assert_eq!(
+            classify_degraded_error("env var 'GISMETEO_TOKEN' not set"),
+            "config_needed"
+        );
+    }
+
+    #[test]
+    fn mcp_process_timeout_is_operator_service() {
+        assert_eq!(
+            classify_degraded_error("MCP tool error: MCP process timeout (30s)"),
+            "operator_service"
+        );
+    }
+
+    #[test]
+    fn ssl_error_is_operator_service() {
+        assert_eq!(
+            classify_degraded_error("Web error: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"),
+            "operator_service"
+        );
+    }
+}
+
+/// Build the `GET /api/doctor/tools` response: degraded tools grouped by
+/// remediation category.
+pub(crate) async fn api_doctor_tools(State(infra): State<InfraServices>) -> Json<Value> {
+    let degraded = match crate::db::tool_quality::get_degraded_tools(&infra.db).await {
+        Ok(t) => t,
+        Err(e) => {
+            return Json(json!({
+                "error": format!("failed to load degraded tools: {e}"),
+            }));
+        }
+    };
+
+    let mut buckets: std::collections::HashMap<&str, Vec<Value>> = std::collections::HashMap::new();
+    for tool in &degraded {
+        let error = tool
+            .get("last_error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let category = classify_degraded_error(error);
+        buckets.entry(category).or_default().push(tool.clone());
+    }
+
+    Json(json!({
+        "degraded_count": degraded.len(),
+        "categories": {
+            "code_fixed": buckets.remove("code_fixed").unwrap_or_default(),
+            "config_needed": buckets.remove("config_needed").unwrap_or_default(),
+            "operator_service": buckets.remove("operator_service").unwrap_or_default(),
+            "unknown": buckets.remove("unknown").unwrap_or_default(),
+        }
+    }))
+}
+
 async fn check_provider_reachability(infra: &InfraServices, auth: &AuthServices) -> CheckResult {
     let start = std::time::Instant::now();
     let providers = match crate::db::providers::list_providers(&infra.db).await {

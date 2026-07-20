@@ -55,6 +55,7 @@ pub(crate) fn routes(state: AppState) -> Router<AppState> {
         .route("/api/usage/daily", get(usage::api_usage_daily))
         .route("/api/tools/health", get(usage::api_tools_health))
         .route("/api/doctor", get(doctor::api_doctor))
+        .route("/api/doctor/tools", get(doctor::api_doctor_tools))
         .route("/api/health/dashboard", get(api_health_dashboard))
         .route("/api/audit", get(audit::api_audit_events))
         .route("/api/watchdog/status", get(watchdog::api_watchdog_status))
