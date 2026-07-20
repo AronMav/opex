@@ -9,6 +9,11 @@
 #     <mime>application/pdf</mime>
 #     <mime>application/vnd.openxmlformats-officedocument.wordprocessingml.document</mime>
 #     <mime>application/msword</mime>
+#     <mime>application/json</mime>
+#     <mime>application/xml</mime>
+#     <mime>application/yaml</mime>
+#     <mime>application/x-yaml</mime>
+#     <mime>application/x-json</mime>
 #     <mime>text/*</mime>
 #     <max_size_mb>50</max_size_mb>
 #   </match>

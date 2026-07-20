@@ -103,16 +103,19 @@ fn merge_job_params(lang: &str, extra: &serde_json::Value) -> serde_json::Value 
     params
 }
 
-/// Shared validate+enqueue for a menu run (web card `/api/files/run`, the
-/// Telegram callback `/api/files/menu-run`, and the choice-valve completion
+/// Shared validate+enqueue/execute for a menu run (web card `/api/files/run`,
+/// the Telegram callback `/api/files/menu-run`, and the choice-valve completion
 /// `/api/commands/menu-run`). Ownership guard + matched-set check (the same
-/// security boundary as the `file_handler` tool's `run`), then enqueue.
-/// `extra_params` is merged into the job params (e.g. a chosen valve value) —
-/// pass `json!({})` when there is nothing to add.
+/// security boundary as the `file_handler` tool's `run`), then either enqueue
+/// (async handler) or execute inline (sync handler). `extra_params` is merged
+/// into the job/run params (e.g. a chosen valve value) — pass `json!({})` when
+/// there is nothing to add.
 #[allow(clippy::too_many_arguments)]
 async fn menu_run_core(
     infra: &InfraServices,
     handlers: &HandlerRegistry,
+    config: &crate::gateway::clusters::ConfigServices,
+    channels: &crate::gateway::clusters::ChannelBus,
     source_url: Option<&str>,
     upload_id_req: Option<Uuid>,
     session_id: Uuid,
@@ -146,16 +149,15 @@ async fn menu_run_core(
     let lang = "ru"; // label localization only; matching is language-agnostic
 
     let source_url = source_url.filter(|s| !s.is_empty());
-    let (buttons, upload_id) = if let Some(url) = source_url {
+    // Upload path: keep BOTH sync and async handlers — the run branch below
+    // dispatches by execution type. URL path stays async-only via
+    // `match_url_handlers`.
+    let (buttons, upload_id): (Vec<crate::agent::handler_registry::HandlerButton>, Option<Uuid>) = if let Some(url) = source_url {
         (match_url_handlers(&manifests, url, &enabled, lang), None)
     } else if let Some(uid) = upload_id_req {
         match assert_upload_accessible(&infra.db, uid).await {
             Ok(meta) => {
-                // F070: the menu enqueues onto the async-only handler_jobs queue.
-                // Drop sync handlers so a sync click can't be enqueued+stranded
-                // (mirrors the match_url_handlers async filter above).
-                let mut b = match_buttons(&manifests, &meta.mime, meta.size, &enabled, lang);
-                crate::agent::handler_registry::retain_async_handlers(&mut b, &manifests);
+                let b = match_buttons(&manifests, &meta.mime, meta.size, &enabled, lang);
                 (b, Some(uid))
             }
             Err((status, body)) => return (status, body).into_response(),
@@ -177,29 +179,123 @@ async fn menu_run_core(
     }
 
     let params = merge_job_params(lang, &extra_params);
-    match handler_jobs::insert_handler_job(
-        &infra.db, upload_id, source_url, handler_id, agent, session_id, &params,
-    )
-    .await
-    {
-        Ok(job_id) => Json(json!({ "ok": true, "job_id": job_id })).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
+
+    // Branch on execution type. URL handlers are async-only (filtered above);
+    // upload-based handlers may be either — sync runs inline, async enqueues.
+    let is_async = manifests
+        .iter()
+        .find(|m| m.id == handler_id)
+        .map(|m| m.execution.as_str() == "async")
+        .unwrap_or(true); // unknown → safer async path
+
+    if is_async {
+        return match handler_jobs::insert_handler_job(
+            &infra.db, upload_id, source_url, handler_id, agent, session_id, &params,
         )
-            .into_response(),
+        .await
+        {
+            Ok(job_id) => Json(json!({ "ok": true, "job_id": job_id })).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        };
     }
+
+    // Sync execution. Requires an upload_id (URL handlers are async-only).
+    let Some(upload_id) = upload_id else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "sync handler requires an upload_id" })),
+        )
+            .into_response();
+    };
+    let upload_meta = match assert_upload_accessible(&infra.db, upload_id).await {
+        Ok(m) => m,
+        Err((status, body)) => return (status, body).into_response(),
+    };
+
+    let toolgate_url = config
+        .config
+        .toolgate_url
+        .as_deref()
+        .unwrap_or("http://localhost:9011");
+    let key = infra.secrets.get_upload_hmac_key();
+    let sync_req = crate::agent::file_handler_sync::SyncRunRequest {
+        upload_id,
+        handler_id,
+        agent,
+        mime: upload_meta.mime.clone(),
+        size: upload_meta.size,
+        language: lang,
+        params,
+    };
+    let outcome = crate::agent::file_handler_sync::run_sync_handler_inline(
+        &infra.db,
+        crate::agent::file_handler_sync::http_client(),
+        toolgate_url,
+        &config.config.gateway.listen,
+        crate::uploads::web_uploads_base(),
+        &key,
+        config.config.uploads.signed_url_ttl_secs,
+        sync_req,
+    )
+    .await;
+
+    // On Ok: persist provenance-wrapped message (mirrors the async deliver
+    // path) + best-effort UI-bus broadcast of any artifacts. The full outcome
+    // is returned to the composer (chat-delivery path).
+    if matches!(outcome.status, ScenarioStatus::Ok) {
+        let content = crate::agent::provenance::wrap_file_output(
+            handler_id,
+            &upload_id.to_string(),
+            &outcome.summary_text,
+        );
+        if let Err(e) = sqlx::query(
+            "INSERT INTO messages (session_id, agent_id, role, content, source) \
+             VALUES ($1, $2, 'assistant', $3, 'file_handler')",
+        )
+        .bind(session_id)
+        .bind(agent)
+        .bind(&content)
+        .execute(&infra.db)
+        .await
+        {
+            tracing::warn!(
+                error = %e,
+                %session_id,
+                handler = %handler_id,
+                "menu_run_core: failed to persist sync file_handler message"
+            );
+        }
+        for artifact in &outcome.artifact_urls {
+            let _ = channels.ui_event_tx.send(
+                opex_types::ws::WsEvent::File {
+                    url: artifact.clone(),
+                    media_type: upload_meta.mime.clone(),
+                }
+                .to_json(),
+            );
+        }
+    }
+
+    Json(outcome).into_response()
 }
 
 /// `POST /api/files/run` — the web `handler_menu` card button click.
 async fn run_menu_handler(
     State(infra): State<InfraServices>,
     State(handlers): State<HandlerRegistry>,
+    State(config): State<crate::gateway::clusters::ConfigServices>,
+    State(channels): State<crate::gateway::clusters::ChannelBus>,
     Json(req): Json<MenuRunRequest>,
 ) -> impl IntoResponse {
     menu_run_core(
         &infra,
         &handlers,
+        &config,
+        &channels,
         req.source_url.as_deref(),
         req.upload_id,
         req.session_id,
@@ -251,6 +347,8 @@ struct MenuTokenRunRequest {
 async fn run_menu_token_handler(
     State(infra): State<InfraServices>,
     State(handlers): State<HandlerRegistry>,
+    State(config): State<crate::gateway::clusters::ConfigServices>,
+    State(channels): State<crate::gateway::clusters::ChannelBus>,
     Json(req): Json<MenuTokenRunRequest>,
 ) -> impl IntoResponse {
     let params = menu_ctx()
@@ -295,6 +393,8 @@ async fn run_menu_token_handler(
     menu_run_core(
         &infra,
         &handlers,
+        &config,
+        &channels,
         source_url,
         upload_id,
         session_id,
@@ -327,6 +427,8 @@ struct CommandMenuRunRequest {
 async fn command_menu_run(
     State(infra): State<InfraServices>,
     State(handlers): State<HandlerRegistry>,
+    State(config): State<crate::gateway::clusters::ConfigServices>,
+    State(channels): State<crate::gateway::clusters::ChannelBus>,
     Json(req): Json<CommandMenuRunRequest>,
 ) -> impl IntoResponse {
     let ctx = menu_ctx()
@@ -390,6 +492,8 @@ async fn command_menu_run(
     menu_run_core(
         &infra,
         &handlers,
+        &config,
+        &channels,
         source_url,
         upload_id,
         session_id,

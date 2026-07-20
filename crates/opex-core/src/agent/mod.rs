@@ -59,6 +59,7 @@ pub mod tool_registry;
 pub mod tool_handlers;
 pub mod capability_tools;
 pub mod file_handler_worker;
+pub mod file_handler_sync;
 pub(crate) mod soul;
 pub(crate) mod drift;
 pub(crate) mod initiative;
