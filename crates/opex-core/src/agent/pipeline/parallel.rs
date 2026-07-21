@@ -916,9 +916,14 @@ fn spawn_persist_message_row(
             {
                 Ok(()) => return,
                 Err(e) => {
-                    let msg = e.to_string();
-                    let retryable = msg.contains("foreign key") || msg.contains("fkey")
-                        || msg.contains("connection") || msg.contains("pool");
+                    // Use structured sqlx error classification instead of
+                    // string matching — Postgres error messages are
+                    // locale-dependent (Russian locale produces "внешний
+                    // ключ" instead of "foreign key"), so substring
+                    // matching silently fails to retry FK violations on
+                    // non-English Postgres. sqlx::Error::Database carries
+                    // a stable SQLSTATE code (23503 for FK violation).
+                    let retryable = is_retryable_db_error(&e);
                     if !retryable {
                         tracing::warn!(
                             error = %e,
@@ -945,6 +950,32 @@ fn spawn_persist_message_row(
             );
         }
     });
+}
+
+/// Classify a DB error as retryable for detached message persist.
+/// Uses structured sqlx error codes instead of string matching —
+/// Postgres error messages are locale-dependent.
+fn is_retryable_db_error(e: &anyhow::Error) -> bool {
+    if let Some(sqlx_err) = e.downcast_ref::<sqlx::Error>() {
+        return match sqlx_err {
+            sqlx::Error::Database(db_err) => {
+                // SQLSTATE 23503 = foreign_key_violation
+                // SQLSTATE 40P01 = deadlock_detected
+                // SQLSTATE 08001 = connection_does_not_exist
+                // SQLSTATE 08003 = connection_does_not_exist
+                // SQLSTATE 08006 = connection_failure
+                let code = db_err.code().map(|c| c.to_string());
+                matches!(
+                    code.as_deref(),
+                    Some("23503") | Some("40P01") | Some("08001")
+                        | Some("08003") | Some("08006")
+                )
+            }
+            sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::WorkerCrashed => true,
+            _ => false,
+        };
+    }
+    false
 }
 
 /// Spawn a fire-and-forget tokio task that persists a single tool result row
