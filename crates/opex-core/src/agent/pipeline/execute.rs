@@ -921,7 +921,14 @@ pub async fn execute<S: EventSink>(
         );
         messages.push(Message {
             role: MessageRole::Assistant,
-            content: partial.clone(),
+            // Strip thinking blocks ( simd/...) from the content that goes
+            // into the LLM context for the next iteration. Without this,
+            // providers that emit reasoning text before tool calls
+            // (Anthropic extended thinking, DeepSeek-R1) pollute the
+            // assistant message with raw thinking tags — confusing the
+            // model and wasting context budget. The thinking_blocks
+            // field carries the structured reasoning separately.
+            content: crate::agent::thinking::strip_thinking(&partial),
             tool_calls: Some(response.tool_calls.clone()),
             tool_call_id: None,
             thinking_blocks: response.thinking_blocks.clone(),
