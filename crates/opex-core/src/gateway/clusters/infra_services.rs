@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use sqlx::PgPool;
 use tokio_util::task::TaskTracker;
@@ -7,6 +8,15 @@ use crate::agent::memory_service::MemoryService;
 use crate::memory::EmbeddingService;
 
 // ── InfraServices cluster ─────────────────────────────────────────────────────
+
+/// Hard cap on the number of concurrently running fire-and-forget background
+/// infrastructure tasks (backup, restore, service/container restarts, etc.).
+/// Prevents runaway fan-out if an operator (or a buggy UI) submits dozens of
+/// restarts in quick succession — each task can hold a DB connection or
+/// subprocess slot, and unbounded concurrency can exhaust the pool. Individual
+/// destructive operations (backup, restore) are additionally deduplicated via
+/// dedicated primitives below.
+const BG_TASK_CONCURRENCY: usize = 8;
 
 /// Cluster holding infrastructure-level services:
 /// the database pool, memory store, embedding service, container/sandbox managers,
@@ -39,6 +49,18 @@ pub struct InfraServices {
     /// by infrastructure handlers (service restarts, backup/restore jobs, etc.).
     /// Ensures graceful shutdown waits for in-flight work.
     pub bg_tasks: Arc<TaskTracker>,
+    /// Concurrency cap for `bg_tasks`. Each spawned background job acquires
+    /// a permit before doing work; the [`Self::spawn_bg`] helper enforces this.
+    pub bg_semaphore: Arc<tokio::sync::Semaphore>,
+    /// One-shot flag preventing two `POST /api/backup` requests from running
+    /// concurrently. `false` = idle, `true` = backup in flight. Toggled via
+    /// `compare_exchange` in the handler so the check-and-set is atomic.
+    pub backup_running: Arc<AtomicBool>,
+    /// Serializes destructive restore jobs. Two concurrent restores would
+    /// race on `pg_restore`, rollback each other's workspace snapshots, and
+    /// call `restart_agents_from_disk` twice — a Mutex is the simplest
+    /// correct gate.
+    pub restore_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl InfraServices {
@@ -65,7 +87,29 @@ impl InfraServices {
             secrets,
             reindex_mutex: Arc::new(tokio::sync::Mutex::new(())),
             bg_tasks,
+            bg_semaphore: Arc::new(tokio::sync::Semaphore::new(BG_TASK_CONCURRENCY)),
+            backup_running: Arc::new(AtomicBool::new(false)),
+            restore_mutex: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+
+    /// Spawn a fire-and-forget background job that acquires a concurrency
+    /// permit from [`Self::bg_semaphore`] before running. Use this everywhere
+    /// a handler would otherwise call `bg_tasks.spawn(...)` directly, so the
+    /// global cap is enforced uniformly. The future runs to completion even
+    /// if the permit is briefly queued — permits exist solely to bound the
+    /// number of *simultaneously executing* jobs, not to reject work.
+    pub fn spawn_bg<F>(&self, future: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let sem = self.bg_semaphore.clone();
+        self.bg_tasks.spawn(async move {
+            // acquire_owned blocks until a permit is available; the returned
+            // guard is dropped at the end of the scope, releasing the permit.
+            let _permit = sem.acquire_owned().await;
+            future.await;
+        });
     }
 
     /// Construct a minimal `InfraServices` for unit tests with no arguments.
@@ -169,6 +213,9 @@ impl InfraServices {
             secrets: Arc::new(crate::secrets::SecretsManager::new_noop()),
             reindex_mutex: Arc::new(tokio::sync::Mutex::new(())),
             bg_tasks: Arc::new(TaskTracker::new()),
+            bg_semaphore: Arc::new(tokio::sync::Semaphore::new(BG_TASK_CONCURRENCY)),
+            backup_running: Arc::new(AtomicBool::new(false)),
+            restore_mutex: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 }

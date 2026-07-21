@@ -516,19 +516,50 @@ async fn cleanup_old_backups_v3(now: chrono::DateTime<chrono::Utc>, retention_da
 /// Create a backup: pg_dump + workspace + config + secrets, bundle as .tar.gz.
 /// Runs in the background task tracker and returns 202 immediately. The caller
 /// can poll `GET /api/backup` to see when the new archive appears.
+///
+/// Concurrency: only one backup may run at a time. The `backup_running` flag
+/// in `InfraServices` is set atomically; a second request while one is in
+/// flight gets 409 Conflict. The flag is cleared via a guard in the spawned
+/// task, so a panic mid-backup still releases it.
 pub(crate) async fn api_create_backup(
     State(infra): State<InfraServices>,
     State(auth): State<AuthServices>,
     State(agents): State<AgentCore>,
     State(cfg_svc): State<ConfigServices>,
 ) -> impl IntoResponse {
+    // Atomic check-and-set: returns Err if the flag was already `true`.
+    if infra
+        .backup_running
+        .compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst)
+        .is_err()
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "ok": false,
+                "error": "a backup is already in progress; poll GET /api/backup and retry later",
+            })),
+        )
+            .into_response();
+    }
+
     let retention = cfg_svc.config.backup.retention_days as i64;
     let container = cfg_svc.config.backup.postgres_container.clone();
     let secrets = auth.secrets.clone();
     let deps = agents.deps.clone();
-    let bg_tasks = infra.bg_tasks.clone();
+    let backup_running = infra.backup_running.clone();
 
-    bg_tasks.spawn(async move {
+    infra.spawn_bg(async move {
+        // Guard: clear the flag on every exit path (success, failure, panic).
+        // The Semaphore permit is acquired by spawn_bg before this future runs.
+        struct BackupGuard<'a>(&'a std::sync::atomic::AtomicBool);
+        impl Drop for BackupGuard<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let _guard = BackupGuard(backup_running.as_ref());
+
         match create_backup_internal(&secrets, &deps, retention, &container).await {
             Ok(filename) => {
                 tracing::info!(filename = %filename, "background backup completed");
@@ -823,10 +854,20 @@ pub(crate) async fn api_restore(
 
     let container_cfg = cfg_svc.config.backup.postgres_container.clone();
     let db = infra.db.clone();
-    let bg_tasks = infra.bg_tasks.clone();
+    let restore_mutex = infra.restore_mutex.clone();
+    // Clone before spawn: `spawn_bg` borrows `&self` while `infra` itself is
+    // moved into the closure for use by `run_restore_from_staged_archive`.
+    let infra_for_spawn = infra.clone();
 
-    bg_tasks.spawn(async move {
+    infra_for_spawn.spawn_bg(async move {
         let job_id = job_id_for_spawn;
+        // Serialize restores: a second restore arriving while one is in flight
+        // would race on pg_restore, rollback each other's snapshots, and call
+        // restart_agents_from_disk twice. The mutex is held for the full
+        // duration of the destructive phase; staging (which is what produces
+        // the 202 response) already completed synchronously in the handler.
+        let _restore_lock = restore_mutex.lock().await;
+
         tracing::warn!(%job_id, "RESTORE initiated from pg_dump backup (v3)");
         match run_restore_from_staged_archive(
             &staged_tar,

@@ -28,7 +28,7 @@ pub(crate) fn routes() -> Router<AppState> {
 /// inherently query-only.
 async fn handle_managed_action(
     pm: &Arc<ProcessManager>,
-    bg_tasks: &std::sync::Arc<tokio_util::task::TaskTracker>,
+    infra: &crate::gateway::clusters::InfraServices,
     name: &str,
     action: &str,
 ) -> (StatusCode, Json<Value>) {
@@ -37,7 +37,7 @@ async fn handle_managed_action(
             let pm = pm.clone();
             let bg_name = name.to_string();
             let bg_action = action.to_string();
-            bg_tasks.spawn(async move {
+            infra.spawn_bg(async move {
                 if let Err(e) = pm.restart(&bg_name).await {
                     tracing::error!(
                         service = %bg_name,
@@ -114,7 +114,7 @@ pub(crate) async fn api_service_action(
     // Managed native processes take priority over Docker
     if let Some(ref pm) = infra.process_manager
         && pm.is_managed(&name) {
-            let (status, body) = handle_managed_action(pm, &infra.bg_tasks, &name, &action).await;
+            let (status, body) = handle_managed_action(pm, &infra, &name, &action).await;
             return (status, body).into_response();
         }
 
@@ -374,11 +374,10 @@ pub(crate) async fn api_service_action(
     // health window). Return 202 immediately and run the action in the
     // background task tracker. Stop remains synchronous because it is fast.
     if matches!(action.as_str(), "restart" | "rebuild" | "start") {
-        let bg_tasks = infra.bg_tasks.clone();
         let bg_name = name.clone();
         let bg_action = action.clone();
         let compose_file = compose_file.clone();
-        bg_tasks.spawn(async move {
+        infra.spawn_bg(async move {
             run_docker_action(
                 &compose_file,
                 &bg_name,
@@ -529,7 +528,7 @@ pub(crate) async fn api_container_restart(
 
     tracing::info!(container = %name, "container restart requested; queuing background restart");
     let name_clone = name.clone();
-    infra.bg_tasks.spawn(async move {
+    infra.spawn_bg(async move {
         match tokio::process::Command::new("docker")
             .args(["restart", &name_clone])
             .output()

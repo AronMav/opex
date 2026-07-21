@@ -13,6 +13,15 @@ use crate::agent::engine_event_sender::EngineEventSender;
 use crate::agent::pipeline::behaviour::BehaviourLayers;
 use crate::agent::pipeline::bootstrap::{self, BootstrapContext, BootstrapOutcome};
 use crate::agent::pipeline::sink::{self, EventSink, PipelineEvent};
+
+/// Wall-clock ceiling for the synchronous bootstrap phase (session resolve,
+/// timeline/compaction state load, context build + enhancements). 60s is the
+/// compromise between "long enough for cold toolgate + multi-agent startup"
+/// and "short enough to surface a stuck turn before the user gives up".
+///
+/// All auxiliary work inside bootstrap is fail-soft (logged + skipped on
+/// error), so 60s is purely the worst-case bound, not the typical latency.
+const BOOTSTRAP_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 use crate::agent::pipeline::{execute, finalize};
 use crate::agent::stream_event::StreamEvent;
 
@@ -156,7 +165,6 @@ impl AgentEngine {
         }
 
         let mut s = sink::NoopSink::new();
-        const BOOTSTRAP_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
         let mut boot = match tokio::time::timeout(
             BOOTSTRAP_HARD_TIMEOUT,
             bootstrap::bootstrap(
@@ -1168,7 +1176,6 @@ impl AgentEngine {
     ) -> Result<String> {
         let mut s = sink::NoopSink::new();
 
-        const BOOTSTRAP_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
         let boot = match tokio::time::timeout(
             BOOTSTRAP_HARD_TIMEOUT,
             bootstrap::bootstrap(
