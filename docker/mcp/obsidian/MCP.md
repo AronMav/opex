@@ -1,6 +1,11 @@
-# Obsidian/Zettelkasten MCP
+# Obsidian MCP
 
-Operations with notes in zettelkasten (Obsidian-compatible format).
+Operations with notes in the vault (Obsidian-compatible format).
+
+## Configuration
+
+Set the `VAULT_PATH` environment variable to the vault directory.
+Default: `/workspace/storage`.
 
 ## Tools
 

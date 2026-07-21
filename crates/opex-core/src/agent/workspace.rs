@@ -18,7 +18,7 @@ pub fn set_shared_writable_dirs(dirs: Vec<String>) {
 
 /// The configured shared-writable-dirs allowlist (empty slice until set).
 /// Public so that `files.rs::resolve_note_dir` can pick the default vault
-/// from the operator-configured list instead of hardcoding "zettelkasten".
+/// from the operator-configured list instead of hardcoding a specific name.
 pub fn shared_writable_dirs() -> &'static [String] {
     SHARED_WRITABLE_DIRS.get().map(Vec::as_slice).unwrap_or(&[])
 }
@@ -781,13 +781,13 @@ async fn validate_workspace_path_inner(
     // Bare filename (no directory separator):
     //   - shared root files (USER.md, AGENTS.md) → workspace root
     //   - shared root dirs (tools/, skills/, …) → workspace root
-    //   - for read: if it exists at workspace root → workspace root (e.g. zettelkasten/)
+    //   - for read: if it exists at workspace root → workspace root (e.g. a vault dir/)
     //   - everything else → agent-specific dir
     //
     // Path with directory separators:
     //   - first component is a known root dir → workspace root (keeps explicit paths intact)
     //   - otherwise → agent-specific dir (agents write `notes/x.md`, not `workspace/notes/x.md`)
-    // Operator-configured shared vaults (e.g. `zettelkasten`) resolve to the
+    // Operator-configured shared vaults (e.g. a notes vault) resolve to the
     // workspace ROOT for writes too — not the agent's private subtree — so a
     // round-trip (read a note, write it back) lands in the same place.
     let is_shared_dir = |c: &str| shared_dirs.iter().any(|d| d == c);
@@ -894,7 +894,7 @@ async fn validate_workspace_path_inner(
             "tools" | "skills" | "mcp" | "uploads" => {}
             // Service directories — writable subdirs checked by is_read_only()
             "toolgate" | "channels" => {}
-            // Operator-configured shared vaults (e.g. zettelkasten) — writable.
+            // Operator-configured shared vaults — writable.
             name if is_shared_dir(name) => {}
             _ => {
                 anyhow::bail!(
@@ -1276,7 +1276,7 @@ mod tests {
 
     // ── shared_writable_dirs: agents can write into configured root vaults ──
 
-    /// With `zettelkasten` configured as a shared writable dir, a WRITE to a
+    /// With a vault configured as a shared writable dir, a WRITE to a
     /// nested path under it resolves to the workspace ROOT (the shared vault),
     /// not the agent's private `agents/{name}/` subtree — and is not rejected by
     /// the write whitelist. This is the fix for the read/write asymmetry where
@@ -1287,16 +1287,16 @@ mod tests {
         let ws = tmp.path().join("workspace");
         std::fs::create_dir_all(&ws).unwrap();
         let ws_str = ws.to_str().unwrap();
-        let shared = vec!["zettelkasten".to_string()];
+        let shared = vec!["vault".to_string()];
 
         // Nested path under the configured vault → workspace root.
         let resolved =
-            validate_workspace_path_inner(ws_str, "Arty", "zettelkasten/Rust/note.md", false, &shared)
+            validate_workspace_path_inner(ws_str, "Arty", "vault/Rust/note.md", false, &shared)
                 .await
                 .expect("write to a configured shared dir must be allowed");
         assert_eq!(
             resolved,
-            ws.join("zettelkasten").join("Rust").join("note.md"),
+            ws.join("vault").join("Rust").join("note.md"),
             "must land in the shared root vault, not agents/Arty/"
         );
     }
@@ -1312,12 +1312,12 @@ mod tests {
         let ws_str = ws.to_str().unwrap();
 
         let resolved =
-            validate_workspace_path_inner(ws_str, "Arty", "zettelkasten/Rust/note.md", false, &[])
+            validate_workspace_path_inner(ws_str, "Arty", "vault/Rust/note.md", false, &[])
                 .await
                 .expect("redirected write still resolves");
         assert_eq!(
             resolved,
-            ws.join("agents").join("Arty").join("zettelkasten").join("Rust").join("note.md"),
+            ws.join("agents").join("Arty").join("vault").join("Rust").join("note.md"),
             "without config, writes redirect into the agent's own dir"
         );
     }
@@ -1329,12 +1329,12 @@ mod tests {
         let ws = tmp.path().join("workspace");
         std::fs::create_dir_all(&ws).unwrap();
         let ws_str = ws.to_str().unwrap();
-        let shared = vec!["zettelkasten".to_string()];
+        let shared = vec!["vault".to_string()];
 
         let err = validate_workspace_path_inner(
             ws_str,
             "Arty",
-            "zettelkasten/../../etc/passwd",
+            "vault/../../etc/passwd",
             false,
             &shared,
         )

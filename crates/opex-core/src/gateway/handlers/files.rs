@@ -893,7 +893,7 @@ async fn deliver_async_failure(state: &AppState, job: &handler_jobs::HandlerJob,
 /// - `dir` empty → `<workspace_root>/<default_vault>/<subfolder>`, with
 ///   `subfolder` validated as a single safe path component. `default_vault`
 ///   is the first entry from the operator-configured
-///   `[agent_tool] shared_writable_dirs` (or `"zettelkasten"` as the
+///   `[agent_tool] shared_writable_dirs` (or `"storage"` as the
 ///   historical fallback when the list is empty).
 ///
 /// Returns `None` when the result would be unsafe: any `..` component in `dir`,
@@ -931,7 +931,7 @@ fn resolve_note_dir(
 /// directory is operator-configured: `post_action.dir` (the `output_dir` valve,
 /// a full absolute path) wins; when empty it falls back to
 /// `<workspace>/<default_vault>/<subfolder>` (the first
-/// `shared_writable_dirs` entry, or `"zettelkasten"` as the historical default).
+/// `shared_writable_dirs` entry, or `"storage"` as the historical default).
 /// mcp-obsidian remains available for agents to call directly as a tool; only
 /// this auto note-write is decoupled from it.
 ///
@@ -982,9 +982,9 @@ async fn run_post_action(job_id: uuid::Uuid, outcome: &ScenarioOutcome) -> Optio
     // Resolve the default vault directory from the operator-configured
     // `[agent_tool] shared_writable_dirs`. The first entry is used as the
     // fallback vault when `output_dir` is empty; if the list is empty,
-    // "zettelkasten" remains as the historical default for backward compat.
+    // "storage" remains as the default when the list is empty.
     let shared = crate::agent::workspace::shared_writable_dirs();
-    let default_vault = shared.first().map(|s| s.as_str()).unwrap_or("zettelkasten");
+    let default_vault = shared.first().map(|s| s.as_str()).unwrap_or("storage");
     let target_dir = match resolve_note_dir(&workspace_root, dir, subfolder, default_vault) {
         Some(d) => d,
         None => {
@@ -1172,15 +1172,15 @@ mod tests {
         use std::path::{Path, PathBuf};
         let ws = Path::new("/ws");
         // Empty dir → vault/<subfolder>. The default_vault parameter
-        // controls which vault is used; "zettelkasten" here mirrors the
-        // historical fallback for backward compat.
+        // controls which vault is used; "storage" here mirrors the
+        // default when shared_writable_dirs is empty.
         assert_eq!(
-            resolve_note_dir(ws, "", "Summary", "zettelkasten"),
-            Some(PathBuf::from("/ws/zettelkasten/Summary"))
+            resolve_note_dir(ws, "", "Summary", "storage"),
+            Some(PathBuf::from("/ws/storage/Summary"))
         );
         assert_eq!(
-            resolve_note_dir(ws, "   ", "Videos", "zettelkasten"),
-            Some(PathBuf::from("/ws/zettelkasten/Videos"))
+            resolve_note_dir(ws, "   ", "Videos", "storage"),
+            Some(PathBuf::from("/ws/storage/Videos"))
         );
         // A custom vault name (e.g. operator set shared_writable_dirs = ["notes"]).
         assert_eq!(
@@ -1189,19 +1189,19 @@ mod tests {
         );
         // Absolute operator path used verbatim (full-path valve).
         assert_eq!(
-            resolve_note_dir(ws, "/home/u/Notes", "Summary", "zettelkasten"),
+            resolve_note_dir(ws, "/home/u/Notes", "Summary", "storage"),
             Some(PathBuf::from("/home/u/Notes"))
         );
         // Relative dir joined under the workspace root.
         assert_eq!(
-            resolve_note_dir(ws, "Custom/Notes", "Summary", "zettelkasten"),
+            resolve_note_dir(ws, "Custom/Notes", "Summary", "storage"),
             Some(PathBuf::from("/ws/Custom/Notes"))
         );
         // Traversal rejected in dir and in subfolder.
-        assert_eq!(resolve_note_dir(ws, "/home/../etc", "Summary", "zettelkasten"), None);
-        assert_eq!(resolve_note_dir(ws, "a/../b", "Summary", "zettelkasten"), None);
-        assert_eq!(resolve_note_dir(ws, "", "../evil", "zettelkasten"), None);
-        assert_eq!(resolve_note_dir(ws, "", "a/b", "zettelkasten"), None);
+        assert_eq!(resolve_note_dir(ws, "/home/../etc", "Summary", "storage"), None);
+        assert_eq!(resolve_note_dir(ws, "a/../b", "Summary", "storage"), None);
+        assert_eq!(resolve_note_dir(ws, "", "../evil", "storage"), None);
+        assert_eq!(resolve_note_dir(ws, "", "a/b", "storage"), None);
     }
 
     #[test]

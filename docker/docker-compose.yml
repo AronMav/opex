@@ -110,6 +110,8 @@ services:
     build: ./mcp/obsidian
     ports:
       - "127.0.0.1:9005:8000"
+    environment:
+      VAULT_PATH: /workspace/${VAULT_DIR:-zettelkasten}
     volumes:
       - ../workspace:/workspace
       - /etc/localtime:/etc/localtime:ro
@@ -233,7 +235,7 @@ services:
       GIT_COMMITTER_NAME: "Opex Agent"
       GIT_COMMITTER_EMAIL: "opex@aronmav.ru"
     volumes:
-      # Workspace mount lets git operate on workspace repositories (e.g. zettelkasten).
+      # Workspace mount lets git operate on workspace repositories (e.g. vault dirs).
       - ~/opex/workspace:/workspace:rw
       # Source tree mount: the deploy git repo lives in ~/opex-src, not inside
       # the runtime workspace. Expose it read-only as /src and make it the

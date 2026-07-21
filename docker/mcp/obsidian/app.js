@@ -1,9 +1,9 @@
 /**
- * Obsidian/Zettelkasten — MCP server for note operations.
+ * Obsidian-compatible MCP server for note operations.
  *
- * Operates on markdown files in /workspace (mounted read-write from host).
- * Environment:
- *   ZETTELKASTEN_PATH - path to zettelkasten directory (default: /workspace/zettelkasten)
+ * Operates on markdown files in the vault directory (mounted read-write
+ * from host workspace). Environment:
+ *   VAULT_PATH - path to the vault directory (default: /workspace/storage)
  */
 
 const fs = require("fs").promises;
@@ -11,7 +11,7 @@ const path = require("path");
 const Fastify = require("fastify");
 const ops = require("./ops");
 
-const ZK_PATH = process.env.ZETTELKASTEN_PATH || "/workspace/zettelkasten";
+const VAULT_PATH = process.env.VAULT_PATH || "/workspace/storage";
 const PORT = parseInt(process.env.PORT || "8000", 10);
 
 const app = Fastify({ logger: true });
@@ -20,7 +20,7 @@ const MCP_TOOLS = [
   {
     name: "list_notes",
     description:
-      "List all notes in the zettelkasten. Returns filenames and first line (title).",
+      "List all notes in the vault. Returns filenames and first line (title).",
     inputSchema: {
       type: "object",
       properties: {
@@ -38,7 +38,7 @@ const MCP_TOOLS = [
   },
   {
     name: "read_note",
-    description: "Read the full content of a zettelkasten note.",
+    description: "Read the full content of a note.",
     inputSchema: {
       type: "object",
       properties: {
@@ -53,7 +53,7 @@ const MCP_TOOLS = [
   {
     name: "create_note",
     description:
-      "Create a new zettelkasten note. Use Zettelkasten-style naming (YYYYMMDDHHMMSS or descriptive).",
+      "Create a new note. Use timestamped or descriptive naming (YYYYMMDDHHMMSS-topic.md).",
     inputSchema: {
       type: "object",
       properties: {
@@ -69,7 +69,7 @@ const MCP_TOOLS = [
   {
     name: "random_note",
     description:
-      "Get a random note from the zettelkasten for learning/review.",
+      "Get a random note from the vault for learning/review.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -144,9 +144,9 @@ const MCP_TOOLS = [
 async function listNotes(limit = 50, query = "") {
   let files;
   try {
-    files = await fs.readdir(ZK_PATH);
+    files = await fs.readdir(VAULT_PATH);
   } catch {
-    return "Каталог zettelkasten не найден: " + ZK_PATH;
+    return "Каталог хранилища не найден: " + VAULT_PATH;
   }
 
   const mdFiles = files
@@ -158,7 +158,7 @@ async function listNotes(limit = 50, query = "") {
     if (results.length >= limit) break;
     if (query) {
       const content = await fs
-        .readFile(path.join(ZK_PATH, file), "utf8")
+        .readFile(path.join(VAULT_PATH, file), "utf8")
         .catch(() => "");
       if (
         !file.toLowerCase().includes(query.toLowerCase()) &&
@@ -167,7 +167,7 @@ async function listNotes(limit = 50, query = "") {
         continue;
     }
     const firstLine = await fs
-      .readFile(path.join(ZK_PATH, file), "utf8")
+      .readFile(path.join(VAULT_PATH, file), "utf8")
       .then((c) => c.split("\n")[0].replace(/^#\s*/, "").trim())
       .catch(() => "");
     results.push(`${file}: ${firstLine}`);
@@ -181,7 +181,7 @@ async function listNotes(limit = 50, query = "") {
 async function readNote(filename) {
   const safe = path.basename(filename);
   try {
-    return await fs.readFile(path.join(ZK_PATH, safe), "utf8");
+    return await fs.readFile(path.join(VAULT_PATH, safe), "utf8");
   } catch {
     return `Заметка '${safe}' не найдена.`;
   }
@@ -190,15 +190,15 @@ async function readNote(filename) {
 async function randomNote() {
   let files;
   try {
-    files = await fs.readdir(ZK_PATH);
+    files = await fs.readdir(VAULT_PATH);
   } catch {
-    return "Каталог zettelkasten не найден.";
+    return "Каталог хранилища не найден.";
   }
   const mdFiles = files.filter((f) => f.endsWith(".md") && !f.startsWith("."));
-  if (!mdFiles.length) return "Нет заметок в zettelkasten.";
+  if (!mdFiles.length) return "Нет заметок в хранилище.";
   const file = mdFiles[Math.floor(Math.random() * mdFiles.length)];
   const content = await fs
-    .readFile(path.join(ZK_PATH, file), "utf8")
+    .readFile(path.join(VAULT_PATH, file), "utf8")
     .catch(() => "");
   return `Случайная заметка: ${file}\n\n${content}`;
 }
@@ -206,9 +206,9 @@ async function randomNote() {
 async function searchNotes(query, limit = 10) {
   let files;
   try {
-    files = await fs.readdir(ZK_PATH);
+    files = await fs.readdir(VAULT_PATH);
   } catch {
-    return "Каталог zettelkasten не найден.";
+    return "Каталог хранилища не найден.";
   }
   const mdFiles = files.filter((f) => f.endsWith(".md") && !f.startsWith("."));
   const q = query.toLowerCase();
@@ -217,7 +217,7 @@ async function searchNotes(query, limit = 10) {
   for (const file of mdFiles) {
     if (results.length >= limit) break;
     const content = await fs
-      .readFile(path.join(ZK_PATH, file), "utf8")
+      .readFile(path.join(VAULT_PATH, file), "utf8")
       .catch(() => "");
     const idx = content.toLowerCase().indexOf(q);
     if (idx >= 0) {

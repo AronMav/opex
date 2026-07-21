@@ -130,6 +130,8 @@ message_wait_for_idle_secs = 60   # how long to wait for target agent to become 
 message_result_secs = 300         # how long sync run/message/collect blocks waiting for a result
 safety_timeout_secs = 600         # outer defense-in-depth wrapper (must be > 60 + 300)
 default_tool_timeout_secs = 120   # outer wrapper for any non-`agent` tool (was hardcoded 120s)
+# Workspace-root directories agents can write to at any depth (shared vaults).
+shared_writable_dirs = ["zettelkasten"]
 
 # Per-tool outer-timeout overrides (tool -> seconds). generate_image proxies to
 # ComfyUI (comfyui-krea2 comfy_timeout_secs=400); its wrapper must exceed that

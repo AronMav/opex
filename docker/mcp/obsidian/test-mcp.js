@@ -4,8 +4,8 @@ const os = require("os");
 const path = require("path");
 const assert = require("assert");
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "zk-test-"));
-process.env.ZETTELKASTEN_PATH = tmp;
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vault-test-"));
+process.env.VAULT_PATH = tmp;
 fs.mkdirSync(path.join(tmp, "_System", "media"), { recursive: true });
 
 const ops = require("./ops"); // pure functions extracted from app.js

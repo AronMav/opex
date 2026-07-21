@@ -242,13 +242,14 @@ pub struct AgentToolConfig {
     /// write to a vault path like `notes/note.md` is silently redirected into
     /// the agent's private `agents/{name}/` subtree (read resolves to the shared
     /// root, so read/write diverge). Each name is a single top-level directory
-    /// component (no slashes). Default: `["zettelkasten"]`.
-    #[serde(default = "default_shared_writable_dirs")]
+    /// component (no slashes). Empty by default — the operator configures the
+    /// vaults they want.
+    #[serde(default)]
     pub shared_writable_dirs: Vec<String>,
 }
 
 fn default_shared_writable_dirs() -> Vec<String> {
-    vec!["zettelkasten".to_string()]
+    Vec::new()
 }
 
 fn default_message_wait_for_idle_secs() -> u64 {
@@ -4165,7 +4166,7 @@ scene_threshold = 0.4
 frame_ceiling = 200
 job_timeout_secs = 1800
 note_max_frames = 24
-vault_name = "zettelkasten"
+vault_name = "storage"
 digest_provider = "my-provider"
 "#;
         let f = write_temp_toml(toml);

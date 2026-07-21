@@ -835,14 +835,14 @@ mod tests {
         // Regression: mcp-server-git returns HTTP 200 + result.isError=true with
         // the exception text in content (NoSuchPathError renders as the bare
         // path). call_tool previously ignored isError and returned the error
-        // string as SUCCESSFUL output — agents saw "/workspace/zettelkasten"
+        // string as SUCCESSFUL output — agents saw "/workspace/storage"
         // as the "result" of git_status/git_add/git_commit.
         let server = MockServer::start().await;
         let body = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 2,
             "result": {
-                "content": [{"type": "text", "text": "/workspace/zettelkasten"}],
+                "content": [{"type": "text", "text": "/workspace/storage"}],
                 "isError": true
             }
         });
@@ -859,7 +859,7 @@ mod tests {
             .expect_err("result.isError=true must surface as Err");
         let msg = err.to_string();
         assert!(msg.contains("MCP tool error"), "{msg}");
-        assert!(msg.contains("/workspace/zettelkasten"), "{msg}");
+        assert!(msg.contains("/workspace/storage"), "{msg}");
     }
 
     #[tokio::test]
