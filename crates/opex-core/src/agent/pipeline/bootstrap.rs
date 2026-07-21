@@ -102,7 +102,13 @@ pub async fn bootstrap<S: EventSink>(
         &engine.current_model(),
     ).await;
 
-    let effective_resume_id: Option<uuid::Uuid> = ctx.resume_session_id;
+    // When force_new_session is set, ignore any resume_session_id — the
+    // caller explicitly wants a fresh session. The cron path sets both
+    // force_new_session=true AND may carry a resume_session_id from the
+    // IncomingMessage; without this guard, the resume id wins and the
+    // session is silently reused, contradicting the force-new semantics.
+    let effective_resume_id: Option<uuid::Uuid> =
+        if ctx.force_new_session { None } else { ctx.resume_session_id };
 
     // 1. Build context (session_id + message history + tool definitions)
     //
