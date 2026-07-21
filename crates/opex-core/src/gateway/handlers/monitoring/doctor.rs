@@ -85,12 +85,23 @@ fn classify_degraded_error(error: &str) -> &'static str {
         return "code_fixed";
     }
     if e.contains("access denied - path outside allowed directories:") {
+        // Extract just the offending path (between "allowed directories:" and
+        // " not in"). Matching the full error would false-positive on the
+        // "not in /workspace" suffix that every such error carries.
+        let path_part: &str = e
+            .split("allowed directories:")
+            .nth(1)
+            .and_then(|s| s.split(" not in").next())
+            .unwrap_or("");
         // Workspace/source-tree prefixes → the rewriter now rewrites these,
         // so any historical failure is stale (code_fixed). We match by a
         // suffix segment rather than the full home-dir path so the heuristic
         // survives a move to a different deploy (different $HOME, different
         // user, containerised runtime, …).
-        if e.contains("/workspace") || e.contains("/opex-src") || e.contains("/src/") {
+        if path_part.contains("/workspace/") || path_part.ends_with("/workspace")
+            || path_part.contains("/opex-src/") || path_part.ends_with("/opex-src")
+            || path_part.contains("/src/")
+        {
             return "code_fixed";
         }
         // Any other /home/... host path (toolgate, channels, /etc, …) is not
@@ -98,7 +109,7 @@ fn classify_degraded_error(error: &str) -> &'static str {
         // workspace_* system tool. Historical failures here will not be
         // reproduced either (the new code rejects with a clearer error),
         // but the underlying call pattern is still misuse.
-        if e.contains("/home/") || e.contains("/etc/") || e.contains("/var/") {
+        if path_part.contains("/home/") || path_part.contains("/etc/") || path_part.contains("/var/") {
             return "agent_misuse";
         }
     }
