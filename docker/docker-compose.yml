@@ -49,31 +49,6 @@ services:
     networks: [ opex ]
     restart: unless-stopped
 
-  tts-silero:
-    image: opex-tts-silero:latest
-    mem_limit: ${TTS_SILERO_MEM_LIMIT:-2g}
-    cpus: ${TTS_SILERO_CPUS:-4}
-    build: ./tts-silero
-    ports:
-      - "127.0.0.1:8088:8000"
-    environment:
-      SILERO_MODEL_ID: v5_1_ru
-      SILERO_DEVICE: cpu
-      SILERO_DEFAULT_SPEAKER: kseniya
-      SILERO_THREADS: "4"
-    volumes:
-      - silero-models:/models
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
-    healthcheck:
-      test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1" ]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 120s
-    networks: [ opex ]
-    restart: unless-stopped
-
   # ═══════════════════════════════════════════════════
   # Web search — searxng DISABLED (active websearch = ws-ollama). Uncomment to re-enable.
   # ═══════════════════════════════════════════════════
@@ -301,5 +276,4 @@ networks:
 
 volumes:
   pgdata:
-  silero-models:
   browser_profiles:
