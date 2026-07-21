@@ -313,6 +313,11 @@ pub async fn bootstrap<S: EventSink>(
         .clone()
         .unwrap_or_else(|| "http://localhost:9011".to_string());
     const ENRICHMENT_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+    tracing::info!(
+        attachment_count = ctx.msg.attachments.len(),
+        user_text_len = user_text.len(),
+        "bootstrap: starting enrichment"
+    );
     let enrich = match tokio::time::timeout(
         ENRICHMENT_HARD_TIMEOUT,
         crate::agent::pipeline::subagent::enrich_message_text(

@@ -1,6 +1,6 @@
 //! URL extraction and content helpers — standalone functions used by the engine.
 
-use crate::agent::handler_registry::{HandlerRegistry, match_buttons};
+use crate::agent::handler_registry::match_buttons;
 use crate::agent::fse::get_enabled_allowlist;
 
 /// Convert a public attachment URL to a localhost URL for internal Core downloads.
@@ -63,11 +63,27 @@ pub(crate) fn extract_upload_id(att_url: &str) -> Option<&str> {
 pub(crate) async fn enrich_with_attachments(
     text: &mut String,
     attachments: &[opex_types::MediaAttachment],
-    handlers: &HandlerRegistry,
+    handlers: &crate::agent::handler_registry::HandlerRegistry,
     db: &sqlx::PgPool,
     lang: &str,
 ) {
     use opex_types::MediaType;
+
+    // Debug: log what we received
+    tracing::info!(
+        attachment_count = attachments.len(),
+        "enrich_with_attachments: processing attachments"
+    );
+    for (i, att) in attachments.iter().enumerate() {
+        tracing::info!(
+            idx = i,
+            url = %att.url,
+            media_type = ?att.media_type,
+            file_name = ?att.file_name,
+            mime_type = ?att.mime_type,
+            "enrich_with_attachments: attachment"
+        );
+    }
 
     let manifests = handlers.manifests().await;
     if manifests.is_empty() {
