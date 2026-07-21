@@ -437,7 +437,7 @@ impl AgentEngine {
             BehaviourLayers::for_interactive(&self.tool_loop_config(), recovery_text);
         let pipeline_result: anyhow::Result<()> = async {
             let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &interactive_layers).await?;
-            let fin_ctx = finalize::finalize_context_from_engine(
+            let mut fin_ctx = finalize::finalize_context_from_engine(
                 self,
                 session_id,
                 outcome.messages_len_at_end,
@@ -448,6 +448,11 @@ impl AgentEngine {
                 compressor,
                 outcome.assistant_message_id,
             );
+            // Z3 fix: attribute usage/failure rows to the provider that
+            // actually served the final call, not always the primary.
+            if let Some(ref name) = outcome.effective_provider_name {
+                fin_ctx.llm_provider = Some(name.clone());
+            }
             let fin_outcome = finalize::execute_status_to_finalize(
                 outcome.status,
                 outcome.final_text,
@@ -1084,7 +1089,7 @@ impl AgentEngine {
             }
         };
 
-        let fin_ctx = finalize::finalize_context_from_engine(
+        let mut fin_ctx = finalize::finalize_context_from_engine(
             self,
             session_id,
             outcome.messages_len_at_end,
@@ -1095,6 +1100,10 @@ impl AgentEngine {
             compressor,
             outcome.assistant_message_id,
         );
+        // Z3 fix: attribute to the effective provider, not always primary.
+        if let Some(ref name) = outcome.effective_provider_name {
+            fin_ctx.llm_provider = Some(name.clone());
+        }
         let fin_outcome = finalize::execute_status_to_finalize(
             outcome.status,
             outcome.final_text,
@@ -1270,7 +1279,7 @@ impl AgentEngine {
                 return Err(e);
             }
         };
-        let fin_ctx = finalize::finalize_context_from_engine(
+        let mut fin_ctx = finalize::finalize_context_from_engine(
             self,
             session_id,
             outcome.messages_len_at_end,
@@ -1278,6 +1287,10 @@ impl AgentEngine {
             compressor,
             outcome.assistant_message_id,
         );
+        // Z3 fix: attribute to the effective provider, not always primary.
+        if let Some(ref name) = outcome.effective_provider_name {
+            fin_ctx.llm_provider = Some(name.clone());
+        }
         let fin_outcome = finalize::execute_status_to_finalize(
             outcome.status,
             outcome.final_text,

@@ -76,6 +76,26 @@ pub struct ExecuteOutcome {
     /// Matches the `messageId` sent in the `MessageStart` SSE event
     /// so the frontend's live buffer ID equals the DB row ID.
     pub assistant_message_id: Uuid,
+    /// Name of the provider that actually served the final LLM call —
+    /// may differ from the primary when the fallback layer engaged.
+    /// Used by finalize to attribute usage/failure rows to the correct
+    /// provider instead of always blaming the primary.
+    /// None = "use primary" (backward compatible).
+    pub effective_provider_name: Option<String>,
+}
+
+impl Default for ExecuteOutcome {
+    fn default() -> Self {
+        Self {
+            status: ExecuteStatus::Done,
+            final_text: String::new(),
+            thinking_json: None,
+            messages_len_at_end: 0,
+            final_parent_msg_id: uuid::Uuid::nil(),
+            assistant_message_id: uuid::Uuid::nil(),
+            effective_provider_name: None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -161,6 +181,7 @@ pub async fn execute<S: EventSink>(
             messages_len_at_end: messages.len(),
             final_parent_msg_id: last_msg_id,
             assistant_message_id: uuid::Uuid::nil(),
+            effective_provider_name: None,
         });
     }
 
@@ -273,6 +294,7 @@ pub async fn execute<S: EventSink>(
                 messages_len_at_end: messages.len(),
                 final_parent_msg_id: last_msg_id,
                 assistant_message_id: assistant_msg_id,
+                effective_provider_name: None,
             });
         }
 
@@ -326,6 +348,7 @@ pub async fn execute<S: EventSink>(
                         messages_len_at_end: messages.len(),
                         final_parent_msg_id: last_msg_id,
                         assistant_message_id: iter_msg_id,
+                        effective_provider_name: None,
                     });
                 }
                 Err(e) => return Err(e.into()),
@@ -357,6 +380,7 @@ pub async fn execute<S: EventSink>(
                     messages_len_at_end: messages.len(),
                     final_parent_msg_id: last_msg_id,
                     assistant_message_id: assistant_msg_id,
+                    effective_provider_name: None,
                 });
             }
             Err(e) => return Err(e.into()),
@@ -479,6 +503,7 @@ pub async fn execute<S: EventSink>(
                     messages_len_at_end: messages.len(),
                     final_parent_msg_id: user_message_id,
                     assistant_message_id: assistant_msg_id,
+                    effective_provider_name: None,
                 });
             }
             Some(r) => r,
@@ -501,6 +526,7 @@ pub async fn execute<S: EventSink>(
                 messages_len_at_end: messages.len(),
                 final_parent_msg_id: user_message_id,
                 assistant_message_id: assistant_msg_id,
+                effective_provider_name: None,
             });
         }
 
@@ -669,6 +695,7 @@ pub async fn execute<S: EventSink>(
                     messages_len_at_end: messages.len(),
                     final_parent_msg_id: last_msg_id,
                     assistant_message_id: assistant_msg_id,
+                    effective_provider_name: None,
                 });
             }
         };
@@ -877,6 +904,7 @@ pub async fn execute<S: EventSink>(
                         messages_len_at_end: messages.len(),
                         final_parent_msg_id: last_msg_id,
                         assistant_message_id: assistant_msg_id,
+                        effective_provider_name: None,
                     });
                 }
                 Err(e) => return Err(e.into()),
@@ -899,6 +927,7 @@ pub async fn execute<S: EventSink>(
                 messages_len_at_end: messages.len(),
                 final_parent_msg_id: last_msg_id,
                 assistant_message_id: assistant_msg_id,
+                effective_provider_name: None,
             });
         }
 
@@ -1079,6 +1108,7 @@ pub async fn execute<S: EventSink>(
                     messages_len_at_end: messages.len(),
                     final_parent_msg_id: last_msg_id,
                     assistant_message_id: assistant_msg_id,
+                    effective_provider_name: None,
                 });
             }
         };
@@ -1095,6 +1125,7 @@ pub async fn execute<S: EventSink>(
                 messages_len_at_end: messages.len(),
                 final_parent_msg_id: last_msg_id,
                 assistant_message_id: assistant_msg_id,
+                effective_provider_name: None,
             });
         }
 
@@ -1149,6 +1180,7 @@ pub async fn execute<S: EventSink>(
                     messages_len_at_end: messages.len(),
                     final_parent_msg_id: last_msg_id,
                     assistant_message_id: assistant_msg_id,
+                    effective_provider_name: None,
                 });
             }
         };
@@ -1298,6 +1330,13 @@ pub async fn execute<S: EventSink>(
                 } else {
                     assistant_msg_id
                 },
+                effective_provider_name: Some(
+                    if let Some(ref fb) = layer_state.fallback_provider {
+                        fb.name().to_string()
+                    } else {
+                        engine.cfg().provider.name().to_string()
+                    }
+                ),
             });
         }
     }
@@ -1370,6 +1409,13 @@ pub async fn execute<S: EventSink>(
         } else {
             assistant_msg_id
         },
+        effective_provider_name: Some(
+            if let Some(ref fb) = layer_state.fallback_provider {
+                fb.name().to_string()
+            } else {
+                engine.cfg().provider.name().to_string()
+            }
+        ),
     })
 }
 
