@@ -1185,7 +1185,7 @@ async fn run_restore_from_staged_archive(
         .unwrap_or_default();
     let plaintext_secrets: Vec<crate::secrets::PlaintextSecret> =
         serde_json::from_slice(&secrets_bytes).unwrap_or_default();
-    let _secret_count = plaintext_secrets.len();
+    tracing::info!(secret_count = plaintext_secrets.len(), "RESTORE: applying plaintext secrets");
     if let Err(e) = auth.secrets.restore_plaintext(plaintext_secrets).await {
         let restarted = restart_agents_from_disk(&agents, &infra, &auth, &bus, &cfg_svc, &status, &handlers).await
             .unwrap_or_default();

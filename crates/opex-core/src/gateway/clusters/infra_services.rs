@@ -65,6 +65,12 @@ pub struct InfraServices {
     /// `restore-jobs/{job_id}/state.json` per job for cross-restart
     /// visibility. Backs `GET /api/restore/jobs{,/{id}}`.
     pub restore_jobs: Arc<crate::gateway::handlers::backup::RestoreJobRegistry>,
+    /// Per-container serialization for `POST /api/containers/{name}/restart`
+    /// and `POST /api/services/{name}/restart`. Docker can deadlock if two
+    /// concurrent `docker restart foo` calls race on the same container's
+    /// stop+start cycle. A DashMap lets different containers restart
+    /// concurrently while serializing restarts of the same container.
+    pub restart_locks: Arc<dashmap::DashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl InfraServices {
@@ -96,6 +102,7 @@ impl InfraServices {
             backup_running: Arc::new(AtomicBool::new(false)),
             restore_mutex: Arc::new(tokio::sync::Mutex::new(())),
             restore_jobs,
+            restart_locks: Arc::new(dashmap::DashMap::new()),
         }
     }
 
@@ -116,6 +123,26 @@ impl InfraServices {
             let _permit = sem.acquire_owned().await;
             future.await;
         });
+    }
+
+    /// Acquire a per-name serialization mutex for restart-like operations.
+    /// Different containers/services restart concurrently; restarts of the
+    /// *same* name are serialized so docker doesn't race on the same
+    /// stop+start cycle. The returned guard is held until dropped; callers
+    /// should keep it alive for the duration of the restart.
+    ///
+    /// The underlying `Arc<Mutex<()>>` is retained in the DashMap for the
+    /// life of the process — bounded by the number of distinct container
+    /// names (~30 in the largest deployment), so no eviction is needed.
+    pub async fn restart_lock(&self, name: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        // entry().or_insert_with() avoids cloning an existing Arc on the hot
+        // path; the Mutex is cheap (uncontended fast path is one CAS).
+        let mutex: Arc<tokio::sync::Mutex<()>> = self
+            .restart_locks
+            .entry(name.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone();
+        mutex.lock_owned().await
     }
 
     /// Construct a minimal `InfraServices` for unit tests with no arguments.
@@ -223,6 +250,7 @@ impl InfraServices {
             backup_running: Arc::new(AtomicBool::new(false)),
             restore_mutex: Arc::new(tokio::sync::Mutex::new(())),
             restore_jobs: Arc::new(crate::gateway::handlers::backup::RestoreJobRegistry::new()),
+            restart_locks: Arc::new(dashmap::DashMap::new()),
         }
     }
 }

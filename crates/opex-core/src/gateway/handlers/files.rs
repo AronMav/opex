@@ -231,8 +231,20 @@ async fn menu_run_core(
         language: lang,
         params,
     };
+    // Default 60s is enough for most handlers (small-image describe, document
+    // extraction, save). transcription of long audio and video summarization
+    // can legitimately take minutes — those handlers get an extended ceiling
+    // so a 5-minute meeting recording doesn't get cut off mid-transcription.
+    const DEFAULT_SYNC_TIMEOUT_SECS: u64 = 60;
+    const LONG_SYNC_TIMEOUT_SECS: u64 = 180;
+    const LONG_RUNNING_HANDLERS: &[&str] = &["transcribe", "summarize_video"];
+    let timeout_secs = if LONG_RUNNING_HANDLERS.contains(&handler_id) {
+        LONG_SYNC_TIMEOUT_SECS
+    } else {
+        DEFAULT_SYNC_TIMEOUT_SECS
+    };
     let outcome = match tokio::time::timeout(
-        std::time::Duration::from_secs(60),
+        std::time::Duration::from_secs(timeout_secs),
         crate::agent::file_handler_sync::run_sync_handler_inline(
             &infra.db,
             crate::agent::file_handler_sync::http_client(),
@@ -252,10 +264,11 @@ async fn menu_run_core(
                 session_id = %session_id,
                 agent = %agent,
                 handler = %handler_id,
-                "sync file handler exceeded 60s gateway timeout"
+                timeout_secs,
+                "sync file handler exceeded gateway timeout"
             );
             crate::agent::file_scenario::outcome::ScenarioOutcome::failed(
-                "sync file handler timed out (60s)".to_string(),
+                format!("sync file handler timed out ({timeout_secs}s)"),
             )
         }
     };

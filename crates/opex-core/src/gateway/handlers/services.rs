@@ -37,7 +37,12 @@ async fn handle_managed_action(
             let pm = pm.clone();
             let bg_name = name.to_string();
             let bg_action = action.to_string();
+            let restart_lock = infra.restart_lock(name).await;
             infra.spawn_bg(async move {
+                // Hold the per-name lock for the duration of the restart so
+                // two concurrent POST /api/services/{name}/restart calls
+                // serialize instead of racing the process manager.
+                let _lock = restart_lock;
                 if let Err(e) = pm.restart(&bg_name).await {
                     tracing::error!(
                         service = %bg_name,
@@ -377,7 +382,13 @@ pub(crate) async fn api_service_action(
         let bg_name = name.clone();
         let bg_action = action.clone();
         let compose_file = compose_file.clone();
+        // Acquire the per-name serialization lock before spawning so two
+        // concurrent requests targeting the same service queue instead of
+        // racing docker-compose (which can deadlock on stop+start of the
+        // same container).
+        let restart_lock = infra.restart_lock(&name).await;
         infra.spawn_bg(async move {
+            let _lock = restart_lock;
             run_docker_action(
                 &compose_file,
                 &bg_name,
@@ -452,7 +463,11 @@ async fn run_docker_action(
             .iter().map(|s| (*s).to_string()).collect(),
         "restart" => ["compose", "-f", compose_file, "restart", name]
             .iter().map(|s| (*s).to_string()).collect(),
-        "start" => ["compose", "-f", compose_file, "start", name]
+        // `start` without --no-deps would also start linked dependencies, which
+        // can cascade into restarting unrelated services. We only want to start
+        // the explicitly requested container; `restart` is already scoped by
+        // docker-compose so it doesn't need the flag.
+        "start" => ["compose", "-f", compose_file, "start", "--no-deps", name]
             .iter().map(|s| (*s).to_string()).collect(),
         _ => return,
     };
@@ -551,7 +566,13 @@ pub(crate) async fn api_container_restart(
 
     tracing::info!(container = %name, "container restart requested; queuing background restart");
     let name_clone = name.clone();
+    // Per-container serialization: two concurrent POST /api/containers/{name}/restart
+    // would race docker on the same stop+start cycle. Acquire the lock before
+    // spawning so the second request blocks at the entry of its spawn_bg
+    // closure rather than inside docker.
+    let restart_lock = infra.restart_lock(&name).await;
     infra.spawn_bg(async move {
+        let _lock = restart_lock;
         match tokio::process::Command::new("docker")
             .args(["restart", &name_clone])
             .output()
