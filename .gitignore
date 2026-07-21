@@ -28,6 +28,8 @@ CLAUDE.md
 /docs/specs/
 /docs/plans/
 .worktrees/
+.tmp_*
+.tmp_ui*
 .planning/
 .mcp.json
 # Release notes drafts — copied into GitHub Release page via gh CLI,
