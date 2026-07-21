@@ -59,12 +59,15 @@ pub async fn dispatch_async_job(
     // from the DB (mirrors the sync path in files.rs which sends mime + upload_id).
     // For url-based jobs we leave mime empty and derive the filename from the URL.
     let (mime, filename) = if let Some(upload_id) = job.upload_id {
-        let real_mime = crate::db::uploads::get_by_id(db, upload_id)
+        let row = crate::db::uploads::get_by_id(db, upload_id)
             .await
-            .unwrap_or(None)
-            .map(|row| row.mime)
-            .unwrap_or_default();
-        (real_mime, upload_id.to_string())
+            .unwrap_or(None);
+        let real_mime = row.as_ref().map(|r| r.mime.clone()).unwrap_or_default();
+        let real_filename = row
+            .as_ref()
+            .and_then(|r| r.filename.clone())
+            .unwrap_or_else(|| upload_id.to_string());
+        (real_mime, real_filename)
     } else {
         let fname = job
             .source_ref

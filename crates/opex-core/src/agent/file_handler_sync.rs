@@ -62,6 +62,9 @@ pub struct SyncRunRequest<'a> {
     pub size: u64,
     pub language: &'a str,
     pub params: serde_json::Value,
+    /// Original client-side filename (e.g. "gonzalomo_api.json"). Falls back
+    /// to the upload UUID when the uploads table has no stored filename.
+    pub filename: String,
 }
 
 /// Run a `execution == "sync"` toolgate handler inline and return its outcome.
@@ -144,13 +147,13 @@ pub async fn run_sync_handler_inline(
         req.handler_id
     );
     let file_part = reqwest::multipart::Part::bytes(bytes.to_vec())
-        .file_name(req.upload_id.to_string())
+        .file_name(req.filename.clone())
         .mime_str(&req.mime)
         .unwrap_or_else(|_| reqwest::multipart::Part::bytes(bytes.to_vec()));
     let form = reqwest::multipart::Form::new()
         .part("file", file_part)
         .text("mime", req.mime.clone())
-        .text("filename", req.upload_id.to_string())
+        .text("filename", req.filename.clone())
         .text("size", req.size.to_string())
         .text("params", params_str)
         .text("config", config_str)
@@ -212,6 +215,7 @@ mod tests {
             size: 42,
             language: "ru",
             params: serde_json::json!({}),
+            filename: "test_file.json".to_string(),
         }
     }
 

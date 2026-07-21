@@ -43,16 +43,21 @@ WORKSPACE_DIR = os.environ.get("WORKSPACE_DIR", "../workspace")
 
 def _safe_rel_path(raw: str, fallback: str) -> str:
     """Sanitize a user-supplied relative path. Rejects absolute paths,
-    parent-dir traversal, and empty segments. Falls back to the original
-    filename when the path is unusable."""
+    parent-dir traversal, and empty segments. Falls back to
+    uploads/{original_filename} when the path is empty or unusable —
+    files always land in uploads/ (never the workspace root, where they
+    would collide with system dirs like agents/, tools/, skills/)."""
     raw = (raw or "").strip()
     if not raw:
-        raw = fallback
+        raw = f"uploads/{os.path.basename(fallback) or 'saved_file'}"
     # Normalize: strip leading slashes, convert backslashes
     raw = raw.replace("\\", "/").lstrip("/")
     # Reject traversal
     if ".." in raw.split("/"):
-        return os.path.basename(fallback) or "saved_file"
+        return f"uploads/{os.path.basename(fallback) or 'saved_file'}"
+    # If the path has no directory component, put it in uploads/
+    if "/" not in raw:
+        raw = f"uploads/{raw}"
     return raw
 
 

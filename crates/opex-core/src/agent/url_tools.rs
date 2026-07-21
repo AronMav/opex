@@ -228,6 +228,7 @@ pub(crate) fn extract_urls(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::handler_registry::HandlerRegistry;
 
     // ── extract_urls ─────────────────────────────────────────────────────────
 

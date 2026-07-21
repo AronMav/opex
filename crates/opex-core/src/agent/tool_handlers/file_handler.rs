@@ -210,6 +210,7 @@ async fn handle_file_handler(deps: ToolDeps<'_>, args: &Value) -> String {
                 size,
                 language: lang,
                 params,
+                filename: upload_row.filename.clone().unwrap_or_else(|| upload_id.to_string()),
             };
             let signed_url_base = crate::uploads::web_uploads_base();
             let key = deps.secrets.get_upload_hmac_key();

@@ -230,6 +230,7 @@ async fn menu_run_core(
         size: upload_meta.size,
         language: lang,
         params,
+        filename: upload_meta.filename.clone().unwrap_or_else(|| upload_id.to_string()),
     };
     // Default 60s is enough for most handlers (small-image describe, document
     // extraction, save). transcription of long audio and video summarization
@@ -541,6 +542,7 @@ async fn command_menu_run(
 pub(crate) struct UploadMeta {
     pub mime: String,
     pub size: u64,
+    pub filename: Option<String>,
 }
 
 /// R3 owner-gate (single-tenant v1): the upload must exist and be one of the
@@ -602,6 +604,7 @@ pub(crate) async fn assert_upload_accessible(
     Ok(UploadMeta {
         mime: row.mime,
         size: row.size_bytes.max(0) as u64,
+        filename: row.filename,
     })
 }
 

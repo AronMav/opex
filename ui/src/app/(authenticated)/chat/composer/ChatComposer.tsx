@@ -374,6 +374,12 @@ export function ChatComposer() {
     e.preventDefault();
     const text = textareaRef.current?.value?.trim() ?? "";
     if (!text && attachments.length === 0) return;
+    // Block submit while files are still uploading — the button is disabled
+    // but Enter/hotkey can still trigger handleSubmit. Without this guard,
+    // attachments are empty (upload hasn't finished → setAttachments hasn't
+    // run) and the message is sent without files. The user sees "file not
+    // found" because the model never received the attachment metadata.
+    if (uploadingCount > 0) return;
     if (attachments.length === 0 && text.startsWith("/")) {
       // Typed slash command: client shortcuts (/stop, /new, /think) run locally,
       // everything else is routed to sendMessage inside dispatchSlashCommand.
