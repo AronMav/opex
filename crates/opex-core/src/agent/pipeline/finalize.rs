@@ -582,6 +582,15 @@ pub async fn finalize<S: EventSink>(
                         "finalize: failed to persist assistant message; marking session interrupted"
                     );
                     lifecycle_guard.interrupt("persist_failed").await;
+                    // The reply was streamed to the UI (SSE) but is NOT in the
+                    // DB. Returning the text here would cause channel adapters
+                    // (Telegram, Discord) to send a reply that has no DB record —
+                    // a session reload shows the user message with no reply, while
+                    // the user received the reply out-of-band. Silent data loss +
+                    // inconsistent state. Return empty so the channel adapter does
+                    // NOT send the orphaned text. The SSE path already showed the
+                    // text live, so the UI user is not affected.
+                    return Ok(String::new());
                 }
             }
             spawn_knowledge_extraction(
