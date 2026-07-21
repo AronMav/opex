@@ -33,6 +33,7 @@ describe("streaming-renderer.sendTurn — body.model (13a)", () => {
       streamSessionManager: {
         start: () => ({ signal: { aborted: false }, isCurrent: () => true }),
         disposeCurrent: vi.fn(),
+        current: () => ({ signal: { aborted: false }, isCurrent: () => true }),
       },
     }));
     vi.doMock("@/lib/query-client", () => ({
@@ -374,6 +375,7 @@ describe("sendMessage — keeps session_id when reviving a terminal session (WS2
         streamSessionManager: {
           start: () => ({ signal: { aborted: false }, isCurrent: () => true }),
           disposeCurrent: vi.fn(),
+          current: () => ({ signal: { aborted: false }, isCurrent: () => true }),
         },
       }));
       vi.doMock("@/lib/query-client", () => ({

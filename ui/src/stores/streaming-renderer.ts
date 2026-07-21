@@ -315,6 +315,20 @@ export function createStreamingRenderer(store: StoreAccess) {
    * rAF) so tests can drive it with fake timers.
    */
   function scheduleReconnect(agent: string, sessionId: string) {
+    // Don't reconnect if the StreamSession was disposed (user Stop, agent
+    // switch, navigation teardown). `disposeCurrent` removes the session from
+    // the manager's map and aborts the SSE controller; the fetch abort then
+    // fires `onConnectionLost` asynchronously — but by that time the session
+    // is already gone, and reconnecting would reopen a stream the user just
+    // asked to stop. This was the root cause of "Stop works only on the
+    // second click": the first click disposed the session and cleared the
+    // reconnect timer synchronously, but the async `onConnectionLost` then
+    // armed a NEW timer that reconnected 500ms later — the second click
+    // cleared that timer.
+    if (!streamSessionManager.current(agent)) {
+      return;
+    }
+
     const attempts = (_reconnectAttempts.get(agent) ?? 0) + 1;
     _reconnectAttempts.set(agent, attempts);
 
@@ -364,6 +378,11 @@ export function createStreamingRenderer(store: StoreAccess) {
     const timer = setTimeout(() => {
       _reconnectTimers.delete(agent);
       if (_disposed) return;
+      // Re-check: the session may have been disposed while we were waiting
+      // for the backoff timer (user pressed Stop, switched agent, etc.).
+      // Without this, a delayed reconnect reopens a stream the user just
+      // cancelled — the same "Stop doesn't work the first time" bug.
+      if (!streamSessionManager.current(agent)) return;
       connect(agent, sessionId, true);
     }, delay);
     _reconnectTimers.set(agent, timer);

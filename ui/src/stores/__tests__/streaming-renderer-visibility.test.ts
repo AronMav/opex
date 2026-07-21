@@ -23,6 +23,7 @@ vi.mock("../stream-session", () => ({
   streamSessionManager: {
     start: () => ({ signal: { aborted: false }, isCurrent: () => true }),
     disposeCurrent: vi.fn(),
+    current: () => ({ signal: { aborted: false }, isCurrent: () => true }),
   },
 }));
 

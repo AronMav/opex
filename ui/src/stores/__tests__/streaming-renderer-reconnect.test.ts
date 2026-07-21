@@ -32,6 +32,10 @@ vi.mock("../stream-session", () => ({
   streamSessionManager: {
     start: () => ({ signal: { aborted: false }, isCurrent: () => true }),
     disposeCurrent: vi.fn(),
+    // `current` returns a truthy object so scheduleReconnect's disposed-check
+    // passes and the reconnect logic is exercised. Tests that specifically
+    // need the disposed branch can override this mock.
+    current: () => ({ signal: { aborted: false }, isCurrent: () => true }),
   },
 }));
 
