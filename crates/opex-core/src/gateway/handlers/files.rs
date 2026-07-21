@@ -890,8 +890,11 @@ async fn deliver_async_failure(state: &AppState, job: &handler_jobs::HandlerJob,
 /// - `dir` non-empty + absolute → used as-is (operator-configured full path,
 ///   e.g. `/home/user/Notes`).
 /// - `dir` non-empty + relative → joined under `workspace_root`.
-/// - `dir` empty → `<workspace_root>/zettelkasten/<subfolder>` (historical vault
-///   default), with `subfolder` validated as a single safe path component.
+/// - `dir` empty → `<workspace_root>/<default_vault>/<subfolder>`, with
+///   `subfolder` validated as a single safe path component. `default_vault`
+///   is the first entry from the operator-configured
+///   `[agent_tool] shared_writable_dirs` (or `"zettelkasten"` as the
+///   historical fallback when the list is empty).
 ///
 /// Returns `None` when the result would be unsafe: any `..` component in `dir`,
 /// or an unsafe `subfolder`. The `filename` is validated separately by the caller.
@@ -899,6 +902,7 @@ fn resolve_note_dir(
     workspace_root: &std::path::Path,
     dir: &str,
     subfolder: &str,
+    default_vault: &str,
 ) -> Option<std::path::PathBuf> {
     let dir = dir.trim();
     if !dir.is_empty() {
@@ -916,7 +920,7 @@ fn resolve_note_dir(
     if !is_safe_path_component(subfolder) {
         return None;
     }
-    Some(workspace_root.join("zettelkasten").join(subfolder))
+    Some(workspace_root.join(default_vault).join(subfolder))
 }
 
 /// Run the optional `post_action` carried in the outcome JSON. Supports a direct
@@ -926,7 +930,8 @@ fn resolve_note_dir(
 /// mcp-obsidian server, so the handler is self-contained/independent. The target
 /// directory is operator-configured: `post_action.dir` (the `output_dir` valve,
 /// a full absolute path) wins; when empty it falls back to
-/// `<workspace>/zettelkasten/<subfolder>` (the historical default location).
+/// `<workspace>/<default_vault>/<subfolder>` (the first
+/// `shared_writable_dirs` entry, or `"zettelkasten"` as the historical default).
 /// mcp-obsidian remains available for agents to call directly as a tool; only
 /// this auto note-write is decoupled from it.
 ///
@@ -974,7 +979,13 @@ async fn run_post_action(job_id: uuid::Uuid, outcome: &ScenarioOutcome) -> Optio
     let workspace_root = tokio::fs::canonicalize(crate::config::WORKSPACE_DIR)
         .await
         .unwrap_or_else(|_| std::path::PathBuf::from(crate::config::WORKSPACE_DIR));
-    let target_dir = match resolve_note_dir(&workspace_root, dir, subfolder) {
+    // Resolve the default vault directory from the operator-configured
+    // `[agent_tool] shared_writable_dirs`. The first entry is used as the
+    // fallback vault when `output_dir` is empty; if the list is empty,
+    // "zettelkasten" remains as the historical default for backward compat.
+    let shared = crate::agent::workspace::shared_writable_dirs();
+    let default_vault = shared.first().map(|s| s.as_str()).unwrap_or("zettelkasten");
+    let target_dir = match resolve_note_dir(&workspace_root, dir, subfolder, default_vault) {
         Some(d) => d,
         None => {
             tracing::warn!(
@@ -993,7 +1004,7 @@ async fn run_post_action(job_id: uuid::Uuid, outcome: &ScenarioOutcome) -> Optio
     match tokio::fs::write(&path, content).await {
         Ok(()) => {
             tracing::info!(job_id = %job_id, path = %path.display(), "run_post_action: note written");
-            // Prefer a workspace-relative display path ("zettelkasten/Summary/x.md");
+            // Prefer a workspace-relative display path ("vault/Summary/x.md");
             // fall back to the absolute path for operator-configured out-of-workspace dirs.
             let display = path
                 .strip_prefix(&workspace_root)
@@ -1160,30 +1171,37 @@ mod tests {
     fn resolve_note_dir_cases() {
         use std::path::{Path, PathBuf};
         let ws = Path::new("/ws");
-        // Empty dir → vault/<subfolder> (historical default).
+        // Empty dir → vault/<subfolder>. The default_vault parameter
+        // controls which vault is used; "zettelkasten" here mirrors the
+        // historical fallback for backward compat.
         assert_eq!(
-            resolve_note_dir(ws, "", "Summary"),
+            resolve_note_dir(ws, "", "Summary", "zettelkasten"),
             Some(PathBuf::from("/ws/zettelkasten/Summary"))
         );
         assert_eq!(
-            resolve_note_dir(ws, "   ", "Videos"),
+            resolve_note_dir(ws, "   ", "Videos", "zettelkasten"),
             Some(PathBuf::from("/ws/zettelkasten/Videos"))
+        );
+        // A custom vault name (e.g. operator set shared_writable_dirs = ["notes"]).
+        assert_eq!(
+            resolve_note_dir(ws, "", "Summary", "notes"),
+            Some(PathBuf::from("/ws/notes/Summary"))
         );
         // Absolute operator path used verbatim (full-path valve).
         assert_eq!(
-            resolve_note_dir(ws, "/home/u/Notes", "Summary"),
+            resolve_note_dir(ws, "/home/u/Notes", "Summary", "zettelkasten"),
             Some(PathBuf::from("/home/u/Notes"))
         );
         // Relative dir joined under the workspace root.
         assert_eq!(
-            resolve_note_dir(ws, "Custom/Notes", "Summary"),
+            resolve_note_dir(ws, "Custom/Notes", "Summary", "zettelkasten"),
             Some(PathBuf::from("/ws/Custom/Notes"))
         );
         // Traversal rejected in dir and in subfolder.
-        assert_eq!(resolve_note_dir(ws, "/home/../etc", "Summary"), None);
-        assert_eq!(resolve_note_dir(ws, "a/../b", "Summary"), None);
-        assert_eq!(resolve_note_dir(ws, "", "../evil"), None);
-        assert_eq!(resolve_note_dir(ws, "", "a/b"), None);
+        assert_eq!(resolve_note_dir(ws, "/home/../etc", "Summary", "zettelkasten"), None);
+        assert_eq!(resolve_note_dir(ws, "a/../b", "Summary", "zettelkasten"), None);
+        assert_eq!(resolve_note_dir(ws, "", "../evil", "zettelkasten"), None);
+        assert_eq!(resolve_note_dir(ws, "", "a/b", "zettelkasten"), None);
     }
 
     #[test]

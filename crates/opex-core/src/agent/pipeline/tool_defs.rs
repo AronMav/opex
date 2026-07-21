@@ -794,7 +794,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
                     },
                     "directory": {
                         "type": "string",
-                        "description": "Subdirectory in workspace containing the git repo (e.g. 'zettelkasten'). Default: workspace root."
+                        "description": "Subdirectory in workspace containing the git repo. Default: workspace root."
                     },
                     "message": { "type": "string", "description": "Commit message (for commit)" },
                     "files": { "type": "array", "items": {"type": "string"}, "description": "Files to stage (for add). Use [\".\"] for all." },

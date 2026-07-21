@@ -152,7 +152,7 @@ to the result — the runner writes the file (no mcp-obsidian dependency):
 result = ctx.result.text(short_summary)
 result.post_action = {
     "kind": "write_file",
-    "dir": ctx.config.get("output_dir") or "",   # abs path, or "" → workspace/zettelkasten
+    "dir": ctx.config.get("output_dir") or "",   # abs path, or "" → workspace/<vault>
     "subfolder": "Summary",
     "filename": f"{safe_slug}.md",                # ^[A-Za-z0-9 _.-]{1,128}$ (path-guarded by core)
     "content": full_markdown_note,

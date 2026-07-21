@@ -238,8 +238,8 @@ pub struct AgentToolConfig {
     pub tool_timeout_overrides: HashMap<String, u64>,
     /// Workspace-root directories (beyond the built-in `agents/tools/skills/mcp/
     /// uploads/toolgate/channels`) that agents may create and write files into at
-    /// any nesting depth — shared knowledge vaults like `zettelkasten`. Without an
-    /// entry here, a write to `zettelkasten/note.md` is silently redirected into
+    /// any nesting depth — shared knowledge vaults. Without an entry here, a
+    /// write to a vault path like `notes/note.md` is silently redirected into
     /// the agent's private `agents/{name}/` subtree (read resolves to the shared
     /// root, so read/write diverge). Each name is a single top-level directory
     /// component (no slashes). Default: `["zettelkasten"]`.

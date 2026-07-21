@@ -17,7 +17,9 @@ pub fn set_shared_writable_dirs(dirs: Vec<String>) {
 }
 
 /// The configured shared-writable-dirs allowlist (empty slice until set).
-fn shared_writable_dirs() -> &'static [String] {
+/// Public so that `files.rs::resolve_note_dir` can pick the default vault
+/// from the operator-configured list instead of hardcoding "zettelkasten".
+pub fn shared_writable_dirs() -> &'static [String] {
     SHARED_WRITABLE_DIRS.get().map(Vec::as_slice).unwrap_or(&[])
 }
 

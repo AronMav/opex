@@ -24,8 +24,8 @@
 #     <param name="language" type="string" default="ru" required="false"/>
 #   </params>
 #   <config>
-#     <field name="output_dir" type="string" default="" label="Полный путь к каталогу" description="Абсолютный путь к папке для конспектов (напр. /home/user/Notes). Если пусто — папка внутри workspace/zettelkasten (см. Папка в хранилище)"/>
-#     <field name="summary_folder" type="string" default="Summary" label="Папка в хранилище" description="Подпапка внутри workspace/zettelkasten, используется когда полный путь не задан"/>
+#     <field name="output_dir" type="string" default="" label="Полный путь к каталогу" description="Абсолютный путь к папке для конспектов (напр. /home/user/Notes). Если пусто — папка внутри workspace/vault (см. Папка в хранилище)"/>
+#     <field name="summary_folder" type="string" default="Summary" label="Папка в хранилище" description="Подпапка внутри workspace/vault, используется когда полный путь не задан"/>
 #     <field name="include_transcript" type="bool" default="true" label="Вставлять транскрипт" description="Добавлять полный транскрипт в свёрнутом блоке в конце заметки"/>
 #     <field name="summary_length" type="string" default="medium" label="Длина конспекта" description="short | medium | long" choices="short,medium,long"/>
 #     <field name="fix_terms" type="bool" default="true" label="Исправлять названия" description="Определять искажённые STT названия (бренды, плагины, термины) и исправлять их через веб-поиск. Транскрипты короче 300 символов пропускаются."/>
@@ -676,7 +676,7 @@ async def run(ctx, file, params):
 
     # Operator-configurable output location (per-agent valves). `output_dir` is a
     # full absolute path; when empty core falls back to
-    # workspace/zettelkasten/<summary_folder>. Core writes the file DIRECTLY (no
+    # workspace/vault/<summary_folder>. Core writes the file DIRECTLY (no
     # mcp-obsidian dependency) — see run_post_action.
     output_dir = str(ctx.config.get("output_dir") or "").strip()
     folder = str(ctx.config.get("summary_folder") or "Summary").strip() or "Summary"
