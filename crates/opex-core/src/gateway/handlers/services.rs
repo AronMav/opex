@@ -526,6 +526,29 @@ pub(crate) async fn api_container_restart(
             .into_response();
     }
 
+    // Synchronously verify the container exists before queueing the restart.
+    // Without this check a typo or a stale whitelist entry (e.g. an MCP
+    // removed from docker-compose.yml) returns 202 and the operator only
+    // discovers the "No such container" error in the logs after waiting for
+    // the 202 to "complete". docker inspect is cheap (~10ms local daemon).
+    let inspect = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        tokio::process::Command::new("docker").args(["inspect", &name]).output(),
+    )
+    .await;
+    let container_exists = match inspect {
+        Ok(Ok(o)) => o.status.success(),
+        _ => false,
+    };
+    if !container_exists {
+        tracing::warn!(container = %name, "container restart blocked: no such container");
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("container '{}' not found", name)})),
+        )
+            .into_response();
+    }
+
     tracing::info!(container = %name, "container restart requested; queuing background restart");
     let name_clone = name.clone();
     infra.spawn_bg(async move {

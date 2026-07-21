@@ -61,6 +61,10 @@ pub struct InfraServices {
     /// call `restart_agents_from_disk` twice — a Mutex is the simplest
     /// correct gate.
     pub restore_mutex: Arc<tokio::sync::Mutex<()>>,
+    /// In-memory registry of restore jobs (job_id → status). Mirrored to
+    /// `restore-jobs/{job_id}/state.json` per job for cross-restart
+    /// visibility. Backs `GET /api/restore/jobs{,/{id}}`.
+    pub restore_jobs: Arc<crate::gateway::handlers::backup::RestoreJobRegistry>,
 }
 
 impl InfraServices {
@@ -75,6 +79,7 @@ impl InfraServices {
         metrics: Arc<crate::metrics::MetricsRegistry>,
         secrets: Arc<crate::secrets::SecretsManager>,
         bg_tasks: Arc<TaskTracker>,
+        restore_jobs: Arc<crate::gateway::handlers::backup::RestoreJobRegistry>,
     ) -> Self {
         Self {
             db,
@@ -90,6 +95,7 @@ impl InfraServices {
             bg_semaphore: Arc::new(tokio::sync::Semaphore::new(BG_TASK_CONCURRENCY)),
             backup_running: Arc::new(AtomicBool::new(false)),
             restore_mutex: Arc::new(tokio::sync::Mutex::new(())),
+            restore_jobs,
         }
     }
 
@@ -216,6 +222,7 @@ impl InfraServices {
             bg_semaphore: Arc::new(tokio::sync::Semaphore::new(BG_TASK_CONCURRENCY)),
             backup_running: Arc::new(AtomicBool::new(false)),
             restore_mutex: Arc::new(tokio::sync::Mutex::new(())),
+            restore_jobs: Arc::new(crate::gateway::handlers::backup::RestoreJobRegistry::new()),
         }
     }
 }

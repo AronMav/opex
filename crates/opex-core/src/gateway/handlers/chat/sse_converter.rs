@@ -318,7 +318,13 @@ pub(super) async fn run_converter(
                 if let Some(start) = start_frame {
                     let _ = send_and_buffer!(start);
                 }
-                let _ = send_and_buffer!(delta_frame);
+                // Skip empty delta frames — `build_text_delta` returns an empty
+                // string when it cannot recover a `current_text_id` after the
+                // TextStart fallback path, and emitting it would advance the
+                // SSE cursor with no content.
+                if !delta_frame.is_empty() {
+                    let _ = send_and_buffer!(delta_frame);
+                }
                 accumulated_text.push_str(text);
                 // Periodic DB flush every 2s so reload shows partial response
                 // Uses append-mode SQL so accumulated_text can be cleared after flush (bounded memory)

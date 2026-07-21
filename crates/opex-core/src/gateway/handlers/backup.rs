@@ -31,6 +31,14 @@ pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/backup", post(api_create_backup).get(api_list_backups))
         .route("/api/backup/{filename}", get(api_download_backup).delete(api_delete_backup))
+        .route(
+            "/api/restore/jobs",
+            get(api_list_restore_jobs),
+        )
+        .route(
+            "/api/restore/jobs/{job_id}",
+            get(api_get_restore_job),
+        )
         .merge(
             Router::new()
                 .route("/api/restore", post(api_restore))
@@ -39,6 +47,171 @@ pub(crate) fn routes() -> Router<AppState> {
 }
 
 const BACKUP_DIR: &str = "backups";
+/// Directory under which restore staging archives + per-job metadata live.
+/// Each restore gets a fresh `restore-jobs/{uuid}/` directory; on success the
+/// directory is removed, on failure it is preserved (forensics) and pruned
+/// lazily by [`cleanup_old_restore_jobs`] at startup.
+pub(crate) const RESTORE_JOBS_DIR: &str = "restore-jobs";
+
+// ── Restore job tracking (in-memory + state.json) ────────────────────────────
+
+/// State of a single restore job. Mirrored to `restore-jobs/{id}/state.json`
+/// so the GET endpoint can recover job status after a core restart.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct RestoreJobStatus {
+    pub job_id: String,
+    pub state: String, // "running" | "completed" | "failed"
+    pub started_at: String, // RFC3339
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agents_restarted: Option<Vec<String>>,
+}
+
+/// Shared registry of restore jobs. Inserted into `InfraServices` and exposed
+/// to handlers via axum State. The map is bounded: completed/failed entries
+/// older than 24h are pruned on read by [`Self::snapshot`].
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RestoreJobRegistry {
+    inner: Arc<std::sync::RwLock<std::collections::HashMap<String, RestoreJobStatus>>>,
+}
+
+impl RestoreJobRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert(&self, status: RestoreJobStatus) {
+        if let Ok(mut map) = self.inner.write() {
+            map.insert(status.job_id.clone(), status);
+        }
+    }
+
+    pub fn update(&self, job_id: &str, state: &str, error: Option<String>, agents: Option<Vec<String>>) {
+        if let Ok(mut map) = self.inner.write()
+            && let Some(entry) = map.get_mut(job_id)
+        {
+            entry.state = state.to_string();
+            entry.finished_at = Some(chrono::Utc::now().to_rfc3339());
+            if error.is_some() { entry.error = error; }
+            if agents.is_some() { entry.agents_restarted = agents; }
+        }
+    }
+
+    pub fn get(&self, job_id: &str) -> Option<RestoreJobStatus> {
+        self.inner.read().ok()?.get(job_id).cloned()
+    }
+
+    /// Snapshot all jobs, sorted newest-first by start time. Prunes entries
+    /// that finished more than 24h ago (caller never sees them again).
+    pub fn snapshot(&self) -> Vec<RestoreJobStatus> {
+        let Ok(map) = self.inner.read() else { return vec![] };
+        let now = chrono::Utc::now();
+        let mut out: Vec<RestoreJobStatus> = map
+            .values()
+            .filter(|s| {
+                if s.state == "running" { return true; }
+                if let Some(finished) = s.finished_at.as_ref().and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok()) {
+                    let age = now.signed_duration_since(finished.with_timezone(&chrono::Utc));
+                    age.num_hours() < 24
+                } else {
+                    true // keep if finished_at is missing (defensive)
+                }
+            })
+            .cloned()
+            .collect();
+        out.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+        out
+    }
+}
+
+/// Load durable state.json files under `restore-jobs/` into a fresh registry.
+/// Called once at startup so the GET endpoint can answer queries about jobs
+/// that were running when the previous core process exited.
+pub(crate) async fn load_restore_jobs_from_disk() -> RestoreJobRegistry {
+    let registry = RestoreJobRegistry::new();
+    let Ok(mut dir) = tokio::fs::read_dir(RESTORE_JOBS_DIR).await else {
+        return registry;
+    };
+    while let Ok(Some(entry)) = dir.next_entry().await {
+        let path = entry.path();
+        if !path.is_dir() { continue; }
+        let state_path = path.join("state.json");
+        let Ok(bytes) = tokio::fs::read(&state_path).await else { continue };
+        let Ok(status) = serde_json::from_slice::<RestoreJobStatus>(&bytes) else { continue };
+        // If state.json says "running" but core restarted, mark it "unknown" —
+        // we cannot tell whether the bg task finished or was killed. Preserve
+        // the original started_at and treat it as failed for visibility.
+        let status = if status.state == "running" {
+            RestoreJobStatus {
+                state: "unknown".to_string(),
+                finished_at: Some(chrono::Utc::now().to_rfc3339()),
+                error: Some("core restarted mid-restore; status unknown".to_string()),
+                ..status
+            }
+        } else {
+            status
+        };
+        registry.insert(status);
+    }
+    registry
+}
+
+/// Persist a snapshot of a job's status to `restore-jobs/{job_id}/state.json`
+/// so the next process can recover it. Best-effort: failures are logged only.
+async fn persist_restore_job_state(status: &RestoreJobStatus) {
+    let job_dir = std::path::Path::new(RESTORE_JOBS_DIR).join(&status.job_id);
+    if let Err(e) = tokio::fs::create_dir_all(&job_dir).await {
+        tracing::warn!(job_id = %status.job_id, error = %e, "restore-jobs: failed to create job dir");
+        return;
+    }
+    let bytes = match serde_json::to_vec_pretty(status) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(job_id = %status.job_id, error = %e, "restore-jobs: failed to serialize state");
+            return;
+        }
+    };
+    if let Err(e) = tokio::fs::write(job_dir.join("state.json"), bytes).await {
+        tracing::warn!(job_id = %status.job_id, error = %e, "restore-jobs: failed to write state.json");
+    }
+}
+
+/// Garbage-collect `restore-jobs/{job_id}/` directories older than the
+/// configured retention. Called once at startup so the directory cannot grow
+/// unbounded over months of failed restore attempts. Forensic retention is
+/// valuable for ~7 days; older archives are unlikely to be useful.
+pub(crate) async fn cleanup_old_restore_jobs(retention_days: i64) {
+    let Ok(mut dir) = tokio::fs::read_dir(RESTORE_JOBS_DIR).await else {
+        return; // directory absent — nothing to clean
+    };
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days);
+    let mut removed = 0u32;
+    while let Ok(Some(entry)) = dir.next_entry().await {
+        let path = entry.path();
+        if !path.is_dir() { continue; }
+        // Use metadata modified time as the canonical age; fall back to
+        // state.json's started_at if the FS time is missing.
+        let mtime: chrono::DateTime<chrono::Utc> = match entry.metadata().await {
+            Ok(m) => m.modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .and_then(|d| chrono::DateTime::<chrono::Utc>::from_timestamp(d.as_secs() as i64, 0))
+                .unwrap_or_else(chrono::Utc::now),
+            Err(_) => continue,
+        };
+        if mtime < cutoff
+            && tokio::fs::remove_dir_all(&path).await.is_ok()
+        {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        tracing::info!(removed, retention_days, "restore-jobs: pruned old job directories");
+    }
+}
 
 /// Select which postgres container to use from `docker ps` stdout.
 ///
@@ -836,7 +1009,7 @@ pub(crate) async fn api_restore(
     // return 202 before the multi-minute pg_restore completes.
     let job_id = uuid::Uuid::new_v4().to_string();
     let job_id_for_spawn = job_id.clone();
-    let job_dir = std::path::Path::new("restore-jobs").join(&job_id);
+    let job_dir = std::path::Path::new(RESTORE_JOBS_DIR).join(&job_id);
     if let Err(e) = tokio::fs::create_dir_all(&job_dir).await {
         let _ = tokio::fs::remove_dir_all(&tmpdir).await;
         return (StatusCode::INTERNAL_SERVER_ERROR,
@@ -852,9 +1025,24 @@ pub(crate) async fn api_restore(
     // tmpdir is now empty of the tarball; keep the rest for the worker or clean it lazily.
     let _ = tokio::fs::remove_dir_all(&tmpdir).await;
 
+    // Register the job as "running" so `GET /api/restore/jobs/{id}` can answer
+    // while the background task is still in flight. Persisted to state.json so
+    // the next core process can also see it (as "unknown" — see load_restore_jobs_from_disk).
+    let initial_status = RestoreJobStatus {
+        job_id: job_id.clone(),
+        state: "running".to_string(),
+        started_at: chrono::Utc::now().to_rfc3339(),
+        finished_at: None,
+        error: None,
+        agents_restarted: None,
+    };
+    infra.restore_jobs.insert(initial_status.clone());
+    persist_restore_job_state(&initial_status).await;
+
     let container_cfg = cfg_svc.config.backup.postgres_container.clone();
     let db = infra.db.clone();
     let restore_mutex = infra.restore_mutex.clone();
+    let restore_jobs = infra.restore_jobs.clone();
     // Clone before spawn: `spawn_bg` borrows `&self` while `infra` itself is
     // moved into the closure for use by `run_restore_from_staged_archive`.
     let infra_for_spawn = infra.clone();
@@ -884,10 +1072,19 @@ pub(crate) async fn api_restore(
         ).await {
             Ok(restarted) => {
                 tracing::warn!(agents = ?restarted, %job_id, "RESTORE complete (pg_dump v3)");
+                restore_jobs.update(&job_id, "completed", None, Some(restarted.clone()));
+                // Refresh state.json so the success state survives a restart.
+                if let Some(s) = restore_jobs.get(&job_id) {
+                    persist_restore_job_state(&s).await;
+                }
                 let _ = tokio::fs::remove_dir_all(&job_dir).await;
             }
             Err(e) => {
                 tracing::error!(error = %e, %job_id, "RESTORE failed; staged archive preserved in restore-jobs");
+                restore_jobs.update(&job_id, "failed", Some(e.to_string()), None);
+                if let Some(s) = restore_jobs.get(&job_id) {
+                    persist_restore_job_state(&s).await;
+                }
             }
         }
     });
@@ -1044,6 +1241,45 @@ async fn run_restore_from_staged_archive(
     ).await.unwrap_or_default();
 
     Ok(restarted)
+}
+
+// ── Restore job status endpoints ─────────────────────────────────────────────
+
+/// `GET /api/restore/jobs` — list recent restore jobs (running + finished
+/// within the last 24h). Sorted newest-first by `started_at`.
+pub(crate) async fn api_list_restore_jobs(
+    State(infra): State<InfraServices>,
+) -> impl IntoResponse {
+    let jobs = infra.restore_jobs.snapshot();
+    Json(json!({
+        "ok": true,
+        "jobs": jobs,
+        "count": jobs.len(),
+    }))
+}
+
+/// `GET /api/restore/jobs/{job_id}` — fetch the status of a single restore
+/// job. Returns 404 if the job_id is unknown to this core process (including
+/// jobs older than the 24h in-memory retention — the on-disk archive may
+/// still exist under `restore-jobs/{job_id}/` but is not surfaced here).
+pub(crate) async fn api_get_restore_job(
+    State(infra): State<InfraServices>,
+    Path(job_id): Path<String>,
+) -> impl IntoResponse {
+    match infra.restore_jobs.get(&job_id) {
+        Some(status) => Json(json!({
+            "ok": true,
+            "job": status,
+        })).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "ok": false,
+                "error": format!("restore job '{job_id}' not found (unknown or older than 24h)"),
+            })),
+        )
+            .into_response(),
+    }
 }
 
 #[cfg(test)]

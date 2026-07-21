@@ -186,14 +186,17 @@ impl SseStreamWriter {
         } else {
             None
         };
-        let id = match self.current_text_id.clone() {
-            Some(id) => id,
-            None => {
-                tracing::error!("build_text_delta called without an open text block");
-                let id = format!("text-orphan-{}", self.text_id_counter);
-                self.text_id_counter += 1;
-                id
-            }
+        // SAFETY (logically): `current_text_id` was just set above if it was
+        // None, and nothing in this function clears it between the assignment
+        // and the clone below. The match stays defensive against future
+        // refactors, but the previous synthetic-id fallback (`text-orphan-N`)
+        // was removed because it produced a brand-new id the client had never
+        // seen — the UI rendered it as a separate text block, duplicating
+        // content. Skipping the delta entirely is the safer degradation: the
+        // user just doesn't see this single chunk, the next delta recovers.
+        let Some(id) = self.current_text_id.clone() else {
+            tracing::error!("build_text_delta: current_text_id still None after assignment — skipping delta");
+            return (start_frame, String::new());
         };
         let delta_frame = self.frame(&SseEvent::TextDelta { id, delta });
         (start_frame, delta_frame)

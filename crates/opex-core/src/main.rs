@@ -728,17 +728,29 @@ async fn main() -> Result<()> {
             oauth_manager,
             Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         ),
-        infra: gateway::clusters::InfraServices::new(
-            db_pool.clone(),
-            memory_store,
-            embedder.clone(),
-            container_manager.clone(),
-            sandbox.clone(),
-            process_manager.clone(),
-            metrics.clone(),
-            secrets_manager.clone(),
-            bg_tasks.clone(),
-        ),
+        infra: {
+            // Load any in-flight restore-job state from a previous core
+            // process (so GET /api/restore/jobs can answer queries about a
+            // restore that was running when core restarted) and prune stale
+            // forensic archives. Retention mirrors backup retention so the
+            // operator's expectation of "how long is history kept" is uniform.
+            let restore_jobs = gateway::handlers::backup::load_restore_jobs_from_disk().await;
+            let restore_jobs = Arc::new(restore_jobs);
+            let retention_days = cfg.backup.retention_days.max(1) as i64;
+            gateway::handlers::backup::cleanup_old_restore_jobs(retention_days).await;
+            gateway::clusters::InfraServices::new(
+                db_pool.clone(),
+                memory_store,
+                embedder.clone(),
+                container_manager.clone(),
+                sandbox.clone(),
+                process_manager.clone(),
+                metrics.clone(),
+                secrets_manager.clone(),
+                bg_tasks.clone(),
+                restore_jobs,
+            )
+        },
         channels: gateway::clusters::ChannelBus::new(
             Arc::new(tokio::sync::RwLock::new(Vec::new())),
             log_tx.clone(),
