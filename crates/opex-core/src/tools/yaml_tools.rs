@@ -813,6 +813,16 @@ impl YamlToolDef {
                     }
                     let token = crate::gateway::shared_token()
                         .ok_or_else(|| anyhow::anyhow!("core shared token not available"))?;
+                    // Audit trail: a bearer_internal call forwards the core's
+                    // own auth token to an internal endpoint. Logged at INFO
+                    // (not DEBUG) so it is visible in the default journalctl
+                    // stream — this is a sensitive operation that should be
+                    // traceable after the fact.
+                    tracing::info!(
+                        tool = %self.name,
+                        endpoint = %url,
+                        "bearer_internal: forwarding core auth token to internal endpoint"
+                    );
                     auth_headers.push(("Authorization".into(), format!("Bearer {token}")));
                 }
                 "basic_env" => {

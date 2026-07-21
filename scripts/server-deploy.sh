@@ -134,6 +134,19 @@ fi
 # atomic symlink flip — the symlink swap avoids the NPM-proxy 502-cache window
 # that a server-side rebuild-in-place would reopen). Run it after a UI change.
 
+# Sync docker-compose.yml to runtime so the MCP `up --no-start` step below
+# sees the current service definitions (mounts, env, profiles). Without this,
+# a compose change (e.g. the mcp-git /src mount added in Phase 5) only reaches
+# the server after a manual `cp` — the next `docker compose up` would silently
+# use the stale runtime copy and never recreate the affected container.
+echo "==> sync docker-compose.yml to runtime"
+if [[ -f "${SRC_DIR}/docker/docker-compose.yml" ]]; then
+    cp -f "${SRC_DIR}/docker/docker-compose.yml" "${RUN_DIR}/docker/docker-compose.yml"
+    echo "  synced docker-compose.yml"
+else
+    echo "  WARNING: ${SRC_DIR}/docker/docker-compose.yml not found — runtime compose unchanged"
+fi
+
 # On-demand MCP containers must EXIST (stopped) for core's ContainerManager to
 # start them — `ensure_running` only inspect+start, never create. `up --no-start`
 # is idempotent: creates any missing container from already-built images. If an

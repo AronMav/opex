@@ -81,7 +81,24 @@ pub fn rewrite_tool_arguments(
 
     for key in PATH_KEYS {
         if let Some(value) = obj.get_mut(*key) {
+            let original = value.clone();
             *value = rewrite_value(value, mcp_name, tool_name, workspace_dir, source_mount_dir)?;
+            // Trace only when the value actually changed — passthrough cases
+            // (container paths, non-string values, unmatched keys) stay
+            // silent so the log is signal, not noise.
+            if *value != original
+                && let Ok(orig_s) = serde_json::to_string(&original)
+                && let Ok(new_s) = serde_json::to_string(&value)
+            {
+                tracing::debug!(
+                    mcp = %mcp_name,
+                    tool = %tool_name,
+                    key = *key,
+                    original = %orig_s,
+                    rewritten = %new_s,
+                    "MCP path argument rewritten"
+                );
+            }
         }
     }
 
@@ -146,6 +163,12 @@ fn rewrite_path(
 
     // Unknown absolute host path. Reject instead of letting the MCP container
     // fail with a confusing "not in /workspace" message.
+    tracing::debug!(
+        mcp = %mcp_name,
+        tool = %tool_name,
+        path = %path,
+        "MCP path rejected: outside the allowed mounts"
+    );
     anyhow::bail!(
         "MCP tool '{tool_name}' on '{mcp_name}' received an absolute host path outside the allowed mounts: {path}. \
          Use '/workspace/...' for workspace files or '/src/...' for the source tree; use workspace_read/workspace_write for host paths that are not mounted."

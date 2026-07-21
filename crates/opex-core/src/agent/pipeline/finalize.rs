@@ -174,7 +174,7 @@ async fn persist_assistant_message(
 async fn emit_stream_event<S: EventSink>(
     sink: &mut S,
     event: StreamEvent,
-    context: &'static str,
+    context: &str,
 ) {
     if let Err(e) = sink.emit(PipelineEvent::Stream(event)).await {
         tracing::warn!(

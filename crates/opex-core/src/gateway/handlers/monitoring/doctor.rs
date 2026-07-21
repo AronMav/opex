@@ -49,26 +49,58 @@ fn probe_status_reachable(status: u16) -> bool {
 /// Categories:
 /// - `code_fixed`    — errors that should not reproduce with the current code
 ///   (path rewriting, `_context` stripping, `bearer_internal` auth, etc.).
-/// - `config_needed` — operator configuration issues (API keys, mounts, provider
-///   URLs, tool schemas).
-/// - `operator_service` — third-party or auxiliary service failures (browser
-///   timeouts, fetch robots.txt, MCP process hangs, network SSL).
+/// - `agent_misuse`  — the agent called an MCP filesystem/git tool with a
+///   host path outside the container mounts (toolgate source, channels
+///   dir, …). The MCP path rewriter now rejects these with a clear error
+///   pointing at `workspace_read`/`workspace_write`; the call itself was
+///   never going to succeed and should be considered agent misuse rather
+///   than a code regression.
+/// - `config_needed` — operator configuration issues (API keys, mounts,
+///   provider URLs, tool schemas).
+/// - `operator_service` — third-party or auxiliary service failures
+///   (browser timeouts, fetch robots.txt, MCP process hangs, network SSL).
 /// - `unknown`       — anything that does not match the heuristics above.
 fn classify_degraded_error(error: &str) -> &'static str {
     let e = error.to_lowercase();
 
-    // Code-fixed signatures (most specific first).
+    // Code-fixed signatures (most specific first). The /home/... path
+    // heuristics below intentionally avoid hardcoding the operator's home
+    // directory: any "Access denied - path outside allowed directories"
+    // error whose path starts with /home/ is either a workspace/src path
+    // (handled by the rewriter → code_fixed) or a host path outside the
+    // mounts (agent_misuse). The disambiguation runs after this block.
     if e.contains("env var 'opex_auth_token' is reserved")
         || (e.contains("unexpected keyword argument") && e.contains("_context"))
         || e.contains("__file__:")
-        || e.contains("access denied - path outside allowed directories: /bridge")
-        || e.contains("access denied - path outside allowed directories: /home/aronmav/opex/workspace")
-        || e.contains("access denied - path outside allowed directories: /home/opex/workspace")
-        || e.contains("access denied - path outside allowed directories: /home/aronmav/opex-src")
-        || e.contains("access denied - path outside allowed directories: /home/aronmav/opex/toolgate")
         || e.contains("mcp tool error: /bridge")
     {
         return "code_fixed";
+    }
+
+    // Path-outside-allowed-directories errors. Split into code_fixed (path
+    // rewriter now handles workspace/src) vs agent_misuse (path outside any
+    // mount — agent should use workspace_read/workspace_write instead of
+    // the MCP filesystem tool). /bridge is always code_fixed (cwd fix).
+    if e.contains("access denied - path outside allowed directories: /bridge") {
+        return "code_fixed";
+    }
+    if e.contains("access denied - path outside allowed directories:") {
+        // Workspace/source-tree prefixes → the rewriter now rewrites these,
+        // so any historical failure is stale (code_fixed). We match by a
+        // suffix segment rather than the full home-dir path so the heuristic
+        // survives a move to a different deploy (different $HOME, different
+        // user, containerised runtime, …).
+        if e.contains("/workspace") || e.contains("/opex-src") || e.contains("/src/") {
+            return "code_fixed";
+        }
+        // Any other /home/... host path (toolgate, channels, /etc, …) is not
+        // something the rewriter can map — the agent should have used a
+        // workspace_* system tool. Historical failures here will not be
+        // reproduced either (the new code rejects with a clearer error),
+        // but the underlying call pattern is still misuse.
+        if e.contains("/home/") || e.contains("/etc/") || e.contains("/var/") {
+            return "agent_misuse";
+        }
     }
 
     // Operator-service / transient third-party failures.
@@ -167,6 +199,55 @@ mod classify_tests {
             "operator_service"
         );
     }
+
+    #[test]
+    fn workspace_path_outside_allowed_is_code_fixed() {
+        // The MCP path rewriter now translates /home/.../workspace/... to
+        // /workspace/... before forwarding to the MCP container, so a
+        // historical "Access denied" with a workspace host path is stale.
+        assert_eq!(
+            classify_degraded_error("MCP tool error: Error: Access denied - path outside allowed directories: /home/aronmav/opex/workspace/agents/Arty/x not in /workspace"),
+            "code_fixed"
+        );
+    }
+
+    #[test]
+    fn source_path_outside_allowed_is_code_fixed() {
+        assert_eq!(
+            classify_degraded_error("MCP tool error: Error: Access denied - path outside allowed directories: /home/aronmav/opex-src/ui/src/app/page.tsx not in /workspace"),
+            "code_fixed"
+        );
+    }
+
+    #[test]
+    fn toolgate_path_outside_allowed_is_agent_misuse() {
+        // /home/.../toolgate/... is not a mount — the agent should have used
+        // workspace_read rather than the MCP filesystem tool.
+        assert_eq!(
+            classify_degraded_error("MCP tool error: Error: Access denied - path outside allowed directories: /home/aronmav/opex/toolgate/routers/imagegen.py not in /workspace"),
+            "agent_misuse"
+        );
+    }
+
+    #[test]
+    fn etc_path_outside_allowed_is_agent_misuse() {
+        // /etc/passwd is not a mount — agent misuse.
+        assert_eq!(
+            classify_degraded_error("MCP tool error: Error: Access denied - path outside allowed directories: /etc/passwd not in /workspace"),
+            "agent_misuse"
+        );
+    }
+
+    #[test]
+    fn non_aronmav_workspace_path_is_code_fixed() {
+        // The heuristic matches "/workspace" anywhere in the error, so a
+        // deploy under a different user (/home/alice/opex/workspace/...)
+        // is still classified correctly.
+        assert_eq!(
+            classify_degraded_error("MCP tool error: Error: Access denied - path outside allowed directories: /home/alice/opex/workspace/foo not in /workspace"),
+            "code_fixed"
+        );
+    }
 }
 
 /// Build the `GET /api/doctor/tools` response: degraded tools grouped by
@@ -195,6 +276,7 @@ pub(crate) async fn api_doctor_tools(State(infra): State<InfraServices>) -> Json
         "degraded_count": degraded.len(),
         "categories": {
             "code_fixed": buckets.remove("code_fixed").unwrap_or_default(),
+            "agent_misuse": buckets.remove("agent_misuse").unwrap_or_default(),
             "config_needed": buckets.remove("config_needed").unwrap_or_default(),
             "operator_service": buckets.remove("operator_service").unwrap_or_default(),
             "unknown": buckets.remove("unknown").unwrap_or_default(),
