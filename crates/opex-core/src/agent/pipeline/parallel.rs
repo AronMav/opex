@@ -422,8 +422,11 @@ pub async fn execute_tool_calls_partitioned(
         })
     };
     let end_payload = |tc: &ToolCall, res: &str| -> Value {
-        let success =
-            !res.to_lowercase().contains("error") && !res.to_lowercase().contains("failed");
+        // Use the canonical classifier (same as engine_dispatch.rs and
+        // record_execution below) — NOT a bare substring "error"/"failed"
+        // match which false-positives on legitimate output like
+        // "0 errors found" or JSON with `"error_code": 0`.
+        let success = !crate::agent::pipeline::dispatch::classify_tool_result(res);
         serde_json::json!({
             "tool_call_id": tc.id,
             "tool_name": tc.name,
@@ -554,16 +557,13 @@ pub async fn execute_tool_calls_partitioned(
                         loop_break: Some(Some(reason)),
                     };
                 }
-                let success = !result.starts_with("Error:")
-                    && !result.starts_with("tool error:")
-                    && !result.contains("timed out");
+                let success = !crate::agent::pipeline::dispatch::classify_tool_result(&result);
                 detector.record_execution(&key, &tool_calls[i].arguments, success);
             }
 
             // Store in semantic cache if successful
             if executor.semantic_cache_config(&tool_calls[i].name).is_some()
-                && !result.starts_with("Error:")
-                && !result.starts_with("tool error:")
+                && !crate::agent::pipeline::dispatch::classify_tool_result(&result)
             {
                 let query_text = tool_calls[i]
                     .arguments
@@ -708,16 +708,13 @@ pub async fn execute_tool_calls_partitioned(
         };
         let res = super::context::truncate_tool_result(model, &raw, current_context_chars);
         if detect_loops {
-            let success = !res.starts_with("Error:")
-                && !res.starts_with("tool error:")
-                && !res.contains("timed out");
+        let success = !crate::agent::pipeline::dispatch::classify_tool_result(&res);
             detector.record_execution(&seq_key, &tool_calls[i].arguments, success);
         }
 
         // Store in semantic cache if successful
         if executor.semantic_cache_config(&tool_calls[i].name).is_some()
-            && !res.starts_with("Error:")
-            && !res.starts_with("tool error:")
+            && !crate::agent::pipeline::dispatch::classify_tool_result(&res)
         {
             let query_text = tool_calls[i]
                 .arguments
