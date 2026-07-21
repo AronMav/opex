@@ -179,9 +179,10 @@ async fn routing_fails_over_on_server_error() {
     assert!(called.load(Ordering::SeqCst), "fallback must have been called");
 }
 
-/// After R1, `InactivityTimeout` is NOT failover-worthy — it bubbles up for retry.
+/// `InactivityTimeout` IS failover-worthy — a stalled provider should trigger
+/// route switch to the fallback so the user's turn doesn't hang.
 #[tokio::test]
-async fn routing_does_not_fail_over_on_inactivity_timeout() {
+async fn routing_fails_over_on_inactivity_timeout() {
     use crate::agent::providers::error::PartialState;
 
     let called = Arc::new(AtomicBool::new(false));
@@ -224,18 +225,18 @@ async fn routing_does_not_fail_over_on_inactivity_timeout() {
         ("fallback:mock-success".into(), fallback, 60),
     ]);
 
-    let err = routing
+    let result = routing
         .chat(&[], &[], CallOptions::default())
         .await
-        .expect_err("InactivityTimeout must bubble up after R1, not fail over");
-    let typed = err.downcast_ref::<LlmCallError>().expect("error must be LlmCallError");
+        .expect("InactivityTimeout must fail over to the fallback, not bubble up");
     assert!(
-        matches!(typed, LlmCallError::InactivityTimeout { .. }),
-        "expected InactivityTimeout, got {typed:?}"
+        result.content.contains("from-fallback"),
+        "fallback must have been called: {}",
+        result.content
     );
     assert!(
-        !called.load(Ordering::SeqCst),
-        "fallback MUST NOT be called for non-failover-worthy InactivityTimeout"
+        called.load(Ordering::SeqCst),
+        "fallback MUST be called for failover-worthy InactivityTimeout"
     );
 }
 
@@ -306,14 +307,15 @@ async fn routing_does_not_fail_over_on_auth_error() {
     );
 }
 
-/// LLM-timeout refactor: `InactivityTimeout` is NOT failover-worthy after R1,
-/// but the timeout counter IS still bumped on `handle_provider_error`.
+/// LLM-timeout refactor: `InactivityTimeout` IS failover-worthy (stalled
+/// provider should trigger route switch), AND the timeout counter IS bumped
+/// on `handle_provider_error`.
 ///
 /// Test isolation note: the `global()` OnceLock is process-wide and tests
 /// run in parallel, so we can't read absolute values. Instead we use
 /// unique provider names so this test's counter labels are isolated.
 #[tokio::test]
-async fn routing_bumps_timeout_counter_on_inactivity_but_does_not_fail_over() {
+async fn routing_bumps_timeout_counter_on_inactivity_and_fails_over() {
     use std::sync::Arc;
     use crate::agent::providers::error::PartialState;
 
@@ -367,20 +369,22 @@ async fn routing_bumps_timeout_counter_on_inactivity_but_does_not_fail_over() {
         ("fallback:unique-t22".into(), fallback, 60),
     ]);
 
-    // After R1: InactivityTimeout bubbles up, fallback is NOT called.
-    let err = routing
+    // InactivityTimeout IS failover-worthy: fallback must be called.
+    let result = routing
         .chat(&[], &[], CallOptions::default())
         .await
-        .expect_err("InactivityTimeout must bubble up after R1");
-    let typed = err.downcast_ref::<LlmCallError>().expect("must be LlmCallError");
-    assert!(matches!(typed, LlmCallError::InactivityTimeout { .. }));
+        .expect("InactivityTimeout must fail over to fallback");
     assert!(
-        !called.load(Ordering::SeqCst),
-        "fallback MUST NOT be called for non-failover-worthy InactivityTimeout"
+        result.content.contains("from-fallback-t22"),
+        "fallback must have been called: {}", result.content
+    );
+    assert!(
+        called.load(Ordering::SeqCst),
+        "fallback MUST be called for failover-worthy InactivityTimeout"
     );
 
     // Unique labels → exact-equality assertion is safe even under parallel
-    // test execution. Timeout counter IS bumped even for non-failover errors.
+    // test execution. Timeout counter IS bumped.
     let timeout_snap = metrics.snapshot_llm_timeout_total();
     assert_eq!(
         timeout_snap.get(&(
@@ -389,17 +393,6 @@ async fn routing_bumps_timeout_counter_on_inactivity_but_does_not_fail_over() {
         )),
         Some(&1),
         "llm_timeout_total{{provider=mock-inactivity-unique-t22,kind=inactivity}} must be 1"
-    );
-    // Failover counter is NOT bumped — inactivity is no longer failover-worthy.
-    let failover_snap = metrics.snapshot_llm_failover_total();
-    assert_eq!(
-        failover_snap.get(&(
-            "primary:unique-t22".to_string(),
-            "fallback:unique-t22".to_string(),
-            "inactivity".to_string()
-        )),
-        None,
-        "llm_failover_total must NOT be bumped for non-failover-worthy InactivityTimeout"
     );
 }
 

@@ -179,11 +179,11 @@ impl LlmCallError {
         match self {
             ConnectTimeout { .. }
             | RequestTimeout { .. }
+            | InactivityTimeout { .. }
             | Network(_)
             | Server5xx { .. } => true,
 
-            InactivityTimeout { .. }      // changed: no longer failover-worthy (retry same provider)
-            | MaxDurationExceeded { .. }
+            MaxDurationExceeded { .. }
             | UserCancelled { .. }
             | ShutdownDrain { .. }
             | AuthError { .. } => false,
@@ -376,12 +376,12 @@ mod tests {
     }
 
     #[test]
-    fn inactivity_is_not_failover_worthy_after_r1() {
+    fn inactivity_is_failover_worthy() {
         let e = LlmCallError::InactivityTimeout {
             provider: "p".into(),
             silent_secs: 60,
             partial_state: PartialState::Empty,
         };
-        assert!(!e.is_failover_worthy(), "InactivityTimeout must NOT be failover-worthy after R1");
+        assert!(e.is_failover_worthy(), "InactivityTimeout must be failover-worthy — a stalled provider should trigger route switch");
     }
 }

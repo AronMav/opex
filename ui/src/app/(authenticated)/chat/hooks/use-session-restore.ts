@@ -124,9 +124,26 @@ export function useSessionRestore({
 
     const agentState = useChatStore.getState().agents[currentAgent];
 
-    // If already streaming — don't touch
+    // If the session is still active (streaming/submitted), we must NOT
+    // bail out — we need to selectSession + resumeStream to silently
+    // reconnect to the in-flight stream and watch the ongoing generation.
+    // The only case where we skip is when connectionPhase is active AND
+    // messageSource is already showing content (live/finishing/history)
+    // — that means the zustand persist already restored a valid view.
+    // When messageSource is "new-chat" with an active phase, it's an F5
+    // reload mid-stream: the phase was persisted but the content wasn't.
+    // Fall through to selectSession below, which calls abortLocalOnly
+    // (resets phase to idle properly through the stream lifecycle) and
+    // then loads the session + resumes the stream.
     if (isActivePhase(agentState?.connectionPhase)) {
-      return;
+      const mode = agentState?.messageSource?.mode;
+      if (mode === "live" || mode === "finishing" || mode === "history") {
+        // Already showing a real session — don't touch
+        return;
+      }
+      // F5 mid-stream: fall through to selectSession which will
+      // abortLocalOnly (resetting the phase through the proper lifecycle)
+      // and then load the session content + resume the stream.
     }
 
     // If has activeSessionId but UI shows new-chat — WS set the ID but didn't load the session.

@@ -19,7 +19,8 @@ use regex::Regex;
 use crate::agent::providers::PROVIDER_CREDENTIALS;
 use crate::db::providers::{self, CreateProvider, UpdateProvider, ProviderRow};
 use crate::gateway::AppState;
-use crate::gateway::clusters::{AuthServices, InfraServices};
+use crate::gateway::clusters::{AgentCore, AuthServices, ChannelBus, ConfigServices, InfraServices, StatusMonitor};
+use crate::agent::handler_registry::HandlerRegistry;
 use crate::secrets::SecretsManager;
 use super::secrets::mask_secret_value;
 
@@ -271,9 +272,15 @@ pub(crate) struct UpdateProviderBody {
     pub api_key: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn api_update_provider(
     State(infra): State<InfraServices>,
     State(auth): State<AuthServices>,
+    State(agents): State<AgentCore>,
+    State(bus): State<ChannelBus>,
+    State(cfg_svc): State<ConfigServices>,
+    State(status): State<StatusMonitor>,
+    State(handlers): State<HandlerRegistry>,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateProviderBody>,
 ) -> impl IntoResponse {
@@ -397,6 +404,38 @@ pub(crate) async fn api_update_provider(
 
             // Toolgate caches config 30s with ETag conditional GET — provider
             // changes propagate within 30s automatically.
+
+            // Hot-reload agents that reference this provider so the new
+            // settings (base_url, model, key, provider_type) take effect
+            // immediately without a core restart. Find which profiles use
+            // this provider by scanning all profile slots.
+            if identity_changed {
+                let profiles = crate::db::profiles::list_profiles(&infra.db)
+                    .await
+                    .unwrap_or_default();
+                for prof in &profiles {
+                    let slots = &prof.slots;
+                    let uses_provider = slots.as_object().is_some_and(|slots_obj| {
+                        slots_obj.values().any(|entries| {
+                            entries.as_array().is_some_and(|arr| {
+                                arr.iter().any(|e| {
+                                    e.get("provider").and_then(|v| v.as_str()) == Some(&p.name)
+                                        || old_provider.as_ref().is_some_and(|old| {
+                                            e.get("provider").and_then(|v| v.as_str()) == Some(&old.name)
+                                        })
+                                })
+                            })
+                        })
+                    });
+                    if uses_provider {
+                        crate::gateway::handlers::profiles::hot_reload_agents_for_profile(
+                            &prof.name, &agents, &infra, &auth, &bus, &cfg_svc, &status, &handlers,
+                        )
+                        .await;
+                    }
+                }
+            }
+
             let json = provider_json(&auth.secrets, &p).await;
             (StatusCode::OK, Json(json)).into_response()
         }

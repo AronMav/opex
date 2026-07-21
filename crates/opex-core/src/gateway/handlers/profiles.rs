@@ -74,8 +74,12 @@ fn profile_json_with_agents(row: &ProfileRow) -> Value {
 /// engine down, then `start_agent_from_config` and re-insert on success. A
 /// single agent's restart failure is logged and skipped — it never aborts the
 /// enclosing PUT.
+///
+/// Also called by `api_update_provider` (providers.rs) when a provider's
+/// identity changes (base_url, model, key) — the agent must rebuild its
+/// RoutingProvider to pick up the new settings without a core restart.
 #[allow(clippy::too_many_arguments)]
-async fn hot_reload_agents_for_profile(
+pub(crate) async fn hot_reload_agents_for_profile(
     profile_name: &str,
     agents: &AgentCore,
     infra: &InfraServices,
