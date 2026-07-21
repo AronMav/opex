@@ -45,6 +45,7 @@ pub struct ErrorStrings {
     pub auth_permanent: &'static str,
     pub billing: &'static str,
     pub overloaded: &'static str,
+    pub call_timeout: &'static str,
     pub unknown: &'static str,
 }
 
@@ -128,6 +129,7 @@ const RU_ERR: ErrorStrings = ErrorStrings {
     auth_permanent: "Ошибка аутентификации API. Проверьте ключ.",
     billing: "Проблема с оплатой/квотой API провайдера.",
     overloaded: "Сервер перегружен. Попробуйте позже.",
+    call_timeout: "Провайдер не отвечает. Переключаюсь на резервного…",
     unknown: "Произошла ошибка. Попробуйте ещё раз.",
 };
 
@@ -139,6 +141,7 @@ const EN_ERR: ErrorStrings = ErrorStrings {
     auth_permanent: "API authentication error. Please check your key.",
     billing: "API provider billing/quota issue.",
     overloaded: "Server is overloaded. Please try later.",
+    call_timeout: "Provider not responding. Switching to fallback…",
     unknown: "An error occurred. Please try again.",
 };
 

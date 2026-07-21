@@ -616,6 +616,19 @@ pub async fn execute<S: EventSink>(
                                 error = %e,
                                 "switching to fallback provider after LLM error"
                             );
+                            // Emit a brief user-visible notification so the
+                            // user knows WHY the turn paused and that a backup
+                            // provider was engaged. Without this the spinner
+                            // just keeps spinning and the user has no idea
+                            // the primary hit a rate limit or stalled.
+                            let _ = sink
+                                .emit(PipelineEvent::Stream(StreamEvent::TextDelta(
+                                    format!(
+                                        "\n\n⚠️ _Первичный провайдер недоступен ({reason}), переключаюсь на резервного…_\n",
+                                        reason = crate::agent::error_classify::user_message(&err_class),
+                                    ),
+                                )))
+                                .await;
                             // Emit StepFinish for the failed step so the
                             // frontend stops the spinner; then `continue`
                             // — the next iteration will use the fallback

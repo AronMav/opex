@@ -134,7 +134,7 @@ pub fn user_message_lang(class: &LlmErrorClass, language: &str) -> &'static str 
         LlmErrorClass::AuthPermanent => e.auth_permanent,
         LlmErrorClass::Billing => e.billing,
         LlmErrorClass::Overloaded => e.overloaded,
-        LlmErrorClass::CallTimeout => e.unknown,  // handled by retry UI, not error message
+        LlmErrorClass::CallTimeout => e.call_timeout,
         LlmErrorClass::Unknown => e.unknown,
     }
 }
