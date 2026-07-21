@@ -50,22 +50,10 @@ impl McpRegistry {
         Self::with_optional_source_dir(container_manager, cache_dir, workspace_dir, None::<PathBuf>)
     }
 
-    /// Constructor that also accepts the host source-tree mount directory.
-    pub fn with_source_dir(
-        container_manager: Option<Arc<ContainerManager>>,
-        cache_dir: impl Into<PathBuf>,
-        workspace_dir: impl AsRef<Path>,
-        source_mount_dir: impl AsRef<Path>,
-    ) -> Self {
-        Self::with_optional_source_dir(
-            container_manager,
-            cache_dir,
-            workspace_dir,
-            Some(source_mount_dir),
-        )
-    }
-
-    fn with_optional_source_dir<S: AsRef<Path>>(
+    /// Constructor with an optional source-tree mount. Pass `None` when the
+    /// deploy source tree is not available — path rewriting for `/src` is
+    /// then disabled (only `/workspace` rewriting remains active).
+    pub fn with_optional_source_dir<S: AsRef<Path>>(
         container_manager: Option<Arc<ContainerManager>>,
         cache_dir: impl Into<PathBuf>,
         workspace_dir: impl AsRef<Path>,

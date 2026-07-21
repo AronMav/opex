@@ -1247,20 +1247,23 @@ async fn init_mcp_registry(container_manager: Option<Arc<containers::ContainerMa
         })
         .or_else(|| {
             // Fallback: look for a directory named `opex-src` in the parent of
-            // the workspace dir.
-            let src = std::path::Path::new(crate::config::WORKSPACE_DIR)
-                .parent()?
-                .join("opex-src");
+            // the (canonicalized) workspace dir. Using the canonical path
+            // matters — `WORKSPACE_DIR` is a relative literal ("workspace"),
+            // whose `.parent()` is the empty string and would resolve `opex-src`
+            // against the process cwd instead of the runtime root.
+            let src = workspace_dir.parent()?.join("opex-src");
             if src.is_dir() { Some(src) } else { None }
         });
 
     // Always create the registry — URL-based MCPs work without Docker.
+    // `source_mount_dir` is `None` when detection failed — path rewriting for
+    // `/src` is then disabled rather than silently redirecting to `/workspace`.
     let has_docker = container_manager.is_some();
-    let registry = Arc::new(mcp::McpRegistry::with_source_dir(
+    let registry = Arc::new(mcp::McpRegistry::with_optional_source_dir(
         container_manager,
         cache_dir,
         workspace_dir,
-        source_dir.as_deref().unwrap_or(std::path::Path::new(crate::config::WORKSPACE_DIR)),
+        source_dir,
     ));
     tracing::info!(has_docker, mcp_count = mcp_map.len(), "MCP registry initialized");
 

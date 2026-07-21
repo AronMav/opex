@@ -10,10 +10,24 @@
 //! This module rewrites tool arguments before they cross the MCP boundary.
 //! Unknown absolute host paths are rejected with a clear error so the agent
 //! can fall back to the correct system tool (e.g. `workspace_read`).
+//!
+//! Rewriting is **gated by `mcp_name`**: only `mcp-filesystem` and `mcp-git`
+//! ever receive rewritten paths. Any other MCP (notion, memory, weather, ...)
+//! passes arguments through unchanged — otherwise a weather MCP's `from`/`to`
+//! date-range parameters or a future tool with a `path` field would be silently
+//! corrupted.
 
 use std::path::Path;
 
+/// MCP servers whose arguments are path-rewritten. Any other MCP is left
+/// untouched.
+const PATH_REWRITING_MCPS: &[&str] = &["mcp-filesystem", "mcp-git"];
+
 /// Path-like argument keys that filesystem/git MCP tools commonly accept.
+///
+/// Note: `from`/`to` are intentionally excluded — they are heavily overloaded
+/// (date ranges in weather/finance MCPs, pagination cursors, etc.) and the
+/// official filesystem MCP uses `source`/`destination` for `move_file`.
 const PATH_KEYS: &[&str] = &[
     "path",
     "paths",
@@ -23,10 +37,10 @@ const PATH_KEYS: &[&str] = &[
     "repo_path",
     "old_path",
     "new_path",
+    "source",
+    "destination",
     "source_path",
     "target_path",
-    "from",
-    "to",
 ];
 
 /// Container mount point for the workspace directory.
@@ -37,6 +51,8 @@ const SOURCE_MOUNT: &str = "/src";
 
 /// Rewrite tool arguments for filesystem/git MCPs.
 ///
+/// - Returns the input unchanged for any `mcp_name` not in
+///   [`PATH_REWRITING_MCPS`].
 /// - Strips any host path prefix that matches `workspace_dir` and replaces it
 ///   with `/workspace`.
 /// - Strips any host path prefix that matches `source_mount_dir` (if provided)
@@ -50,6 +66,14 @@ pub fn rewrite_tool_arguments(
     workspace_dir: &Path,
     source_mount_dir: Option<&Path>,
 ) -> anyhow::Result<serde_json::Value> {
+    // Gate: only filesystem/git MCPs receive rewritten paths. Other MCPs may
+    // use the same parameter names for non-filesystem values (weather `from`/
+    // `to` date ranges, notion parent-page paths, etc.) and must not be
+    // touched.
+    if !PATH_REWRITING_MCPS.contains(&mcp_name) {
+        return Ok(arguments.clone());
+    }
+
     let mut out = arguments.clone();
     let Some(obj) = out.as_object_mut() else {
         return Ok(out);
@@ -286,5 +310,44 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, "/workspace/agents/Arty/journal.md");
+    }
+
+    #[test]
+    fn non_path_mcp_is_passthrough() {
+        // A `from`/`to` date range from a weather MCP must not be rewritten
+        // even when it looks path-like.
+        let args = serde_json::json!({
+            "from": "2026-01-01",
+            "to": "2026-12-31",
+            "path": "/home/aronmav/opex/workspace/x"
+        });
+        let out = rewrite_tool_arguments("mcp-weather", "get_forecast", &args, &ws(), Some(&src()))
+            .unwrap();
+        assert_eq!(out, args, "non-filesystem MCP args must be unchanged");
+    }
+
+    #[test]
+    fn unknown_mcp_with_path_arg_is_passthrough() {
+        let args = serde_json::json!({"path": "/home/aronmav/opex/workspace/x"});
+        let out = rewrite_tool_arguments("mcp-notion", "search", &args, &ws(), Some(&src()))
+            .unwrap();
+        assert_eq!(out, args);
+    }
+
+    #[test]
+    fn move_file_source_destination_rewritten() {
+        let args = serde_json::json!({
+            "source": "/home/aronmav/opex/workspace/a.md",
+            "destination": "/home/aronmav/opex/workspace/b.md"
+        });
+        let out = rewrite_tool_arguments("mcp-filesystem", "move_file", &args, &ws(), Some(&src()))
+            .unwrap();
+        assert_eq!(
+            out,
+            serde_json::json!({
+                "source": "/workspace/a.md",
+                "destination": "/workspace/b.md"
+            })
+        );
     }
 }

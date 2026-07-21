@@ -22,15 +22,25 @@ def _infer_working_dir(command):
     directory as their last argument, and relative paths in tool calls are
     resolved against the subprocess working directory. Git MCP servers
     receive `--repository /src`. If the last command token is an absolute
-    path, use it as cwd so relative paths land inside the container mount
-    instead of the bridge's own `/bridge` directory.
+    path to an existing directory, use it as cwd so relative paths land
+    inside the container mount instead of the bridge's own `/bridge`
+    directory.
+
+    The `os.path.isdir()` check is critical: many MCP commands end with
+    the script path (`node /mcp_server/dist/index.js`,
+    `node /mcp_modules/.../cli.mjs`) — using those as cwd would fail
+    `chdir()` with ENOTDIR and break every call to that MCP.
     """
     if not command:
         return None
     last = command[-1]
-    if isinstance(last, str) and last.startswith("/") and last not in ("/", "/bridge"):
-        return last
-    return None
+    if not isinstance(last, str):
+        return None
+    if not last.startswith("/") or last in ("/", "/bridge"):
+        return None
+    if not os.path.isdir(last):
+        return None
+    return last
 
 
 async def stdio_call(method: str, params: dict, req_id):
