@@ -264,7 +264,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         },
         ToolDefinition {
             name: "file_handler".to_string(),
-            description: "Run a file/URL handler (e.g. summarize a video, transcribe audio, extract a document) that the user chose. When the user sends a video/file link or an uploaded file, the system lists the matching handlers in context; present those options to the user and, once they pick one, call this with action=\"run\". Use action=\"list\" to re-fetch the options. The result (e.g. the video summary) is delivered to the chat asynchronously when it finishes.".to_string(),
+            description: "Run a file/URL handler (e.g. summarize a video, transcribe audio, extract a document, save a file to workspace). When the user sends a video/file link or an uploaded file, the system lists the matching handlers in context; present those options to the user and, once they pick one, call this with action=\"run\". Use action=\"list\" to re-fetch the options. The result (e.g. the video summary) is delivered to the chat asynchronously when it finishes.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -284,6 +284,15 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
                     "handler_id": {
                         "type": "string",
                         "description": "Required for action=run — the handler the user chose (must be one from action=list)."
+                    },
+                    "args": {
+                        "type": "object",
+                        "description": "Optional handler-specific parameters. Examples: {\"path\": \"uploads/file.json\"} for save, {\"prompt\": \"Describe in Russian\"} for describe, {\"max_chars\": 5000} for extract_document.",
+                        "properties": {
+                            "path": { "type": "string", "description": "For save: relative path in workspace (e.g. 'uploads/file.json')" },
+                            "prompt": { "type": "string", "description": "For describe: custom prompt for vision model" },
+                            "max_chars": { "type": "integer", "description": "For extract_document: max characters to extract" }
+                        }
                     }
                 },
                 "required": ["action"]

@@ -159,7 +159,17 @@ async fn handle_file_handler(deps: ToolDeps<'_>, args: &Value) -> String {
                 .map(|m| m.execution.as_str() == "async")
                 .unwrap_or(true); // unknown → safer async path
 
-            let params = json!({ "language": lang });
+            // Build params for the handler: start with language, then merge
+            // any extra args the model passed (e.g. `path` for save, `prompt`
+            // for describe, `max_chars` for extract_document). The model's
+            // args are a JSON object under the "args" key in the tool call
+            // arguments — we pass them through so handlers can use them.
+            let mut params = json!({ "language": lang });
+            if let Some(extra) = args.get("args").and_then(|v| v.as_object()) {
+                for (k, v) in extra {
+                    params[k] = v.clone();
+                }
+            }
 
             if is_async {
                 // Async path: enqueue, the file_handler_worker dispatches later.
