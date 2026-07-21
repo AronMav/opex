@@ -27,8 +27,8 @@ describe("wsDeleteRecursive URL encoding", () => {
       return Promise.resolve({ ok: true, status: 200, text: async () => "" } as Response);
     }));
 
-    await wsDeleteRecursive("zettelkasten/My Note/a.md").catch(() => {});
-    expect(fetched[0]).toBe("/api/workspace/zettelkasten/My%20Note/a.md?recursive=true");
+    await wsDeleteRecursive("vault/My Note/a.md").catch(() => {});
+    expect(fetched[0]).toBe("/api/workspace/vault/My%20Note/a.md?recursive=true");
   });
 
   it("encodes # and ? in segment names without breaking the query string", async () => {

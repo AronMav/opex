@@ -3,10 +3,10 @@ import { resolveAssetPath, findImageMatches } from "@/components/workspace/md-de
 
 describe("resolveAssetPath", () => {
   it("resolves relative against noteDir", () => {
-    expect(resolveAssetPath("zettelkasten/Note", "images/x.png")).toBe("zettelkasten/Note/images/x.png");
+    expect(resolveAssetPath("vault/Note", "images/x.png")).toBe("vault/Note/images/x.png");
   });
   it("returns null for absolute urls", () => {
-    expect(resolveAssetPath("zettelkasten/Note", "https://e.com/a.png")).toBeNull();
+    expect(resolveAssetPath("vault/Note", "https://e.com/a.png")).toBeNull();
   });
   it("returns null for root-relative urls", () => {
     expect(resolveAssetPath("note", "/images/x.png")).toBeNull();

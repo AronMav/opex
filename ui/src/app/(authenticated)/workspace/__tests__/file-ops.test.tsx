@@ -3,9 +3,9 @@ import { buildRenameTarget, encodeWorkspacePath } from "@/app/(authenticated)/wo
 
 describe("buildRenameTarget", () => {
   it("keeps file in current folder", () => {
-    expect(buildRenameTarget("zettelkasten/Note", "a.md", "b.md")).toEqual({
-      from: "zettelkasten/Note/a.md",
-      to: "zettelkasten/Note/b.md",
+    expect(buildRenameTarget("vault/Note", "a.md", "b.md")).toEqual({
+      from: "vault/Note/a.md",
+      to: "vault/Note/b.md",
     });
   });
   it("works at root", () => {
