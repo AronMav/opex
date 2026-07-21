@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 
-use crate::agent::url_tools::{enrich_with_attachments, extract_urls};
+use crate::agent::url_tools::extract_urls;
 use crate::config::DelegationConfig;
 
 /// Tools denied to subagents by default (prevent recursive spawning, destructive operations, and dangerous ops).
@@ -215,12 +215,16 @@ pub struct EnrichResult {
 /// handlers, presents them to the user, and runs the chosen one via
 /// `file_handler(action="run", …)`. No adapter-specific inline buttons and no
 /// auto-processing.
+#[allow(clippy::too_many_arguments)]
 pub async fn enrich_message_text(
     http_client: &reqwest::Client,
     gateway_listen: &str,
     toolgate_url: &str,
     user_text: &str,
     attachments: &[opex_types::MediaAttachment],
+    handler_registry: &crate::agent::handler_registry::HandlerRegistry,
+    db: &sqlx::PgPool,
+    lang: &str,
 ) -> EnrichResult {
     let mut enriched = user_text.to_string();
 
@@ -243,7 +247,19 @@ pub async fn enrich_message_text(
             }
         }
     }
-    enrich_with_attachments(&mut enriched, attachments);
+
+    // Enrich with file attachment context: resolve available handlers from the
+    // registry and inject a structured hint so the model can call
+    // file_handler(action="run") directly instead of going through
+    // action="list" first.
+    crate::agent::url_tools::enrich_with_attachments(
+        &mut enriched,
+        attachments,
+        handler_registry,
+        db,
+        lang,
+    )
+    .await;
 
     // Video/file link → hand off to the model-driven handler menu. Uses the
     // ORIGINAL user_text link (pre-PII-redaction) so the source URL is real.
@@ -958,17 +974,38 @@ mod tests {
 
     // ── enrich_message_text → EnrichResult ──────────────────────────────────
 
+    /// Helper: build a HandlerRegistry that returns an empty manifest list
+    /// (no toolgate reachable in unit tests).
+    fn empty_handler_registry() -> crate::agent::handler_registry::HandlerRegistry {
+        crate::agent::handler_registry::HandlerRegistry::new(
+            "http://127.0.0.1:1".to_string(),
+            reqwest::Client::new(),
+        )
+    }
+
+    /// Helper: lazy PgPool for tests (never connects — attachments are empty
+    /// in these tests so the pool is never actually queried).
+    fn test_db() -> sqlx::PgPool {
+        sqlx::PgPool::connect_lazy("postgres://invalid")
+            .expect("lazy pool for test")
+    }
+
     /// A YouTube link in the user text adds a hint pointing the model at the
     /// `file_handler` tool (model-driven menu). It never auto-processes.
     #[tokio::test]
     async fn enrich_youtube_link_adds_file_handler_hint() {
         let client = reqwest::Client::new();
+        let reg = empty_handler_registry();
+        let db = test_db();
         let result = enrich_message_text(
             &client,
             "127.0.0.1:18789",
             "http://localhost:9011",
             "сделай конспект https://www.youtube.com/watch?v=abc123",
             &[],
+            &reg,
+            &db,
+            "ru",
         )
         .await;
 
@@ -990,12 +1027,17 @@ mod tests {
     #[tokio::test]
     async fn enrich_plain_text_adds_no_handler_hint() {
         let client = reqwest::Client::new();
+        let reg = empty_handler_registry();
+        let db = test_db();
         let result = enrich_message_text(
             &client,
             "127.0.0.1:18789",
             "http://localhost:9011",
             "привет, как дела?",
             &[],
+            &reg,
+            &db,
+            "ru",
         )
         .await;
         assert!(!result.text.contains("file_handler"), "no hint for plain text");

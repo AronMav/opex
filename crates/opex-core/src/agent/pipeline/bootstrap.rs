@@ -321,6 +321,9 @@ pub async fn bootstrap<S: EventSink>(
             &toolgate_url,
             &user_text,
             &ctx.msg.attachments,
+            &engine.cfg().handler_registry,
+            &engine.cfg().db,
+            &engine.cfg().agent.language,
         ),
     )
     .await

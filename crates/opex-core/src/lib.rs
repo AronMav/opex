@@ -70,7 +70,22 @@ pub mod agent {
         // Path resolves relative to `src/agent/fse/`.
         #[path = "allowlist.rs"]
         pub mod allowlist;
+
+        // allowlist_store — DB-backed toggle storage. Needed by url_tools'
+        // enrich_with_attachments to resolve the enabled-handler allowlist.
+        #[path = "allowlist_store.rs"]
+        #[allow(dead_code)]
+        pub mod allowlist_store;
+
+        pub use allowlist_store::get_enabled_allowlist;
     }
+
+    // handler_registry — toolgate handler manifest cache + match_buttons.
+    // Needed by url_tools' enrich_with_attachments to resolve available
+    // handlers for a given file attachment.
+    #[path = "handler_registry.rs"]
+    #[allow(dead_code)]
+    pub mod handler_registry;
 
     pub mod file_scenario {
         // Surviving toolgate wire type parsed by `gateway/handlers/files.rs`.

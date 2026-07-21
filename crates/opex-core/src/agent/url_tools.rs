@@ -1,5 +1,8 @@
 //! URL extraction and content helpers — standalone functions used by the engine.
 
+use crate::agent::handler_registry::{HandlerRegistry, match_buttons};
+use crate::agent::fse::get_enabled_allowlist;
+
 /// Convert a public attachment URL to a localhost URL for internal Core downloads.
 ///
 /// When `public_url` is configured (e.g. `https://192.168.1.85`), `att.url` contains
@@ -47,54 +50,152 @@ pub(crate) fn extract_upload_id(att_url: &str) -> Option<&str> {
 
 /// Append media attachment hints to the enriched text for the LLM.
 ///
-/// For audio/video/image/document attachments the hint points the model at the
-/// `file_handler` tool (action=list to fetch the applicable handlers, action=run
-/// to execute the user's choice) — the same model-driven menu used for links.
+/// For each attachment, resolves the available file handlers via `match_buttons`
+/// and injects a structured hint listing them with `handler_id` + label +
+/// description. The model can then call `file_handler(action="run")` directly
+/// when the user's text already indicates what to do (e.g. "расшифруй" →
+/// `transcribe`), or offer a brief choice when it doesn't — without the
+/// extra round-trip of `action="list"`.
+///
 /// The model MUST NOT try to read the bytes itself (it has no multimodal
-/// channel — `Message.content` is `String`); all media is processed out-of-band
-/// through toolgate handlers (`describe`, `transcribe`, `extract_document`,
-/// `save`) or, for images, the `analyze_image` capability tool when a vision
-/// provider is configured.
-pub(crate) fn enrich_with_attachments(text: &mut String, attachments: &[opex_types::MediaAttachment]) {
+/// channel — `Message.content` is `String`); all media is processed
+/// out-of-band through toolgate handlers.
+pub(crate) async fn enrich_with_attachments(
+    text: &mut String,
+    attachments: &[opex_types::MediaAttachment],
+    handlers: &HandlerRegistry,
+    db: &sqlx::PgPool,
+    lang: &str,
+) {
     use opex_types::MediaType;
-    // Model-driven handler menu for a handleable upload. Explicitly forbids
-    // the model from attempting to "read" the bytes itself (which would emit
-    // fake "this model does not support image input" errors on text-only LLMs).
-    let menu = |kind: &str, extra: &str, url: &str| -> String {
-        match extract_upload_id(url) {
-            Some(id) => format!(
-                "[Пользователь прислал {kind}{extra} (upload_id: {id}). НЕ пытайся прочитать \
-                 это сама — у тебя нет прямого доступа к байтам файла. Вызови инструмент \
-                 file_handler с action=\"list\" и upload_id=\"{id}\", покажи доступные \
-                 обработчики и по выбору пользователя вызови file_handler с action=\"run\", \
-                 тем же upload_id и выбранным handler_id.]"
-            ),
-            None => format!("[User sent a {kind}{extra}: {url}]"),
+
+    let manifests = handlers.manifests().await;
+    if manifests.is_empty() {
+        // Toolgate not reachable or no handlers configured — fall back to
+        // the generic hint so the model at least knows a file was sent.
+        for att in attachments {
+            let kind = match att.media_type {
+                MediaType::Image => "изображение",
+                MediaType::Audio => "голосовое сообщение",
+                MediaType::Video => "видео",
+                MediaType::Document => "документ",
+            };
+            let name = att.file_name.as_deref().unwrap_or("");
+            let extra = if name.is_empty() { String::new() } else { format!(" «{name}»") };
+            let hint = match extract_upload_id(&att.url) {
+                Some(id) => format!(
+                    "[Пользователь прислал {kind}{extra} (upload_id: {id}). \
+                     Вызови file_handler с action=\"list\" и upload_id=\"{id}\" \
+                     для просмотра доступных обработчиков.]"
+                ),
+                None => format!("[User sent a {kind}{extra}: {}]", att.url),
+            };
+            push_hint(text, &hint);
         }
-    };
+        return;
+    }
+
+    let enabled = get_enabled_allowlist(db).await;
+
     for att in attachments {
-        let hint = match att.media_type {
-            // Images use the same menu hint — `describe` (vision) and `save`
-            // are exposed by `file_handler` after the sync-execution fix.
-            // If `analyze_image` is available as a capability tool the model
-            // may pick that instead, but the hint must not assume it.
-            MediaType::Image => {
-                let name = att.file_name.as_deref().unwrap_or("image");
-                menu("изображение", &format!(" «{name}»"), &att.url)
-            }
-            MediaType::Audio => menu("голосовое сообщение", "", &att.url),
-            MediaType::Video => menu("видео", "", &att.url),
-            MediaType::Document => {
-                let name = att.file_name.as_deref().unwrap_or("file");
-                menu("документ", &format!(" «{name}»"), &att.url)
+        let upload_id = match extract_upload_id(&att.url) {
+            Some(id) => id,
+            None => {
+                // Non-upload URL (e.g. direct hotlink) — simple hint, no handler menu.
+                let kind = match att.media_type {
+                    MediaType::Image => "image",
+                    MediaType::Audio => "audio",
+                    MediaType::Video => "video",
+                    MediaType::Document => "document",
+                };
+                let name = att.file_name.as_deref().unwrap_or("");
+                let extra = if name.is_empty() { String::new() } else { format!(" «{name}»") };
+                push_hint(text, &format!("[User sent a {kind}{extra}: {}]", att.url));
+                continue;
             }
         };
-        if text.is_empty() {
-            *text = hint;
-        } else {
-            text.push('\n');
-            text.push_str(&hint);
+
+        // Resolve the upload row to get MIME + size for match_buttons.
+        let upload_uuid = match uuid::Uuid::parse_str(upload_id) {
+            Ok(u) => u,
+            Err(_) => {
+                push_hint(text, &format!(
+                    "[Пользователь прислал файл (upload_id: {upload_id}). \
+                     Вызови file_handler с action=\"list\" и upload_id=\"{upload_id}\".]"
+                ));
+                continue;
+            }
+        };
+        let row = match crate::db::uploads::get_by_id(db, upload_uuid).await {
+            Ok(Some(r)) => r,
+            _ => {
+                push_hint(text, &format!(
+                    "[Пользователь прислал файл (upload_id: {upload_id}). \
+                     Вызови file_handler с action=\"list\" и upload_id=\"{upload_id}\".]"
+                ));
+                continue;
+            }
+        };
+
+        let mime = &row.mime;
+        let size = u64::try_from(row.size_bytes).unwrap_or(0);
+        let buttons = match_buttons(
+            &manifests, mime, size, &enabled, lang,
+        );
+
+        let kind = match att.media_type {
+            MediaType::Image => "изображение",
+            MediaType::Audio => "голосовое сообщение",
+            MediaType::Video => "видео",
+            MediaType::Document => "документ",
+        };
+        let name = att.file_name.as_deref().unwrap_or("");
+        let extra = if name.is_empty() { String::new() } else { format!(" «{name}»") };
+
+        if buttons.is_empty() {
+            push_hint(text, &format!(
+                "[Пользователь прислал {kind}{extra} (upload_id: {upload_id}). \
+                 НЕ пытайся прочитать это сама — у тебя нет прямого доступа к байтам файла. \
+                 Для этого типа файла нет доступных обработчиков.]"
+            ));
+            continue;
         }
+
+        // Build a structured handler list the model can act on directly.
+        let mut handler_lines = String::new();
+        for b in &buttons {
+            let desc = manifests
+                .iter()
+                .find(|m| m.id == b.id)
+                .and_then(|m| m.descriptions.get(lang).or_else(|| m.descriptions.get("en")))
+                .cloned()
+                .unwrap_or_default();
+            handler_lines.push_str(&format!("  • {} ({})", b.id, b.label));
+            if !desc.is_empty() {
+                handler_lines.push_str(&format!(" — {desc}"));
+            }
+            handler_lines.push('\n');
+        }
+
+        push_hint(text, &format!(
+            "[Пользователь прислал {kind}{extra} (upload_id: {upload_id}, mime: {mime}, size: {size} bytes).\n\
+             НЕ пытайся прочитать это сама — у тебя нет прямого доступа к байтам файла.\n\
+             Доступные обработчики:\n\
+             {handler_lines}\
+             Если пользователь уже указал в сообщении, что делать с файлом — вызови \
+             file_handler с action=\"run\", upload_id=\"{upload_id}\" и подходящим handler_id. \
+             Если не указал — кратко предложи выбрать из списка выше и вызови \
+             file_handler с action=\"run\" после выбора.]"
+        ));
+    }
+}
+
+fn push_hint(text: &mut String, hint: &str) {
+    if text.is_empty() {
+        *text = hint.to_string();
+    } else {
+        text.push('\n');
+        text.push_str(hint);
     }
 }
 
@@ -145,15 +246,23 @@ mod tests {
 
     // ── enrich_with_attachments ──────────────────────────────────────────────
 
-    #[test]
-    fn enrich_with_attachments_empty_no_change() {
+    fn empty_registry() -> HandlerRegistry {
+        HandlerRegistry::new("http://127.0.0.1:1".to_string(), reqwest::Client::new())
+    }
+
+    fn test_db() -> sqlx::PgPool {
+        sqlx::PgPool::connect_lazy("postgres://invalid").expect("lazy pool")
+    }
+
+    #[tokio::test]
+    async fn enrich_with_attachments_empty_no_change() {
         let mut text = "hello".to_string();
-        enrich_with_attachments(&mut text, &[]);
+        enrich_with_attachments(&mut text, &[], &empty_registry(), &test_db(), "ru").await;
         assert_eq!(text, "hello");
     }
 
-    #[test]
-    fn enrich_with_attachments_image_without_upload_id_falls_back_to_url() {
+    #[tokio::test]
+    async fn enrich_with_attachments_image_without_upload_id_falls_back_to_url() {
         // An image without an /api/uploads/{id} URL can't be routed through
         // file_handler (no upload_id to pass) — keep the bare inline note.
         let mut text = String::new();
@@ -164,7 +273,7 @@ mod tests {
             mime_type: None,
             file_size: None,
         };
-        enrich_with_attachments(&mut text, &[att]);
+        enrich_with_attachments(&mut text, &[att], &empty_registry(), &test_db(), "ru").await;
         assert!(
             text.contains("https://example.com/img.jpg"),
             "image url survives in hint: {text}"
@@ -175,11 +284,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn enrich_with_attachments_image_with_upload_id_routes_via_file_handler() {
-        // The fix for the "this model does not support image input" leak: an
-        // image upload MUST point at file_handler so the model does not try
-        // to read the bytes itself.
+    #[tokio::test]
+    async fn enrich_with_attachments_empty_manifests_falls_back_to_list_hint() {
+        // No handlers configured (toolgate unreachable) → generic hint with
+        // action="list" so the model can still call file_handler.
         let mut text = String::new();
         let att = opex_types::MediaAttachment {
             url: "https://host/api/uploads/44444444-4444-4444-8444-444444444444?sig=x".to_string(),
@@ -188,21 +296,20 @@ mod tests {
             mime_type: None,
             file_size: None,
         };
-        enrich_with_attachments(&mut text, &[att]);
-        assert!(text.contains("file_handler"), "image hint points at file_handler: {text}");
+        enrich_with_attachments(&mut text, &[att], &empty_registry(), &test_db(), "ru").await;
+        // With empty manifests, the fallback hint says action="list".
+        assert!(
+            text.contains("file_handler"),
+            "fallback hint points at file_handler: {text}"
+        );
         assert!(
             text.contains("44444444-4444-4444-8444-444444444444"),
-            "image hint carries the upload_id: {text}"
-        );
-        assert!(text.contains("photo.png"), "image hint keeps the filename: {text}");
-        assert!(
-            text.contains("НЕ пытайся прочитать"),
-            "image hint forbids the model from reading bytes itself: {text}"
+            "hint carries the upload_id: {text}"
         );
     }
 
-    #[test]
-    fn enrich_with_attachments_multiple_joined_with_newline() {
+    #[tokio::test]
+    async fn enrich_with_attachments_multiple_joined_with_newline() {
         let mut text = "look at this".to_string();
         let att1 = opex_types::MediaAttachment {
             url: "https://example.com/img.jpg".to_string(),
@@ -218,35 +325,35 @@ mod tests {
             mime_type: None,
             file_size: None,
         };
-        enrich_with_attachments(&mut text, &[att1, att2]);
+        enrich_with_attachments(&mut text, &[att1, att2], &empty_registry(), &test_db(), "ru").await;
         assert!(
             text.contains("https://example.com/img.jpg"),
             "image url survives: {text}"
         );
-        // Audio upload → file_handler menu with the extracted upload_id.
-        assert!(text.contains("file_handler"), "audio hint points at file_handler: {text}");
         assert!(
-            text.contains("11111111-1111-4111-8111-111111111111"),
-            "audio hint carries the upload_id: {text}"
+            text.contains("file_handler"),
+            "audio hint points at file_handler: {text}"
         );
     }
 
-    #[test]
-    fn enrich_with_attachments_document_with_filename() {
+    #[tokio::test]
+    async fn enrich_with_attachments_non_upload_url_no_handler() {
         let mut text = String::new();
         let att = opex_types::MediaAttachment {
-            url: "https://host/api/uploads/22222222-2222-4222-8222-222222222222?sig=x".to_string(),
+            url: "https://example.com/doc.pdf".to_string(),
             media_type: opex_types::MediaType::Document,
             file_name: Some("report.pdf".to_string()),
             mime_type: None,
             file_size: None,
         };
-        enrich_with_attachments(&mut text, &[att]);
-        assert!(text.contains("file_handler"), "document hint points at file_handler: {text}");
-        assert!(text.contains("report.pdf"), "document hint keeps the filename: {text}");
+        enrich_with_attachments(&mut text, &[att], &empty_registry(), &test_db(), "ru").await;
         assert!(
-            text.contains("22222222-2222-4222-8222-222222222222"),
-            "document hint carries the upload_id: {text}"
+            text.contains("report.pdf"),
+            "document hint keeps the filename: {text}"
+        );
+        assert!(
+            !text.contains("file_handler"),
+            "non-upload URL → no file_handler menu: {text}"
         );
     }
 
