@@ -1229,9 +1229,17 @@ pub async fn execute<S: EventSink>(
             // callers leave the layer `None` and get the legacy Failed
             // status with the reason intact.
             let (status, finish_reason) = if layers.forced_final_call.is_some() {
-                match engine
-                    .cfg()
-                    .provider
+                // Use the live provider (fallback if engaged) — not the
+                // primary. If the turn failed over to a reserve, the
+                // primary is likely cooled/broken and the forced-final
+                // summary should go to the working provider.
+                let forced_provider: &dyn crate::agent::providers::LlmProvider =
+                    if let Some(ref fb) = layer_state.fallback_provider {
+                        fb.as_ref()
+                    } else {
+                        engine.cfg().provider.as_ref()
+                    };
+                match forced_provider
                     .chat(
                         &messages,
                         &[],
@@ -1308,17 +1316,22 @@ pub async fn execute<S: EventSink>(
     // callers leave the layer `None` and get the legacy "no extra call,
     // just emit Finish { reason: turn_limit }" semantics.
     if layers.forced_final_call.is_some() {
-        match engine
-            .cfg()
-            .provider
+        // Use the live provider (fallback if engaged) — same rationale as
+        // the loop-break forced-final path above.
+        let forced_provider: &dyn crate::agent::providers::LlmProvider =
+            if let Some(ref fb) = layer_state.fallback_provider {
+                fb.as_ref()
+            } else {
+                engine.cfg().provider.as_ref()
+            };
+        match forced_provider
             .chat(
                 &messages,
                 &[],
                 crate::agent::providers::CallOptions {
                     // CACHE-02: same rationale as the loop-break forced-final
                     // path — the third breakpoint must be present on every
-                    // call to engine.cfg().provider so cache hits cover this
-                    // code path too.
+                    // call so cache hits cover this code path too.
                     claude_md_content: claude_md_content.clone(),
                     // Wave-2 Task 12: same per-turn override as the main loop.
                     model_override: turn_model_override.clone(),
