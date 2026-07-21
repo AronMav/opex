@@ -576,13 +576,21 @@ export function createStreamingRenderer(store: StoreAccess) {
       if (!sid) continue;
       const last = _lastEventTime.get(agent) ?? 0;
       // If we never recorded activity OR the gap exceeds the threshold, the
-      // socket is almost certainly dead — re-open. connect() disposes the prior
-      // session itself (generation bump keeps the stale-write guard), never
-      // POSTs /abort (tab focus must not cancel the backend turn), settles
-      // nothing (settleMessages:false — a reconnect CONTINUATION of the same
-      // turn, same message id), and replays the envelope (or an empty
-      // finished envelope if the turn already ended while hidden).
+      // socket is almost certainly dead — re-open. However, if `last === 0`
+      // (no activity ever recorded for this agent), only reattach on the
+      // FIRST watchdog tick — subsequent ticks should respect the activity
+      // timestamp set by the reattach's onEnvelopeApplied/onEventActivity.
+      // Without this, a backend that always returns an empty (finished)
+      // envelope + a phase that stays "submitted" would trigger infinite
+      // reattach loops on every watchdog tick.
       if (last !== 0 && now - last < staleMs) continue;
+      if (last === 0) {
+        // First-ever check for this agent — record a timestamp so the next
+        // tick has a reference point. If the reattach succeeds, onEventActivity
+        // will update it with the real event time. If it fails, the watchdog
+        // won't hammer the backend on every tick (it'll wait staleMs first).
+        _lastEventTime.set(agent, now);
+      }
       try {
         // C1 fix: pass isRetry=true so the reconnect-budget cap is honoured.
         // With the default (false), connect() would _reconnectAttempts.delete()

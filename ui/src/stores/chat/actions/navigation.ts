@@ -128,10 +128,21 @@ export function createNavigationActions(deps: ActionDeps) {
       const agent = forAgent ?? get().currentAgent;
       ensure(agent);
 
-      // If re-selecting the same session that's currently streaming, just switch to live view
+      // If re-selecting the same session that's currently streaming,
+      // switch to live view (the user navigated back to the active session
+      // — they should see the ongoing generation, not stale history).
       const currentState = get().agents[agent];
       if (currentState?.activeSessionId === sessionId && isActivePhase(currentState.connectionPhase)) {
-        // Already in live mode — no change needed (messageSource should already be live)
+        // Already in live mode — no change needed
+        if (currentState.messageSource?.mode === "live" || currentState.messageSource?.mode === "finishing") {
+          return;
+        }
+        // In history mode but stream is active — switch to live to show
+        // the ongoing generation. This happens after F5 restore: the
+        // restore effect called selectSession (history mode) and then
+        // resumeStream connected (phase=streaming), but messageSource
+        // stayed as "history". The user should see live content.
+        update(agent, { messageSource: { mode: "live", messages: [] } });
         return;
       }
 
