@@ -31,7 +31,10 @@ pub fn is_running(pool: &GoalDriverPool, session_id: Uuid) -> bool {
 }
 
 /// Grace window for a goal turn to wind down cooperatively before a hard abort.
-const GOAL_STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+/// 60s (audit 2026-07-22): long-running tools (`generate_image`, `code_exec`)
+/// legitimately hold the turn for minutes; 10s hard-aborted mid-tool-call and
+/// guard-dropped the session as `failed`.
+const GOAL_STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Stop the goal driver for a session cooperatively.
 ///

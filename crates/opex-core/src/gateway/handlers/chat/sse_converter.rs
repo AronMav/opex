@@ -158,8 +158,12 @@ pub(super) async fn run_converter(
     // (forward_chunks_into_sink drops the provider future on cancel), so a user
     // Stop halts generation within a tick and the engine emits its aborted
     // Finish promptly. This grace is the last-resort window for a genuinely
-    // wedged engine that ignores the token — 5s, not 30s.
-    const CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+    // wedged engine that ignores the token — 60s (audit 2026-07-22). Was 5s,
+    // which hard-aborted mid-tool-call (generate_image, code_exec) before the
+    // tool could finish/persist, producing spurious `cancel_grace_exceeded`
+    // interrupts. 60s aligns with the channel-path grace (15-20s) while
+    // covering the default 120s tool-timeout for the common fast-tool case.
+    const CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
     let mut logged_cancel_drain = false;
     let mut cancel_deadline: Option<tokio::time::Instant> = None;
     loop {
