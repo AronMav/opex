@@ -906,7 +906,7 @@ Only available in interactive contexts (web UI or Telegram); returns an error in
     // profile: view and switch the agent's configured providers/models
     tools.push(ToolDefinition {
         name: "profile".to_string(),
-        description: "View your profile slots (text, vision, tts, stt, imagegen, websearch) with their provider/model list, or switch to a different provider/model for the current turn. action=\"show\" to list all slots; action=\"switch\" with slot+provider+optional model to change for this turn only.".to_string(),
+        description: "View your profile slots (text, vision, tts, stt, imagegen, websearch) with their provider/model list, or switch to a different provider for the current turn. action=\"show\" to list all slots; action=\"switch\" with slot+provider to change for this turn. For slot=\"text\" also accepts optional model. For other slots (imagegen, vision, tts, stt, websearch) the named provider is used first on the next capability tool call, with fallback to the remaining chain.".to_string(),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {

@@ -503,6 +503,9 @@ pub struct FinalizeContext {
     /// `initiative_tick_inner`. `None` only occurs in unit tests that
     /// construct `FinalizeContext` directly without going through the engine.
     pub initiative: Option<crate::agent::initiative::tick::InitiativeDeps>,
+    /// Per-session tool state map — used to clear the per-turn capability
+    /// provider override (set by the `profile` tool) at turn end.
+    pub session_tool_state: Option<crate::agent::dispatcher::SessionToolStateMap>,
 }
 
 // ── finalize() ────────────────────────────────────────────────────────────────
@@ -539,6 +542,14 @@ pub async fn finalize<S: EventSink>(
             cancelled = n,
             "finalize: cancelled pending clarify waiters"
         );
+    }
+
+    // Clear the per-turn capability provider override (set by the `profile`
+    // tool's `switch` action) so it doesn't leak into the next turn.
+    if let Some(map) = ctx.session_tool_state.as_ref()
+        && let Some(state) = map.get(&ctx.session_id)
+    {
+        state.clear_capability_provider().await;
     }
 
     let sm = SessionManager::new(ctx.db.clone());
@@ -846,6 +857,7 @@ pub fn finalize_context_from_engine(
                 channel_router: engine.state().channel_router.clone(),
             })
         },
+        session_tool_state: engine.cfg().session_tool_state.clone(),
     }
 }
 
@@ -1080,6 +1092,7 @@ mod tests {
                 emotion: crate::config::EmotionConfig::default(),
             },
             initiative: None,
+            session_tool_state: None,
         }
     }
 

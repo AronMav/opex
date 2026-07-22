@@ -213,32 +213,60 @@ impl MediaKind {
 /// `imagegen` slot and Photo never reads the `tts` slot. Keeping this as a
 /// free function (not tied to `CommandContext`) lets us unit-test the
 /// cross-contamination guard without a full engine setup.
+/// Same as `provider_attempts_with_override` with no override — the original
+/// chain order. Kept for test compatibility.
+#[cfg(test)]
 pub fn provider_attempts_for(
     kind: MediaKind,
     slots: &crate::db::profiles::Slots,
+) -> Vec<Vec<(String, String)>> {
+    provider_attempts_with_override(kind, slots, None)
+}
+
+/// Same as `provider_attempts_for` but with an optional per-turn provider
+/// override `(slot, provider)` set by the `profile` tool's `switch` action.
+/// When the override matches this kind's capability slot, the named provider
+/// is moved to the front of the attempt chain (other providers follow as
+/// fallback). When the override's slot doesn't match this kind, the chain
+/// is unchanged.
+pub fn provider_attempts_with_override(
+    kind: MediaKind,
+    slots: &crate::db::profiles::Slots,
+    override_provider: Option<(&str, &str)>,
 ) -> Vec<Vec<(String, String)>> {
     let cap = match kind {
         MediaKind::Voice => "tts",
         MediaKind::Photo => "imagegen",
         MediaKind::Video | MediaKind::Other => return Vec::new(),
     };
-    slots
-        .get(cap)
-        .map(|chain| {
-            chain
-                .iter()
-                .map(|e| {
-                    let mut h = vec![("X-Opex-Provider".to_string(), e.provider.clone())];
-                    if kind == MediaKind::Voice
-                        && let Some(v) = e.voice.as_deref().filter(|v| !v.is_empty())
-                    {
-                        h.push(("X-Opex-Voice".to_string(), v.to_string()));
-                    }
-                    h
-                })
-                .collect()
+    let chain = match slots.get(cap) {
+        Some(c) if !c.is_empty() => c,
+        _ => return Vec::new(),
+    };
+
+    // If an override is set for this exact slot, reorder: the override
+    // provider goes first, then the rest in their original order.
+    let overridden = override_provider
+        .filter(|(slot, _)| *slot == cap)
+        .map(|(_, provider)| provider.to_string());
+
+    let mut entries: Vec<&crate::db::profiles::SlotEntry> = chain.iter().collect();
+    if let Some(ref preferred) = overridden {
+        entries.sort_by_key(|e| e.provider != *preferred);
+    }
+
+    entries
+        .iter()
+        .map(|e| {
+            let mut h = vec![("X-Opex-Provider".to_string(), e.provider.clone())];
+            if kind == MediaKind::Voice
+                && let Some(v) = e.voice.as_deref().filter(|v| !v.is_empty())
+            {
+                h.push(("X-Opex-Voice".to_string(), v.to_string()));
+            }
+            h
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 /// Whether a background-media provider failure is worth retrying against the
@@ -312,18 +340,25 @@ pub struct BackgroundMediaTask {
 
 impl BackgroundMediaTask {
     /// Construct from the current pipeline context — clones all Arc/cheap fields.
+    /// `override_provider` is the per-turn capability provider override
+    /// `(slot, provider)` from the `profile` tool, if any.
     pub fn from_ctx(
         ctx: &super::CommandContext<'_>,
         tool: &YamlToolDef,
         args: &serde_json::Value,
         ca: &ChannelActionConfig,
+        override_provider: Option<(&str, &str)>,
     ) -> Option<Self> {
         use crate::agent::pipeline::channel_actions::{make_oauth_context, make_resolver};
 
         let kind = MediaKind::from_action(&ca.action);
 
-        // Per-kind provider chain — see `provider_attempts_for` for the policy.
-        let provider_attempts = provider_attempts_for(kind, &ctx.cfg.profile_slots);
+        // Per-kind provider chain — see `provider_attempts_with_override` for the policy.
+        let provider_attempts = provider_attempts_with_override(
+            kind,
+            &ctx.cfg.profile_slots,
+            override_provider,
+        );
 
         let context = args.get("_context").cloned().unwrap_or(serde_json::Value::Null);
 

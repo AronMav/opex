@@ -58,7 +58,8 @@ async fn handle_show(deps: ToolDeps<'_>) -> String {
     }
 
     out.push_str("---\n");
-    out.push_str("Use `profile(action=\"switch\", slot=\"text\", provider=\"name\")` to switch to a different provider for this turn.\n");
+    out.push_str("Use `profile(action=\"switch\", slot=\"text\", provider=\"name\")` to switch the text provider/model for this turn.\n");
+    out.push_str("Use `profile(action=\"switch\", slot=\"imagegen\", provider=\"name\")` to switch the image provider for this turn (also works for vision, tts, stt, websearch).\n");
 
     out
 }
@@ -92,47 +93,62 @@ async fn handle_switch(deps: ToolDeps<'_>, args: &Value) -> String {
         }).to_string();
     }
 
-    // Only the text slot supports per-turn model switching via set_model_override.
-    // Other slots (vision, tts, stt, imagegen) are resolved at capability-tool
-    // dispatch time via the profile_slots chain — the active provider is always
-    // entries[0], so switching requires reordering the slot (which is a profile
-    // edit, not a per-turn override).
-    if slot != "text" {
-        return json!({
-            "error": format!("switch is only supported for the 'text' slot. Other slots (vision, tts, stt, imagegen) are resolved at dispatch time — use the UI Profiles page to reorder providers."),
-            "hint": "For text: profile(action=\"switch\", slot=\"text\", provider=\"...\")"
-        }).to_string();
-    }
+    match slot {
+        "text" => {
+            let model_to_set = match model_override {
+                Some(m) => m.to_string(),
+                None => entries
+                    .iter()
+                    .find(|e| e.provider == provider_name)
+                    .and_then(|e| e.model.as_deref())
+                    .unwrap_or("")
+                    .to_string()
+            };
 
-    // For the text slot: set the model override on the provider.
-    // The provider is the RoutingProvider — set_model_override propagates
-    // to all routes. The model name must match what the target provider
-    // expects (we trust the agent to pass a valid model from the list).
-    let model_to_set = match model_override {
-        Some(m) => m.to_string(),
-        None => {
-            // Find the default model from the slot entry
-            entries
-                .iter()
-                .find(|e| e.provider == provider_name)
-                .and_then(|e| e.model.as_deref())
-                .unwrap_or("")
-                .to_string()
+            if model_to_set.is_empty() {
+                deps.cfg.provider.set_model_override(None);
+            } else {
+                deps.cfg.provider.set_model_override(Some(model_to_set.clone()));
+            }
+
+            json!({
+                "ok": true,
+                "message": format!("Switched text provider to '{}' with model '{}'. This applies to the current turn only.", provider_name, model_to_set),
+                "provider": provider_name,
+                "model": model_to_set,
+                "slot": slot
+            })
+            .to_string()
         }
-    };
-
-    if model_to_set.is_empty() {
-        deps.cfg.provider.set_model_override(None);
-    } else {
-        deps.cfg.provider.set_model_override(Some(model_to_set.clone()));
+        "imagegen" | "vision" | "stt" | "tts" | "websearch" => {
+            // Capability slots: set a per-turn provider override in
+            // session_tool_state. The dispatch paths (engine_dispatch.rs
+            // for search_web/analyze_image, media_background.rs for
+            // generate_image/synthesize_speech) read this override and
+            // reorder the provider chain so the named provider is tried
+            // first. Fallback to the remaining chain entries is preserved.
+            if let Some(state) = deps.session_tool_state.as_ref() {
+                state.set_capability_provider(slot.to_string(), provider_name.to_string()).await;
+                json!({
+                    "ok": true,
+                    "message": format!("Switched {} provider to '{}' for this turn. The next capability tool call (generate_image, synthesize_speech, search_web, analyze_image, transcribe_audio) will use this provider first, with fallback to the remaining chain.", slot, provider_name),
+                    "provider": provider_name,
+                    "slot": slot
+                })
+                .to_string()
+            } else {
+                json!({
+                    "ok": false,
+                    "error": "session state not available — cannot set per-turn provider override for this session."
+                })
+                .to_string()
+            }
+        }
+        _ => {
+            json!({
+                "error": format!("unknown slot '{}'. Available slots: text, vision, tts, stt, imagegen, websearch, compaction", slot)
+            })
+            .to_string()
+        }
     }
-
-    json!({
-        "ok": true,
-        "message": format!("Switched text provider to '{}' with model '{}'. This applies to the current turn only.", provider_name, model_to_set),
-        "provider": provider_name,
-        "model": model_to_set,
-        "slot": slot
-    })
-    .to_string()
 }

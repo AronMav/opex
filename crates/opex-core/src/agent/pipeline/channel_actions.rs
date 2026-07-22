@@ -14,6 +14,25 @@ use crate::oauth::OAuthManager;
 // (`crate::uploads::web_uploads_base()`) so they resolve against the page origin
 // and never depend on `gateway.public_url`. See that function for the rationale.
 
+/// Resolve the per-turn capability provider override from `session_tool_state`
+/// (set by the `profile` tool's `switch` action). Returns `None` when no
+/// override is set, no session is known, or session_tool_state is not wired.
+async fn resolve_capability_override(
+    cfg: &crate::agent::agent_config::AgentConfig,
+    args: &serde_json::Value,
+) -> Option<(String, String)> {
+    let map = cfg.session_tool_state.as_ref()?;
+    let sid = args
+        .get("_context")
+        .and_then(|c| c.get("session_id"))
+        .and_then(|s| s.as_str())
+        .and_then(|s| uuid::Uuid::parse_str(s).ok())?;
+    let state = map.entry(sid).or_insert_with(
+        crate::agent::dispatcher::SessionToolState::new,
+    );
+    state.capability_provider().await
+}
+
 /// Build a `SecretsEnvResolver` for YAML tool env resolution.
 pub(crate) fn make_resolver(
     secrets: &Arc<SecretsManager>,
@@ -153,8 +172,12 @@ pub async fn execute_yaml_channel_action(
         return execute_inline_for_ui(ctx, tool, args, ca).await;
     }
 
+    // Resolve per-turn capability provider override from session_tool_state
+    // (set by the `profile` tool's `switch` action).
+    let override_provider = resolve_capability_override(ctx.cfg, args).await;
+
     let task =
-        match crate::agent::pipeline::media_background::BackgroundMediaTask::from_ctx(ctx, tool, args, ca) {
+        match crate::agent::pipeline::media_background::BackgroundMediaTask::from_ctx(ctx, tool, args, ca, override_provider.as_ref().map(|(s, p)| (s.as_str(), p.as_str()))) {
             Some(t) => t,
             None => {
                 // Endpoint blocked by the SSRF guard (e.g. literal private IP).
@@ -176,11 +199,14 @@ async fn execute_inline_for_ui(
     ca: &crate::tools::yaml_tools::ChannelActionConfig,
 ) -> String {
     use crate::agent::pipeline::handlers::save_binary_to_uploads;
-    use crate::agent::pipeline::media_background::{provider_attempts_for, MediaKind};
+    use crate::agent::pipeline::media_background::MediaKind;
 
     let kind = MediaKind::from_action(&ca.action);
     let resolver = make_resolver(&ctx.tex.secrets, &ctx.cfg.agent.name);
     let oauth_ctx = make_oauth_context(ctx.tex.oauth.as_ref(), &ctx.cfg.agent.name);
+
+    // Resolve per-turn capability provider override from session_tool_state.
+    let override_provider = resolve_capability_override(ctx.cfg, args).await;
 
     // Inline (web-UI) path is synchronous and short-lived — the caller (LLM
     // tool loop) sees the error and can itself decide to retry, so we only
@@ -188,7 +214,14 @@ async fn execute_inline_for_ui(
     // loop (unlike BackgroundMediaTask::run) — that's the LLM's job for this
     // path.
     let tool_headers: Vec<(String, String)> =
-        provider_attempts_for(kind, &ctx.cfg.profile_slots).into_iter().next().unwrap_or_default();
+        crate::agent::pipeline::media_background::provider_attempts_with_override(
+            kind,
+            &ctx.cfg.profile_slots,
+            override_provider.as_ref().map(|(s, p)| (s.as_str(), p.as_str())),
+        )
+        .into_iter()
+        .next()
+        .unwrap_or_default();
 
     // Lift the per-tool timeout the same way BackgroundMediaTask does — UI
     // sessions still have to wait, but FLUX / Qwen3-TTS on Pi can take

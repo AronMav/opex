@@ -380,10 +380,26 @@ impl AgentEngine {
                     "analyze_image" => Some("vision"),
                     _ => None,
                 };
-                if let Some(cap) = chain_capability
-                    && let Some(h) = slot_chain_header(&self.cfg().profile_slots, cap)
-                {
-                    injected_headers.push(h);
+                if let Some(cap) = chain_capability {
+                    // Resolve per-turn capability provider override from
+                    // session_tool_state (set by the `profile` tool).
+                    let override_provider = if let Some(map) = self.cfg().session_tool_state.as_ref()
+                        && let Some(sid) = dispatch_session_id
+                    {
+                        let state = map.entry(sid).or_insert_with(
+                            crate::agent::dispatcher::SessionToolState::new,
+                        );
+                        state.capability_provider().await
+                    } else {
+                        None
+                    };
+                    if let Some(h) = slot_chain_header_with_override(
+                        &self.cfg().profile_slots,
+                        cap,
+                        override_provider.as_ref().map(|(s, p)| (s.as_str(), p.as_str())),
+                    ) {
+                        injected_headers.push(h);
+                    }
                 }
                 return match yaml_tool.execute_with_ctx(
                     arguments, client, Some(&resolver), oauth_ctx.as_ref(), &injected_headers,
@@ -475,20 +491,34 @@ impl AgentEngine {
 /// downstream service can retry across providers in the agent's configured
 /// order. Returns `None` when the slot is missing or empty — in that case the
 /// downstream falls back to its own default provider selection.
+#[cfg(test)]
 fn slot_chain_header(
     slots: &crate::db::profiles::Slots,
     capability: &str,
 ) -> Option<(String, String)> {
-    let chain = slots
-        .get(capability)?
-        .iter()
-        .map(|e| e.provider.as_str())
-        .collect::<Vec<_>>()
-        .join(",");
-    if chain.is_empty() {
+    slot_chain_header_with_override(slots, capability, None)
+}
+
+/// Same as `slot_chain_header` but with an optional per-turn provider
+/// override `(slot, provider)`. When the override matches `capability`,
+/// the chain is reordered so the named provider comes first.
+fn slot_chain_header_with_override(
+    slots: &crate::db::profiles::Slots,
+    capability: &str,
+    override_provider: Option<(&str, &str)>,
+) -> Option<(String, String)> {
+    let chain = slots.get(capability)?;
+    let mut names: Vec<String> = chain.iter().map(|e| e.provider.clone()).collect();
+    if let Some((slot, provider)) = override_provider
+        && slot == capability
+    {
+        names.sort_by_key(|n| n != provider);
+    }
+    let joined = names.join(",");
+    if joined.is_empty() {
         None
     } else {
-        Some(("X-Opex-Providers".to_string(), chain))
+        Some(("X-Opex-Providers".to_string(), joined))
     }
 }
 
