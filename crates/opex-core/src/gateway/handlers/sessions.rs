@@ -169,7 +169,7 @@ pub(crate) async fn api_session_messages(
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
     Query(q): Query<MessagesQuery>,
 ) -> impl IntoResponse {
-    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let limit = q.limit.unwrap_or(2000).clamp(1, 5000);
 
     // Audit 2026-05-08 (4th pass): `?agent=` is now MANDATORY here too. The
     // earlier IDOR fix made it optional which silently bypassed ownership

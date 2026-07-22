@@ -787,7 +787,10 @@ export function useSessionMessages(sessionId: string | null, agent?: string) {
     queryKey: [...qk.sessionMessages(sessionId!), agent ?? ""] as const,
     queryFn: () => {
       // Audit 2026-05-08: backend requires ?agent= for owner check.
-      const params = new URLSearchParams({ limit: "100" });
+      // No effective cap — load the full history in one shot (audit
+      // 2026-07-22): a session must always open with all its messages
+      // regardless of count. Server clamps to 5000.
+      const params = new URLSearchParams({ limit: "5000" });
       if (agent) params.set("agent", agent);
       return apiGet<{ messages: MessageRow[] }>(
         `/api/sessions/${sessionId}/messages?${params.toString()}`,

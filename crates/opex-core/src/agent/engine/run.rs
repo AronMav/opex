@@ -22,6 +22,14 @@ use crate::agent::pipeline::sink::{self, EventSink, PipelineEvent};
 /// All auxiliary work inside bootstrap is fail-soft (logged + skipped on
 /// error), so 60s is purely the worst-case bound, not the typical latency.
 const BOOTSTRAP_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Upper bound a user turn waits to acquire the per-session goal lock before
+/// bailing out as `Interrupted`. Long-running tools (`generate_image`,
+/// `code_exec`, long LLM streams) can legitimately hold the lock for minutes;
+/// 30s killed concurrent turns mid-tool-call (audit 2026-07-22). The
+/// `cancel` token still wins on explicit `/stop` / disconnect — this is only
+/// the safety net for an abandoned wedged holder.
+const GOAL_LOCK_ACQUIRE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 use crate::agent::pipeline::{execute, finalize};
 use crate::agent::stream_event::StreamEvent;
 
@@ -398,7 +406,7 @@ impl AgentEngine {
             self.cfg().goal_locks.as_ref(),
             session_id,
             cancel.clone(),
-            std::time::Duration::from_secs(30),
+            GOAL_LOCK_ACQUIRE_TIMEOUT,
         )
         .await
         {
@@ -732,7 +740,7 @@ impl AgentEngine {
             self.cfg().goal_locks.as_ref(),
             session_id,
             cancel.clone(),
-            std::time::Duration::from_secs(30),
+            GOAL_LOCK_ACQUIRE_TIMEOUT,
         )
         .await
         {

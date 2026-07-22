@@ -123,8 +123,9 @@ export function ChatThread({
     }
   }, [activeSessionId, currentAgent, connectionPhase, liveAssistantId, sessionMessagesData]);
 
-  const renderLimit = useChatStore((s) => s.agents[s.currentAgent]?.renderLimit ?? 100);
-
+  // `renderLimit` is no longer used to cap rendering (audit 2026-07-22): the
+  // full history renders. The legacy load-earlier infrastructure below stays
+  // wired but inert — `hiddenCount` is always 0 so the button never shows.
   const loadEarlierMessages = useChatStore((s) => s.loadEarlierMessages);
   const loadPreviousMessages = useChatStore((s) => s.loadPreviousMessages);
   const hasMoreHistory = useChatStore((s) => s.agents[s.currentAgent]?.hasMoreHistory ?? false);
@@ -147,10 +148,12 @@ export function ChatThread({
     return !content.startsWith("[Handoff from") && !content.startsWith("[Response from");
   }), [sourceMessages]);
 
-  const allMessages = useMemo(
-    () => filteredMessages.length > renderLimit ? filteredMessages.slice(-renderLimit) : filteredMessages,
-    [filteredMessages, renderLimit],
-  );
+  // No render cap (audit 2026-07-22): a session must render its full history
+  // regardless of message count. Virtuoso virtualises the DOM, so even very
+  // long sessions stay cheap. The legacy `renderLimit`/`hiddenCount`/Load
+  // earlier infrastructure is retained but inert — `hiddenCount` is always 0
+  // and the "Load earlier" button never renders.
+  const allMessages = filteredMessages;
 
   // Branch-aware jump-to-message (search palette / bookmarks / scroll-restore).
   // Consumes palette-store.target and scrolls the SAME array Virtuoso renders.
@@ -161,7 +164,7 @@ export function ChatThread({
   const msgCount = sourceMessages.length;
   // hiddenCount is based on filteredMessages (not raw sourceMessages) so inter-agent
   // routing messages don't inflate the "load earlier" indicator.
-  const hiddenCount = useMemo(() => Math.max(0, filteredMessages.length - renderLimit), [filteredMessages.length, renderLimit]);
+  const hiddenCount = 0;
   const hasMessages = msgCount > 0;
 
   const isStreaming = isActivePhase(connectionPhase);
