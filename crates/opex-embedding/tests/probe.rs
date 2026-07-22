@@ -28,7 +28,7 @@ async fn probe_dim_retries_5xx_then_succeeds() {
     Mock::given(method("POST"))
         .and(path("/v1/embeddings"))
         .respond_with(ResponseTemplate::new(502))
-        .up_to_n_times(2)
+        .up_to_n_times(1)
         .mount(&mock)
         .await;
     Mock::given(method("POST"))

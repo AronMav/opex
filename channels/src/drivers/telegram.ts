@@ -369,7 +369,7 @@ export function createTelegramDriver(
           if (!e) return;
           state.debounce.delete(key);
           const mergedText = e.texts.join("\n");
-          dispatchOrQueue(bot, e.msg, e.userId, e.chatId, mergedText, e.attachments, bridge, strings, state, errorCooldownMs, errorPolicy)
+          dispatchOrQueue(bot, e.msg, e.userId, e.chatId, mergedText, e.attachments, bridge, strings, state, errorCooldownMs, errorPolicy, typingModeEffective)
             .catch((err) => console.error("[tg] debounce dispatch failed:", err?.message ?? err));
         }, DEBOUNCE_DELAY_MS);
         return;
@@ -380,7 +380,7 @@ export function createTelegramDriver(
         if (!e) return;
         state.debounce.delete(key);
         const mergedText = e.texts.join("\n");
-        dispatchOrQueue(bot, e.msg, e.userId, e.chatId, mergedText, e.attachments, bridge, strings, state, errorCooldownMs, errorPolicy)
+        dispatchOrQueue(bot, e.msg, e.userId, e.chatId, mergedText, e.attachments, bridge, strings, state, errorCooldownMs, errorPolicy, typingModeEffective)
           .catch((err) => console.error("[tg] debounce dispatch failed:", err?.message ?? err));
       }, DEBOUNCE_DELAY_MS);
 
@@ -388,7 +388,7 @@ export function createTelegramDriver(
       return;
     }
 
-    await dispatchOrQueue(bot, msg, userId, chatId, text, attachments, bridge, strings, state, errorCooldownMs, errorPolicy);
+    await dispatchOrQueue(bot, msg, userId, chatId, text, attachments, bridge, strings, state, errorCooldownMs, errorPolicy, typingModeEffective);
   });
 
   // Callback query handler (inline buttons)
@@ -643,6 +643,7 @@ async function dispatchOrQueue(
   state: ActiveState,
   errorCooldownMs = 60_000,
   errorPolicy = "suppress_repeated",
+  typingModeEffective = "instant",
 ): Promise<void> {
   const key = `${userId}:${chatId}`;
 
@@ -658,7 +659,7 @@ async function dispatchOrQueue(
     return;
   }
 
-  await processMessage(bot, msg, userId, chatId, text, attachments, bridge, strings, state, errorCooldownMs, errorPolicy);
+  await processMessage(bot, msg, userId, chatId, text, attachments, bridge, strings, state, errorCooldownMs, errorPolicy, typingModeEffective);
 }
 
 // ── Inline action buttons for file attachments / video links ────────────────
@@ -677,6 +678,7 @@ async function processMessage(
   state: ActiveState,
   errorCooldownMs = 60_000,
   errorPolicy = "suppress_repeated",
+  typingModeEffective = "instant",
 ): Promise<void> {
   const key = `${userId}:${chatId}`;
   const threadId = msg.message_thread_id;
@@ -896,7 +898,7 @@ async function processMessage(
     const allAttachments = queued.flatMap((q) => q.attachments);
     await bot.api.setMessageReaction(last.chatId, last.msg.message_id, []).catch(() => { });
     setImmediate(() => {
-      processMessage(bot, last.msg, last.userId, last.chatId, merged, allAttachments, bridge, strings, state, errorCooldownMs, errorPolicy).catch(() => { });
+      processMessage(bot, last.msg, last.userId, last.chatId, merged, allAttachments, bridge, strings, state, errorCooldownMs, errorPolicy, typingModeEffective).catch(() => { });
     });
   }
 }
