@@ -264,7 +264,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         },
         ToolDefinition {
             name: "file_handler".to_string(),
-            description: "Run a file/URL handler (e.g. summarize a video, transcribe audio, extract a document, save a file to workspace). When the user sends a video/file link or an uploaded file, the system lists the matching handlers in context; present those options to the user and, once they pick one, call this with action=\"run\". Use action=\"list\" to re-fetch the options. The result (e.g. the video summary) is delivered to the chat asynchronously when it finishes.".to_string(),
+            description: "Run a file/URL handler (e.g. summarize a video, transcribe audio, extract a document, save a file to workspace). When the user sends a video/file link or an uploaded file, the system lists the matching handlers in context; present those options to the user and, once they pick one, call this with action=\"run\". Use action=\"list\" to re-fetch the options. For action=\"list\" with a session, an interactive clickable menu is automatically shown to the user — reply with an EMPTY message (no text). The result (e.g. the video summary) is delivered to the chat asynchronously when it finishes.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {

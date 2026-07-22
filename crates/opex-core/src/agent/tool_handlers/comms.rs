@@ -280,13 +280,17 @@ impl SystemToolHandler for GitToolHandler {
                 }
             }
             "status" | "diff" | "push" | "pull" => {
-                match tokio::process::Command::new("git")
-                    .args([action])
-                    .current_dir(&git_dir)
-                    .output()
-                    .await
+                let git_timeout = std::time::Duration::from_secs(60);
+                match tokio::time::timeout(
+                    git_timeout,
+                    tokio::process::Command::new("git")
+                        .args([action])
+                        .current_dir(&git_dir)
+                        .output(),
+                )
+                .await
                 {
-                    Ok(o) => {
+                    Ok(Ok(o)) => {
                         let mut out = String::from_utf8_lossy(&o.stdout).to_string();
                         let stderr = String::from_utf8_lossy(&o.stderr);
                         if !stderr.is_empty() {
@@ -299,7 +303,8 @@ impl SystemToolHandler for GitToolHandler {
                             out
                         }
                     }
-                    Err(e) => format!("Error running git {}: {}", action, e),
+                    Ok(Err(e)) => format!("Error running git {}: {}", action, e),
+                    Err(_) => format!("Error: git {} timed out (60s)", action),
                 }
             }
             _ => format!(

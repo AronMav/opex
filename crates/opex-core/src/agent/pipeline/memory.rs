@@ -335,7 +335,7 @@ pub async fn handle_memory_update(
             Ok(updated) => updated,
             Err(msg) => return msg,
         },
-        _ => return format!("Unknown action '{}'. Use: add, update, remove", action),
+        _ => return format!("Error: unknown action '{action}'. Use: add, update, remove"),
     };
 
     // Guard against unbounded growth

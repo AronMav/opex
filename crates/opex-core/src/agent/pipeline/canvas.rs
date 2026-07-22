@@ -68,7 +68,7 @@ pub async fn handle_canvas(
         "snapshot" => {
             canvas_snapshot(canvas_state, http_client).await
         }
-        other => format!("Unknown canvas action: {other}"),
+        other => format!("Error: unknown canvas action '{other}'. Use: present, clear, run_js."),
     }
 }
 

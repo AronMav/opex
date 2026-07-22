@@ -118,7 +118,18 @@ impl AgentEngine {
         arguments: &'a serde_json::Value,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send + 'a>> {
         Box::pin(async move {
-            // 0. Approval check — if tool requires confirmation, wait for owner.
+            // 0a. Reject malformed tool names BEFORE any approval, hooks, or
+            // audit — a leaked `__file__:` marker or hallucinated name must
+            // not trigger approval requests or webhook fan-out.
+            if !crate::agent::dispatcher::lookup::is_valid_tool_name(name) {
+                return format!(
+                    "Error: tool name '{}' is not a valid identifier; \
+                     use tool_use(action='search') to find the correct tool name",
+                    name
+                );
+            }
+
+            // 0b. Approval check — if tool requires confirmation, wait for owner.
             // Skip approval for automated channels (cron, heartbeat, inter-agent).
             let context = arguments.get("_context").cloned().unwrap_or_default();
             let is_automated = context.get("_channel")
@@ -223,18 +234,6 @@ impl AgentEngine {
                 }
                 _ => arguments,
             };
-
-            // 0. Reject malformed/invalid tool names before any dispatch or
-            // audit so a corrupted tool name (e.g. a `__file__:` marker leaked
-            // into the name field) cannot pollute the tool-quality log or
-            // reach filesystem/HTTP dispatch.
-            if !crate::agent::dispatcher::lookup::is_valid_tool_name(name) {
-                return format!(
-                    "Error: tool name '{}' is not a valid identifier; \
-                     use tool_use(action='search') to find the correct tool name",
-                    name
-                );
-            }
 
             // 1. System tools (registry)
             let available = self.available_tool_names().await;

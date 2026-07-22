@@ -738,7 +738,7 @@ pub fn handle_rich_card(args: &serde_json::Value) -> String {
     let card_type = args.get("card_type").and_then(|v| v.as_str()).unwrap_or("table");
     match card_type {
         "table" | "metric" => {}
-        other => return format!("Unknown rich_card type: {other}"),
+        other => return format!("Error: unknown card_type '{other}' (use 'table' or 'metric')"),
     }
     format!("{RICH_CARD_PREFIX}{}", serde_json::to_string(args).unwrap_or_default())
 }

@@ -48,6 +48,24 @@ pub async fn handle_message_action(ctx: &CommandContext<'_>, args: &serde_json::
         return "Error: 'action' is required".to_string();
     }
 
+    // Validate action-specific required params before sending to the channel
+    // adapter — an empty edit/react silently no-ops or sends garbage.
+    match action {
+        "edit" | "reply" => {
+            let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("").trim();
+            if text.is_empty() {
+                return format!("Error: 'text' is required for action='{action}'");
+            }
+        }
+        "react" => {
+            let emoji = args.get("emoji").and_then(|v| v.as_str()).unwrap_or("").trim();
+            if emoji.is_empty() {
+                return "Error: 'emoji' is required for action='react'".to_string();
+            }
+        }
+        _ => {}
+    }
+
     let context = args.get("_context").cloned().unwrap_or(serde_json::Value::Null);
     let target_channel = args.get("channel").and_then(|v| v.as_str()).map(|s| s.to_string());
 
