@@ -905,7 +905,7 @@ Only available in interactive contexts (web UI or Telegram); returns an error in
 
     tools.push(ToolDefinition {
         name: "tool_use".to_string(),
-        description: "Discover and invoke extension tools (YAML, MCP, rare system tools). Use action=\"search\" with a query to find relevant tools, action=\"describe\" to load full schema, action=\"call\" to invoke. For frequent tools (workspace_*, code_exec, memory, agent, skill_use, web_fetch) call them directly.".to_string(),
+        description: "Discover and invoke extension tools (YAML, MCP, rare system tools). Actions: \"search\" (find tools by query), \"describe\" (load full schema for a tool by name), \"call\" (invoke a tool by name with arguments). For frequent tools (workspace_*, code_exec, memory, agent, skill_use, web_fetch) call them directly — do NOT use tool_use for those.".to_string(),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -1044,31 +1044,31 @@ Only available in interactive contexts (web UI or Telegram); returns an error in
 
     // code_exec: for base agents runs on host; for others runs in Docker sandbox
     if ctx.is_base && !ctx.has_sandbox {
-        tools.push(ToolDefinition {
-            name: "code_exec".to_string(),
-            description: "Execute bash or Python on the host. Full filesystem access; cwd = binary dir. Returns stdout/stderr.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "code": {
-                        "type": "string",
-                        "description": "Code to execute. For bash: shell commands. For Python: full script text."
-                    },
-                    "language": {
-                        "type": "string",
-                        "description": "Programming language: 'bash' (default for host operations) or 'python'",
-                        "enum": ["bash", "python"],
-                        "default": "bash"
-                    },
-                    "packages": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Python packages to install before execution. Only for Python."
-                    }
+    tools.push(ToolDefinition {
+        name: "code_exec".to_string(),
+        description: "Execute bash or Python on the host. Full filesystem access; cwd = binary dir. Returns stdout/stderr. The 'code' parameter is REQUIRED — pass the actual code or commands as a string.".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "REQUIRED. The code or commands to execute as a string. For bash: shell commands (e.g. 'ls -la /home'). For Python: full script text."
                 },
-                "required": ["code"]
-            }),
-        });
+                "language": {
+                    "type": "string",
+                    "description": "Programming language: 'bash' (default for host operations) or 'python'",
+                    "enum": ["bash", "python"],
+                    "default": "bash"
+                },
+                "packages": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Python packages to install before execution. Only for Python."
+                }
+            },
+            "required": ["code"]
+        }),
+    });
     } else if ctx.has_sandbox {
         tools.extend(build_sandbox_tool_definitions());
     }
@@ -1136,13 +1136,13 @@ Only available in interactive contexts (web UI or Telegram); returns an error in
 pub fn build_sandbox_tool_definitions() -> Vec<ToolDefinition> {
     vec![ToolDefinition {
         name: "code_exec".to_string(),
-        description: "Execute bash or Python in an isolated container. Workspace files NOT accessible — pass data via variables. Returns stdout/stderr.".to_string(),
+        description: "Execute bash or Python in an isolated container. Workspace files NOT accessible — pass data via variables. Returns stdout/stderr. The 'code' parameter is REQUIRED — pass the actual code as a string.".to_string(),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
                 "code": {
                     "type": "string",
-                    "description": "Code to execute. For Python: full script text. For bash: shell commands."
+                    "description": "REQUIRED. The code to execute as a string. For Python: full script text. For bash: shell commands."
                 },
                 "language": {
                     "type": "string",
