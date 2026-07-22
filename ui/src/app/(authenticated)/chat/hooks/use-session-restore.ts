@@ -176,15 +176,20 @@ export function useSessionRestore({
     }
 
     // If already viewing a real session (live or history) — validate it still
-    // exists in the current sessions list. Pre-populated last session IDs may
-    // be stale (deleted or outside the top-40 window); fall through to re-select
-    // in that case so the restore effect picks a valid session.
+    // exists in the current agent's sessions list AND belongs to the current
+    // agent. Pre-populated last session IDs may be stale (deleted, outside the
+    // top-40 window, or — critically — belong to a DIFFERENT agent if zustand
+    // persist restored the wrong agent's activeSessionId). Fall through to
+    // re-select in those cases so the restore effect picks a valid session.
     if (agentState?.activeSessionId && agentState?.messageSource?.mode !== "new-chat") {
-      if (sessions.some((s) => s.id === agentState.activeSessionId)) {
+      const sessionInList = sessions.some((s) => s.id === agentState.activeSessionId);
+      if (sessionInList) {
         restoredAgents.current.add(currentAgent);
         return;
       }
-      // Session not found — fall through to re-select below
+      // Session not in this agent's list — it may belong to another agent
+      // (zustand persist restored cross-agent state) or may be stale.
+      // Fall through to re-select below.
     }
 
     // Priority 1: URL ?s= param (deep link)
