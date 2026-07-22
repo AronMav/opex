@@ -70,7 +70,7 @@ export function ThinkingWave({ className }: { className?: string }) {
       aria-live="polite"
     >
       <div
-        className="relative h-[3px] w-32 overflow-hidden rounded-full"
+        className="relative h-[6px] w-40 overflow-hidden rounded-full"
         style={{
           background: "color-mix(in srgb, var(--primary) 20%, transparent)",
         }}
@@ -90,7 +90,7 @@ export function ThinkingWave({ className }: { className?: string }) {
           style={{
             background:
               "linear-gradient(90deg, transparent 0%, var(--primary) 50%, transparent 100%)",
-            boxShadow: `0 0 8px var(--primary)`,
+            boxShadow: `0 0 12px var(--primary)`,
             animation: "thinking-wave-sweep 1.6s ease-in-out infinite",
           }}
         />
