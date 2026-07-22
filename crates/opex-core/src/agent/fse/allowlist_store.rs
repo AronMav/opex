@@ -5,27 +5,70 @@
 //! toggle can never admit a non-built-in action (design §4.6).
 
 use sqlx::PgPool;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use super::allowlist::{validate_allowlist_toggle, AllowlistError, FSE_DEFAULT_ALLOWLIST};
 
 /// `system_flags` key holding the JSON array of currently-enabled members.
 const ALLOWLIST_FLAG_KEY: &str = "fse.allowlist.enabled";
 
+/// TTL for the in-process allowlist cache. The allowlist is a global
+/// operator setting that changes rarely — 30s is a safe balance between
+/// freshness and DB query avoidance.
+const ALLOWLIST_CACHE_TTL: Duration = Duration::from_secs(30);
+
+/// Process-wide cache for `get_enabled_allowlist`. Avoids a DB query on
+/// every `file_handler` call (which can fire twice per user interaction:
+/// list + run). The cache is invalidated on writes via
+/// `invalidate_allowlist_cache`.
+static ALLOWLIST_CACHE: Mutex<Option<(Instant, Arc<Vec<String>>)>> = Mutex::new(None);
+
 /// Return the enabled subset of `FSE_DEFAULT_ALLOWLIST`. When the flag is
 /// unset (fresh install) or unreadable, defaults to the FULL constant — the
 /// seeded defaults must work out of the box. Any stale value not in the
 /// constant is silently dropped (defense-in-depth against a hand-edited row).
+///
+/// Results are cached for `ALLOWLIST_CACHE_TTL` to avoid a DB query on
+/// every `file_handler` invocation.
 pub async fn get_enabled_allowlist(db: &PgPool) -> Vec<String> {
+    // Check cache first (fast path — no DB query)
+    {
+        let cache = ALLOWLIST_CACHE.lock().unwrap();
+        if let Some((fetched_at, cached)) = cache.as_ref()
+            && fetched_at.elapsed() < ALLOWLIST_CACHE_TTL
+        {
+            return (*cached).to_vec();
+        }
+    }
+
+    // Cache miss or expired — fetch from DB
     let stored: Option<Vec<String>> = opex_db::sys_flags::get(db, ALLOWLIST_FLAG_KEY)
         .await
         .and_then(|v| serde_json::from_value(v).ok());
-    match stored {
+    let result: Vec<String> = match stored {
         Some(list) => list
             .into_iter()
             .filter(|m| FSE_DEFAULT_ALLOWLIST.contains(&m.as_str()))
             .collect(),
         None => FSE_DEFAULT_ALLOWLIST.iter().map(|s| s.to_string()).collect(),
+    };
+
+    // Update cache
+    {
+        let mut cache = ALLOWLIST_CACHE.lock().unwrap();
+        *cache = Some((Instant::now(), Arc::new(result.clone())));
     }
+
+    result
+}
+
+/// Invalidate the allowlist cache. Called after writes (set_enabled_allowlist*)
+/// so the next read picks up the change immediately.
+pub fn invalidate_allowlist_cache() {
+    let mut cache = ALLOWLIST_CACHE.lock().unwrap();
+    *cache = None;
 }
 
 /// Persist the enabled subset. Rejects (without writing) any member absent
@@ -46,6 +89,7 @@ pub async fn set_enabled_allowlist(
     {
         tracing::warn!(error = %e, "failed to persist fse allowlist toggle");
     }
+    invalidate_allowlist_cache();
     Ok(())
 }
 
@@ -82,6 +126,7 @@ pub async fn set_enabled_allowlist_checked(
     validate_allowlist_toggle(&members)
         .map_err(|e| anyhow::anyhow!("allowlist validation failed: {e}"))?;
     opex_db::sys_flags::upsert(db, ALLOWLIST_FLAG_KEY, serde_json::json!(members)).await?;
+    invalidate_allowlist_cache();
     Ok(())
 }
 

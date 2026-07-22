@@ -758,7 +758,7 @@ pub async fn handle_secret_set(
     };
     let value = match args.get("value").and_then(|v| v.as_str()) {
         Some(v) if !v.is_empty() => v,
-        _ => return "Error: 'value' is required".to_string(),
+        _ => return "Error: 'value' must be a non-empty string".to_string(),
     };
     let description = args.get("description").and_then(|v| v.as_str());
     let global = args.get("global").and_then(|v| v.as_bool()).unwrap_or(false);
