@@ -306,6 +306,7 @@ pub(crate) struct VisionAnalyzeRequest {
 #[allow(clippy::string_slice)]
 pub(crate) async fn api_vision_analyze(
     State(cfg): State<ConfigServices>,
+    State(auth): State<AuthServices>,
     headers: axum::http::HeaderMap,
     Json(body): Json<VisionAnalyzeRequest>,
 ) -> impl IntoResponse {
@@ -352,7 +353,23 @@ pub(crate) async fn api_vision_analyze(
             &image_url
         };
         let port = cfg.config.gateway.listen.rsplit(':').next().unwrap_or("18789");
-        let local_url = format!("http://localhost:{port}{path}");
+
+        // The /api/uploads/{id} endpoint requires ?sig=&exp= even on loopback.
+        // Mint a short-lived signed URL so the localhost download succeeds.
+        // Extract the UUID from the path (segment after "/api/uploads/").
+        let upload_id = path
+            .trim_start_matches("/api/uploads/")
+            .split('/')
+            .next()
+            .and_then(|s| uuid::Uuid::parse_str(s).ok());
+        let local_url = match upload_id {
+            Some(id) => {
+                let key = auth.secrets.get_upload_hmac_key();
+                let signed = crate::uploads::mint_uploads_url("", id, &key, 60);
+                format!("http://localhost:{port}{signed}")
+            }
+            None => format!("http://localhost:{port}{path}"),
+        };
 
         let image_bytes = match http.get(&local_url).send().await {
             Ok(resp) if resp.status().is_success() => match resp.bytes().await {
