@@ -13,6 +13,7 @@ mod session;
 pub(crate) mod tool_use;
 mod todo;
 pub(crate) mod clarify;
+mod profile;
 
 use workspace::*;
 use memory::*;
@@ -29,6 +30,7 @@ use session::*;
 use tool_use::*;
 use todo::*;
 use clarify::ClarifyHandler;
+use profile::ProfileHandler;
 
 use crate::agent::tool_registry::SystemToolRegistry;
 
@@ -70,6 +72,7 @@ impl SystemToolRegistry {
         r.register("process",          ProcessHandler);
         r.register("tool_use",         ToolUseHandler);
         r.register("clarify",          ClarifyHandler);
+        r.register("profile",          ProfileHandler);
         r
     }
 }

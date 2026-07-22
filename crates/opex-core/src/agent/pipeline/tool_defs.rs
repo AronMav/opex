@@ -903,6 +903,35 @@ Only available in interactive contexts (web UI or Telegram); returns an error in
         }),
     });
 
+    // profile: view and switch the agent's configured providers/models
+    tools.push(ToolDefinition {
+        name: "profile".to_string(),
+        description: "View your profile slots (text, vision, tts, stt, imagegen, websearch) with their provider/model list, or switch to a different provider/model for the current turn. action=\"show\" to list all slots; action=\"switch\" with slot+provider+optional model to change for this turn only.".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["show", "switch"],
+                    "description": "\"show\" = list all slots with their providers/models; \"switch\" = change the active provider/model for this turn"
+                },
+                "slot": {
+                    "type": "string",
+                    "description": "Capability slot to switch (for switch): text, vision, tts, stt, imagegen, websearch, compaction"
+                },
+                "provider": {
+                    "type": "string",
+                    "description": "Provider name to switch to (for switch). Must be one of the providers listed in the slot."
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Optional model override (for switch). If omitted, uses the provider's default_model."
+                }
+            },
+            "required": ["action"]
+        }),
+    });
+
     tools.push(ToolDefinition {
         name: "tool_use".to_string(),
         description: "Discover and invoke extension tools (YAML, MCP, rare system tools). Actions: \"search\" (find tools by query), \"describe\" (load full schema for a tool by name), \"call\" (invoke a tool by name with arguments). For frequent tools (workspace_*, code_exec, memory, agent, skill_use, web_fetch) call them directly — do NOT use tool_use for those.".to_string(),
@@ -1277,8 +1306,8 @@ mod tests {
         // Catches accidental gating that would silently shrink the list.
         let actual = all_system_tool_names().len();
         assert!(
-            actual >= 28,
-            "expected >= 28 tools in all_system_tool_names(), got {actual}"
+            actual >= 29,
+            "expected >= 29 tools in all_system_tool_names(), got {actual}"
         );
     }
 
