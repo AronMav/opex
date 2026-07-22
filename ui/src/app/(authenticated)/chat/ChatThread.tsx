@@ -224,6 +224,15 @@ export function ChatThread({
   const lastAssistantHasText = lastMsg?.role === "assistant" && lastMsg.parts.some(
     (p) => p.type === "text" && (p as { type: string; text?: string }).text,
   );
+  // Also show thinking while tools are actively running (input-streaming or
+  // input-available but no output yet) — the model is still "thinking" even
+  // if it already produced some text alongside the tool call.
+  const hasRunningTools = lastMsg?.role === "assistant" && lastMsg.parts.some(
+    (p) => p.type === "tool"
+      && (p as { type: string; state?: string }).state !== "output-available"
+      && (p as { type: string; state?: string }).state !== "output-error"
+      && (p as { type: string; state?: string }).state !== "output-denied",
+  );
   const lastMsgIsOtherAgent = lastMsg?.role === "assistant" && lastMsg.agentId && lastMsg.agentId !== currentAgent;
   const isLiveOrHistory = isLive || isHistory;
   // When a turn opens, the live overlay is empty ([]) so history bleeds
@@ -252,7 +261,7 @@ export function ChatThread({
     && !lastMsgIsOtherAgent
     && (
       connectionPhase === "submitted"
-      || ((isLiveEmpty || isResumeWaitingForStream || !lastAssistantHasText)
+      || ((isLiveEmpty || isResumeWaitingForStream || !lastAssistantHasText || hasRunningTools)
           && (connectionPhase === "streaming" || engineRunning))
     );
 
