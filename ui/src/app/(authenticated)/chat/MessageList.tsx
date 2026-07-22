@@ -5,7 +5,7 @@ import { Virtuoso } from "react-virtuoso";
 import { useChatStore } from "@/stores/chat-store";
 import type { ChatMessage } from "@/stores/chat-store";
 import { Button } from "@/components/ui/button";
-import { CometLoader, CircularLoader } from "@/components/ui/loader";
+import { ThinkingWave, CircularLoader } from "@/components/ui/loader";
 
 import { MessageItem } from "./MessageItem";
 import { useChatAutoscroll } from "./use-chat-autoscroll";
@@ -60,9 +60,9 @@ function ThinkingMessage() {
       aria-live="polite"
       aria-label={t("chat.thinking")}
       data-testid="thinking-indicator"
-      className="pt-1 pb-2 pl-12 animate-in fade-in slide-in-from-bottom-2 duration-300 ease-out"
+      className="pt-1 pb-2 animate-in fade-in slide-in-from-bottom-2 duration-300 ease-out"
     >
-      <CometLoader />
+      <ThinkingWave />
     </div>
   );
 }

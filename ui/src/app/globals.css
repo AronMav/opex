@@ -285,10 +285,6 @@
 }
 
 /* --- Loader Keyframes --- */
-@keyframes holo-wave {
-  0%, 100% { transform: scaleY(0.35); opacity: 0.45; }
-  50%       { transform: scaleY(1);   opacity: 1; }
-}
 @keyframes pulse-dot {
   0%, 100% { transform: scale(0.6); opacity: 0.5; }
   50% { transform: scale(1); opacity: 1; }
@@ -296,6 +292,16 @@
 @keyframes loading-dots {
   0%, 100% { opacity: 0; }
   50% { opacity: 1; }
+}
+
+/* --- Thinking Wave --- */
+@keyframes thinking-wave-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+@keyframes thinking-wave-breathe {
+  0%, 100% { opacity: 0.3; }
+  50%      { opacity: 0.6; }
 }
 
 /* --- Audio Player --- */

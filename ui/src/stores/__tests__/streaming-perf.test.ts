@@ -252,7 +252,7 @@ vi.mock("@/components/ui/collapsible", () => ({
 }));
 
 vi.mock("@/components/ui/loader", () => ({
-  CometLoader: () => null,
+  ThinkingWave: () => null,
   CircularLoader: () => null,
   PulseDotLoader: () => null,
   Loader: () => null,

@@ -60,37 +60,48 @@ export function PulseDotLoader({
   )
 }
 
-const HOLO_BARS: { height: number; color: string; delay: string }[] = [
-  { height: 10, color: "var(--chart-1)", delay: "0s" },
-  { height: 18, color: "var(--chart-5)", delay: "0.18s" },
-  { height: 13, color: "var(--chart-4)", delay: "0.36s" },
-]
-
-export function CometLoader({ className }: { className?: string }) {
+/** Unified thinking indicator — a horizontal wave with a sweeping gradient pulse.
+ *  Centered, stretched horizontally, with a soft glow. */
+export function ThinkingWave({ className }: { className?: string }) {
   return (
-    <div className={cn("flex items-end gap-[3px]", className)} style={{ height: 20 }}>
-      {HOLO_BARS.map((bar, i) => (
+    <div
+      className={cn("flex items-center justify-center", className)}
+      role="status"
+      aria-live="polite"
+    >
+      <div
+        className="relative h-[3px] w-32 overflow-hidden rounded-full"
+        style={{
+          background: "color-mix(in srgb, var(--primary) 20%, transparent)",
+        }}
+      >
+        {/* Breathing track */}
         <div
-          key={i}
+          className="absolute inset-0 rounded-full"
           style={{
-            width: 4,
-            height: bar.height,
-            borderRadius: 2,
-            background: bar.color,
-            boxShadow: `0 0 6px ${bar.color}`,
-            animation: `holo-wave 1.2s ease-in-out infinite`,
-            animationDelay: bar.delay,
-            transformOrigin: "bottom",
+            background:
+              "linear-gradient(90deg, transparent, color-mix(in srgb, var(--primary) 40%, transparent), transparent)",
+            animation: "thinking-wave-breathe 2s ease-in-out infinite",
           }}
         />
-      ))}
-      <span className="sr-only">Loading</span>
+        {/* Sweeping pulse */}
+        <div
+          className="absolute inset-y-0 w-1/2 rounded-full"
+          style={{
+            background:
+              "linear-gradient(90deg, transparent 0%, var(--primary) 50%, transparent 100%)",
+            boxShadow: `0 0 8px var(--primary)`,
+            animation: "thinking-wave-sweep 1.6s ease-in-out infinite",
+          }}
+        />
+      </div>
+      <span className="sr-only">Thinking</span>
     </div>
   )
 }
 
 /** Inline blinking caret shown at the end of actively streaming text.
- *  Deliberately NOT the CometLoader: the comet means "thinking", the caret
+ *  Deliberately NOT the ThinkingWave: the wave means "thinking", the caret
  *  means "text is arriving right here". */
 export function StreamingCaret() {
   return (
