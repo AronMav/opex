@@ -12,10 +12,11 @@ impl AgentEngine {
         &'a self,
         name: &'a str,
         arguments: &'a serde_json::Value,
+        cancel: &'a tokio_util::sync::CancellationToken,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send + 'a>> {
         Box::pin(async move {
             let audit_start = std::time::Instant::now();
-            let result = self.execute_tool_call_inner(name, arguments).await;
+            let result = self.execute_tool_call_inner(name, arguments, cancel).await;
 
             // Audit record (dispatched via bounded queue)
             let elapsed = audit_start.elapsed();
@@ -107,8 +108,11 @@ impl AgentEngine {
     /// (codemode is non-interactive, so approval-required tools are rejected
     /// outright rather than reaching here). The caller must have already
     /// verified the tool is in the agent's policy-filtered available set.
+    ///
+    /// Uses a fresh, never-cancelled token — codemode is a stateless RPC
+    /// endpoint with no session lifecycle to cancel from.
     pub(crate) async fn codemode_execute_tool(&self, name: &str, arguments: &serde_json::Value) -> String {
-        self.execute_tool_call(name, arguments).await
+        self.execute_tool_call(name, arguments, &tokio_util::sync::CancellationToken::new()).await
     }
 
     /// Inner tool dispatch (separated for audit wrapping).
@@ -116,6 +120,7 @@ impl AgentEngine {
         &'a self,
         name: &'a str,
         arguments: &'a serde_json::Value,
+        cancel: &'a tokio_util::sync::CancellationToken,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send + 'a>> {
         Box::pin(async move {
             // 0a. Reject malformed tool names BEFORE any approval, hooks, or
@@ -156,6 +161,7 @@ impl AgentEngine {
                         self.state().channel_router.as_ref(),
                         self.state().ui_event_tx.as_ref(),
                         self.sse_event_tx(),
+                        cancel,
                     ).await;
 
                     use crate::agent::approval_manager::ApprovalOutcome;
@@ -168,7 +174,7 @@ impl AgentEngine {
                             {
                                 obj.insert("_context".to_string(), ctx.clone());
                             }
-                            return self.execute_tool_call(name, &modified).await;
+                            return self.execute_tool_call(name, &modified, cancel).await;
                         }
                         ApprovalOutcome::Rejected(reason) => return reason,
                         ApprovalOutcome::Cancelled => {

@@ -318,6 +318,14 @@ pub async fn run_subagent_with_session(
             &mut detector, loop_config.detect_loops, None,
             parallel_batch_id,
             &denied_for_subagent,
+            // Subagent cancellation is via the parent's `AtomicBool`, checked
+            // between iterations (not reactive during tool runs). A fresh,
+            // never-cancelled token here means tool execution inside a subagent
+            // turn is bounded only by the per-tool timeout + the subagent's own
+            // `deadline`. Threading the parent's `CancellationToken` here would
+            // require a token per subagent — deferred (subagent tools are
+            // short-lived and already bounded by `max_iterations`).
+            &tokio_util::sync::CancellationToken::new(),
         ).await;
         for batch in &outcome.results {
             messages.push(Message {

@@ -66,10 +66,16 @@ pub struct ToolPersistCtx<'a> {
 /// Trait abstracting single-tool execution so the free function doesn't depend
 /// on `AgentEngine` directly.
 pub trait ToolExecutor: Send + Sync {
+    /// Execute a single tool call. `cancel` is the session-level cancellation
+    /// token — tool bodies SHOULD observe it (approval waits do via `select!`);
+    /// the outer `select!` in `execute_tool_calls_partitioned` also drops the
+    /// returned future on cancel, which aborts in-flight HTTP requests
+    /// (reqwest aborts on drop) and Docker exec streams.
     fn execute_tool_call<'a>(
         &'a self,
         name: &'a str,
         arguments: &'a Value,
+        cancel: &'a tokio_util::sync::CancellationToken,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send + 'a>>;
 
     fn needs_approval(&self, tool_name: &str) -> bool;
@@ -284,6 +290,11 @@ pub async fn execute_tool_calls_partitioned(
     extra_deny: &[String],
     mcp: Option<&crate::mcp::McpRegistry>,
     parallel_batch_id: Option<ParallelBatchId>,
+    // Session-level cancel token — observed by the `select!` wrapper around
+    // each tool call (drops the future on cancel, aborting HTTP/Docker) and
+    // threaded into approval waits. `CancellationToken::new()` for paths
+    // without an external cancel (cron / isolated).
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> BatchOutcome {
     // ── Dispatcher rewrite ───────────────────────────────────────────────────
     //
@@ -505,18 +516,31 @@ pub async fn execute_tool_calls_partitioned(
                     } else {
                         executor.tool_timeout(&name)
                     };
-                    let result = match tokio::time::timeout(
-                        timeout,
-                        executor.execute_tool_call(&name, &args),
-                    )
-                    .await
-                    {
-                        Ok(r) => r,
-                        Err(_) => format!(
-                            "Tool '{}' timed out after {}s",
-                            name,
-                            timeout.as_secs()
+                    // Cancel-aware: on session cancel (user Stop / abort),
+                    // drop the tool future immediately — reqwest aborts the
+                    // in-flight HTTP request on drop, Docker exec streams
+                    // close, and approval waits resolve via their inner
+                    // `select!`. Without this, a 120s `generate_image` would
+                    // run to completion after the user hit Stop.
+                    let result = match tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => format!(
+                            "Tool '{}' interrupted (session cancelled)",
+                            name
                         ),
+                        r = tokio::time::timeout(
+                            timeout,
+                            executor.execute_tool_call(&name, &args, cancel),
+                        ) => match r {
+                            Ok(res) => res,
+                            Err(_) => format!(
+                                "Tool '{}' timed out after {}s",
+                                name,
+                                timeout.as_secs()
+                            ),
+                        },
+                    } {
+                        r => r,
                     };
                     let truncated = super::context::truncate_tool_result(
                         model,
@@ -693,18 +717,25 @@ pub async fn execute_tool_calls_partitioned(
         } else {
             executor.tool_timeout(&tool_calls[i].name)
         };
-        let raw = match tokio::time::timeout(
-            timeout,
-            executor.execute_tool_call(&tool_calls[i].name, &enriched[i]),
-        )
-        .await
-        {
-            Ok(r) => r,
-            Err(_) => format!(
-                "Tool '{}' timed out after {}s",
-                tool_calls[i].name,
-                timeout.as_secs()
+        let raw = match tokio::select! {
+            biased;
+            _ = cancel.cancelled() => format!(
+                "Tool '{}' interrupted (session cancelled)",
+                tool_calls[i].name
             ),
+            r = tokio::time::timeout(
+                timeout,
+                executor.execute_tool_call(&tool_calls[i].name, &enriched[i], cancel),
+            ) => match r {
+                Ok(res) => res,
+                Err(_) => format!(
+                    "Tool '{}' timed out after {}s",
+                    tool_calls[i].name,
+                    timeout.as_secs()
+                ),
+            },
+        } {
+            r => r,
         };
         let res = super::context::truncate_tool_result(model, &raw, current_context_chars);
         if detect_loops {
@@ -1353,6 +1384,7 @@ mod sequential_enrichment_tests {
             &'a self,
             _name: &'a str,
             arguments: &'a serde_json::Value,
+            _cancel: &'a tokio_util::sync::CancellationToken,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send + 'a>> {
             let captured = self.captured.clone();
             let args = arguments.clone();
@@ -1454,6 +1486,7 @@ mod sequential_enrichment_tests {
             &[], // extra_deny: no subagent isolation in this test
             None,
             None,
+            &tokio_util::sync::CancellationToken::new(),
         )
         .await;
 
@@ -1519,6 +1552,7 @@ mod sequential_enrichment_tests {
             &[], // extra_deny: empty in this test
             None,
             None,
+            &tokio_util::sync::CancellationToken::new(),
         )
         .await;
 

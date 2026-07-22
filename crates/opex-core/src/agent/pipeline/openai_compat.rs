@@ -196,6 +196,7 @@ pub async fn handle_openai(
             &mut detector, loop_config.detect_loops, None,
             parallel_batch_id,
             &[],  // openai_compat is top-level, not a subagent
+            &tokio_util::sync::CancellationToken::new(),
         ).await;
         for batch in &outcome.results {
             messages.push(Message {

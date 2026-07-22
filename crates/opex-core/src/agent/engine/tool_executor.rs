@@ -101,6 +101,7 @@ impl AgentEngine {
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
         parallel_batch_id: Option<opex_types::ids::ParallelBatchId>,
         extra_deny: &[String],
+        cancel: &tokio_util::sync::CancellationToken,
     ) -> crate::agent::pipeline::parallel::BatchOutcome {
         // Load YAML tools (cached for 30s)
         let yaml_tools: std::sync::Arc<std::collections::HashMap<String, crate::tools::yaml_tools::YamlToolDef>> = {
@@ -151,6 +152,7 @@ impl AgentEngine {
             extra_deny,
             self.mcp().as_deref(),
             parallel_batch_id,
+            cancel,
         )
         .await
     }
@@ -191,6 +193,7 @@ impl crate::agent::tool_executor::ToolExecutorDeps for AgentEngine {
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
         parallel_batch_id: Option<opex_types::ids::ParallelBatchId>,
         extra_deny: &[String],
+        cancel: &tokio_util::sync::CancellationToken,
     ) -> crate::agent::pipeline::parallel::BatchOutcome {
         self.execute_tool_calls_partitioned(
             tool_calls,
@@ -203,6 +206,7 @@ impl crate::agent::tool_executor::ToolExecutorDeps for AgentEngine {
             persist_ctx,
             parallel_batch_id,
             extra_deny,
+            cancel,
         )
         .await
     }
@@ -215,8 +219,9 @@ impl crate::agent::pipeline::parallel::ToolExecutor for AgentEngine {
         &'a self,
         name: &'a str,
         arguments: &'a serde_json::Value,
+        cancel: &'a tokio_util::sync::CancellationToken,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send + 'a>> {
-        self.execute_tool_call(name, arguments)
+        self.execute_tool_call(name, arguments, cancel)
     }
 
     fn needs_approval(&self, tool_name: &str) -> bool {

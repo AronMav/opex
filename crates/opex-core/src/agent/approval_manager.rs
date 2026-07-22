@@ -85,6 +85,7 @@ impl ApprovalManager {
         channel_router: Option<&ChannelActionRouter>,
         ui_event_tx: Option<&tokio::sync::broadcast::Sender<String>>,
         sse_event_tx: &Arc<dashmap::DashMap<Uuid, crate::agent::engine_event_sender::EngineEventSender>>,
+        cancel: &tokio_util::sync::CancellationToken,
     ) -> ApprovalOutcome {
         let session_id = context
             .get("session_id")
@@ -233,8 +234,26 @@ impl ApprovalManager {
             }
         }
 
-        // 5. Wait for approval with timeout
-        match tokio::time::timeout(Duration::from_secs(timeout_secs), result_rx).await {
+        // 5. Wait for approval with timeout + cooperative cancel.
+        //    Cancel (user Stop / session abort) takes priority over both the
+        //    approval reply and the timeout — a wedged approval must not block
+        //    the turn from winding down. The cleanup (remove waiter + resolve
+        //    DB) mirrors the `Ok(Err(_))` sender-dropped branch.
+        let timeout_fut = tokio::time::timeout(Duration::from_secs(timeout_secs), result_rx);
+        tokio::pin!(timeout_fut);
+        let result = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                tracing::info!(tool = %tool_name, approval_id = %approval_id, "approval wait cancelled by session cancel");
+                self.waiters.remove(&approval_id);
+                let _ = crate::db::approvals::resolve_approval_strict(
+                    &self.db, approval_id, "cancelled", "system",
+                ).await;
+                return ApprovalOutcome::Cancelled;
+            }
+            r = &mut timeout_fut => r,
+        };
+        match result {
             Ok(Ok(ApprovalResult::Approved)) => {
                 tracing::info!(tool = %tool_name, approval_id = %approval_id, "tool approved");
                 ApprovalOutcome::Approved

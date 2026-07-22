@@ -1161,6 +1161,7 @@ pub async fn execute<S: EventSink>(
                 Some(&persist_ctx),
                 parallel_batch_id,
                 &[], // top-level (handle_sse / handle_with_status), not a subagent
+                &cancel,
             ),
         )
         .await
