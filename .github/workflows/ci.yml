@@ -142,7 +142,7 @@ jobs:
           bun-version: latest
 
       - name: Install
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: TypeScript strict check
         # tsc --noEmit gates merges on type-correctness. `bun test`

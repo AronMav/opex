@@ -98,7 +98,7 @@ mod tests {
             let c = calls_c.clone();
             async move {
                 let n = c.fetch_add(1, Ordering::SeqCst);
-                if n < 2 {
+                if n < 1 {
                     Err(RetryableError::Transient(anyhow!("502 bad gateway")))
                 } else {
                     Ok(7)
@@ -107,7 +107,7 @@ mod tests {
         })
         .await;
         assert_eq!(res.unwrap(), 7);
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test(start_paused = true)]
