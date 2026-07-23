@@ -344,6 +344,36 @@ impl SystemToolHandler for RichCardHandler {
     }
 }
 
+// ── send_media ───────────────────────────────────────────────────────────────
+
+pub struct SendMediaHandler;
+
+#[async_trait]
+impl SystemToolHandler for SendMediaHandler {
+    async fn handle(&self, _deps: ToolDeps<'_>, args: &Value) -> String {
+        let url = match args.get("url").and_then(|v| v.as_str()) {
+            Some(u) if !u.is_empty() => u,
+            _ => return "Error: 'url' is required.".to_string(),
+        };
+        if !url.starts_with("/api/uploads/") && !url.starts_with("/uploads/") {
+            return "Error: url must be an internal /api/uploads/ path.".to_string();
+        }
+        let media_type = args
+            .get("media_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let marker = serde_json::json!({
+            "url": url,
+            "mediaType": media_type,
+        });
+        format!(
+            "{}{}\nMedia displayed inline.",
+            crate::agent::engine::FILE_PREFIX,
+            marker,
+        )
+    }
+}
+
 // ── browser_action ────────────────────────────────────────────────────────────
 
 pub struct BrowserActionHandler;

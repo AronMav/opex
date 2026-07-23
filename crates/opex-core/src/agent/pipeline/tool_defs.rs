@@ -681,6 +681,26 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         },
     ]);
 
+    // send_media: display an existing image/file inline in chat
+    tools.push(ToolDefinition {
+        name: "send_media".to_string(),
+        description: "Display an existing image or file inline in the chat. Use with URLs from /api/uploads/ (e.g. from previous generate_image results or user uploads). The media appears directly in the conversation.".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Media URL from /api/uploads/ (e.g. /api/uploads/{id}?sig=...). Get URLs from previous generate_image results or uploaded files."
+                },
+                "media_type": {
+                    "type": "string",
+                    "description": "MIME type (e.g. image/png, audio/mpeg, application/pdf). Optional."
+                }
+            },
+            "required": ["url"]
+        }),
+    });
+
     // ── Skill editing (optional group) ──────────────────────────────────
     if groups.skill_editing {
         tools.push(ToolDefinition {

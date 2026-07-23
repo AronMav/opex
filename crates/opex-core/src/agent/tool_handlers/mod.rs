@@ -69,6 +69,7 @@ impl SystemToolRegistry {
         r.register("git",              GitToolHandler);
         r.register("canvas",           CanvasHandler);
         r.register("rich_card",        RichCardHandler);
+        r.register("send_media",       SendMediaHandler);
         r.register("process",          ProcessHandler);
         r.register("tool_use",         ToolUseHandler);
         r.register("clarify",          ClarifyHandler);
