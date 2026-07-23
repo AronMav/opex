@@ -60,8 +60,10 @@ DEFAULT_WORKFLOW: dict = {
 }
 
 # The one CLIPTextEncode we drive is the POSITIVE prompt. If a graph has more
-# than one, set options.nodes.prompt to disambiguate.
-_PROMPT_CLASSES = ("CLIPTextEncode",)
+# than one, set options.nodes.prompt to disambiguate. Includes Flux-style
+# encoders (CLIPTextEncodeFlux) which use clip_l + t5xxl inputs instead of a
+# single `text` field.
+_PROMPT_CLASSES = ("CLIPTextEncode", "CLIPTextEncodeFlux")
 _SIZE_CLASSES = (
     "EmptySD3LatentImage",
     "EmptyLatentImage",
@@ -124,6 +126,20 @@ class ComfyUIImageGen:
                   if isinstance(n, dict) and n.get("class_type") in _PROMPT_CLASSES and nid != prompt_node]
         return others[0] if len(others) == 1 else None
 
+    def _set_prompt_text(self, graph: dict, node_id: str, text: str) -> None:
+        """Write `text` into a prompt node, handling both standard
+        CLIPTextEncode (single `text` input) and Flux CLIPTextEncodeFlux
+        (split `clip_l` + `t5xxl` inputs). For Flux nodes the prompt is written
+        to BOTH fields — matching the working-template pattern where clip_l
+        and t5xxl carry the same text."""
+        inputs = graph[node_id].setdefault("inputs", {})
+        class_type = graph[node_id].get("class_type", "")
+        if class_type == "CLIPTextEncodeFlux":
+            inputs["clip_l"] = text
+            inputs["t5xxl"] = text
+        else:
+            inputs["text"] = text
+
     def _build_graph(self, prompt: str, size: str, model: str | None,
                      negative: str = "") -> dict:
         graph = copy.deepcopy(self._workflow)
@@ -131,14 +147,14 @@ class ComfyUIImageGen:
         prompt_node = self._find_node(graph, "prompt", _PROMPT_CLASSES)
         if prompt_node is None:
             raise ValueError("ComfyUI workflow has no CLIPTextEncode node to carry the prompt")
-        graph[prompt_node].setdefault("inputs", {})["text"] = prompt
+        self._set_prompt_text(graph, prompt_node, prompt)
 
         # Negative prompt (only for graphs with a real negative encoder — e.g.
         # Chroma at cfg>1). Overwrites the workflow's baked-in negative text.
         if negative:
             neg_node = self._find_negative_node(graph, prompt_node)
             if neg_node is not None:
-                graph[neg_node].setdefault("inputs", {})["text"] = negative
+                self._set_prompt_text(graph, neg_node, negative)
 
         size_node = self._find_node(graph, "size", _SIZE_CLASSES)
         if size_node is not None:
