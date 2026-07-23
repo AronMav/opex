@@ -204,7 +204,9 @@ fn is_read_only(workspace_dir: &str, resolved: &Path, base: bool) -> bool {
 
 /// Maximum bytes per workspace file included in system prompt.
 /// Files exceeding this are truncated with a warning to the LLM.
-const MAX_PROMPT_FILE_BYTES: usize = 12 * 1024; // 12 KB
+/// 16 KB: character-driven agents (Aria) have rich SOUL.md personality
+/// prompts that legitimately need more room than the original 12 KB.
+const MAX_PROMPT_FILE_BYTES: usize = 16 * 1024; // 16 KB
 
 /// Placeholder substituted for an identity file that triggers a high-severity
 /// injection match. Keeps the rest of the system prompt intact.

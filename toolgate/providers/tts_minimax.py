@@ -37,6 +37,20 @@ class MiniMaxTTS:
         self.bitrate = int(opts.get("bitrate", 128000))
         self._request_timeout = resolve_request_timeout(opts)
 
+    async def list_voices(self, http: httpx.AsyncClient) -> dict:
+        """Return MiniMax preset voices. MiniMax has no /v1/audio/voices
+        endpoint, so we return the documented preset list statically."""
+        return {
+            "voices": [
+                "Wise_Woman", "Deep_Voice_Man", "Calm_Woman", "Casual_Guy",
+                "Friendly_Person", "Calm_Man", "Serene_Woman", "Young_Knight",
+                "Bee_Bee", "MiniMax_001", "MiniMax_002", "presonal_F",
+                "presonal_M", "narrator_woman", "narrator_man",
+                "clone:Arty",
+            ],
+            "default": self.default_voice,
+        }
+
     async def synthesize(self, http: httpx.AsyncClient, text: str,
                          voice: str, model: str | None = None,
                          response_format: str = "mp3",
