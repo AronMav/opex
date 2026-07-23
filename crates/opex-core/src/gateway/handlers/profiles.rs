@@ -98,12 +98,25 @@ pub(crate) async fn hot_reload_agents_for_profile(
         }
     };
 
-    for cfg in configs.into_iter().filter(|c| c.agent.profile == profile_name) {
+    let matching: Vec<_> = configs.into_iter().filter(|c| c.agent.profile == profile_name).collect();
+    if matching.is_empty() {
+        tracing::warn!(profile = %profile_name,
+            "profile hot-reload: no agents bound to this profile (check agent TOML `profile` field)");
+    }
+
+    for cfg in matching {
         let agent_name = cfg.agent.name.clone();
 
         // Stop the old engine (if running) and drop its access guard.
         let old_handle = agents.map.write().await.remove(&agent_name);
         auth.access_guards.write().await.remove(&agent_name);
+        if let Some(handle) = &old_handle {
+            // Cancel in-flight requests so active sessions reconnect against
+            // the freshly-swapped engine (otherwise an active turn keeps the
+            // old Arc<AgentEngine> with stale profile_slots until it finishes).
+            handle.engine.state().cancel_all_requests();
+            handle.engine.state().wait_drain(std::time::Duration::from_secs(5)).await;
+        }
         if let Some(handle) = old_handle {
             handle.shutdown(&agents.scheduler).await;
         }

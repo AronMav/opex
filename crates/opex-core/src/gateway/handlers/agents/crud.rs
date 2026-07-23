@@ -1058,6 +1058,12 @@ pub(crate) async fn api_update_agent(
     // Hot-restart: stop old agent, start new one.
     let old_handle = agents.map.write().await.remove(&name);
     auth.access_guards.write().await.remove(&name);
+    if let Some(handle) = &old_handle {
+        // Cancel in-flight requests so active sessions reconnect against the
+        // freshly-swapped engine with updated config/providers.
+        handle.engine.state().cancel_all_requests();
+        handle.engine.state().wait_drain(std::time::Duration::from_secs(5)).await;
+    }
     if let Some(handle) = old_handle {
         handle.shutdown(&agents.scheduler).await;
     }
@@ -1352,6 +1358,10 @@ pub(crate) async fn api_delete_agent(
         let _ = sandbox.remove_container(&name).await;
     }
 
+    if let Some(handle) = &handle {
+        handle.engine.state().cancel_all_requests();
+        handle.engine.state().wait_drain(std::time::Duration::from_secs(5)).await;
+    }
     if let Some(handle) = handle {
         handle.shutdown(&agents.scheduler).await;
         tracing::info!(agent = %name, "agent deleted and stopped via API");
