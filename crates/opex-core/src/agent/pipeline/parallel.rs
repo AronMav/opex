@@ -522,7 +522,7 @@ pub async fn execute_tool_calls_partitioned(
                     // close, and approval waits resolve via their inner
                     // `select!`. Without this, a 120s `generate_image` would
                     // run to completion after the user hit Stop.
-                    let result = match tokio::select! {
+                    let result = tokio::select! {
                         biased;
                         _ = cancel.cancelled() => format!(
                             "Tool '{}' interrupted (session cancelled)",
@@ -539,8 +539,6 @@ pub async fn execute_tool_calls_partitioned(
                                 timeout.as_secs()
                             ),
                         },
-                    } {
-                        r => r,
                     };
                     let truncated = super::context::truncate_tool_result(
                         model,
@@ -717,7 +715,7 @@ pub async fn execute_tool_calls_partitioned(
         } else {
             executor.tool_timeout(&tool_calls[i].name)
         };
-        let raw = match tokio::select! {
+        let raw = tokio::select! {
             biased;
             _ = cancel.cancelled() => format!(
                 "Tool '{}' interrupted (session cancelled)",
@@ -734,8 +732,6 @@ pub async fn execute_tool_calls_partitioned(
                     timeout.as_secs()
                 ),
             },
-        } {
-            r => r,
         };
         let res = super::context::truncate_tool_result(model, &raw, current_context_chars);
         if detect_loops {

@@ -910,9 +910,13 @@ pub async fn handle_skill_capture(
     // wrapper skills like "generate-image" or "call-workspace-write" that it
     // then loops on loading instead of calling the actual tool.
     let tool_shadow = name.replace('-', "_");
-    let known_tools: std::collections::HashSet<&str> =
-        crate::agent::pipeline::tool_defs::all_system_tool_names().iter().copied().collect();
-    if known_tools.contains(tool_shadow.as_str()) {
+    let system_ok = crate::agent::pipeline::tool_defs::all_system_tool_names()
+        .iter()
+        .any(|t| *t == tool_shadow);
+    let capability_ok = crate::agent::capability_tools::CAPABILITY_TOOL_NAMES
+        .iter()
+        .any(|t| *t == tool_shadow);
+    if system_ok || capability_ok {
         return format!(
             "Skill name '{}' shadows an existing tool '{}'. Do not create wrapper skills — \
              call the tool directly. Choose a different name that describes a WORKFLOW, \
@@ -931,12 +935,16 @@ pub async fn handle_skill_capture(
         _ => return "Error: 'instructions' is required.".to_string(),
     };
 
-    // Reject wrapper skills: instructions that tell the model to load another
-    // skill ("skill_use" / "action='load'") create the indirection loops that
-    // trap agents in endless skill-loading. A skill should contain DIRECT
-    // instructions, not pointers to other skills.
+    // Reject wrapper skills: instructions that reference loading other skills
+    // create the indirection loops that trap agents in endless skill-loading.
+    // Catches both code-style ("skill_use(action='load')") and prose ("load
+    // the X skill", "first load skill Y") references.
     let lower_instr = instructions.to_lowercase();
-    if lower_instr.contains("skill_use(") || lower_instr.contains("action=\"load\"") {
+    let references_skill_load = lower_instr.contains("skill_use(")
+        || lower_instr.contains("action=\"load\"")
+        || lower_instr.contains("action='load'")
+        || (lower_instr.contains("load") && lower_instr.contains("skill"));
+    if references_skill_load {
         return format!(
             "Skill '{}' rejected: instructions reference loading other skills. \
              Skills must contain DIRECT instructions — call tools, not other skills. \
