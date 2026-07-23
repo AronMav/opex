@@ -140,11 +140,16 @@ impl MediaKind {
     /// `file_marker_json` must be a JSON object string with at least `url`
     /// (and ideally `mediaType`), as produced by `save_binary_to_uploads`.
     pub fn inline_tool_result(self, file_marker_json: &str) -> String {
+        let url = serde_json::from_str::<serde_json::Value>(file_marker_json)
+            .ok()
+            .and_then(|v| v.get("url").and_then(|u| u.as_str()).map(String::from))
+            .unwrap_or_default();
         format!(
-            "{}{}\n[SYSTEM] {} delivered inline in chat; do NOT mention or repeat it. End your turn with no further text.",
+            "{}{}\n[SYSTEM] {} delivered inline in chat.\nURL: {}",
             crate::agent::engine::FILE_PREFIX,
             file_marker_json,
             self.subject(),
+            url,
         )
     }
 
