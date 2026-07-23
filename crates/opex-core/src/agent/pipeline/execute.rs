@@ -637,9 +637,10 @@ pub async fn execute<S: EventSink>(
 
                             // Persist the provider switch to the profile so
                             // future turns use the working provider as primary.
-                            if resolved_idx > 0 {
-                                if let Some(chain) = engine.cfg().profile_slots.get("text")
-                                    && let Some(entry) = chain.get(resolved_idx) {
+                            if resolved_idx > 0
+                                && let Some(chain) = engine.cfg().profile_slots.get("text")
+                                && let Some(entry) = chain.get(resolved_idx)
+                            {
                                         let db = engine.cfg().db.clone();
                                         let profile_name = engine.cfg().agent.profile.clone();
                                         let agent_name = engine.cfg().agent.name.clone();
@@ -657,7 +658,6 @@ pub async fn execute<S: EventSink>(
                                                 &db, &profile_name, &provider_name, model.as_deref(), slot_idx,
                                             ).await;
                                         });
-                                    }
                             }
 
                             tracing::warn!(
