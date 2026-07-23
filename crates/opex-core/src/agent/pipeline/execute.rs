@@ -2094,6 +2094,7 @@ mod tests {
     }
 }
 
+#[allow(clippy::items_after_test_module)]
 /// Move the provider at `from_idx` to position 0 in the profile's text slot
 /// array, so the next engine rebuild uses it as primary.
 async fn promote_provider_in_profile(
