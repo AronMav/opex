@@ -634,6 +634,32 @@ pub async fn execute<S: EventSink>(
                         if let Some((p, resolved_idx)) = next {
                             layer_state.fallback_chain_idx = resolved_idx;
                             layer_state.adopt_fallback(p);
+
+                            // Persist the provider switch to the profile so
+                            // future turns use the working provider as primary.
+                            if resolved_idx > 0 {
+                                if let Some(chain) = engine.cfg().profile_slots.get("text")
+                                    && let Some(entry) = chain.get(resolved_idx) {
+                                        let db = engine.cfg().db.clone();
+                                        let profile_name = engine.cfg().agent.profile.clone();
+                                        let agent_name = engine.cfg().agent.name.clone();
+                                        let provider_name = entry.provider.clone();
+                                        let model = entry.model.clone();
+                                        let slot_idx = resolved_idx;
+                                        tracing::info!(
+                                            agent = %agent_name,
+                                            provider = %provider_name,
+                                            profile = %profile_name,
+                                            "provider switch persisted to profile (promoted to primary)"
+                                        );
+                                        tokio::spawn(async move {
+                                            promote_provider_in_profile(
+                                                &db, &profile_name, &provider_name, model.as_deref(), slot_idx,
+                                            ).await;
+                                        });
+                                    }
+                            }
+
                             tracing::warn!(
                                 agent = %engine.cfg().agent.name,
                                 iteration,
@@ -2065,5 +2091,45 @@ mod tests {
         // The marker line is still removed from the display text.
         assert!(!parts.display_result.contains("__file__"));
         assert!(!parts.display_result.contains("evil.example"));
+    }
+}
+
+/// Move the provider at `from_idx` to position 0 in the profile's text slot
+/// array, so the next engine rebuild uses it as primary.
+async fn promote_provider_in_profile(
+    db: &sqlx::PgPool,
+    profile_name: &str,
+    _provider_name: &str,
+    _model: Option<&str>,
+    from_idx: usize,
+) {
+    let row: Result<Option<serde_json::Value>, sqlx::Error> = sqlx::query_scalar(
+        "SELECT slots->'text' FROM profiles WHERE name = $1",
+    )
+    .bind(profile_name)
+    .fetch_optional(db)
+    .await;
+
+    let Some(Some(text_slots)) = row.ok() else { return; };
+    let Some(arr) = text_slots.as_array() else { return; };
+    if from_idx == 0 || from_idx >= arr.len() { return; }
+
+    let mut slots: Vec<serde_json::Value> = arr.to_vec();
+    let entry = slots.remove(from_idx);
+    slots.insert(0, entry);
+    let new_text = serde_json::Value::Array(slots);
+
+    let res = sqlx::query(
+        "UPDATE profiles SET slots = jsonb_set(slots, '{text}', $2::jsonb), updated_at = now() WHERE name = $1",
+    )
+    .bind(profile_name)
+    .bind(&new_text)
+    .execute(db)
+    .await;
+
+    if let Err(e) = &res {
+        tracing::warn!(profile = %profile_name, error = %e, "failed to persist provider promotion");
+    } else {
+        tracing::info!(profile = %profile_name, promoted_from = from_idx, "profile text slot reordered");
     }
 }
