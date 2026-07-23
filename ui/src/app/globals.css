@@ -393,3 +393,11 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Sonner toasts are click-to-dismiss (see components/ui/sonner.tsx): show a
+   pointer over dismissible toasts so the affordance is discoverable, instead
+   of the text I-beam the toast body would otherwise get. Non-dismissible /
+   disabled toasts keep the default cursor. */
+[data-sonner-toast][data-dismissible="true"]:not([data-disabled="true"]) {
+  cursor: pointer;
+}
