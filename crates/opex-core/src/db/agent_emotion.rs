@@ -1,9 +1,8 @@
-//! Mood persistence for the emotion layer v1 (spec
-//! `docs/superpowers/specs/2026-07-14-agent-soul-emotion-layer-v1-design.md`).
-//! `upsert_blended` is called from the knowledge extractor's appraisal
-//! piggyback (Task 3). `get` is not read by any production path in v1 (the
-//! mood-block prompt reader was cut from scope) — kept for this module's
-//! own test and reserved for a later phase.
+//! Mood persistence for the emotion layer (spec
+//! `docs/superpowers/specs/2026-07-14-agent-soul-emotion-layer-v1-design.md` +
+//! render-v2 §3.4). `upsert_blended` is called from the knowledge extractor's
+//! appraisal piggyback; `get` is read by the emotion prompt-render v2 path
+//! (`AgentEngine::emotion_mood_block`).
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -12,10 +11,7 @@ use sqlx::PgPool;
 use crate::agent::emotion::{blend, decay};
 use crate::config::EmotionConfig;
 
-// Fields are only read by `get`'s own #[sqlx::test] in v1 (get is unused in
-// production — see module doc comment); allow(dead_code) mirrors that.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct MoodRow {
     pub valence: f32,
     pub label: Option<String>,
@@ -23,10 +19,8 @@ pub struct MoodRow {
 }
 
 /// Current stored mood (raw, not decayed). Callers that render/consume it apply
-/// `emotion::decay` by elapsed-since-`updated_at` themselves.
-// Unused in v1 production (mood-block reader cut from scope) — kept for this
-// module's #[sqlx::test] and reserved for a later phase.
-#[allow(dead_code)]
+/// `emotion::decay` by elapsed-since-`updated_at` themselves. Read by the
+/// emotion prompt-render v2 path (`AgentEngine::emotion_mood_block`).
 pub async fn get(db: &PgPool, agent_id: &str) -> Result<Option<MoodRow>> {
     let row = sqlx::query_as::<_, (f32, Option<String>, DateTime<Utc>)>(
         "SELECT valence, label, updated_at FROM agent_emotion_state WHERE agent_id = $1",

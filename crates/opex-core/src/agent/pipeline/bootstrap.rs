@@ -465,9 +465,19 @@ pub async fn bootstrap<S: EventSink>(
     // Feed the enriched text to the LLM so it sees the transcribed voice /
     // attachment descriptions / fetched URL contents that enrich_message_text
     // produced. DB stores only user_text (original); enriched_text is LLM-only.
+    // ECP v1 (spec §3.4): when drift.ecp is on, perspective-frame the live user
+    // turn so the model cannot adopt the interlocutor's persona claims. The
+    // historical window is framed inside build(); this covers the current turn
+    // (appended here, after build).
+    let drift_cfg = &engine.cfg().agent.drift;
+    let live_content = if drift_cfg.ecp {
+        crate::agent::drift::reproject_perspective(&enriched_text)
+    } else {
+        enriched_text.clone()
+    };
     messages.push(Message {
         role: MessageRole::User,
-        content: enriched_text.clone(),
+        content: live_content,
         tool_calls: None,
         tool_call_id: None,
         thinking_blocks: vec![],

@@ -206,6 +206,8 @@ pub(crate) struct DriftPayload {
     pub z_release: Option<f32>,
     pub correct: Option<bool>,
     pub anchor: Option<String>,
+    pub ecp: Option<bool>,
+    pub ecp_recent_turns: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -224,6 +226,7 @@ pub(crate) struct EmotionPayload {
     pub intensity_importance_k: Option<f32>,
     pub blend_rate: Option<f32>,
     pub decay_half_life_hours: Option<f32>,
+    pub render_to_prompt: Option<bool>,
 }
 
 // ── Config builder ──────────────────────────────────────
@@ -285,6 +288,8 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
                 z_release: d.z_release.unwrap_or(1.0),
                 correct: d.correct.unwrap_or(false),
                 anchor: d.anchor.filter(|s| !s.is_empty()),
+                ecp: d.ecp.unwrap_or(false),
+                ecp_recent_turns: d.ecp_recent_turns.unwrap_or(1),
             }).unwrap_or_default(),
             initiative: p.initiative.flatten().map(|i| InitiativeConfig {
                 enabled: i.enabled.unwrap_or(false),
@@ -299,6 +304,7 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
                 intensity_importance_k: e.intensity_importance_k.unwrap_or(3.0),
                 blend_rate: e.blend_rate.unwrap_or(0.3),
                 decay_half_life_hours: e.decay_half_life_hours.unwrap_or(12.0),
+                render_to_prompt: e.render_to_prompt.unwrap_or(false),
             }).unwrap_or_default(),
             compaction: p.compaction.flatten().map(|c| CompactionConfig {
                 enabled: c.enabled.unwrap_or(true),

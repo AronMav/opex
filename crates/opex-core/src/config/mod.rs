@@ -1514,6 +1514,17 @@ pub struct DriftConfig {
     /// Operator identity reminder (~1-2 sentences). None → generic name-based fallback.
     #[serde(default)]
     pub anchor: Option<String>,
+    /// Opt-in ECP v1 (Egocentric Context Projection, spec §3.2): wrap each
+    /// recent interlocutor (user) turn with an explicit perspective boundary so
+    /// the model cannot adopt the partner's persona claims as its own.
+    /// Requires `enabled = true`. Deterministic, LLM-free.
+    #[serde(default)]
+    pub ecp: bool,
+    /// How many of the most-recent user turns (current turn always included)
+    /// ECP frames when `ecp = true`. Default 1 = live turn only (the injection
+    /// vector); widen to cover deeper history at proportionate token cost.
+    #[serde(default = "default_drift_ecp_recent_turns")]
+    pub ecp_recent_turns: usize,
 }
 
 fn default_drift_threshold() -> f32 {
@@ -1531,6 +1542,9 @@ fn default_drift_z_fire() -> f32 {
 fn default_drift_z_release() -> f32 {
     1.0
 }
+fn default_drift_ecp_recent_turns() -> usize {
+    1
+}
 
 impl Default for DriftConfig {
     fn default() -> Self {
@@ -1543,6 +1557,8 @@ impl Default for DriftConfig {
             z_release: default_drift_z_release(),
             correct: false,
             anchor: None,
+            ecp: false,
+            ecp_recent_turns: default_drift_ecp_recent_turns(),
         }
     }
 }
@@ -1572,6 +1588,12 @@ impl DriftConfig {
         if self.correct && !self.enabled {
             errors.push("drift.correct requires drift.enabled = true".to_string());
         }
+        if self.ecp && !self.enabled {
+            errors.push("drift.ecp requires drift.enabled = true".to_string());
+        }
+        if !(1..=50).contains(&self.ecp_recent_turns) {
+            errors.push("drift.ecp_recent_turns must be in [1, 50]".to_string());
+        }
         errors
     }
 }
@@ -1590,6 +1612,27 @@ mod drift_config_tests {
 
         let off = DriftConfig { enabled: false, correct: false, ..DriftConfig::default() };
         assert!(off.validate().is_empty(), "correct off → no error");
+    }
+
+    #[test]
+    fn ecp_requires_enabled_and_range() {
+        // valid: ecp on + enabled
+        let ok = DriftConfig { enabled: true, ecp: true, ..DriftConfig::default() };
+        assert!(ok.validate().is_empty(), "ecp+enabled must pass: {:?}", ok.validate());
+
+        // invalid: ecp without enabled
+        let bad = DriftConfig { enabled: false, ecp: true, ..DriftConfig::default() };
+        assert!(bad.validate().iter().any(|e| e.contains("drift.ecp requires")), "ecp without enabled must error");
+
+        // invalid: ecp_recent_turns out of range
+        let bad_range = DriftConfig { enabled: true, ecp: true, ecp_recent_turns: 0, ..DriftConfig::default() };
+        assert!(bad_range.validate().iter().any(|e| e.contains("ecp_recent_turns")), "0 turns must error");
+        let bad_range2 = DriftConfig { enabled: true, ecp: true, ecp_recent_turns: 51, ..DriftConfig::default() };
+        assert!(bad_range2.validate().iter().any(|e| e.contains("ecp_recent_turns")), "51 turns must error");
+
+        // ecp off → no ecp errors regardless of recent_turns within default
+        let off = DriftConfig::default();
+        assert!(off.validate().is_empty(), "default config must pass");
     }
 }
 
@@ -1737,6 +1780,14 @@ pub struct EmotionConfig {
     pub blend_rate: f32,
     #[serde(default = "default_emotion_halflife")]
     pub decay_half_life_hours: f32,
+    /// Opt-in emotion prompt-render v2 (spec §3.1): surface the agent's
+    /// bucketed mood as an observation block in the system prompt. Requires
+    /// `enabled = true` (which itself requires `soul.enabled`, cross-checked
+    /// in `AgentConfig::load()`). Neutral mood renders nothing; the block is
+    /// framed as data-not-instruction and suppressed on turns where the drift
+    /// A-anchor fires.
+    #[serde(default)]
+    pub render_to_prompt: bool,
 }
 fn default_emotion_k() -> f32 {
     3.0
@@ -1754,6 +1805,7 @@ impl Default for EmotionConfig {
             intensity_importance_k: 3.0,
             blend_rate: 0.3,
             decay_half_life_hours: 12.0,
+            render_to_prompt: false,
         }
     }
 }
@@ -1768,6 +1820,9 @@ impl EmotionConfig {
         }
         if self.decay_half_life_hours <= 0.0 {
             errors.push("emotion.decay_half_life_hours must be > 0".to_string());
+        }
+        if self.render_to_prompt && !self.enabled {
+            errors.push("emotion.render_to_prompt requires emotion.enabled = true".to_string());
         }
         errors
     }
@@ -1785,6 +1840,11 @@ mod emotion_config_tests {
         assert!(bad_blend.validate().iter().any(|e| e.contains("blend_rate")));
         let bad_hl = EmotionConfig { decay_half_life_hours: 0.0, ..Default::default() };
         assert!(bad_hl.validate().iter().any(|e| e.contains("decay_half_life_hours")));
+        // render_to_prompt requires enabled
+        let bad_render = EmotionConfig { enabled: false, render_to_prompt: true, ..Default::default() };
+        assert!(bad_render.validate().iter().any(|e| e.contains("render_to_prompt requires")));
+        let ok_render = EmotionConfig { enabled: true, render_to_prompt: true, ..Default::default() };
+        assert!(ok_render.validate().is_empty(), "render+enabled must pass");
     }
 }
 
@@ -3702,6 +3762,8 @@ model = "gpt-4o"
             z_release: 1.0,
             correct: false,
             anchor: None,
+            ecp: false,
+            ecp_recent_turns: 1,
         };
         let errs = bad.validate();
         assert_eq!(errs.len(), 3, "each violated rule reports once: {errs:?}");

@@ -859,6 +859,22 @@ pub(crate) async fn api_update_agent(
             if d.z_release.is_none() {
                 d.z_release = Some(a.drift.z_release);
             }
+            // ecp / ecp_recent_turns are operator knobs not yet carried by the
+            // UI form: restore from existing config on omission (same defense
+            // as the z-fields above) so a UI round-trip never silently resets a
+            // hand-tuned TOML value to the schema default.
+            if d.ecp.is_none() {
+                d.ecp = Some(a.drift.ecp);
+            }
+            if d.ecp_recent_turns.is_none() {
+                d.ecp_recent_turns = Some(a.drift.ecp_recent_turns);
+            }
+        }
+        // emotion.render_to_prompt: same operator-knob preserve rule.
+        if let Some(Some(ref mut e)) = payload.emotion
+            && e.render_to_prompt.is_none()
+        {
+            e.render_to_prompt = Some(a.emotion.render_to_prompt);
         }
     }
 

@@ -197,6 +197,17 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     /// unchanged; the return is `None` on every non-correcting path.
     async fn drift_probe(&self, history: &[opex_db::sessions::MessageRow], session_id: Uuid) -> Option<String>;
 
+    /// Emotion prompt-render v2 (spec §3.4): returns the bucketed mood
+    /// observation block to append at the system-prompt tail, or `None` when
+    /// emotion render is disabled / no mood row / neutral band / fail-soft.
+    /// Suppressed by the caller on turns where `drift_probe` fires (anchor wins).
+    async fn emotion_mood_block(&self) -> Option<String>;
+
+    /// ECP v1 gate (spec §3.4): `(drift.ecp, drift.ecp_recent_turns)`. When the
+    /// first element is true, the caller perspective-frames the last N user
+    /// turns (current turn always included).
+    fn agent_drift_ecp(&self) -> (bool, usize);
+
     /// Stage C: read-only «current focus + active initiative goals» block.
     /// Framed + sanitized; None when nothing to show or initiative disabled.
     async fn initiative_block(&self, agent: &str) -> Option<String>;
@@ -345,6 +356,16 @@ impl ContextBuilder for DefaultContextBuilder {
         let drift_anchor = fail_soft_enhancement(
             "drift_probe",
             || deps.drift_probe(&history, session_id),
+            None,
+        ).await;
+
+        // Emotion prompt-render v2 (spec §3.4): bucketed mood observation block,
+        // fail-soft. Suppressed at the tail when the drift anchor fires —
+        // identity re-anchoring wins over mood surfacing (drift-feedback-loop
+        // mitigation, v1 spec §7).
+        let emotion_mood = fail_soft_enhancement(
+            "emotion_mood",
+            || deps.emotion_mood_block(),
             None,
         ).await;
 
@@ -623,6 +644,10 @@ impl ContextBuilder for DefaultContextBuilder {
         // the drift z-score fired this turn. Rare (only when hysteresis is active).
         if let Some(block) = drift_anchor {
             system_prompt.push_str(&block);
+        } else if let Some(block) = emotion_mood {
+            // Emotion mood observation (spec §3.4) — only when the drift anchor
+            // did NOT fire this turn (anchor wins; drift-feedback-loop mitigation).
+            system_prompt.push_str(&block);
         }
 
         tracing::info!(
@@ -709,6 +734,33 @@ impl ContextBuilder for DefaultContextBuilder {
         {
             messages = prune_old_tool_outputs(&messages, keep_turns);
             tracing::debug!(keep_turns, "proactive tool output pruning applied");
+        }
+
+        // ECP v1 (spec §3.4): perspective-frame the last N user turns so the
+        // model cannot adopt the interlocutor's persona claims as its own.
+        // The current (live) turn is appended by the caller after build(); it
+        // is framed there. Here we cover the historical window. System /
+        // assistant / tool messages pass through untouched.
+        let (ecp_on, ecp_recent) = deps.agent_drift_ecp();
+        if ecp_on && ecp_recent > 0 {
+            // indices of user-role messages, in order; frame the last N.
+            let user_idx: Vec<usize> = messages
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.role == opex_types::MessageRole::User)
+                .map(|(i, _)| i)
+                .collect();
+            let frame_from = user_idx.len().saturating_sub(ecp_recent);
+            for &i in &user_idx[frame_from..] {
+                messages[i].content = crate::agent::drift::reproject_perspective(&messages[i].content);
+            }
+            if user_idx.len() > frame_from {
+                tracing::debug!(
+                    ecp_recent,
+                    framed = user_idx.len() - frame_from,
+                    "ECP perspective frames applied to recent user turns"
+                );
+            }
         }
 
         // 6. Available tools (if requested)

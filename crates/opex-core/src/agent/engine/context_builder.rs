@@ -404,6 +404,34 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         anchor
     }
 
+    /// Emotion prompt-render v2 (spec §3.4). Gated by
+    /// `emotion.render_to_prompt && emotion.enabled`; reads the persisted mood,
+    /// decays it by elapsed-since-`updated_at`, and renders the bucketed block.
+    /// Fail-soft (DB error / no row → None). Pure render in `emotion::render_mood_block`.
+    async fn emotion_mood_block(&self) -> Option<String> {
+        let cfg = &self.cfg().agent.emotion;
+        if !cfg.render_to_prompt || !cfg.enabled {
+            return None;
+        }
+        let agent = self.agent_name();
+        let row = match crate::db::agent_emotion::get(&self.cfg().db, agent).await {
+            Ok(Some(r)) => r,
+            Ok(None) => return None,
+            Err(e) => {
+                tracing::warn!(agent, error = %e, "emotion mood read failed (skipped)");
+                return None;
+            }
+        };
+        let elapsed_hours = (chrono::Utc::now() - row.updated_at).num_seconds() as f32 / 3600.0;
+        let decayed = crate::agent::emotion::decay(row.valence, elapsed_hours, cfg.decay_half_life_hours);
+        crate::agent::emotion::render_mood_block(decayed, row.label.as_deref())
+    }
+
+    fn agent_drift_ecp(&self) -> (bool, usize) {
+        let d = &self.cfg().agent.drift;
+        (d.ecp, d.ecp_recent_turns)
+    }
+
     /// Stage C: read-only «current focus + active initiative goals» block.
     /// Non-base only, gated by `[agent.initiative].enabled`; fail-soft (DB
     /// errors degrade to empty focus / no goals rather than propagating).
