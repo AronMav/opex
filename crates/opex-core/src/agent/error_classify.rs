@@ -146,10 +146,15 @@ pub fn format_user_error(error: &anyhow::Error) -> String {
 }
 
 /// Whether the error class is worth retrying at the engine level.
+///
+/// RateLimit is deliberately EXCLUDED: a 429 means the account's quota is
+/// exhausted — retrying the same provider after 60s wastes time and delays
+/// the fallback-provider switch. The failover layer (`is_failover_worthy`)
+/// handles RateLimit by switching to a different provider (different quota).
 pub fn is_retryable(class: &LlmErrorClass) -> bool {
     matches!(
         class,
-        LlmErrorClass::TransientHttp | LlmErrorClass::Overloaded | LlmErrorClass::RateLimit
+        LlmErrorClass::TransientHttp | LlmErrorClass::Overloaded
     )
 }
 
@@ -343,7 +348,8 @@ mod tests {
     fn retryable_check() {
         assert!(is_retryable(&LlmErrorClass::TransientHttp));
         assert!(is_retryable(&LlmErrorClass::Overloaded));
-        assert!(is_retryable(&LlmErrorClass::RateLimit));
+        // RateLimit is NOT retryable — failover to a different provider instead.
+        assert!(!is_retryable(&LlmErrorClass::RateLimit));
         assert!(!is_retryable(&LlmErrorClass::AuthPermanent));
         assert!(!is_retryable(&LlmErrorClass::CallTimeout));
         assert!(!is_retryable(&LlmErrorClass::Unknown));
