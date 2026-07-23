@@ -730,7 +730,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
     // skill_use: on-demand skill loading (always available, not gated by skill_editing)
     tools.push(ToolDefinition {
         name: "skill_use".to_string(),
-        description: "Discover and load reusable skills. action=list to enumerate, action=load to read.".to_string(),
+        description: "Load a reusable skill (reference guide). action=list to enumerate, action=load to read. Skills are INSTRUCTIONS ONLY — after reading, call the actual tool directly (e.g. generate_image, workspace_write). Do NOT chain skill loads — one skill per task, then act.".to_string(),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
