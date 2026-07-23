@@ -423,12 +423,12 @@ pub(crate) async fn api_chat_sse(
                 // mark the session interrupted instead of leaving it running
                 // forever — the user sees an "interrupted" reply instead of a
                 // spinner that never stops.
-                const TURN_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+                const TURN_HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1800);
                 let turn_cancel = engine_cancel.clone();
                 let turn_timer = tokio::spawn(async move {
                     tokio::time::sleep(TURN_HARD_TIMEOUT).await;
                     tracing::warn!(
-                        "turn exceeded 600s hard timeout — cancelling engine task"
+                        "turn exceeded 1800s hard timeout — cancelling engine task"
                     );
                     turn_cancel.cancel();
                 });

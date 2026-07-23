@@ -102,7 +102,15 @@ async fn compact_if_needed_inner(
     let total = estimate_tokens(messages);
     let threshold = max_tokens * 80 / 100;
 
-    if !force && total < threshold {
+    // Message-count safety net: even when the token estimate is below the
+    // 80%-of-context threshold, a very long conversation (many tool calls +
+    // results) degrades LLM quality and slows every call. Trigger compaction
+    // unconditionally when the message count is excessive — the token
+    // estimate is a rough heuristic (content_len / 4) and routinely
+    // undercounts sessions rich in tool-result URLs and structured payloads.
+    const COMPACTION_MESSAGE_FLOOR: usize = 150;
+
+    if !force && total < threshold && messages.len() < COMPACTION_MESSAGE_FLOOR {
         return Ok(None);
     }
 
@@ -110,7 +118,8 @@ async fn compact_if_needed_inner(
         total_tokens = total,
         threshold,
         messages = messages.len(),
-        "context window threshold reached, compacting"
+        message_floor = COMPACTION_MESSAGE_FLOOR,
+        "context compaction triggered"
     );
 
     // Keep system message (first) and last N messages

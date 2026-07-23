@@ -453,11 +453,11 @@ pub(super) fn strip_orphaned_tool_messages(messages: &[Message]) -> Vec<Message>
     for msg in messages {
         match msg.role {
             MessageRole::Assistant => {
-                if let Some(ref tcs) = msg.tool_calls
+                    if let Some(ref tcs) = msg.tool_calls
                     && !tcs.is_empty() {
                         let complete = tcs.iter().all(|tc| result_ids.contains(&tc.id));
                         if !complete {
-                            tracing::warn!(
+                            tracing::debug!(
                                 "dropping assistant+tool_calls message: \
                                  some tool results missing from history (incomplete save)"
                             );
