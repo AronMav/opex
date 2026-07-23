@@ -840,6 +840,12 @@ async fn main() -> Result<()> {
     #[cfg(unix)]
     setup_sighup_handler(state.clone());
 
+    // File watcher on config/agents/: selectively hot-reload only the agents
+    // whose TOML changed (external edits), without a restart or SIGHUP.
+    // API-initiated writes are a no-op here (running already matches disk).
+    #[cfg(unix)]
+    spawn_agent_config_watcher("config/agents".to_string(), state.clone(), watcher_cancel.clone());
+
     // Start managed child processes just before serve
     if let Some(ref pm) = process_manager {
         let pm_clone = pm.clone();
@@ -1663,62 +1669,192 @@ fn setup_sighup_handler(state: gateway::AppState) {
             tracing::info!("SIGHUP received — reloading agent configs with graceful drain");
             if let Ok(configs) = crate::config::load_agent_configs("config/agents") {
                 for cfg in configs {
-                    let name = cfg.agent.name.clone();
-
-                    // 1. Atomically remove from map. During drain, the agent is absent from
-                    //    the map — new requests receive "agent not found" (acceptable for the
-                    //    drain window, typically < 1s for idle agents, up to 10s worst-case).
-                    let old_handle = state.agents.map.write().await.remove(&name);
-                    // Remove old guard now so channel adapters don't re-fetch a stale one
-                    // during the creation window. Saved so we can restore it on failure.
-                    let old_guard = state.auth.access_guards.write().await.remove(&name);
-
-                    // 2. Cancel + drain on the extracted handle (write lock already released).
-                    //    No race: old engine is no longer in the map, so no new request can
-                    //    reach it between cancel and drain completion.
-                    if let Some(ref h) = old_handle {
-                        tracing::info!(agent = %name, "SIGHUP: cancelling and draining old agent");
-                        h.engine.state.cancel_all_requests();
-                        h.engine.state.wait_drain(std::time::Duration::from_secs(10)).await;
-                    }
-
-                    // 3. Create new engine. Guard inserted before handle (same ordering as
-                    //    api_create_agent/api_update_agent) to avoid a reconnect race.
-                    match crate::gateway::start_agent_from_config(
-                        &cfg,
-                        &state.agents,
-                        &state.infra,
-                        &state.auth,
-                        &state.channels,
-                        &state.config,
-                        &state.status,
-                        &state.handlers,
-                    ).await {
-                        Ok((new_handle, guard)) => {
-                            if let Some(old) = old_handle {
-                                old.shutdown(&state.agents.scheduler).await;
-                            }
-                            if let Some(g) = guard {
-                                state.auth.access_guards.write().await.insert(name.clone(), g);
-                            }
-                            // old_guard is intentionally dropped here — superseded by new config.
-                            state.agents.map.write().await.insert(name.clone(), new_handle);
-                            tracing::info!(agent = %name, "SIGHUP: agent reloaded");
-                        }
-                        Err(e) => {
-                            tracing::error!(agent = %name, error = %e, "SIGHUP: failed to create new engine");
-                            // Restore both handle and guard so the agent remains reachable.
-                            if let Some(old) = old_handle {
-                                state.agents.map.write().await.insert(name.clone(), old);
-                            }
-                            if let Some(og) = old_guard {
-                                state.auth.access_guards.write().await.insert(name.clone(), og);
-                            }
-                            tracing::warn!(agent = %name, "SIGHUP: restored old engine after create failure");
-                        }
-                    }
+                    reload_one_agent(&state, cfg).await;
                 }
             }
+        }
+    });
+}
+
+/// Atomically drain + recreate one agent from `cfg` (the SIGHUP / file-watcher
+/// reload primitive). On create failure the old handle/guard are restored so
+/// the agent stays reachable. `state.agents.map` is briefly without the entry
+/// during drain (new requests get "agent not found" for the drain window).
+#[cfg(unix)]
+async fn reload_one_agent(state: &gateway::AppState, cfg: crate::config::AgentConfig) {
+    let name = cfg.agent.name.clone();
+
+    // 1. Atomically remove from map. During drain, the agent is absent from
+    //    the map — new requests receive "agent not found" (acceptable for the
+    //    drain window, typically < 1s for idle agents, up to 10s worst-case).
+    let old_handle = state.agents.map.write().await.remove(&name);
+    // Remove old guard now so channel adapters don't re-fetch a stale one
+    // during the creation window. Saved so we can restore it on failure.
+    let old_guard = state.auth.access_guards.write().await.remove(&name);
+
+    // 2. Cancel + drain on the extracted handle (write lock already released).
+    //    No race: old engine is no longer in the map, so no new request can
+    //    reach it between cancel and drain completion.
+    if let Some(ref h) = old_handle {
+        tracing::info!(agent = %name, "reload: cancelling and draining old agent");
+        h.engine.state.cancel_all_requests();
+        h.engine.state.wait_drain(std::time::Duration::from_secs(10)).await;
+    }
+
+    // 3. Create new engine. Guard inserted before handle (same ordering as
+    //    api_create_agent/api_update_agent) to avoid a reconnect race.
+    match crate::gateway::start_agent_from_config(
+        &cfg,
+        &state.agents,
+        &state.infra,
+        &state.auth,
+        &state.channels,
+        &state.config,
+        &state.status,
+        &state.handlers,
+    ).await {
+        Ok((new_handle, guard)) => {
+            if let Some(old) = old_handle {
+                old.shutdown(&state.agents.scheduler).await;
+            }
+            if let Some(g) = guard {
+                state.auth.access_guards.write().await.insert(name.clone(), g);
+            }
+            // old_guard is intentionally dropped here — superseded by new config.
+            state.agents.map.write().await.insert(name.clone(), new_handle);
+            tracing::info!(agent = %name, "agent reloaded");
+        }
+        Err(e) => {
+            tracing::error!(agent = %name, error = %e, "reload: failed to create new engine");
+            // Restore both handle and guard so the agent remains reachable.
+            if let Some(old) = old_handle {
+                state.agents.map.write().await.insert(name.clone(), old);
+            }
+            if let Some(og) = old_guard {
+                state.auth.access_guards.write().await.insert(name.clone(), og);
+            }
+            tracing::warn!(agent = %name, "reload: restored old engine after create failure");
+        }
+    }
+}
+
+/// Selective reload driven by the agent-config file watcher: reload ONLY agents
+/// whose on-disk config differs from the running engine, and remove agents that
+/// disappeared from disk. Because it compares running-vs-disk, API-initiated
+/// writes (which swap the engine atomically AND write the TOML) are a no-op
+/// here — running already matches disk — so the watcher never re-drains an agent
+/// the API just updated. Only external TOML edits trigger a reload.
+#[cfg(unix)]
+async fn reload_changed_agents(state: &gateway::AppState) {
+    let configs = match crate::config::load_agent_configs("config/agents") {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "agent-config watcher: load failed, keeping current");
+            return;
+        }
+    };
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for cfg in configs {
+        let name = cfg.agent.name.clone();
+        seen.insert(name.clone());
+
+        let dirty = match state.agents.map.read().await.get(&name) {
+            Some(h) => {
+                let running = crate::config::AgentConfig { agent: h.engine.cfg().agent.clone() };
+                running != cfg
+            }
+            // on disk but not running → create
+            None => true,
+        };
+        if dirty {
+            reload_one_agent(state, cfg).await;
+        }
+    }
+
+    // Running agents with no disk config → removed via TOML delete.
+    let running_names: Vec<String> = state.agents.map.read().await.keys().cloned().collect();
+    for name in running_names {
+        if seen.contains(&name) {
+            continue;
+        }
+        let removed = state.agents.map.write().await.remove(&name);
+        if let Some(h) = removed {
+            h.engine.state.cancel_all_requests();
+            h.engine.state.wait_drain(std::time::Duration::from_secs(10)).await;
+            h.shutdown(&state.agents.scheduler).await;
+            tracing::info!(agent = %name, "agent-config watcher: removed (deleted from disk)");
+        }
+        state.auth.access_guards.write().await.remove(&name);
+    }
+}
+
+/// Watch `config/agents/` for TOML changes and selectively hot-reload only the
+/// agents whose config changed (closes the "edit Arty.toml → nothing happens
+/// without a restart" gap; SIGHUP remains the force-reload-all hammer). OS
+/// thread + tokio handle, mirroring `config::spawn_config_watcher`.
+#[cfg(unix)]
+fn spawn_agent_config_watcher(
+    dir: String,
+    state: gateway::AppState,
+    cancel: tokio_util::sync::CancellationToken,
+) {
+    use notify::{Event, EventKind, RecursiveMode, Watcher};
+
+    let rt = tokio::runtime::Handle::current();
+    std::thread::spawn(move || {
+        let (tx, rx) = std::sync::mpsc::channel::<notify::Result<Event>>();
+
+        let mut watcher = match notify::recommended_watcher(tx) {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::error!(error = %e, "failed to create agent-config watcher");
+                return;
+            }
+        };
+        if let Err(e) = watcher.watch(std::path::Path::new(&dir), RecursiveMode::Recursive) {
+            tracing::error!(error = %e, dir = %dir, "failed to watch agent-config dir");
+            return;
+        }
+        tracing::info!(dir = %dir, "agent-config watcher started");
+
+        let mut last_reload = std::time::Instant::now();
+        loop {
+            if cancel.is_cancelled() {
+                tracing::debug!("agent-config watcher: shutdown signal received, exiting");
+                break;
+            }
+            let event = match rx.recv_timeout(std::time::Duration::from_millis(250)) {
+                Ok(ev) => ev,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+            // Editors often emit Create+Rename or Modify; react to content-changing kinds only.
+            let is_content_change = matches!(
+                event,
+                Ok(Event { kind: EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_), .. })
+            );
+            if !is_content_change {
+                continue;
+            }
+            // Only react to .toml files (the dir is otherwise static).
+            let toml_touched = match &event {
+                Ok(e) => e.paths.iter().any(|p| p.extension().and_then(|x| x.to_str()) == Some("toml")),
+                Err(_) => true, // surface raw errors below
+            };
+            if !toml_touched {
+                continue;
+            }
+            // Debounce (editors emit many events); let the write settle.
+            if last_reload.elapsed() < std::time::Duration::from_millis(500) {
+                continue;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let state = state.clone();
+            rt.spawn(async move {
+                reload_changed_agents(&state).await;
+            });
+            last_reload = std::time::Instant::now();
         }
     });
 }

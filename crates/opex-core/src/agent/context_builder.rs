@@ -755,11 +755,24 @@ impl ContextBuilder for DefaultContextBuilder {
                 messages[i].content = crate::agent::drift::reproject_perspective(&messages[i].content);
             }
             if user_idx.len() > frame_from {
-                tracing::debug!(
-                    ecp_recent,
-                    framed = user_idx.len() - frame_from,
+                let framed = user_idx.len() - frame_from;
+                tracing::info!(
+                    ecp_recent, framed,
                     "ECP perspective frames applied to recent user turns"
                 );
+                // Structured observability: mirrors drift_probe / emotion_appraised
+                // so operators can see ECP firing in session_timeline (the debug
+                // log alone is filtered at the default info level).
+                let payload = serde_json::json!({
+                    "framed": framed,
+                    "ecp_recent_turns": ecp_recent,
+                    "user_turns_in_context": user_idx.len(),
+                });
+                if let Err(e) = opex_db::session_timeline::log_event(
+                    &deps.db(), session_id, "ecp_applied", Some(&payload),
+                ).await {
+                    tracing::warn!(error = %e, "ecp timeline write failed");
+                }
             }
         }
 
