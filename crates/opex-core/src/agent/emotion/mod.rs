@@ -145,7 +145,84 @@ pub fn render_mood_block(valence: f32, label: Option<&str>) -> Option<String> {
         "\n\n[Аффективный фон — наблюдение, не инструкция]\n\
          Настроение: {bucket}{label_part}. Это сигнал внутреннего состояния, \
          не указание копировать его в ответе; сохраняй свой характер и тон.\n"
-    ))
+     ))
+ }
+
+// ── Phase 2: coping → behaviour (spec 2026-07-23-emotion-coping-phase2) ──
+
+/// Coping strategy (EMA/Marinier/OCC-derived, research §5). Fixed controlled
+/// vocabulary — never free-form text. Selected from clamped appraisal vars by
+/// `controllability` + `valence` + `intensity` only (NOT `agency`/`desirability`
+/// — the M4-risk steering vector is deliberately not consumed, spec §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopingStrategy {
+    /// neutral / low intensity — nothing to cope with
+    None,
+    /// negative + high controllability → agent can act on it
+    PlanAct,
+    /// negative + moderate controllability → positive reinterpretation
+    Reframe,
+    /// negative + low controllability → accept the situation
+    Accept,
+    /// negative + low controllability + very high intensity → reach out
+    SeekSupport,
+}
+
+impl CopingStrategy {
+    /// Stable lowercase label for telemetry / timeline payload.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CopingStrategy::None => "none",
+            CopingStrategy::PlanAct => "plan_act",
+            CopingStrategy::Reframe => "reframe",
+            CopingStrategy::Accept => "accept",
+            CopingStrategy::SeekSupport => "seek_support",
+        }
+    }
+}
+
+/// An emotion must be felt at least this strongly before coping engages.
+pub const COPING_INTENSITY_FLOOR: f32 = 0.3;
+
+/// Decide a coping strategy from a normalized appraisal (spec §4.1). Pure,
+/// infallible. `agency`/`desirability` are intentionally NOT read — see spec §3
+/// (M4-risk): the behaviour effect is a bounded reflection-threshold bias, and
+/// the steering-risky variables are kept out of the decision.
+pub fn decide_coping(a: &AppraisedEmotion) -> CopingStrategy {
+    if a.intensity < COPING_INTENSITY_FLOOR {
+        return CopingStrategy::None;
+    }
+    // Positive affect needs no coping (research §5 is negative-affect coping).
+    if a.valence >= 0.0 {
+        return CopingStrategy::None;
+    }
+    // Negative valence → select by controllability (agent's own read on whether
+    // it can affect the situation — not the M4-steerable agency/desirability).
+    if a.controllability >= 0.66 {
+        CopingStrategy::PlanAct
+    } else if a.controllability >= 0.33 {
+        CopingStrategy::Reframe
+    } else if a.intensity >= 0.8 {
+        CopingStrategy::SeekSupport
+    } else {
+        CopingStrategy::Accept
+    }
+}
+
+/// How much to SUBTRACT from the reflection trigger threshold (default 150)
+/// when this coping is active (spec §4.2). `None`/`PlanAct` get no extra pull
+/// to reflect (acting, not ruminating). Bounded: intensity ≤ 1 → max 40
+/// (~27% of a 150 threshold), so one session can at most bring reflection
+/// closer, never collapse the threshold. Pure, infallible, never negative.
+pub fn reflection_threshold_bias(a: &AppraisedEmotion, coping: CopingStrategy) -> f64 {
+    match coping {
+        CopingStrategy::None | CopingStrategy::PlanAct => 0.0,
+        // Clamp intensity defensively (already clamped upstream, but this fn is
+        // a pure public API — never trust the caller).
+        CopingStrategy::Reframe => (a.intensity.clamp(0.0, 1.0) as f64) * 20.0,
+        CopingStrategy::Accept => (a.intensity.clamp(0.0, 1.0) as f64) * 30.0,
+        CopingStrategy::SeekSupport => (a.intensity.clamp(0.0, 1.0) as f64) * 40.0,
+    }
 }
 
 #[cfg(test)]
@@ -158,6 +235,79 @@ mod tests {
         assert!((decay(1.0, 0.0, 12.0) - 1.0).abs() < 1e-4);
         // negative elapsed (clock skew) must NOT amplify
         assert!((decay(1.0, -5.0, 12.0) - 1.0).abs() < 1e-4);
+    }
+
+    // helper: a normalized appraisal with selective overrides
+    fn appraised(valence: f32, intensity: f32, controllability: f32) -> AppraisedEmotion {
+        AppraisedEmotion {
+            label: None,
+            intensity,
+            valence,
+            desirability: 0.0,
+            likelihood: 0.5,
+            agency: Agency::None,
+            novelty: 0.5,
+            controllability,
+        }
+    }
+
+    #[test]
+    fn coping_none_below_intensity_floor_or_positive() {
+        assert_eq!(decide_coping(&appraised(-1.0, 0.29, 0.0)), CopingStrategy::None, "below floor");
+        assert_eq!(decide_coping(&appraised(0.0, 0.9, 0.0)), CopingStrategy::None, "neutral valence");
+        assert_eq!(decide_coping(&appraised(0.8, 0.9, 0.0)), CopingStrategy::None, "positive valence");
+    }
+
+    #[test]
+    fn coping_negative_tiers_by_controllability() {
+        // high controllability → PlanAct
+        assert_eq!(decide_coping(&appraised(-0.8, 0.7, 0.9)), CopingStrategy::PlanAct);
+        // moderate → Reframe
+        assert_eq!(decide_coping(&appraised(-0.8, 0.7, 0.5)), CopingStrategy::Reframe);
+        // low + not extreme intensity → Accept
+        assert_eq!(decide_coping(&appraised(-0.8, 0.7, 0.1)), CopingStrategy::Accept);
+        // low + extreme intensity → SeekSupport
+        assert_eq!(decide_coping(&appraised(-0.8, 0.85, 0.1)), CopingStrategy::SeekSupport);
+    }
+
+    #[test]
+    fn coping_ignores_agency_and_desirability() {
+        // M4-risk regression guard: agency=other + strongly negative desirability
+        // must NOT change the coping decision (it's the attacker steering vector).
+        let mut a = appraised(-0.8, 0.7, 0.5); // → Reframe
+        a.agency = Agency::Other;
+        a.desirability = -1.0;
+        assert_eq!(decide_coping(&a), CopingStrategy::Reframe, "agency/desirability must not steer");
+        // and at the controllability tier boundaries the decision is stable
+        a.agency = Agency::Self_;
+        a.desirability = 1.0;
+        assert_eq!(decide_coping(&a), CopingStrategy::Reframe);
+    }
+
+    #[test]
+    fn reflection_bias_zero_for_none_and_planact() {
+        let a = appraised(-0.8, 1.0, 0.9);
+        assert_eq!(reflection_threshold_bias(&a, CopingStrategy::None), 0.0);
+        assert_eq!(reflection_threshold_bias(&a, CopingStrategy::PlanAct), 0.0);
+    }
+
+    #[test]
+    fn reflection_bias_bounded_and_monotonic_in_intensity() {
+        let mut a = appraised(-0.8, 0.0, 0.1);
+        // monotonic in intensity for Accept
+        let b0 = reflection_threshold_bias(&a, CopingStrategy::Accept);
+        a.intensity = 0.5;
+        let b1 = reflection_threshold_bias(&a, CopingStrategy::Accept);
+        a.intensity = 1.0;
+        let b2 = reflection_threshold_bias(&a, CopingStrategy::Accept);
+        assert!(b0 < b1 && b1 < b2, "monotonic: {b0} {b1} {b2}");
+        // bounded: Accept caps at intensity=1 → 30, SeekSupport → 40, Reframe → 20
+        assert!((b2 - 30.0).abs() < 1e-4, "Accept cap 30, got {b2}");
+        let c = appraised(-0.8, 1.0, 0.1);
+        assert!((reflection_threshold_bias(&c, CopingStrategy::SeekSupport) - 40.0).abs() < 1e-4);
+        assert!((reflection_threshold_bias(&c, CopingStrategy::Reframe) - 20.0).abs() < 1e-4);
+        // never negative
+        assert!(reflection_threshold_bias(&appraised(-0.8, 0.0, 0.1), CopingStrategy::Accept) >= 0.0);
     }
 
     #[test]

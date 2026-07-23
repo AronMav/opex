@@ -1788,6 +1788,12 @@ pub struct EmotionConfig {
     /// A-anchor fires.
     #[serde(default)]
     pub render_to_prompt: bool,
+    /// Opt-in coping Phase 2 (spec 2026-07-23-emotion-coping-phase2): appraisal
+    /// biases the reflection trigger — a strong negative emotion → reflect
+    /// sooner. Uses only controllability/valence/intensity (NOT the M4-risk
+    /// agency/desirability vector). Requires `enabled = true`.
+    #[serde(default)]
+    pub coping: bool,
 }
 fn default_emotion_k() -> f32 {
     3.0
@@ -1806,6 +1812,7 @@ impl Default for EmotionConfig {
             blend_rate: 0.3,
             decay_half_life_hours: 12.0,
             render_to_prompt: false,
+            coping: false,
         }
     }
 }
@@ -1823,6 +1830,9 @@ impl EmotionConfig {
         }
         if self.render_to_prompt && !self.enabled {
             errors.push("emotion.render_to_prompt requires emotion.enabled = true".to_string());
+        }
+        if self.coping && !self.enabled {
+            errors.push("emotion.coping requires emotion.enabled = true".to_string());
         }
         errors
     }
@@ -1845,6 +1855,11 @@ mod emotion_config_tests {
         assert!(bad_render.validate().iter().any(|e| e.contains("render_to_prompt requires")));
         let ok_render = EmotionConfig { enabled: true, render_to_prompt: true, ..Default::default() };
         assert!(ok_render.validate().is_empty(), "render+enabled must pass");
+        // coping requires enabled
+        let bad_coping = EmotionConfig { enabled: false, coping: true, ..Default::default() };
+        assert!(bad_coping.validate().iter().any(|e| e.contains("emotion.coping requires")));
+        let ok_coping = EmotionConfig { enabled: true, coping: true, ..Default::default() };
+        assert!(ok_coping.validate().is_empty(), "coping+enabled must pass");
     }
 }
 

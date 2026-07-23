@@ -264,8 +264,40 @@ async fn extract_and_save_inner(
     // caller supplied deps (initiative enabled + non-base + owner set) and
     // stale reflections exist from a prior soul-enabled period.
     if soul_deps.cfg.enabled {
+        // Phase 2 coping (spec 2026-07-23-emotion-coping-phase2 §4.4): a strong
+        // negative appraisal lowers the reflection trigger threshold so the agent
+        // reflects sooner on emotionally significant sessions. Bias is 0 when
+        // coping is disabled or no appraisal. The decision + bias are logged for
+        // audit (M4-risk: coping uses only controllability/valence/intensity —
+        // never agency/desirability — see emotion::decide_coping).
+        let threshold_bias: f64 = if soul_deps.emotion.coping {
+            if let Some(a) = &appraised {
+                let coping = crate::agent::emotion::decide_coping(a);
+                let bias = crate::agent::emotion::reflection_threshold_bias(a, coping);
+                if bias > 0.0 {
+                    let payload = serde_json::json!({
+                        "strategy": coping.as_str(),
+                        "intensity": a.intensity,
+                        "valence": a.valence,
+                        "controllability": a.controllability,
+                        "agency": a.agency.as_str(),
+                        "threshold_bias": bias,
+                    });
+                    if let Err(e) = opex_db::session_timeline::log_event(
+                        db, session_id, "coping_decided", Some(&payload),
+                    ).await {
+                        tracing::warn!(agent = agent_name, error = %e, "coping timeline write failed");
+                    }
+                }
+                bias
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
         crate::agent::soul::reflection::maybe_reflect(
-            db, agent_name, provider, memory_store, soul_deps,
+            db, agent_name, provider, memory_store, soul_deps, threshold_bias,
         )
         .await;
 

@@ -870,11 +870,16 @@ pub(crate) async fn api_update_agent(
                 d.ecp_recent_turns = Some(a.drift.ecp_recent_turns);
             }
         }
-        // emotion.render_to_prompt: same operator-knob preserve rule.
-        if let Some(Some(ref mut e)) = payload.emotion
-            && e.render_to_prompt.is_none()
-        {
-            e.render_to_prompt = Some(a.emotion.render_to_prompt);
+        // emotion.render_to_prompt / coping: operator knobs not carried by the
+        // UI form — restore from existing config on omission (same defense as
+        // the drift z-fields) so a UI round-trip never resets a hand-tuned value.
+        if let Some(Some(ref mut e)) = payload.emotion {
+            if e.render_to_prompt.is_none() {
+                e.render_to_prompt = Some(a.emotion.render_to_prompt);
+            }
+            if e.coping.is_none() {
+                e.coping = Some(a.emotion.coping);
+            }
         }
     }
 

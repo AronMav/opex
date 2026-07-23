@@ -56,7 +56,12 @@ pub(crate) fn session_capped_sum(pairs: &[(String, f32)]) -> f64 {
     per.values().map(|v| v.min(SESSION_CONTRIBUTION_CAP)).sum()
 }
 
-async fn should_reflect(db: &PgPool, agent: &str, cfg: &SoulConfig) -> Result<bool> {
+/// Floor on the effective reflection threshold after a coping bias is applied
+/// (spec §4.3): prevents an emotion-driven bias from collapsing the threshold
+/// toward 0. The bias is already bounded (≤40), but this is a hard backstop.
+pub(crate) const MIN_EFFECTIVE_THRESHOLD: f64 = 20.0;
+
+async fn should_reflect(db: &PgPool, agent: &str, cfg: &SoulConfig, threshold_bias: f64) -> Result<bool> {
     let marker = crate::db::memory_queries::latest_reflection_at(db, agent).await?;
     if let Some(m) = marker {
         let cooldown = chrono::Duration::minutes(cfg.reflection_cooldown_minutes as i64);
@@ -65,17 +70,22 @@ async fn should_reflect(db: &PgPool, agent: &str, cfg: &SoulConfig) -> Result<bo
         }
     }
     let pairs = crate::db::memory_queries::event_importance_since(db, agent, marker).await?;
-    Ok(session_capped_sum(&pairs) > cfg.reflection_threshold)
+    let effective = (cfg.reflection_threshold - threshold_bias).max(MIN_EFFECTIVE_THRESHOLD);
+    Ok(session_capped_sum(&pairs) > effective)
 }
 
 /// Entry point, called from the knowledge extractor after events are saved.
 /// Never propagates errors — logs + backoff.
+///
+/// `threshold_bias` lowers the reflection trigger threshold (Phase 2 coping:
+/// a strong negative emotion → reflect sooner). 0.0 = unbiased (default).
 pub async fn maybe_reflect(
     db: &PgPool,
     agent: &str,
     provider: &Arc<dyn LlmProvider>,
     memory_store: &Arc<dyn MemoryService>,
     deps: &SoulDeps,
+    threshold_bias: f64,
 ) {
     if !deps.cfg.enabled || !memory_store.is_available() {
         return;
@@ -93,7 +103,7 @@ pub async fn maybe_reflect(
     let Ok(_guard) = deps.runtime.lock.try_lock() else { return };
 
     // re-check under lock (TOCTOU of two concurrent Done sessions)
-    match should_reflect(db, agent, &deps.cfg).await {
+    match should_reflect(db, agent, &deps.cfg, threshold_bias).await {
         Ok(true) => {}
         Ok(false) => return,
         Err(e) => {
@@ -347,12 +357,12 @@ mod tests {
                     .bind(format!("soul_event:{s}")).execute(&db).await.unwrap();
             }
         }
-        assert!(super::should_reflect(&db, "A", &cfg).await.unwrap());
+        assert!(super::should_reflect(&db, "A", &cfg, 0.0).await.unwrap());
         // свежая рефлексия → маркер сдвинут (счётчик 0) И кулдаун активен → false
         sqlx::query("INSERT INTO memory_chunks (id, agent_id, content, source, pinned, scope, kind) \
                      VALUES (gen_random_uuid(), 'A', 'r', 'soul_reflection', false, 'private', 'reflection')")
             .execute(&db).await.unwrap();
-        assert!(!super::should_reflect(&db, "A", &cfg).await.unwrap());
+        assert!(!super::should_reflect(&db, "A", &cfg, 0.0).await.unwrap());
     }
 
     /// Конкурентность (§9): лок занят → второй вызов мгновенно скипает,
@@ -374,7 +384,7 @@ mod tests {
         let store: std::sync::Arc<dyn crate::agent::memory_service::MemoryService> =
             std::sync::Arc::new(crate::agent::memory_service::mock::MockMemoryService::available());
         // должен вернуться сразу (try_lock занят), НЕ дойдя до провайдера
-        super::maybe_reflect(&db, "A", &provider, &store, &deps).await;
+        super::maybe_reflect(&db, "A", &provider, &store, &deps, 0.0).await;
     }
 
     /// Backoff pause (spec §3): a future `paused_until` short-circuits BEFORE any
@@ -397,6 +407,6 @@ mod tests {
         let store: std::sync::Arc<dyn crate::agent::memory_service::MemoryService> =
             std::sync::Arc::new(crate::agent::memory_service::mock::MockMemoryService::available());
         let db = sqlx::PgPool::connect_lazy("postgres://u:p@127.0.0.1:1/db").unwrap();
-        super::maybe_reflect(&db, "A", &provider, &store, &deps).await;
+        super::maybe_reflect(&db, "A", &provider, &store, &deps, 0.0).await;
     }
 }
