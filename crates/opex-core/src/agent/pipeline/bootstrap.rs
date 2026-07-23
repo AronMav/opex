@@ -173,6 +173,13 @@ pub async fn bootstrap<S: EventSink>(
         tracing::warn!(error = %e, "checkpoint new_turn failed (non-fatal)");
     }
 
+    // Reset per-turn skill load counter (prevents skill-loading loops from
+    // carrying over across turns — each turn gets a fresh budget).
+    if let Some(map) = engine.cfg().session_tool_state.as_ref()
+        && let Some(st) = map.get(&session_id) {
+            st.reset_skill_load_count();
+        }
+
     // Persist the originating channel chat_id (if any) so an interactive `/goal`
     // interrupted by a restart can be channel-pushed on the next boot, not only
     // surfaced in the UI bell. Best-effort: web/UI sessions carry no chat_id, and

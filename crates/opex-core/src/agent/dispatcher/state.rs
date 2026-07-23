@@ -2,9 +2,16 @@
 
 use dashmap::DashMap;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
+
+/// Maximum skill loads per turn. After this, skill_use(load) returns an error
+/// telling the model to call the actual tool directly. Prevents infinite
+/// skill-loading loops where the model chains wrapper skills instead of
+/// invoking tools.
+pub const MAX_SKILL_LOADS_PER_TURN: u32 = 3;
 
 /// Map of session UUID → per-session tool dispatcher state.
 pub type SessionToolStateMap = Arc<DashMap<Uuid, Arc<SessionToolState>>>;
@@ -18,6 +25,11 @@ pub type SessionToolStateMap = Arc<DashMap<Uuid, Arc<SessionToolState>>>;
 pub struct SessionToolState {
     describe_cache: RwLock<HashMap<String, String>>,
     capability_provider_override: RwLock<Option<(String, String)>>,
+    /// Per-turn skill load counter. Reset to 0 at turn start. Increments on
+    /// every `skill_use(action="load")`. When it exceeds
+    /// `MAX_SKILL_LOADS_PER_TURN`, further loads are refused with a message
+    /// directing the model to call the actual tool directly.
+    skill_load_count: AtomicU32,
 }
 
 impl SessionToolState {
@@ -25,6 +37,7 @@ impl SessionToolState {
         Arc::new(Self {
             describe_cache: RwLock::new(HashMap::new()),
             capability_provider_override: RwLock::new(None),
+            skill_load_count: AtomicU32::new(0),
         })
     }
 
@@ -53,6 +66,18 @@ impl SessionToolState {
     /// Clear the per-turn override (called at turn end by the pipeline).
     pub async fn clear_capability_provider(&self) {
         *self.capability_provider_override.write().await = None;
+    }
+
+    /// Increment the per-turn skill load counter. Returns the NEW count.
+    /// Callers compare against `MAX_SKILL_LOADS_PER_TURN` to decide whether
+    /// to allow the load.
+    pub fn bump_skill_load_count(&self) -> u32 {
+        self.skill_load_count.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Reset the per-turn skill load counter to 0. Called at turn start.
+    pub fn reset_skill_load_count(&self) {
+        self.skill_load_count.store(0, Ordering::Relaxed);
     }
 }
 

@@ -49,6 +49,21 @@ impl SystemToolHandler for SkillUseHandler {
 
         if action == "load"
             && let Some(name) = args.get("name").and_then(|v| v.as_str()) {
+                // Per-turn skill-load cap: prevents infinite skill-loading
+                // loops where the model chains wrapper skills instead of
+                // calling the actual tool.
+                if let Some(st) = &deps.session_tool_state {
+                    let count = st.bump_skill_load_count();
+                    if count > crate::agent::dispatcher::state::MAX_SKILL_LOADS_PER_TURN {
+                        return format!(
+                            "Skill load limit reached ({}/turn). Skills are reference guides — \
+                             you already have the instructions. Call the actual tool directly \
+                             (e.g. generate_image, workspace_write). Do NOT load more skills.",
+                            crate::agent::dispatcher::state::MAX_SKILL_LOADS_PER_TURN,
+                        );
+                    }
+                }
+
                 let skills = crate::skills::load_skills(deps.workspace_dir).await;
                 if let Some(skill) = skills.iter().find(|s| s.meta.name == name)
                     && matches!(skill.meta.state, crate::skills::SkillState::Archived) {

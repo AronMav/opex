@@ -906,6 +906,21 @@ pub async fn handle_skill_capture(
         );
     }
 
+    // Reject names that shadow real tools — prevents the model from creating
+    // wrapper skills like "generate-image" or "call-workspace-write" that it
+    // then loops on loading instead of calling the actual tool.
+    let tool_shadow = name.replace('-', "_");
+    let known_tools: std::collections::HashSet<&str> =
+        crate::agent::pipeline::tool_defs::all_system_tool_names().iter().copied().collect();
+    if known_tools.contains(tool_shadow.as_str()) {
+        return format!(
+            "Skill name '{}' shadows an existing tool '{}'. Do not create wrapper skills — \
+             call the tool directly. Choose a different name that describes a WORKFLOW, \
+             not a tool invocation.",
+            name, tool_shadow
+        );
+    }
+
     let description = match args.get("description").and_then(|v| v.as_str()) {
         Some(d) if !d.is_empty() => d.to_string(),
         _ => return "Error: 'description' is required.".to_string(),
@@ -915,6 +930,20 @@ pub async fn handle_skill_capture(
         Some(i) if !i.is_empty() => i.to_string(),
         _ => return "Error: 'instructions' is required.".to_string(),
     };
+
+    // Reject wrapper skills: instructions that tell the model to load another
+    // skill ("skill_use" / "action='load'") create the indirection loops that
+    // trap agents in endless skill-loading. A skill should contain DIRECT
+    // instructions, not pointers to other skills.
+    let lower_instr = instructions.to_lowercase();
+    if lower_instr.contains("skill_use(") || lower_instr.contains("action=\"load\"") {
+        return format!(
+            "Skill '{}' rejected: instructions reference loading other skills. \
+             Skills must contain DIRECT instructions — call tools, not other skills. \
+             Rewrite the instructions without skill_use references.",
+            name
+        );
+    }
 
     // Check for collision before writing.
     let skill_path = std::path::Path::new(workspace_dir)
