@@ -1006,8 +1006,8 @@ mod tests {
         assert!(out.contains(json), "marker payload must be embedded verbatim: {out}");
         assert!(out.contains("Image"), "follow-up text must reference Image kind: {out}");
         assert!(
-            out.to_lowercase().contains("end your turn"),
-            "must instruct LLM to stay quiet (image already in chat): {out}"
+            out.contains("URL:"),
+            "must include plain URL so the model can reference it: {out}"
         );
     }
 
