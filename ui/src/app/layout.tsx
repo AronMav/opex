@@ -54,7 +54,7 @@ export default function RootLayout({
           <TooltipProvider>
             {children}
           </TooltipProvider>
-          <Toaster position="top-center" />
+          <Toaster position="top-left" />
           <SearchPalette />
           <LanguageSync />
         </ThemeProvider>
