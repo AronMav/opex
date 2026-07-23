@@ -12,7 +12,11 @@ export type AgentDetailApprovalDto = { enabled: boolean, require_for: Array<stri
 
 export type AgentDetailCompactionDto = { enabled: boolean, threshold: number, preserve_tool_calls: boolean, preserve_last_n: number, max_context_tokens: number | null, };
 
-export type AgentDetailDriftDto = { enabled: boolean, threshold: number, min_history: number, baseline_turns: number, z_fire: number, z_release: number, correct: boolean, anchor?: string, };
+export type AgentDetailDriftDto = { enabled: boolean, threshold: number, min_history: number, baseline_turns: number, z_fire: number, z_release: number, correct: boolean, anchor?: string, 
+/**
+ * ECP v1: perspective-frame recent interlocutor turns.
+ */
+ecp: boolean, ecp_recent_turns: number, };
 
 export type AgentDetailDto = { name: string, language: string, 
 /**
@@ -33,7 +37,11 @@ icon_url: string | null, max_tools_in_context: number | null, tool_loop: AgentDe
  */
 voice?: string, };
 
-export type AgentDetailEmotionDto = { enabled: boolean, intensity_importance_k: number, blend_rate: number, decay_half_life_hours: number, };
+export type AgentDetailEmotionDto = { enabled: boolean, intensity_importance_k: number, blend_rate: number, decay_half_life_hours: number, 
+/**
+ * v2: surface the bucketed mood as an observation in the system prompt.
+ */
+render_to_prompt: boolean, };
 
 export type AgentDetailHeartbeatDto = { cron: string, timezone: string | null, announce_to: string | null, };
 

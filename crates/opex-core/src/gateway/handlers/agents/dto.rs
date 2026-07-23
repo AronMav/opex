@@ -142,6 +142,8 @@ impl AgentDetailDto {
                 z_release: a.drift.z_release,
                 correct: a.drift.correct,
                 anchor: a.drift.anchor.clone(),
+                ecp: a.drift.ecp,
+                ecp_recent_turns: a.drift.ecp_recent_turns,
             },
             initiative: AgentDetailInitiativeDto {
                 enabled: a.initiative.enabled,
@@ -156,6 +158,7 @@ impl AgentDetailDto {
                 intensity_importance_k: a.emotion.intensity_importance_k,
                 blend_rate: a.emotion.blend_rate,
                 decay_half_life_hours: a.emotion.decay_half_life_hours,
+                render_to_prompt: a.emotion.render_to_prompt,
             },
             approval: a.approval.as_ref().map(|ap| AgentDetailApprovalDto {
                 enabled: ap.enabled,

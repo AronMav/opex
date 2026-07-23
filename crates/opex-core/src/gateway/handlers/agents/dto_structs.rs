@@ -131,6 +131,9 @@ pub struct AgentDetailDriftDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-gen", ts(optional))]
     pub anchor: Option<String>,
+    /// ECP v1: perspective-frame recent interlocutor turns.
+    pub ecp: bool,
+    pub ecp_recent_turns: usize,
 }
 crate::register_ts_dto!(AgentDetailDriftDto);
 
@@ -156,6 +159,8 @@ pub struct AgentDetailEmotionDto {
     pub intensity_importance_k: f32,
     pub blend_rate: f32,
     pub decay_half_life_hours: f32,
+    /// v2: surface the bucketed mood as an observation in the system prompt.
+    pub render_to_prompt: bool,
 }
 crate::register_ts_dto!(AgentDetailEmotionDto);
 

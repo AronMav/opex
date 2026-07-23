@@ -134,6 +134,8 @@ export const emptyForm: FormState = {
   driftZRelease: "1.0",
   driftCorrect: false,
   driftAnchor: "",
+  driftEcp: false,
+  driftEcpRecentTurns: "1",
   initiativeEnabled: false,
   initiativeProposalCap: "1",
   initiativeDecompose: false,
@@ -144,6 +146,7 @@ export const emptyForm: FormState = {
   emotionK: "3",
   emotionBlendRate: "0.3",
   emotionHalfLife: "12",
+  emotionRenderToPrompt: false,
 };
 
 export function detailToForm(d: AgentDetail): FormState {
@@ -226,6 +229,8 @@ export function detailToForm(d: AgentDetail): FormState {
     driftZRelease: String(d.drift?.z_release ?? 1.0),
     driftCorrect: d.drift?.correct ?? false,
     driftAnchor: d.drift?.anchor ?? "",
+    driftEcp: d.drift?.ecp ?? false,
+    driftEcpRecentTurns: String(d.drift?.ecp_recent_turns ?? 1),
     initiativeEnabled: d.initiative?.enabled ?? false,
     initiativeProposalCap: String(d.initiative?.daily_proposal_cap ?? 1),
     initiativeDecompose: d.initiative?.decompose ?? false,
@@ -236,6 +241,7 @@ export function detailToForm(d: AgentDetail): FormState {
     emotionK: String(d.emotion?.intensity_importance_k ?? 3),
     emotionBlendRate: String(d.emotion?.blend_rate ?? 0.3),
     emotionHalfLife: String(d.emotion?.decay_half_life_hours ?? 12),
+    emotionRenderToPrompt: d.emotion?.render_to_prompt ?? false,
   };
 }
 
@@ -364,6 +370,8 @@ export function formToPayload(f: FormState) {
       z_release: numOr(f.driftZRelease, 1.0),
       correct: f.driftCorrect,
       anchor: f.driftAnchor.trim() !== "" ? f.driftAnchor : null,
+      ecp: f.driftEcp,
+      ecp_recent_turns: parseInt(f.driftEcpRecentTurns) || 1,
     },
     initiative: {
       enabled: f.initiativeEnabled,
@@ -378,6 +386,7 @@ export function formToPayload(f: FormState) {
       intensity_importance_k: numOr(f.emotionK, 3),
       blend_rate: parseFloat(f.emotionBlendRate) || 0.3,
       decay_half_life_hours: parseFloat(f.emotionHalfLife) || 12,
+      render_to_prompt: f.emotionRenderToPrompt,
     },
   };
 }

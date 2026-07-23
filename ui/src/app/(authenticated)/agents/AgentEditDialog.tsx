@@ -148,6 +148,8 @@ export interface FormState {
   driftZRelease: string;
   driftCorrect: boolean;
   driftAnchor: string;
+  driftEcp: boolean;
+  driftEcpRecentTurns: string;
   // Initiative
   initiativeEnabled: boolean;
   initiativeProposalCap: string;
@@ -160,6 +162,7 @@ export interface FormState {
   emotionK: string;
   emotionBlendRate: string;
   emotionHalfLife: string;
+  emotionRenderToPrompt: boolean;
 }
 
 export interface AgentEditDialogProps {
@@ -214,6 +217,7 @@ export function soulGating(
   return {
     emotionDisabled: !form.soulEnabled,
     driftCorrectDisabled: !form.driftEnabled,
+    driftEcpDisabled: !form.driftEnabled,
     initiativeDisabled: editingBase,
     // M2: server rejects daily_plan without a configured heartbeat.
     dailyPlanDisabled: editingBase || !form.hbEnabled,
@@ -702,6 +706,10 @@ export function AgentEditDialog({
                           onChange={(e) => upd({ driftAnchor: e.target.value })}
                         />
                       </Field>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-muted-foreground">{t("agents.drift_ecp")}</span>
+                        <Switch checked={form.driftEcp} disabled={g.driftEcpDisabled} onCheckedChange={(v) => upd({ driftEcp: v })} className="data-[state=checked]:bg-primary" />
+                      </div>
                       <AdvancedSection label={t("common.advanced")}>
                         <Field label={t("agents.drift_threshold")} labelClassName="text-xs" hint={t("agents.drift_threshold_deprecated")}>
                           <Input type="number" step="0.01" min={0} max={2} disabled className="bg-background border-border font-mono text-sm h-8" value={form.driftThreshold} onChange={(e) => upd({ driftThreshold: e.target.value })} />
@@ -717,6 +725,9 @@ export function AgentEditDialog({
                         </Field>
                         <Field label={t("agents.drift_z_release")} labelClassName="text-xs" hint={t("agents.drift_z_release_hint")}>
                           <Input type="number" step="0.1" min={0} max={20} className="bg-background border-border font-mono text-sm h-8" value={form.driftZRelease} onChange={(e) => upd({ driftZRelease: e.target.value })} />
+                        </Field>
+                        <Field label={t("agents.drift_ecp_recent_turns")} labelClassName="text-xs" hint={t("agents.drift_ecp_recent_turns_hint")}>
+                          <Input type="number" min={1} max={50} disabled={g.driftEcpDisabled} className="bg-background border-border font-mono text-sm h-8" value={form.driftEcpRecentTurns} onChange={(e) => upd({ driftEcpRecentTurns: e.target.value })} />
                         </Field>
                       </AdvancedSection>
                     </SwitchSection>
@@ -752,6 +763,10 @@ export function AgentEditDialog({
                       note={g.emotionDisabled ? t("agents.emotion_requires_soul_note") : undefined}
                       onToggle={(v) => upd({ emotionEnabled: v })}
                     >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-muted-foreground">{t("agents.emotion_render_to_prompt")}</span>
+                        <Switch checked={form.emotionRenderToPrompt} disabled={g.emotionDisabled} onCheckedChange={(v) => upd({ emotionRenderToPrompt: v })} className="data-[state=checked]:bg-primary" />
+                      </div>
                       <AdvancedSection label={t("common.advanced")}>
                         <Field label={t("agents.emotion_k")} labelClassName="text-xs">
                           <Input type="number" step="0.1" min={0} max={5} className="bg-background border-border font-mono text-sm h-8" value={form.emotionK} onChange={(e) => upd({ emotionK: e.target.value })} />

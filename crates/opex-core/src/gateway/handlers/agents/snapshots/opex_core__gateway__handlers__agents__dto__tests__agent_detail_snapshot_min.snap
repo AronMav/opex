@@ -45,7 +45,9 @@ expression: dto
     "baseline_turns": 8,
     "z_fire": 2.5,
     "z_release": 1.0,
-    "correct": false
+    "correct": false,
+    "ecp": false,
+    "ecp_recent_turns": 1
   },
   "initiative": {
     "enabled": false,
@@ -59,7 +61,8 @@ expression: dto
     "enabled": false,
     "intensity_importance_k": 3.0,
     "blend_rate": 0.3,
-    "decay_half_life_hours": 12.0
+    "decay_half_life_hours": 12.0,
+    "render_to_prompt": false
   },
   "approval": null,
   "routing": [],
