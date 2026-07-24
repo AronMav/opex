@@ -413,24 +413,10 @@ export function ChatComposer() {
       // When streaming: form submit triggers sendMessage → interruptAndSend.
       formRef.current?.requestSubmit();
     } else if (e.key === "Enter" && e.shiftKey) {
-      // Shift+Enter while idle: newline (default behavior, do nothing here).
-      // Shift+Enter while streaming: queue the message instead of sending.
-      const phase = useChatStore.getState().agents[useChatStore.getState().currentAgent]?.connectionPhase;
-      if (isActivePhase(phase)) {
-        e.preventDefault();
-        const text = textareaRef.current?.value?.trim() ?? "";
-        if (!text) return;
-        useChatStore.getState().queueMessage(text, attachments.length > 0 ? attachments : undefined);
-        clearDraft(useChatStore.getState().currentAgent);
-        setAttachments([]);
-        setHasInput(false);
-        setComposerText("");
-        if (textareaRef.current) {
-          textareaRef.current.value = "";
-          textareaRef.current.style.height = "auto";
-        }
-      }
-      // If idle: let default newline behavior proceed.
+      // Shift+Enter: always a newline (default textarea behavior).
+      // The queue-on-shift-enter-while-streaming feature was removed — it
+      // confused users who expected a newline and got a queued message.
+      // Enter (without Shift) while streaming already does interruptAndSend.
     }
   }, [attachments, slashQuery, mentionQuery]);
 
