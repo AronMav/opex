@@ -103,7 +103,7 @@ impl AgentState {
 
     /// Cancel every active request token.
     pub fn cancel_all_requests(&self) {
-        let guard = self.active_requests.lock().unwrap();
+        let guard = self.active_requests.lock().unwrap_or_else(|e| e.into_inner());
         for (_, token) in guard.iter() {
             token.cancel();
         }
@@ -114,7 +114,7 @@ impl AgentState {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
             {
-                let guard = self.active_requests.lock().unwrap();
+                let guard = self.active_requests.lock().unwrap_or_else(|e| e.into_inner());
                 if guard.is_empty() {
                     return;
                 }
@@ -136,7 +136,7 @@ impl AgentState {
     /// `cancel`). For paths with no external token, pass a fresh one.
     pub fn register_request_guarded(self: &Arc<Self>, token: CancellationToken) -> RequestGuard {
         let id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
-        self.active_requests.lock().unwrap().push((id, token));
+        self.active_requests.lock().unwrap_or_else(|e| e.into_inner()).push((id, token));
         RequestGuard {
             state: self.clone(),
             id: RequestId(id),
@@ -148,7 +148,7 @@ impl AgentState {
     pub fn remove_request(&self, id: &RequestId) {
         self.active_requests
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .retain(|(i, _)| *i != id.0);
     }
 

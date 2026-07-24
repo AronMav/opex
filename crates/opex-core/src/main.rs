@@ -794,11 +794,16 @@ async fn main() -> Result<()> {
     {
         let renewal_db = db_pool.clone();
         let renewal_oauth = state.auth.oauth.clone();
+        let renewal_shutdown = bg_shutdown.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(6 * 3600));
             loop {
-                interval.tick().await;
-                crate::gateway::renew_expiring_gmail_watches(&renewal_db, &renewal_oauth).await;
+                tokio::select! {
+                    _ = renewal_shutdown.cancelled() => break,
+                    _ = interval.tick() => {
+                        crate::gateway::renew_expiring_gmail_watches(&renewal_db, &renewal_oauth).await;
+                    }
+                }
             }
         });
     }

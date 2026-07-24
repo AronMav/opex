@@ -66,7 +66,9 @@ async fn create_pool_with_timeout(url: &str, window: Duration) -> Result<PgPool>
     let options = PgPoolOptions::new()
         .max_connections(30)
         .min_connections(3)
-        .acquire_timeout(Duration::from_secs(5));
+        .acquire_timeout(Duration::from_secs(5))
+        .max_lifetime(Duration::from_secs(1800))
+        .idle_timeout(Duration::from_secs(600));
 
     let deadline = Instant::now() + window;
     let mut backoff = Duration::from_millis(500);
