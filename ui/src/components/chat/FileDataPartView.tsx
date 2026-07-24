@@ -63,11 +63,27 @@ const FAMILY_STYLES: Record<FileFamily, { icon: typeof FileText; bg: string; tex
 
 function extFromUrl(url: string): string | null {
   try {
-    const u = new URL(url, window.location.origin);
-    const path = u.pathname;
+    const path = url.split("?")[0];
     const dot = path.lastIndexOf(".");
     if (dot < 0 || dot === path.length - 1) return null;
-    return path.slice(dot + 1).toUpperCase();
+    const seg = path.slice(dot + 1);
+    if (seg.length > 5) return null;
+    return seg.toUpperCase();
+  } catch {
+    return null;
+  }
+}
+
+function idFromUrl(url: string): string | null {
+  try {
+    const path = url.split("?")[0];
+    const parts = path.split("/").filter(Boolean);
+    if (parts.length < 2) return null;
+    const last = parts[parts.length - 1];
+    if (last.length === 36 && last.includes("-")) {
+      return last.split("-")[0];
+    }
+    return null;
   } catch {
     return null;
   }
@@ -91,11 +107,14 @@ export const FileDataPartView = memo(function FileDataPartView({ data }: { data:
     );
   }
 
-  const label = filename?.trim() || friendlyLabel(mediaType);
+  const label = friendlyLabel(mediaType);
   const family = classifyMediaType(mediaType, label);
   const styles = FAMILY_STYLES[family];
   const Icon = styles.icon;
   const ext = extFromUrl(url);
+  const uploadId = idFromUrl(url);
+
+  const displayName = filename?.trim() || (uploadId ? `${label} ${uploadId}` : label);
 
   return (
     <a
@@ -116,7 +135,7 @@ export const FileDataPartView = memo(function FileDataPartView({ data }: { data:
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate text-sm font-medium text-foreground">
-          {filename?.trim() || label}
+          {displayName}
         </span>
         <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
           {ext && <span className="font-mono font-semibold uppercase">{ext}</span>}
