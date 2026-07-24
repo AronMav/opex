@@ -23,6 +23,10 @@ vi.mock("next/dynamic", () => ({
 // ── Mock: lucide-react (heavy icon library — stub all named exports) ────────
 
 vi.mock("lucide-react", () => {
+  // Explicit stub map (NOT importOriginal — importing the full lucide library
+  // in many test files exhausts the vitest worker heap and OOMs the suite).
+  // Keep this list in sync with the icons the rendered tree uses; FileDataPartView
+  // needs Music/Video/Code/FileType in addition to the long-standing set.
   const Icon = () => null;
   return {
     Activity: Icon, AlertCircle: Icon, AlertTriangle: Icon, Archive: Icon,
@@ -31,10 +35,10 @@ vi.mock("lucide-react", () => {
     Calendar: Icon, CalendarClock: Icon, Camera: Icon, Check: Icon, CheckCircle: Icon, CheckCircle2: Icon,
     CheckIcon: Icon, ChevronDown: Icon, ChevronDownIcon: Icon, ChevronLeft: Icon,
     ChevronRight: Icon, ChevronRightIcon: Icon, ChevronUp: Icon, Circle: Icon,
-    CircleCheck: Icon, CircleCheckIcon: Icon, CircleIcon: Icon, ClipboardList: Icon, Clock: Icon, Copy: Icon,
+    CircleCheck: Icon, CircleCheckIcon: Icon, CircleIcon: Icon, ClipboardList: Icon, Clock: Icon, Code: Icon, Copy: Icon,
     CornerDownRight: Icon, Cpu: Icon, Database: Icon, DollarSign: Icon,
     Download: Icon, Edit3: Icon, ExternalLink: Icon, Eye: Icon,
-    FileCode: Icon, FileCode2: Icon, FileCog: Icon, FilePlus: Icon, FileText: Icon,
+    FileCode: Icon, FileCode2: Icon, FileCog: Icon, FilePlus: Icon, FileText: Icon, FileType: Icon,
     Folder: Icon, FolderMinus: Icon, FolderPlus: Icon, FolderTree: Icon, Gamepad2: Icon, Gauge: Icon,
     GitBranch: Icon, Globe: Icon, Hammer: Icon, Hash: Icon, HeartPulse: Icon,
     History: Icon, Image: Icon, ImageIcon: Icon, InfoIcon: Icon,
@@ -43,7 +47,7 @@ vi.mock("lucide-react", () => {
     Loader2Icon: Icon, LogOut: Icon, LucideProps: Icon,
     Mail: Icon, Maximize2: Icon, Menu: Icon, MessageSquare: Icon,
     MessageSquareShare: Icon, MessageSquareText: Icon, Mic: Icon, Minimize2: Icon, Minus: Icon,
-    Monitor: Icon, Moon: Icon, MoreHorizontal: Icon, Network: Icon, Nut: Icon,
+    Monitor: Icon, Moon: Icon, MoreHorizontal: Icon, Music: Icon, Network: Icon, Nut: Icon,
     OctagonXIcon: Icon, PanelLeftIcon: Icon, PanelRight: Icon,
     Paperclip: Icon, Pencil: Icon, Phone: Icon, Pin: Icon, PinOff: Icon,
     Play: Icon, Plus: Icon, Power: Icon, PowerOff: Icon, Radio: Icon,
@@ -52,7 +56,7 @@ vi.mock("lucide-react", () => {
     ShieldCheck: Icon, Sparkles: Icon, Square: Icon, Stethoscope: Icon, Sun: Icon,
     Tag: Icon, ThumbsDown: Icon, ThumbsUp: Icon, Timer: Icon, Trash2: Icon,
     TrendingDown: Icon, TrendingUp: Icon, TriangleAlertIcon: Icon,
-    Unlink: Icon, Upload: Icon, User: Icon, UserCheck: Icon, UserX: Icon,
+    Unlink: Icon, Upload: Icon, User: Icon, UserCheck: Icon, UserX: Icon, Video: Icon,
     Volume2: Icon, VolumeX: Icon, Webhook: Icon, Wifi: Icon, WifiOff: Icon,
     Wrench: Icon, XCircle: Icon, XIcon: Icon, Zap: Icon,
     ZoomIn: Icon, ZoomOut: Icon,

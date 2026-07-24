@@ -4,13 +4,16 @@
  * from the actual store, same pattern as agent-switching.test.ts /
  * session-switch-invalidation.test.ts).
  *
- * Regression covered (Important finding, task-4 review): `queueMessage` used
- * `voice: opts?.voice ?? prev?.voice`, so a PLAIN-TEXT queue call (no `opts` —
- * e.g. Shift+Enter, or the F085 interrupt-race path) made while a voice
- * message was already pending INHERITED `voice: true`, causing a typed
- * message's reply to be read aloud. Fix: `voice: opts?.voice === true` — a
- * non-voice queue call always produces `voice: false` and REPLACES content
- * (last intent wins), never appends onto a prior voice pending message.
+ * Model: `pendingMessage` is a FIFO queue (`PendingMessageEntry[]`) since the
+ * "FIFO message queue" redesign — each `queueMessage` call APPENDS an entry;
+ * messages accumulate while the model works and drain one-by-one on idle. The
+ * old single-object "last intent wins / append-with-\n" semantics are gone.
+ *
+ * Regression still covered (Fix 1, task-4 review): each entry's `voice` is
+ * `opts?.voice === true`, so a PLAIN-TEXT queue call (no `opts` — e.g.
+ * Shift+Enter, or the F085 interrupt-race path) always produces a `voice:false`
+ * entry and NEVER inherits `voice:true` from an earlier queued voice message —
+ * a typed message's reply is never read aloud.
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -61,61 +64,55 @@ beforeEach(() => {
   });
 });
 
-describe("queueMessage — real reducer (stream-control.ts)", () => {
-  it("a fresh voice message sets pendingMessage.voice = true", () => {
+const queue = () => useChatStore.getState().agents[AGENT]?.pendingMessage ?? [];
+
+describe("queueMessage — real reducer (stream-control.ts, FIFO queue)", () => {
+  it("a fresh voice message queues a single voice:true entry", () => {
     useChatStore.getState().queueMessage("привет", undefined, { voice: true });
 
-    expect(useChatStore.getState().agents[AGENT]?.pendingMessage).toMatchObject({
-      content: "привет",
-      attachments: undefined,
-      voice: true,
-    });
+    const q = queue();
+    expect(q).toHaveLength(1);
+    expect(q[0]).toMatchObject({ content: "привет", voice: true });
   });
 
-  it("a second voice message appends content with \\n and stays voice: true", () => {
+  it("two voice messages queue two separate FIFO entries (no \\n append)", () => {
     useChatStore.getState().queueMessage("первая фраза", undefined, { voice: true });
     useChatStore.getState().queueMessage("вторая фраза", undefined, { voice: true });
 
-    expect(useChatStore.getState().agents[AGENT]?.pendingMessage).toMatchObject({
-      content: "первая фраза\nвторая фраза",
-      attachments: undefined,
-      voice: true,
-    });
+    const q = queue();
+    expect(q).toHaveLength(2);
+    expect(q[0]).toMatchObject({ content: "первая фраза", voice: true });
+    expect(q[1]).toMatchObject({ content: "вторая фраза", voice: true });
   });
 
-  it("a plain-text queue call after a pending voice message REPLACES content and sets voice: false (Fix 1)", () => {
+  it("a plain-text queue call after a voice message queues a separate voice:false entry (Fix 1)", () => {
     useChatStore.getState().queueMessage("говорю голосом", undefined, { voice: true });
 
     // No opts — the Shift+Enter path / F085 interrupt-race path call queueMessage
-    // this way. Must NOT inherit voice: true from the prior pending message, and
-    // must NOT append onto it — a typed message supersedes the queued voice one.
+    // this way. The new entry must be voice:false and must NOT inherit voice:true
+    // from the earlier queued voice message (so its reply is never read aloud).
     useChatStore.getState().queueMessage("напечатал текст");
 
-    expect(useChatStore.getState().agents[AGENT]?.pendingMessage).toMatchObject({
-      content: "напечатал текст",
-      attachments: undefined,
-      voice: false,
-    });
+    const q = queue();
+    expect(q).toHaveLength(2);
+    expect(q[0]).toMatchObject({ content: "говорю голосом", voice: true });
+    expect(q[1]).toMatchObject({ content: "напечатал текст", voice: false });
   });
 
-  it("opts.voice explicitly false after a pending voice message also replaces and clears the flag", () => {
+  it("opts.voice explicitly false also queues a voice:false entry", () => {
     useChatStore.getState().queueMessage("говорю голосом", undefined, { voice: true });
     useChatStore.getState().queueMessage("напечатал текст", undefined, { voice: false });
 
-    expect(useChatStore.getState().agents[AGENT]?.pendingMessage).toMatchObject({
-      content: "напечатал текст",
-      attachments: undefined,
-      voice: false,
-    });
+    const q = queue();
+    expect(q).toHaveLength(2);
+    expect(q[1]).toMatchObject({ content: "напечатал текст", voice: false });
   });
 
-  it("a fresh non-voice queue call (no prior pending) sets voice: false", () => {
+  it("a fresh non-voice queue call (no prior pending) queues a voice:false entry", () => {
     useChatStore.getState().queueMessage("plain text");
 
-    expect(useChatStore.getState().agents[AGENT]?.pendingMessage).toMatchObject({
-      content: "plain text",
-      attachments: undefined,
-      voice: false,
-    });
+    const q = queue();
+    expect(q).toHaveLength(1);
+    expect(q[0]).toMatchObject({ content: "plain text", voice: false });
   });
 });

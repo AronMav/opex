@@ -61,13 +61,17 @@ export function PulseDotLoader({
 }
 
 /** Unified thinking indicator — a horizontal wave with a sweeping gradient pulse.
- *  Centered, stretched horizontally, with a soft glow. */
+ *  Centered, stretched horizontally, with a soft glow.
+ *
+ *  Purely decorative: it is always rendered inside a semantic live region
+ *  (MessageList's ThinkingMessage, which carries role="status" +
+ *  aria-label="chat.thinking"). Marking the wave aria-hidden avoids a nested
+ *  live region that would double-announce and break `getByRole("status")`. */
 export function ThinkingWave({ className }: { className?: string }) {
   return (
     <div
       className={cn("flex items-center justify-center", className)}
-      role="status"
-      aria-live="polite"
+      aria-hidden="true"
     >
       <div
         className="relative h-[6px] w-40 overflow-hidden rounded-full"
@@ -95,7 +99,6 @@ export function ThinkingWave({ className }: { className?: string }) {
           }}
         />
       </div>
-      <span className="sr-only">Thinking</span>
     </div>
   )
 }

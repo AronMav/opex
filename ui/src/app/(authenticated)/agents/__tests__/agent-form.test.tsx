@@ -2,6 +2,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
+// ── Polyfill: jsdom lacks ResizeObserver, which Radix Dialog/Select inside
+//    AgentEditDialog rely on for size observation. Without it the dialog falls
+//    into a measure/re-render loop that exhausts the worker heap (OOM) before a
+//    single test runs. 31 other test files polyfill it the same way. ──────────
+globalThis.ResizeObserver = class ResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof globalThis.ResizeObserver;
+
 // ── Pure function imports ───────────────────────────────────────────────────
 import { detailToForm, formToPayload, emptyForm } from "../page";
 import { soulGating } from "../AgentEditDialog";
@@ -450,6 +460,7 @@ describe("soulGating", () => {
     )).toEqual({
       emotionDisabled: true,
       driftCorrectDisabled: true,
+      driftEcpDisabled: true,
       autoApproveDisabled: true,
       initiativeDisabled: false,
       dailyPlanDisabled: true,
@@ -460,6 +471,7 @@ describe("soulGating", () => {
     )).toEqual({
       emotionDisabled: false,
       driftCorrectDisabled: false,
+      driftEcpDisabled: false,
       autoApproveDisabled: false,
       initiativeDisabled: true,
       dailyPlanDisabled: true,

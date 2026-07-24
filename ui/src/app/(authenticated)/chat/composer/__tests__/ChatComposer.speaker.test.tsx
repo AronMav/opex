@@ -3,12 +3,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { render, waitFor, screen, fireEvent } from "@testing-library/react";
 
-// Task 6: streaming per-sentence TTS via hooks/tts-speaker. For a VOICE turn the
-// composer feeds the assistant's streaming TEXT deltas through the sentence
-// splitter and synthesises each complete sentence via /api/tts/synthesize,
-// playing them in order on a single <audio> element. An audio/* file part on the
-// reply (agent-produced voice) TAKES OVER — the per-sentence queue is aborted and
-// the agent audio is played instead.
+// Task 6: TTS for a VOICE turn via hooks/use-voice-reply. The hook is
+// SINGLE-SHOT: it waits for the turn to finish (streaming → idle falling edge),
+// then synthesises the FULL reply text as ONE /api/tts/synthesize request and
+// plays it on a single <audio> element (no per-sentence streaming). An audio/*
+// file part on the reply (agent-produced voice) TAKES OVER during streaming —
+// the agent audio is fetched and played instead of TTS.
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn(), refresh: vi.fn() }),
@@ -160,23 +160,32 @@ describe("ChatComposer streaming TTS speaker (Task 6)", () => {
     vi.restoreAllMocks();
   });
 
-  it("synthesises the assistant's reply sentence-by-sentence for a voice turn", async () => {
-    // Voice turn already streaming, assistant reply carries two complete
-    // sentences (each ≥ minLen, trailing whitespace makes both emit on push).
+  it("synthesises the full reply as a single TTS request when the voice turn ends", async () => {
+    // Voice turn streaming; the assistant reply carries two sentences. Single-shot
+    // TTS waits for the turn to END, then sends the WHOLE text in one request.
     chatState.agents.main.voiceTurnPending = true;
     chatState.agents.main.connectionPhase = "streaming";
     chatState.agents.main.messageSource = liveSource([
       { type: "text", text: "Привет, как твои дела сегодня? Всё отлично, спасибо большое! " },
     ]);
 
-    render(<ChatComposer />);
+    const { rerender } = render(<ChatComposer />);
 
-    // Two sentences → two POSTs to /api/tts/synthesize, and two playbacks.
+    // Nothing is synthesised while the turn is still streaming (single-shot).
+    await new Promise((r) => setTimeout(r, 20));
+    expect(
+      fetchMock.mock.calls.filter((c) => String(c[0]).startsWith("/api/tts/synthesize")).length,
+    ).toBe(0);
+
+    // Turn ends (streaming → idle) → ONE synth request for the full reply.
+    chatState.agents.main.connectionPhase = "idle";
+    rerender(<ChatComposer />);
+
     await waitFor(() => {
       const synthCalls = fetchMock.mock.calls.filter((c) =>
         String(c[0]).startsWith("/api/tts/synthesize"),
       );
-      expect(synthCalls.length).toBe(2);
+      expect(synthCalls.length).toBe(1);
     });
 
     const synthCalls = fetchMock.mock.calls.filter((c) =>
@@ -187,7 +196,11 @@ describe("ChatComposer streaming TTS speaker (Task 6)", () => {
     // POST with a JSON {text} body + bearer auth.
     const init = synthCalls[0][1] as RequestInit;
     expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body as string)).toHaveProperty("text");
+    const body = JSON.parse(init.body as string);
+    expect(body).toHaveProperty("text");
+    // The whole reply is sent in one request (single-shot, not per-sentence).
+    expect(body.text).toContain("Привет, как твои дела сегодня?");
+    expect(body.text).toContain("Всё отлично, спасибо большое!");
 
     // Playback happened on the single <audio> element.
     await waitFor(() => expect(playedSrcs.length).toBeGreaterThanOrEqual(1));
@@ -238,10 +251,8 @@ describe("ChatComposer streaming TTS speaker (Task 6)", () => {
     expect(playedSrcs.length).toBe(0);
   });
 
-  // ── Fix 1: Stop must NOT voice the trailing partial sentence ──────────────
-  it("Stop during a voice turn does not voice the trailing partial sentence", async () => {
-    // One COMPLETE sentence (spoken) + a trailing partial with no boundary (held
-    // in the splitter accumulator, not yet emitted).
+  // ── Fix 1: Stop must silence the voice turn (no TTS after the turn ends) ──
+  it("Stop during a voice turn silences it — no TTS after the turn ends", async () => {
     chatState.agents.main.voiceTurnPending = true;
     chatState.agents.main.connectionPhase = "streaming";
     chatState.agents.main.messageSource = liveSource([
@@ -249,35 +260,24 @@ describe("ChatComposer streaming TTS speaker (Task 6)", () => {
     ]);
 
     const { rerender } = render(<ChatComposer />);
-
-    // The one complete sentence is synthesised; the partial hangs in the splitter.
-    await waitFor(() => {
-      const calls = fetchMock.mock.calls.filter((c) =>
-        String(c[0]).startsWith("/api/tts/synthesize"),
-      );
-      expect(calls.length).toBe(1);
-    });
-    const before = fetchMock.mock.calls.filter((c) =>
-      String(c[0]).startsWith("/api/tts/synthesize"),
-    ).length;
-
-    // Press Stop (the square button rendered while streaming) → silenceVoiceTurn:
-    // cancel speaker, clear voiceTurnPending, reset feed cursor + splitter.
-    fireEvent.click(screen.getByLabelText("chat.stop_and_keep"));
-    // stopStream→abortLocalOnly would set the phase idle — simulate the falling
-    // edge so the effect that (previously) flushed the trailing partial runs.
-    chatState.agents.main.connectionPhase = "idle";
-    rerender(<ChatComposer />);
-
-    // Let effects + microtasks settle: nothing more must be synthesised/played.
     await new Promise((r) => setTimeout(r, 20));
 
-    const after = fetchMock.mock.calls.filter((c) =>
-      String(c[0]).startsWith("/api/tts/synthesize"),
-    ).length;
-    expect(after).toBe(before); // NO trailing synth after Stop
-    // The voice turn was cleanly ended (falling-edge gate now skips flush).
+    // Press Stop (the square button rendered while streaming) → silenceVoiceTurn:
+    // cancel speaker + clear voiceTurnPending.
+    fireEvent.click(screen.getByLabelText("chat.stop_and_keep"));
     expect(chatState.setVoiceTurnPending).toHaveBeenCalledWith(false, "main");
+
+    // Turn ends (streaming → idle). Because the voice turn was silenced, the
+    // single-shot falling edge must NOT synthesise anything.
+    chatState.agents.main.connectionPhase = "idle";
+    rerender(<ChatComposer />);
+    await new Promise((r) => setTimeout(r, 20));
+
+    const synthCalls = fetchMock.mock.calls.filter((c) =>
+      String(c[0]).startsWith("/api/tts/synthesize"),
+    );
+    expect(synthCalls.length).toBe(0);
+    expect(playedSrcs.length).toBe(0);
   });
 
   // ── Fix 2: upstream "(Empty response: …)" garbage must NOT be voiced ───────
@@ -303,20 +303,23 @@ describe("ChatComposer streaming TTS speaker (Task 6)", () => {
   });
 
   it("voices a normal reply that only CONTAINS (Empty response: mid-string", async () => {
-    // Leading real text → start-only match returns false → the reply IS voiced.
+    // Leading real text → start-only garbage match returns false → the reply IS
+    // voiced. Single-shot: synth fires on the streaming → idle falling edge.
     chatState.agents.main.voiceTurnPending = true;
     chatState.agents.main.connectionPhase = "streaming";
     chatState.agents.main.messageSource = liveSource([
       { type: "text", text: "Смотри, вот пример: см. (Empty response:) в середине строки. " },
     ]);
 
-    render(<ChatComposer />);
+    const { rerender } = render(<ChatComposer />);
+    chatState.agents.main.connectionPhase = "idle";
+    rerender(<ChatComposer />);
 
     await waitFor(() => {
       const synthCalls = fetchMock.mock.calls.filter((c) =>
         String(c[0]).startsWith("/api/tts/synthesize"),
       );
-      expect(synthCalls.length).toBeGreaterThanOrEqual(1);
+      expect(synthCalls.length).toBe(1);
     });
   });
 });

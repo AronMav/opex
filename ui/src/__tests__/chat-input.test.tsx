@@ -22,6 +22,8 @@ vi.mock("next/navigation", () => ({
 // Loader2 passes className through so animate-spin tests continue to work.
 
 vi.mock("lucide-react", () => {
+  // Explicit stub map (NOT importOriginal — importing the full lucide library
+  // in many test files exhausts the vitest worker heap and OOMs the suite).
   const Icon = () => null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const Loader2 = ({ className }: any) => <svg className={className} />;
@@ -32,10 +34,10 @@ vi.mock("lucide-react", () => {
     Calendar: Icon, Camera: Icon, Check: Icon, CheckCircle: Icon, CheckCircle2: Icon,
     CheckIcon: Icon, ChevronDown: Icon, ChevronDownIcon: Icon, ChevronLeft: Icon,
     ChevronRight: Icon, ChevronRightIcon: Icon, ChevronUp: Icon, Circle: Icon,
-    CircleCheckIcon: Icon, CircleIcon: Icon, Clock: Icon, Copy: Icon,
+    CircleCheckIcon: Icon, CircleIcon: Icon, Clock: Icon, Code: Icon, Copy: Icon,
     CornerDownRight: Icon, Cpu: Icon, Database: Icon, DollarSign: Icon,
     Download: Icon, Edit3: Icon, ExternalLink: Icon, Eye: Icon,
-    FileCode: Icon, FileCode2: Icon, FilePlus: Icon, FileText: Icon,
+    FileCode: Icon, FileCode2: Icon, FilePlus: Icon, FileText: Icon, FileType: Icon,
     Folder: Icon, FolderMinus: Icon, Gamepad2: Icon, Gauge: Icon,
     GitBranch: Icon, Globe: Icon, Hammer: Icon, Hash: Icon, HeartPulse: Icon,
     History: Icon, Image: Icon, ImageIcon: Icon, InfoIcon: Icon,
@@ -44,7 +46,7 @@ vi.mock("lucide-react", () => {
     Loader2Icon: Icon, LogOut: Icon, LucideProps: Icon,
     Mail: Icon, Maximize2: Icon, Menu: Icon, MessageSquare: Icon,
     MessageSquareShare: Icon, Mic: Icon, Minimize2: Icon, Minus: Icon,
-    Monitor: Icon, Moon: Icon, MoreHorizontal: Icon, Network: Icon,
+    Monitor: Icon, Moon: Icon, MoreHorizontal: Icon, Music: Icon, Network: Icon,
     OctagonXIcon: Icon, PanelLeftIcon: Icon, PanelRight: Icon,
     Paperclip: Icon, Pencil: Icon, Phone: Icon, Pin: Icon, PinOff: Icon,
     Play: Icon, Plus: Icon, Power: Icon, PowerOff: Icon, Radio: Icon,
@@ -53,7 +55,7 @@ vi.mock("lucide-react", () => {
     ShieldCheck: Icon, Square: Icon, Stethoscope: Icon, Sun: Icon,
     Tag: Icon, ThumbsDown: Icon, ThumbsUp: Icon, Timer: Icon, Trash2: Icon,
     TrendingDown: Icon, TrendingUp: Icon, TriangleAlertIcon: Icon,
-    Unlink: Icon, User: Icon, UserCheck: Icon, UserX: Icon,
+    Unlink: Icon, User: Icon, UserCheck: Icon, UserX: Icon, Video: Icon,
     Volume2: Icon, VolumeX: Icon, Webhook: Icon, Wifi: Icon, WifiOff: Icon,
     Wrench: Icon, XCircle: Icon, XIcon: Icon, Zap: Icon,
     ZoomIn: Icon, ZoomOut: Icon,

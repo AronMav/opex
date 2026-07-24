@@ -108,7 +108,7 @@ function FileHeader({ family, label, displayName, ext }: { family: FileFamily; l
       </span>
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-xs font-medium text-foreground">{displayName}</span>
-        <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+        <span className="flex items-center gap-1 text-3xs text-muted-foreground">
           {ext && <span className="font-mono font-semibold uppercase">{ext}</span>}
           {ext && <span aria-hidden>·</span>}
           <span>{label}</span>

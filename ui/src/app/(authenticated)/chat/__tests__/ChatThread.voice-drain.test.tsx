@@ -82,13 +82,14 @@ vi.mock("@/stores/auth-store", () => ({
 
 const AGENT = "Agent1";
 
-type PendingMessage = {
+type PendingMessageEntry = {
   content: string;
   attachments?: unknown;
   voice?: boolean;
   sessionId?: string | null;
   agent?: string;
-} | null;
+};
+type PendingMessage = PendingMessageEntry[];
 
 const agentState: {
   activeSessionId: string | null;
@@ -116,7 +117,7 @@ const agentState: {
   renderLimit: 100,
   hasMoreHistory: false,
   isLoadingHistory: false,
-  pendingMessage: null,
+  pendingMessage: [],
   voiceTurnPending: false,
 };
 
@@ -129,7 +130,7 @@ const storeActionMocks = {
     agentState.voiceTurnPending = pending;
   }),
   clearPending: vi.fn(() => {
-    agentState.pendingMessage = null;
+    agentState.pendingMessage = [];
   }),
   resumeStream: vi.fn(),
   loadEarlierMessages: vi.fn(),
@@ -229,13 +230,13 @@ describe("ChatThread — pendingMessage drain effect (real effect, voice arming)
   beforeEach(() => {
     vi.clearAllMocks();
     agentState.connectionPhase = "streaming";
-    agentState.pendingMessage = null;
+    agentState.pendingMessage = [];
     agentState.voiceTurnPending = false;
   });
 
   it("arms voiceTurnPending BEFORE sendMessage when draining a queued voice message on idle transition", () => {
     agentState.connectionPhase = "streaming";
-    agentState.pendingMessage = { content: "привет", attachments: undefined, voice: true };
+    agentState.pendingMessage = [{ content: "привет", attachments: undefined, voice: true }];
 
     const { rerender } = render(
       <ChatThread streamError={null} isReadOnly={false} onClearError={vi.fn()} onRetry={vi.fn()} />,
@@ -261,7 +262,7 @@ describe("ChatThread — pendingMessage drain effect (real effect, voice arming)
 
   it("does NOT arm voiceTurnPending when draining a non-voice queued message", () => {
     agentState.connectionPhase = "streaming";
-    agentState.pendingMessage = { content: "напечатал текст", attachments: undefined, voice: false };
+    agentState.pendingMessage = [{ content: "напечатал текст", attachments: undefined, voice: false }];
 
     const { rerender } = render(
       <ChatThread streamError={null} isReadOnly={false} onClearError={vi.fn()} onRetry={vi.fn()} />,
@@ -277,7 +278,7 @@ describe("ChatThread — pendingMessage drain effect (real effect, voice arming)
 
   it("discards the pending message on error transition without sending it", () => {
     agentState.connectionPhase = "streaming";
-    agentState.pendingMessage = { content: "должно быть отброшено", attachments: undefined, voice: true };
+    agentState.pendingMessage = [{ content: "должно быть отброшено", attachments: undefined, voice: true }];
 
     const { rerender } = render(
       <ChatThread streamError={null} isReadOnly={false} onClearError={vi.fn()} onRetry={vi.fn()} />,
@@ -300,7 +301,7 @@ describe("ChatThread — Fix H session-scoped pending drain", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     agentState.connectionPhase = "streaming";
-    agentState.pendingMessage = null;
+    agentState.pendingMessage = [];
     agentState.voiceTurnPending = false;
     agentState.activeSessionId = null;
   });
@@ -308,7 +309,7 @@ describe("ChatThread — Fix H session-scoped pending drain", () => {
   it("DELIVERS when the stamp matches the current agent + session", () => {
     agentState.activeSessionId = "S1";
     agentState.connectionPhase = "streaming";
-    agentState.pendingMessage = { content: "матч", attachments: undefined, voice: false, sessionId: "S1", agent: AGENT };
+    agentState.pendingMessage = [{ content: "матч", attachments: undefined, voice: false, sessionId: "S1", agent: AGENT }];
 
     const { rerender } = render(
       <ChatThread streamError={null} isReadOnly={false} onClearError={vi.fn()} onRetry={vi.fn()} />,
@@ -324,7 +325,7 @@ describe("ChatThread — Fix H session-scoped pending drain", () => {
     // Queued for S1, but the user has since switched to S2 (same agent).
     agentState.activeSessionId = "S2";
     agentState.connectionPhase = "idle"; // selectSession's abortLocalOnly already forced idle
-    agentState.pendingMessage = { content: "не туда", attachments: undefined, voice: false, sessionId: "S1", agent: AGENT };
+    agentState.pendingMessage = [{ content: "не туда", attachments: undefined, voice: false, sessionId: "S1", agent: AGENT }];
 
     render(<ChatThread streamError={null} isReadOnly={false} onClearError={vi.fn()} onRetry={vi.fn()} />);
 

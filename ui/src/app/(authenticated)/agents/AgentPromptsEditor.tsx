@@ -35,7 +35,13 @@ export function AgentPromptsEditor({ agentName }: { agentName: string | null }) 
 
   useEffect(() => {
     if (!agentName) {
-      setRows([]);
+      // Functional update that returns the SAME reference when rows is already
+      // empty, so React bails out of the re-render. A plain `setRows([])` would
+      // pass a fresh array every time; combined with the unstable `prompts`
+      // reference in the deps below (react-query / a mock can return a new []
+      // each render), that re-runs this effect every render → infinite
+      // setRows/re-render loop that exhausts the heap.
+      setRows((r) => (r.length === 0 ? r : []));
       seededRef.current = null;
       return;
     }

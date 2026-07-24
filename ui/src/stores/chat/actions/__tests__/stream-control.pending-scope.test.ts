@@ -84,12 +84,13 @@ describe("Fix H — setCurrentAgent clears the departing agent's pending (LOST c
   it("drops a queued message when switching to a different agent (no silent stranding)", () => {
     // Queue on A, then switch to B.
     useChatStore.getState().queueMessage("для A");
-    expect(useChatStore.getState().agents[A]?.pendingMessage).not.toBeNull();
+    expect(useChatStore.getState().agents[A]?.pendingMessage).toHaveLength(1);
 
     useChatStore.getState().setCurrentAgent(B);
 
-    // A's queue is cleared (surfaced via toast), not silently stuck.
-    expect(useChatStore.getState().agents[A]?.pendingMessage).toBeNull();
+    // A's queue is cleared (surfaced via toast), not silently stuck. The FIFO
+    // model clears to an empty array (never null — see navigation.ts).
+    expect(useChatStore.getState().agents[A]?.pendingMessage).toHaveLength(0);
     expect(useChatStore.getState().currentAgent).toBe(B);
   });
 });
