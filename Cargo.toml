@@ -1,4 +1,4 @@
-[workspace]
+﻿[workspace]
 resolver = "2"
 members = [
     "crates/opex-core",
@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.35.0"
+version = "0.36.0"
 edition = "2024"
 license = "MIT"
 
@@ -28,10 +28,10 @@ tower-http = { version = "0.6", features = ["cors", "trace", "fs", "set-header"]
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "macros", "migrate"] }
 
-# HTTP client (rustls — no openssl dependency for cross-compilation)
+# HTTP client (rustls вЂ” no openssl dependency for cross-compilation)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots", "charset", "http2", "macos-system-configuration", "stream", "multipart"] }
 
-# Magic-byte file-type sniffing (pure Rust, no OpenSSL/TLS — ARM64-safe).
+# Magic-byte file-type sniffing (pure Rust, no OpenSSL/TLS вЂ” ARM64-safe).
 # Used by the File Scenario Engine sniffer to avoid trusting channel-provided media_type.
 infer = "0.16"
 # Promote the transitive mime_guess to a direct dep so the sniffer can name it
@@ -83,7 +83,7 @@ thiserror = "2"
 # Env file
 dotenv = "0.15"
 
-# Secrets vault (pure Rust — safe for ARM64 cross-compilation)
+# Secrets vault (pure Rust вЂ” safe for ARM64 cross-compilation)
 chacha20poly1305 = "0.10"
 hex = "0.4"
 rand = "0.9"
