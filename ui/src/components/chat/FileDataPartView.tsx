@@ -32,6 +32,9 @@ function friendlyLabel(mediaType: string): string {
   if (m.startsWith("application/vnd.openxmlformats-officedocument")) return "Office";
   if (m.startsWith("application/vnd.oasis.opendocument")) return "Office";
   if (m === "application/msword") return "Word";
+  if (m.startsWith("image/")) return "Image";
+  if (m.startsWith("audio/")) return "Audio";
+  if (m.startsWith("video/")) return "Video";
   if (m.startsWith("application/")) return "Document";
   return "File";
 }
@@ -89,32 +92,72 @@ function idFromUrl(url: string): string | null {
   }
 }
 
+function deriveName(filename: string | undefined, label: string, uploadId: string | null): string {
+  if (filename?.trim()) return filename.trim();
+  if (uploadId) return `${label} ${uploadId}`;
+  return label;
+}
+
+function FileHeader({ family, label, displayName, ext }: { family: FileFamily; label: string; displayName: string; ext: string | null }) {
+  const styles = FAMILY_STYLES[family];
+  const Icon = styles.icon;
+  return (
+    <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">
+      <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-lg", styles.bg)}>
+        <Icon className={cn("h-4 w-4", styles.text)} />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-xs font-medium text-foreground">{displayName}</span>
+        <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+          {ext && <span className="font-mono font-semibold uppercase">{ext}</span>}
+          {ext && <span aria-hidden>·</span>}
+          <span>{label}</span>
+        </span>
+      </span>
+    </div>
+  );
+}
+
 export const FileDataPartView = memo(function FileDataPartView({ data }: { data: FileDataPart }) {
   const { url, mediaType, filename } = data;
   const safeUrl = sanitizeUrl(url);
+  const label = friendlyLabel(mediaType);
+  const family = classifyMediaType(mediaType, label);
+  const ext = extFromUrl(url);
+  const uploadId = idFromUrl(url);
+  const displayName = deriveName(filename, label, uploadId);
 
   if (mediaType.startsWith("image/")) {
-    return <ImageLightbox src={safeUrl} />;
+    return (
+      <div className="max-w-[min(28rem,100%)] overflow-hidden rounded-xl border border-border bg-card shadow-[var(--elevation-2)]">
+        <FileHeader family={family} label={label} displayName={displayName} ext={ext} />
+        <ImageLightbox src={safeUrl} className="w-full max-w-none rounded-none border-0 shadow-none" />
+      </div>
+    );
   }
+
   if (mediaType.startsWith("audio/")) {
-    return <AudioPlayer src={safeUrl} />;
+    return (
+      <div className="max-w-[min(28rem,100%)] overflow-hidden rounded-xl border border-border bg-card shadow-[var(--elevation-2)]">
+        <FileHeader family={family} label={label} displayName={displayName} ext={ext} />
+        <div className="px-2 pb-2">
+          <AudioPlayer src={safeUrl} />
+        </div>
+      </div>
+    );
   }
+
   if (mediaType.startsWith("video/")) {
     return (
-      <div className="group relative max-w-[min(28rem,100%)] overflow-hidden rounded-xl border border-border bg-card shadow-[var(--elevation-2)] transition-shadow hover:shadow-[var(--elevation-3)]">
+      <div className="max-w-[min(28rem,100%)] overflow-hidden rounded-xl border border-border bg-card shadow-[var(--elevation-2)]">
+        <FileHeader family={family} label={label} displayName={displayName} ext={ext} />
         <video controls src={safeUrl} className="w-full" />
       </div>
     );
   }
 
-  const label = friendlyLabel(mediaType);
-  const family = classifyMediaType(mediaType, label);
   const styles = FAMILY_STYLES[family];
   const Icon = styles.icon;
-  const ext = extFromUrl(url);
-  const uploadId = idFromUrl(url);
-
-  const displayName = filename?.trim() || (uploadId ? `${label} ${uploadId}` : label);
 
   return (
     <a
