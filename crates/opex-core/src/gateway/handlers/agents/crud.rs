@@ -92,6 +92,27 @@ pub(crate) fn merge_soul_sections(
     }
 }
 
+/// Preserve `[agent.access]` fields the PUT payload omitted (absent = keep disk
+/// value). The UI round-trips `access` with `mode` but frequently without
+/// `owner_id`; before this, such a save silently wiped `owner_id`, which gates
+/// initiative/day-plan generation (`owner_id.is_some()` in day_plan_tick /
+/// initiative_tick) and owner-scoped channel delivery. Same class as the F-04
+/// z_fire/hooks/compaction field-level preserves. Only inner fields are merged
+/// here — whole-section absence is handled by the `access.is_none()` block in
+/// `api_update_agent`, and explicit `null` (clear) is left untouched.
+pub(crate) fn merge_access_fields(
+    acc: &mut AccessPayload,
+    existing: Option<&crate::config::AgentAccessConfig>,
+) {
+    let Some(existing) = existing else { return };
+    if acc.mode.is_none() {
+        acc.mode = Some(existing.mode.clone());
+    }
+    if acc.owner_id.is_none() {
+        acc.owner_id = existing.owner_id.clone();
+    }
+}
+
 // ── agent_id table catalogue + helpers ──────────────────────────────────────
 //
 // Centralized list of every table whose `agent_id` column references
@@ -735,6 +756,11 @@ pub(crate) async fn api_update_agent(
                 owner_id: ac.owner_id.clone(),
             }));
         }
+        // Field-level preserve for access fields omitted from a present access
+        // section (UI sends `mode` but not `owner_id` on many saves).
+        if let Some(Some(ref mut acc)) = payload.access {
+            merge_access_fields(acc, a.access.as_ref());
+        }
         if payload.heartbeat.is_none() {
             payload.heartbeat = Some(a.heartbeat.as_ref().map(|h| HeartbeatPayload {
                 cron: h.cron.clone(),
@@ -863,8 +889,8 @@ pub(crate) async fn api_update_agent(
                 d.ecp_recent_turns = Some(a.drift.ecp_recent_turns);
             }
         }
-        // emotion.render_to_prompt is carried by the UI form; coping is TOML-only.
-        // Both restored from existing config on omission (audit F-04).
+        // emotion.render_to_prompt and coping are carried by the UI form; both
+        // restored from existing config on omission (audit F-04).
         if let Some(Some(ref mut e)) = payload.emotion {
             if e.render_to_prompt.is_none() {
                 e.render_to_prompt = Some(a.emotion.render_to_prompt);
@@ -1736,6 +1762,38 @@ mod tests {
         });
         assert!(new_cfg.agent.soul.enabled, "soul omitted → preserved from disk");
         assert!(!new_cfg.agent.drift.enabled, "drift present → UI value (disabled) wins");
+    }
+
+    #[test]
+    fn merge_access_fields_preserves_owner_id_when_omitted() {
+        use super::{merge_access_fields, AccessPayload};
+        let existing = crate::config::AgentAccessConfig {
+            mode: "restricted".into(),
+            owner_id: Some("388443751".into()),
+        };
+
+        // UI sent access with `mode` only — owner_id omitted must NOT wipe the owner binding.
+        let mut acc = AccessPayload { mode: Some("restricted".into()), owner_id: None };
+        merge_access_fields(&mut acc, Some(&existing));
+        assert_eq!(acc.owner_id.as_deref(), Some("388443751"), "omitted owner_id is preserved from disk");
+        assert_eq!(acc.mode.as_deref(), Some("restricted"));
+
+        // Explicit owner_id in the payload wins (UI is authoritative when present).
+        let mut acc2 = AccessPayload { mode: Some("standard".into()), owner_id: Some("999".into()) };
+        merge_access_fields(&mut acc2, Some(&existing));
+        assert_eq!(acc2.owner_id.as_deref(), Some("999"), "explicit owner_id must win");
+        assert_eq!(acc2.mode.as_deref(), Some("standard"));
+
+        // Both fields omitted → both preserved.
+        let mut acc3 = AccessPayload { mode: None, owner_id: None };
+        merge_access_fields(&mut acc3, Some(&existing));
+        assert_eq!(acc3.mode.as_deref(), Some("restricted"));
+        assert_eq!(acc3.owner_id.as_deref(), Some("388443751"));
+
+        // No existing access section → nothing to copy, no panic.
+        let mut acc4 = AccessPayload { mode: None, owner_id: None };
+        merge_access_fields(&mut acc4, None);
+        assert!(acc4.mode.is_none() && acc4.owner_id.is_none());
     }
 
     // ── validate_sections() reachability from the handlers ───────────────────
