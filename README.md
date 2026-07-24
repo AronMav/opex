@@ -1,4 +1,4 @@
-<h1 align="center">
+﻿<h1 align="center">
   <img src="docs/assets/opex-banner.png" alt="OPEX — a self-hosted AI gateway built like infrastructure" width="820">
 </h1>
 
@@ -18,7 +18,7 @@
   <a href="SECURITY.md">Security</a>
 </p>
 
-**OPEX is a self-hosted AI agent platform � always-on agents with long-term memory, reflection and identity, living in your chat apps. Built like infrastructure: a Rust core, not a chat wrapper.** A Rust core runs the HTTP API, agent lifecycle, LLM calls, tools, memory, scheduler and secrets on any Linux box — x86_64 or ARM64, down to a Raspberry Pi-class board. Your agents live in Telegram, Discord, Slack, Matrix, IRC, WhatsApp and Email while working on your server — with an encrypted secrets vault, SSRF-guarded tool calls, sandboxed code execution and a watchdog that messages you when something breaks.
+**OPEX is a self-hosted AI agent platform — always-on agents with long-term memory, reflection and identity, living in your chat apps. Built like infrastructure: a Rust core, not a chat wrapper.** A Rust core runs the HTTP API, agent lifecycle, LLM calls, tools, memory, scheduler and secrets on any Linux box — x86_64 or ARM64, down to a Raspberry Pi-class board. Your agents live in Telegram, Discord, Slack, Matrix, IRC, WhatsApp and Email while working on your server — with an encrypted secrets vault, SSRF-guarded tool calls, sandboxed code execution and a watchdog that messages you when something breaks.
 
 Everything above the core is a file you can edit: an agent's persona is Markdown, a tool is ten lines of YAML, a skill is a Markdown note. Change the file — behavior changes. No rebuild, no restart.
 
