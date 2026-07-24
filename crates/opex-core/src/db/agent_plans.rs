@@ -15,11 +15,9 @@ pub struct Proposal {
     pub acted_at: Option<DateTime<Utc>>,
 }
 
-// B-wide daily plan (Task 1 of the day-plan feature): DB+config foundation only.
-// Not yet wired into any driver — the heartbeat-advanced day_plan_tick consumer
-// lands in Task 2. `#[allow(dead_code)]` below is temporary scaffolding.
+// B-wide daily plan: consumed by the heartbeat-advanced day_plan_tick driver
+// (agent/initiative/day_plan.rs) and the initiative gateway handlers.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[allow(dead_code)]
 pub struct DayIntent {
     #[serde(default)]
     pub session_id: Option<Uuid>,
@@ -38,15 +36,12 @@ pub struct PlanRow {
     pub last_proposal_at: Option<DateTime<Utc>>,
     pub proposals_today: i32,
     pub proposal_day: Option<NaiveDate>,
-    // day_plan_* fields: consumed by the Task 2 day_plan_tick driver.
-    #[allow(dead_code)]
+    // day_plan_* fields: consumed by the day_plan_tick driver.
     pub day_plan: serde_json::Value,
-    #[allow(dead_code)]
     pub day_plan_current: i32,
-    #[allow(dead_code)]
     pub day_plan_date: Option<NaiveDate>,
-    #[allow(dead_code)]
     pub day_plan_status: Option<String>,
+    // Decoded for completeness but not read by current consumers.
     #[allow(dead_code)]
     pub updated_at: DateTime<Utc>,
 }

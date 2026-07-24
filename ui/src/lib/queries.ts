@@ -1,7 +1,7 @@
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
-import { apiGet, apiPost, apiPut, apiDelete, apiPatch, listCheckpoints, restoreCheckpoint, getAgentPlan, approveProposal, dismissProposal, cancelGoal } from "./api"
+import { apiGet, apiPost, apiPut, apiDelete, apiPatch, listCheckpoints, restoreCheckpoint, getAgentPlan, approveProposal, dismissProposal, cancelGoal, reflectAgent } from "./api"
 import { useNotificationStore } from "@/stores/notification-store"
 import { useWsStore } from "@/stores/ws-store"
 import { useWsSubscription } from "@/hooks/use-ws-subscription"
@@ -1088,6 +1088,13 @@ export function useCancelGoal() {
   return useMutation<{ ok: boolean; cancelled?: boolean }, Error, { agent: string; sessionId: string }>({
     mutationFn: ({ agent, sessionId }) => cancelGoal(agent, sessionId),
     onSuccess: (_r, { agent }) => qc.invalidateQueries({ queryKey: qk.agentPlan(agent) }),
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+export function useReflectAgent() {
+  return useMutation<{ ok: boolean; queued?: boolean; session_id?: string }, Error, { agent: string; anchor: string }>({
+    mutationFn: ({ agent, anchor }) => reflectAgent(agent, anchor),
     onError: (e: Error) => toast.error(e.message),
   })
 }

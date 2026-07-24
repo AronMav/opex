@@ -147,6 +147,10 @@ export const emptyForm: FormState = {
   emotionBlendRate: "0.3",
   emotionHalfLife: "12",
   emotionRenderToPrompt: false,
+  emotionCoping: false,
+  emotionChain: false,
+  emotionSeekSupport: false,
+  emotionBiasDayPlan: false,
 };
 
 export function detailToForm(d: AgentDetail): FormState {
@@ -242,6 +246,10 @@ export function detailToForm(d: AgentDetail): FormState {
     emotionBlendRate: String(d.emotion?.blend_rate ?? 0.3),
     emotionHalfLife: String(d.emotion?.decay_half_life_hours ?? 12),
     emotionRenderToPrompt: d.emotion?.render_to_prompt ?? false,
+    emotionCoping: d.emotion?.coping ?? false,
+    emotionChain: d.emotion?.chain ?? false,
+    emotionSeekSupport: d.emotion?.seek_support ?? false,
+    emotionBiasDayPlan: d.emotion?.bias_day_plan ?? false,
   };
 }
 
@@ -387,6 +395,10 @@ export function formToPayload(f: FormState) {
       blend_rate: parseFloat(f.emotionBlendRate) || 0.3,
       decay_half_life_hours: parseFloat(f.emotionHalfLife) || 12,
       render_to_prompt: f.emotionRenderToPrompt,
+      coping: f.emotionCoping,
+      chain: f.emotionChain,
+      seek_support: f.emotionSeekSupport,
+      bias_day_plan: f.emotionBiasDayPlan,
     },
   };
 }

@@ -185,6 +185,20 @@ pub async fn load_tool_events(db: &PgPool, session_id: Uuid) -> Result<Vec<Timel
         .collect())
 }
 
+/// Returns true if the session already has at least one timeline row of
+/// `event_type`. Used to rate-limit proactive side effects to once per session
+/// (e.g. the SeekSupport owner message — see knowledge_extractor.rs).
+pub async fn has_event_type(db: &PgPool, session_id: Uuid, event_type: &str) -> Result<bool> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM session_timeline WHERE session_id = $1 AND event_type = $2)",
+    )
+    .bind(session_id)
+    .bind(event_type)
+    .fetch_one(db)
+    .await?;
+    Ok(exists)
+}
+
 /// H5: maximum number of `tool_end` rows `load_tool_events` will hydrate the
 /// LoopDetector with. See that function's doc comment for the rationale.
 pub const TOOL_EVENTS_WARMUP_LIMIT: usize = 256;

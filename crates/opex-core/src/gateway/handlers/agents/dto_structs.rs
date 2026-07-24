@@ -161,6 +161,14 @@ pub struct AgentDetailEmotionDto {
     pub decay_half_life_hours: f32,
     /// v2: surface the bucketed mood as an observation in the system prompt.
     pub render_to_prompt: bool,
+    /// Phase 2 coping: appraisal biases the reflection trigger.
+    pub coping: bool,
+    /// Chain-of-emotion: render the mood block in its expressive framing.
+    pub chain: bool,
+    /// SeekSupport coping action: agent messages the owner when in high distress.
+    pub seek_support: bool,
+    /// Mood → day-plan priority bias.
+    pub bias_day_plan: bool,
 }
 crate::register_ts_dto!(AgentDetailEmotionDto);
 

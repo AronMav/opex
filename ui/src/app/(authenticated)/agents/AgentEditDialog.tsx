@@ -163,6 +163,10 @@ export interface FormState {
   emotionBlendRate: string;
   emotionHalfLife: string;
   emotionRenderToPrompt: boolean;
+  emotionCoping: boolean;
+  emotionChain: boolean;
+  emotionSeekSupport: boolean;
+  emotionBiasDayPlan: boolean;
 }
 
 export interface AgentEditDialogProps {
@@ -766,6 +770,22 @@ export function AgentEditDialog({
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-medium text-muted-foreground">{t("agents.emotion_render_to_prompt")}</span>
                         <Switch checked={form.emotionRenderToPrompt} disabled={g.emotionDisabled} onCheckedChange={(v) => upd({ emotionRenderToPrompt: v })} className="data-[state=checked]:bg-primary" />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-muted-foreground">{t("agents.emotion_coping")}</span>
+                        <Switch checked={form.emotionCoping} disabled={g.emotionDisabled} onCheckedChange={(v) => upd({ emotionCoping: v })} className="data-[state=checked]:bg-primary" />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-muted-foreground">{t("agents.emotion_chain")}</span>
+                        <Switch checked={form.emotionChain} disabled={g.emotionDisabled} onCheckedChange={(v) => upd({ emotionChain: v })} className="data-[state=checked]:bg-primary" />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-muted-foreground">{t("agents.emotion_seek_support")}</span>
+                        <Switch checked={form.emotionSeekSupport} disabled={g.emotionDisabled || !form.emotionCoping} onCheckedChange={(v) => upd({ emotionSeekSupport: v })} className="data-[state=checked]:bg-primary" />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-muted-foreground">{t("agents.emotion_bias_day_plan")}</span>
+                        <Switch checked={form.emotionBiasDayPlan} disabled={g.emotionDisabled} onCheckedChange={(v) => upd({ emotionBiasDayPlan: v })} className="data-[state=checked]:bg-primary" />
                       </div>
                       <AdvancedSection label={t("common.advanced")}>
                         <Field label={t("agents.emotion_k")} labelClassName="text-xs">

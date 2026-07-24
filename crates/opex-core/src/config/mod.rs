@@ -1766,7 +1766,7 @@ mod initiative_config_tests {
 }
 
 /// Configuration for the emotion layer v1 (appraisal + mood; spec
-/// `docs/superpowers/specs/2026-07-14-agent-soul-emotion-layer-v1.md`).
+/// `docs/superpowers/specs/2026-07-14-agent-soul-emotion-layer-v1-design.md`).
 /// Maps to `[agent.emotion]`. All fields default — section can be omitted.
 /// Opt-in: requires `[agent.soul] enabled = true` (cross-checked in
 /// `AgentConfig::load()`, `EmotionConfig` alone can't see `SoulConfig`).
@@ -1794,6 +1794,28 @@ pub struct EmotionConfig {
     /// agency/desirability vector). Requires `enabled = true`.
     #[serde(default)]
     pub coping: bool,
+    /// Opt-in chain-of-emotion (research §7): the mood block is rendered in its
+    /// expressive framing — instead of a passive "observation, don't copy", the
+    /// prompt invites the model to let the accumulated mood naturally color its
+    /// tone, so the agent sounds emotionally engaged rather than merely aware of
+    /// its mood. Requires `enabled = true`. Implies prompt rendering (the block
+    /// is emitted when `render_to_prompt || chain`). Same safety envelope:
+    /// bucketed valence, whitelist-only label, "keep your character" guard.
+    #[serde(default)]
+    pub chain: bool,
+    /// Opt-in SeekSupport coping action (research §7): when appraisal selects the
+    /// `SeekSupport` strategy (negative + low controllability + very high
+    /// intensity), the agent proactively messages its owner "I need help with X".
+    /// Decision stays M4-safe (controllability/valence/intensity only). Rate
+    /// limited to once per session. Requires `enabled = true` AND `coping = true`.
+    #[serde(default)]
+    pub seek_support: bool,
+    /// Opt-in mood → day-plan priority bias (research §2): when the morning
+    /// day-plan is generated, a non-neutral mood shifts intent priorities
+    /// (подавленное → срочное/завершающее; приподнятое → амбициозное). Framed as
+    /// data-not-instruction. Requires `enabled = true`.
+    #[serde(default)]
+    pub bias_day_plan: bool,
 }
 fn default_emotion_k() -> f32 {
     3.0
@@ -1813,6 +1835,9 @@ impl Default for EmotionConfig {
             decay_half_life_hours: 12.0,
             render_to_prompt: false,
             coping: false,
+            chain: false,
+            seek_support: false,
+            bias_day_plan: false,
         }
     }
 }
@@ -1833,6 +1858,18 @@ impl EmotionConfig {
         }
         if self.coping && !self.enabled {
             errors.push("emotion.coping requires emotion.enabled = true".to_string());
+        }
+        if self.chain && !self.enabled {
+            errors.push("emotion.chain requires emotion.enabled = true".to_string());
+        }
+        if self.seek_support && !self.enabled {
+            errors.push("emotion.seek_support requires emotion.enabled = true".to_string());
+        }
+        if self.seek_support && !self.coping {
+            errors.push("emotion.seek_support requires emotion.coping = true".to_string());
+        }
+        if self.bias_day_plan && !self.enabled {
+            errors.push("emotion.bias_day_plan requires emotion.enabled = true".to_string());
         }
         errors
     }
@@ -1860,6 +1897,23 @@ mod emotion_config_tests {
         assert!(bad_coping.validate().iter().any(|e| e.contains("emotion.coping requires")));
         let ok_coping = EmotionConfig { enabled: true, coping: true, ..Default::default() };
         assert!(ok_coping.validate().is_empty(), "coping+enabled must pass");
+        // chain requires enabled
+        let bad_chain = EmotionConfig { enabled: false, chain: true, ..Default::default() };
+        assert!(bad_chain.validate().iter().any(|e| e.contains("emotion.chain requires")));
+        let ok_chain = EmotionConfig { enabled: true, chain: true, ..Default::default() };
+        assert!(ok_chain.validate().is_empty(), "chain+enabled must pass");
+        // seek_support requires enabled AND coping
+        let bad_ss_disabled = EmotionConfig { enabled: false, coping: true, seek_support: true, ..Default::default() };
+        assert!(bad_ss_disabled.validate().iter().any(|e| e.contains("seek_support requires emotion.enabled")));
+        let bad_ss_no_coping = EmotionConfig { enabled: true, coping: false, seek_support: true, ..Default::default() };
+        assert!(bad_ss_no_coping.validate().iter().any(|e| e.contains("seek_support requires emotion.coping")));
+        let ok_ss = EmotionConfig { enabled: true, coping: true, seek_support: true, ..Default::default() };
+        assert!(ok_ss.validate().is_empty(), "seek_support+enabled+coping must pass");
+        // bias_day_plan requires enabled
+        let bad_bdp = EmotionConfig { enabled: false, bias_day_plan: true, ..Default::default() };
+        assert!(bad_bdp.validate().iter().any(|e| e.contains("bias_day_plan requires")));
+        let ok_bdp = EmotionConfig { enabled: true, bias_day_plan: true, ..Default::default() };
+        assert!(ok_bdp.validate().is_empty(), "bias_day_plan+enabled must pass");
     }
 }
 

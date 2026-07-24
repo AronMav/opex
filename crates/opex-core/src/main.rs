@@ -1097,9 +1097,10 @@ async fn resume_autonomous_goals(state: gateway::AppState, db: sqlx::PgPool) {
 }
 
 /// Notify owners of interactive (`/goal`) sessions whose autonomous driver was
-/// lost to a restart. Unlike cron goals these are NEVER auto-redriven — doing so
-/// would silently continue a human's live chat (`list_redrivable` enforces the
-/// `origin='cron'` boundary). Instead the owner gets a notification prompting
+/// lost to a restart. Unlike cron/initiative goals these are NEVER auto-redriven —
+/// doing so would silently continue a human's live chat (`list_redrivable`
+/// enforces the `origin IN ('cron','initiative')` boundary, excluding
+/// `origin='goal'`). Instead the owner gets a notification prompting
 /// `/goal resume`, and the goal is paused so it is not re-notified next boot and
 /// lands in the state `/goal resume` reactivates.
 async fn notify_interrupted_interactive_goals(state: gateway::AppState, db: sqlx::PgPool) {

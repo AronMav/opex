@@ -4,6 +4,7 @@ pub mod dto;
 mod icon;
 pub(crate) mod initiative;
 mod lifecycle;
+mod reflect;
 mod schema;
 
 pub(crate) use crud::*;
@@ -30,4 +31,5 @@ pub(crate) fn routes() -> Router<AppState> {
         .merge(icon::routes())
         .merge(checkpoints::routes())
         .merge(initiative::routes())
+        .merge(reflect::routes())
 }

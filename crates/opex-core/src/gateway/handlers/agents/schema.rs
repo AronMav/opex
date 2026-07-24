@@ -233,6 +233,9 @@ pub(crate) struct EmotionPayload {
     pub decay_half_life_hours: Option<f32>,
     pub render_to_prompt: Option<bool>,
     pub coping: Option<bool>,
+    pub chain: Option<bool>,
+    pub seek_support: Option<bool>,
+    pub bias_day_plan: Option<bool>,
 }
 
 // ── Config builder ──────────────────────────────────────
@@ -312,6 +315,9 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
                 decay_half_life_hours: e.decay_half_life_hours.unwrap_or(12.0),
                 render_to_prompt: e.render_to_prompt.unwrap_or(false),
                 coping: e.coping.unwrap_or(false),
+                chain: e.chain.unwrap_or(false),
+                seek_support: e.seek_support.unwrap_or(false),
+                bias_day_plan: e.bias_day_plan.unwrap_or(false),
             }).unwrap_or_default(),
             compaction: p.compaction.flatten().map(|c| CompactionConfig {
                 enabled: c.enabled.unwrap_or(true),

@@ -1,16 +1,18 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { ArrowLeft, Target, Lightbulb, ListChecks, Check, X } from "lucide-react";
+import { ArrowLeft, Target, Lightbulb, ListChecks, Check, X, Sparkles } from "lucide-react";
+import { toast } from "sonner";
 import { useTranslation } from "@/hooks/use-translation";
 import { relativeTime } from "@/lib/format";
-import { useAgentPlan, useApproveProposal, useDismissProposal, useCancelGoal } from "@/lib/queries";
+import { useAgentPlan, useApproveProposal, useDismissProposal, useCancelGoal, useReflectAgent } from "@/lib/queries";
 import { PageContainer } from "@/components/ui/page-container";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionHeader } from "@/components/ui/section-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -41,8 +43,24 @@ function AgentPlanPageInner() {
   const approveProposal = useApproveProposal();
   const dismissProposal = useDismissProposal();
   const cancelGoal = useCancelGoal();
+  const reflect = useReflectAgent();
+  const [anchor, setAnchor] = useState("");
 
   const acting = approveProposal.isPending || dismissProposal.isPending || cancelGoal.isPending;
+
+  const submitReflect = () => {
+    const topic = anchor.trim();
+    if (!topic) return;
+    reflect.mutate(
+      { agent, anchor: topic },
+      {
+        onSuccess: () => {
+          toast.success(t("agent_plan.reflect_success"));
+          setAnchor("");
+        },
+      },
+    );
+  };
 
   return (
     <PageContainer>
@@ -79,6 +97,32 @@ function AgentPlanPageInner() {
             ) : (
               <EmptyState icon={Target} text={t("agent_plan.no_focus")} height="h-24" />
             )}
+          </div>
+
+          {/* Topic-anchored reflection (research §4) */}
+          <div>
+            <SectionHeader icon={Sparkles} title={t("agent_plan.reflect_title")} />
+            <Card className="p-4">
+              <p className="mb-3 text-xs text-muted-foreground">{t("agent_plan.reflect_hint")}</p>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={anchor}
+                  onChange={(e) => setAnchor(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") submitReflect(); }}
+                  placeholder={t("agent_plan.reflect_placeholder")}
+                  className="bg-background border-border text-sm h-9"
+                />
+                <Button
+                  size="sm"
+                  onClick={submitReflect}
+                  disabled={reflect.isPending || anchor.trim() === ""}
+                  className="shrink-0"
+                >
+                  <Sparkles className="h-4 w-4 mr-2" />
+                  {t("agent_plan.reflect_button")}
+                </Button>
+              </div>
+            </Card>
           </div>
 
           {/* Proposals */}

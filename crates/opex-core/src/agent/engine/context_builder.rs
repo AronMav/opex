@@ -381,6 +381,7 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
 
         // 5. Log (regardless of correct).
         let payload = serde_json::json!({
+            "agent": agent,
             "z": z,
             "dist": dist,
             "mu": mu,
@@ -404,13 +405,15 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         anchor
     }
 
-    /// Emotion prompt-render v2 (spec §3.4). Gated by
-    /// `emotion.render_to_prompt && emotion.enabled`; reads the persisted mood,
-    /// decays it by elapsed-since-`updated_at`, and renders the bucketed block.
-    /// Fail-soft (DB error / no row → None). Pure render in `emotion::render_mood_block`.
+    /// Emotion prompt-render v2 (spec §3.4) + chain-of-emotion (research §7).
+    /// Gated by `emotion.enabled && (render_to_prompt || chain)`; reads the
+    /// persisted mood, decays it by elapsed-since-`updated_at`, and renders the
+    /// bucketed block. `chain` selects the expressive framing (invite the mood to
+    /// color the reply); otherwise the observational block is used. Fail-soft
+    /// (DB error / no row → None). Pure render in `emotion::render_mood_block*`.
     async fn emotion_mood_block(&self) -> Option<String> {
         let cfg = &self.cfg().agent.emotion;
-        if !cfg.render_to_prompt || !cfg.enabled {
+        if !cfg.enabled || (!cfg.render_to_prompt && !cfg.chain) {
             return None;
         }
         let agent = self.agent_name();
@@ -424,7 +427,11 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         };
         let elapsed_hours = (chrono::Utc::now() - row.updated_at).num_seconds() as f32 / 3600.0;
         let decayed = crate::agent::emotion::decay(row.valence, elapsed_hours, cfg.decay_half_life_hours);
-        crate::agent::emotion::render_mood_block(decayed, row.label.as_deref())
+        if cfg.chain {
+            crate::agent::emotion::render_mood_block_expressive(decayed, row.label.as_deref())
+        } else {
+            crate::agent::emotion::render_mood_block(decayed, row.label.as_deref())
+        }
     }
 
     fn agent_drift_ecp(&self) -> (bool, usize) {

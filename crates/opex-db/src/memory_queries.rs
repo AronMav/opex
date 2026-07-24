@@ -35,9 +35,9 @@ pub struct MemoryChunk {
 /// mapped to a domain error by [`map_fts_lang_error`].
 const INSERT_CHUNK_SQL: &str = r"
     INSERT INTO memory_chunks
-        (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, scope, kind, importance, lineage)
+        (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, scope, kind, importance, lineage, valence)
     VALUES
-        ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector($8::regconfig, $3), $7, $9, $10, $11)
+        ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector($8::regconfig, $3), $7, $9, $10, $11, $12)
 ";
 
 /// Translate Postgres errors raised by an unknown text-search config
@@ -492,6 +492,7 @@ async fn insert_chunk_inner<'e, E>(
     kind: &str,
     importance: f32,
     lineage: Option<&[uuid::Uuid]>,
+    valence: Option<f32>,
 ) -> Result<()>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
@@ -508,6 +509,7 @@ where
         .bind(kind)         // $9
         .bind(importance)   // $10
         .bind(lineage)      // $11
+        .bind(valence)      // $12
         .execute(executor)
         .await
         .map_err(|e| map_fts_lang_error(lang, e))
@@ -530,8 +532,9 @@ pub async fn insert_chunk(
     kind: &str,
     importance: f32,
     lineage: Option<&[uuid::Uuid]>,
+    valence: Option<f32>,
 ) -> Result<()> {
-    insert_chunk_inner(db, id, content, vec_str, source, pinned, lang, scope, agent_id, kind, importance, lineage).await
+    insert_chunk_inner(db, id, content, vec_str, source, pinned, lang, scope, agent_id, kind, importance, lineage, valence).await
 }
 
 /// Insert a new memory chunk within an existing transaction.
@@ -550,8 +553,9 @@ pub async fn insert_chunk_tx(
     kind: &str,
     importance: f32,
     lineage: Option<&[uuid::Uuid]>,
+    valence: Option<f32>,
 ) -> Result<()> {
-    insert_chunk_inner(&mut **tx, id, content, vec_str, source, pinned, lang, scope, agent_id, kind, importance, lineage).await
+    insert_chunk_inner(&mut **tx, id, content, vec_str, source, pinned, lang, scope, agent_id, kind, importance, lineage, valence).await
 }
 
 // ── Get ──────────────────────────────────────────────────────────────────────
@@ -682,6 +686,9 @@ pub struct SoulCandidate {
     pub importance: f32,
     pub created_at: DateTime<Utc>,
     pub similarity: f64,
+    /// Per-chunk emotional valence ([-1,1]); NULL for facts/reflections/legacy.
+    /// Used for mood-congruence bias in soul retrieval scoring (feature #5).
+    pub valence: Option<f32>,
 }
 
 fn row_to_soul_candidate(r: &sqlx::postgres::PgRow) -> SoulCandidate {
@@ -694,6 +701,7 @@ fn row_to_soul_candidate(r: &sqlx::postgres::PgRow) -> SoulCandidate {
         importance: r.get("importance"),
         created_at: r.get("created_at"),
         similarity: r.try_get("similarity").unwrap_or(0.0),
+        valence: r.try_get("valence").ok().flatten(),
     }
 }
 
@@ -715,7 +723,7 @@ pub async fn soul_candidates(
 ) -> Result<Vec<SoulCandidate>> {
     let rows = sqlx::query(
         r"(SELECT id, content, COALESCE(source,'') AS source, kind, importance,
-                  created_at,
+                  created_at, valence,
                   (1.0 - (embedding <=> $1::vector))::float8 AS similarity
            FROM memory_chunks
            WHERE embedding IS NOT NULL
@@ -726,7 +734,7 @@ pub async fn soul_candidates(
            LIMIT $4)
           UNION ALL
           (SELECT id, content, COALESCE(source,'') AS source, kind, importance,
-                  created_at,
+                  created_at, valence,
                   (1.0 - (embedding <=> $1::vector))::float8 AS similarity
            FROM memory_chunks
            WHERE embedding IS NOT NULL
@@ -783,7 +791,7 @@ pub async fn event_importance_since(
 pub async fn recent_soul_chunks(db: &PgPool, agent_id: &str, limit: i64) -> Result<Vec<SoulCandidate>> {
     let rows = sqlx::query(
         r"SELECT id, content, COALESCE(source,'') AS source, kind, importance,
-                  created_at, 0.0::float8 AS similarity
+                  created_at, valence, 0.0::float8 AS similarity
            FROM memory_chunks
            WHERE agent_id = $1 AND kind IN ('event', 'reflection')
            ORDER BY created_at DESC
@@ -937,6 +945,7 @@ mod tests {
             "fact",
             5.0,
             None,
+            None,
         ).await;
         assert!(result.is_ok(), "russian lang insert failed: {:?}", result);
     }
@@ -957,6 +966,7 @@ mod tests {
             "fact",
             5.0,
             None,
+            None,
         ).await;
         assert!(result.is_ok(), "english lang insert failed: {:?}", result);
     }
@@ -976,6 +986,7 @@ mod tests {
             "test_agent",
             "fact",
             5.0,
+            None,
             None,
         ).await;
         assert!(result.is_err(), "klingon should be rejected");
@@ -1004,6 +1015,7 @@ mod tests {
             "fact",
             5.0,
             None,
+            None,
         ).await;
         assert!(result.is_err(), "injection attempt should be rejected");
         let count: (i64,) = sqlx::query_as("SELECT count(*) FROM memory_chunks")
@@ -1027,6 +1039,7 @@ mod tests {
             "test_agent",
             "fact",
             5.0,
+            None,
             None,
         ).await;
         assert!(result.is_ok(), "tx insert failed: {:?}", result);

@@ -764,6 +764,7 @@ impl ContextBuilder for DefaultContextBuilder {
                 // so operators can see ECP firing in session_timeline (the debug
                 // log alone is filtered at the default info level).
                 let payload = serde_json::json!({
+                    "agent": deps.agent_name(),
                     "framed": framed,
                     "ecp_recent_turns": ecp_recent,
                     "user_turns_in_context": user_idx.len(),

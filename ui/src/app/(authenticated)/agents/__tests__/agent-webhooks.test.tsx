@@ -204,7 +204,7 @@ describe("detailToForm — webhooks init", () => {
       soul: { enabled: false, reflection_threshold: 150, reflection_cooldown_minutes: 60, context_top_k: 6, context_budget_tokens: 800, max_events_per_session: 10 },
       drift: { enabled: false, threshold: 0.15, min_history: 6, baseline_turns: 3, z_fire: 2.5, z_release: 1.0, correct: false, ecp: false, ecp_recent_turns: 1 },
       initiative: { enabled: false, daily_proposal_cap: 1, decompose: false, daily_plan: false, auto_approve_day_plan: false, daily_token_budget: 0 },
-      emotion: { enabled: false, intensity_importance_k: 3, blend_rate: 0.3, decay_half_life_hours: 12, render_to_prompt: false },
+      emotion: { enabled: false, intensity_importance_k: 3, blend_rate: 0.3, decay_half_life_hours: 12, render_to_prompt: false, coping: false, chain: false, seek_support: false, bias_day_plan: false },
     });
     expect(form.hooksWebhooks).toEqual([]);
   });
@@ -226,7 +226,7 @@ describe("detailToForm — webhooks init", () => {
       soul: { enabled: false, reflection_threshold: 150, reflection_cooldown_minutes: 60, context_top_k: 6, context_budget_tokens: 800, max_events_per_session: 10 },
       drift: { enabled: false, threshold: 0.15, min_history: 6, baseline_turns: 3, z_fire: 2.5, z_release: 1.0, correct: false, ecp: false, ecp_recent_turns: 1 },
       initiative: { enabled: false, daily_proposal_cap: 1, decompose: false, daily_plan: false, auto_approve_day_plan: false, daily_token_budget: 0 },
-      emotion: { enabled: false, intensity_importance_k: 3, blend_rate: 0.3, decay_half_life_hours: 12, render_to_prompt: false },
+      emotion: { enabled: false, intensity_importance_k: 3, blend_rate: 0.3, decay_half_life_hours: 12, render_to_prompt: false, coping: false, chain: false, seek_support: false, bias_day_plan: false },
     });
     expect(form.hooksWebhooks).toEqual([wh]);
   });

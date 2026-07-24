@@ -112,6 +112,7 @@ pub trait MemoryService: Send + Sync {
     }
 
     /// Index one soul chunk. Default: unsupported (mocks/null stores).
+    #[allow(clippy::too_many_arguments)]
     async fn index_soul(
         &self,
         _content: &str,
@@ -120,6 +121,7 @@ pub trait MemoryService: Send + Sync {
         _kind: &str,
         _importance: f32,
         _lineage: Option<Vec<uuid::Uuid>>,
+        _valence: Option<f32>,
     ) -> Result<String> {
         anyhow::bail!("soul indexing not supported by this MemoryService")
     }
@@ -227,6 +229,7 @@ impl MemoryService for crate::memory::MemoryStore {
         crate::memory::MemoryStore::soul_retrieve(self, query, top_k, agent_id, exclude_source).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn index_soul(
         &self,
         content: &str,
@@ -235,8 +238,9 @@ impl MemoryService for crate::memory::MemoryStore {
         kind: &str,
         importance: f32,
         lineage: Option<Vec<uuid::Uuid>>,
+        valence: Option<f32>,
     ) -> Result<String> {
-        crate::memory::MemoryStore::index_soul(self, content, source, agent_id, kind, importance, lineage).await
+        crate::memory::MemoryStore::index_soul(self, content, source, agent_id, kind, importance, lineage, valence).await
     }
 
     async fn index_soul_batch_tx(
@@ -255,17 +259,20 @@ pub mod mock {
     use super::*;
 
     /// Stub MemoryService for unit tests. No database or network required.
+    /// Soul methods are backed by an in-memory Vec so service-level tests can
+    /// index and retrieve soul chunks without a live pgvector stack.
     pub struct MockMemoryService {
         pub available: bool,
+        soul: std::sync::Mutex<Vec<crate::memory::SoulCandidate>>,
     }
 
     impl MockMemoryService {
         pub fn available() -> Self {
-            Self { available: true }
+            Self { available: true, soul: std::sync::Mutex::new(vec![]) }
         }
 
         pub fn unavailable() -> Self {
-            Self { available: false }
+            Self { available: false, soul: std::sync::Mutex::new(vec![]) }
         }
     }
 
@@ -335,6 +342,62 @@ pub mod mock {
 
         async fn enqueue_reindex_task(&self, _params: serde_json::Value) -> Result<uuid::Uuid> {
             Ok(uuid::Uuid::nil())
+        }
+
+        async fn soul_retrieve(
+            &self,
+            _query: &str,
+            top_k: usize,
+            _agent_id: &str,
+            exclude_source: Option<&str>,
+        ) -> Result<Vec<crate::memory::SoulCandidate>> {
+            let guard = self.soul.lock().unwrap();
+            let out = guard.iter()
+                .filter(|c| exclude_source.map(|s| c.source != s).unwrap_or(true))
+                .take(top_k)
+                .cloned()
+                .collect();
+            Ok(out)
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        async fn index_soul(
+            &self,
+            content: &str,
+            source: &str,
+            _agent_id: &str,
+            kind: &str,
+            importance: f32,
+            _lineage: Option<Vec<uuid::Uuid>>,
+            valence: Option<f32>,
+        ) -> Result<String> {
+            let id = uuid::Uuid::new_v4();
+            self.soul.lock().unwrap().push(crate::memory::SoulCandidate {
+                id,
+                content: content.to_string(),
+                source: source.to_string(),
+                kind: kind.to_string(),
+                importance,
+                created_at: chrono::Utc::now(),
+                similarity: 1.0,
+                valence,
+            });
+            Ok(id.to_string())
+        }
+
+        async fn index_soul_batch_tx(
+            &self,
+            items: &[crate::memory::soul::SoulInsert],
+            agent_id: &str,
+        ) -> Result<Vec<String>> {
+            let mut ids = Vec::with_capacity(items.len());
+            for it in items {
+                let id = self.index_soul(
+                    &it.content, &it.source, agent_id, &it.kind, it.importance, it.lineage.clone(), it.valence,
+                ).await?;
+                ids.push(id);
+            }
+            Ok(ids)
         }
     }
 }
@@ -477,6 +540,44 @@ mod tests {
         let (results, mode) = mock.search("query", 5, &exclude, "Agent1").await.unwrap();
         assert!(results.is_empty());
         assert_eq!(mode, "mock");
+    }
+
+    // ── Soul (service-level) ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn soul_index_and_retrieve_roundtrip() {
+        let mock = MockMemoryService::available();
+        let id = mock.index_soul("agent reflected on X", "soul_event:s1", "Arty", "event", 0.8, None, None).await.unwrap();
+        assert!(!id.is_empty());
+        let got = mock.soul_retrieve("X", 5, "Arty", None).await.unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].kind, "event");
+        assert_eq!(got[0].content, "agent reflected on X");
+    }
+
+    #[tokio::test]
+    async fn soul_batch_index_returns_id_per_item() {
+        let mock = MockMemoryService::available();
+        let items = vec![
+            crate::memory::soul::SoulInsert { content: "a".into(), source: "s".into(), kind: "reflection".into(), importance: 0.5, lineage: None, valence: None },
+            crate::memory::soul::SoulInsert { content: "b".into(), source: "s".into(), kind: "reflection".into(), importance: 0.5, lineage: None, valence: None },
+        ];
+        let ids = mock.index_soul_batch_tx(&items, "Arty").await.unwrap();
+        assert_eq!(ids.len(), 2);
+        let got = mock.soul_retrieve("", 10, "Arty", None).await.unwrap();
+        assert_eq!(got.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn soul_retrieve_respects_exclude_source_and_top_k() {
+        let mock = MockMemoryService::available();
+        mock.index_soul("keep", "src_a", "Arty", "fact", 0.5, None, None).await.unwrap();
+        mock.index_soul("skip", "src_b", "Arty", "fact", 0.5, None, None).await.unwrap();
+        let got = mock.soul_retrieve("", 10, "Arty", Some("src_b")).await.unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].source, "src_a");
+        let limited = mock.soul_retrieve("", 1, "Arty", None).await.unwrap();
+        assert_eq!(limited.len(), 1);
     }
 
 }

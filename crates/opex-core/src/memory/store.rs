@@ -314,7 +314,7 @@ impl MemoryStore {
         let vec_str = fmt_vec(&embedding);
         let id = uuid::Uuid::new_v4().to_string();
         crate::db::memory_queries::insert_chunk(
-            &self.db, &id, content, &vec_str, source, pinned, &lang, scope, agent_id, "fact", 5.0, None,
+            &self.db, &id, content, &vec_str, source, pinned, &lang, scope, agent_id, "fact", 5.0, None, None,
         ).await?;
         Ok(id)
     }
@@ -344,7 +344,7 @@ impl MemoryStore {
         self.delete_by_source(source).await?;
         let id = uuid::Uuid::new_v4().to_string();
         crate::db::memory_queries::insert_chunk(
-            &self.db, &id, content, &vec_str, source, pinned, &lang, scope, agent_id, "fact", 5.0, None,
+            &self.db, &id, content, &vec_str, source, pinned, &lang, scope, agent_id, "fact", 5.0, None, None,
         )
         .await?;
         Ok(id)
@@ -372,7 +372,7 @@ impl MemoryStore {
             let vec_str = fmt_vec(&embeddings[i]);
             let id = uuid::Uuid::new_v4().to_string();
             crate::db::memory_queries::insert_chunk_tx(
-                &mut tx, &id, content, &vec_str, source, *pinned, &lang, scope, agent_id, "fact", 5.0, None,
+                &mut tx, &id, content, &vec_str, source, *pinned, &lang, scope, agent_id, "fact", 5.0, None, None,
             ).await
             .context("failed to insert memory chunk in batch")?;
             ids.push(id);
@@ -402,11 +402,21 @@ impl MemoryStore {
             crate::memory::soul::SOUL_CANDIDATE_LIMIT,
             crate::memory::soul::SOUL_REFLECTION_FLOOR,
         ).await?;
-        Ok(crate::memory::soul::score_and_select(cands, chrono::Utc::now(), top_k))
+        // Mood-congruence bias (feature #5): the agent's current mood valence
+        // makes valence-matching memories rank higher. Fail-soft: no mood row /
+        // DB error → 0.0 (neutral, no bias). Uses the raw stored (already
+        // blended-on-write) valence; decay-on-read is a prompt-display
+        // refinement and is not needed for a retrieval ranking signal.
+        let mood_valence: f32 = match crate::db::agent_emotion::get(&self.db, agent_id).await {
+            Ok(Some(row)) => row.valence,
+            _ => 0.0,
+        };
+        Ok(crate::memory::soul::score_and_select(cands, chrono::Utc::now(), top_k, mood_valence))
     }
 
     /// Index one soul chunk (event). Internal-only path — agent-facing writers
     /// always write kind='fact' (spec §5.2 spoofing invariant).
+    #[allow(clippy::too_many_arguments)]
     pub async fn index_soul(
         &self,
         content: &str,
@@ -415,6 +425,7 @@ impl MemoryStore {
         kind: &str,
         importance: f32,
         lineage: Option<Vec<uuid::Uuid>>,
+        valence: Option<f32>,
     ) -> Result<String> {
         if self.embedder.dim_mismatch() {
             anyhow::bail!("dim_mismatch: reindex required (POST /api/memory/reindex)");
@@ -425,7 +436,7 @@ impl MemoryStore {
         let id = uuid::Uuid::new_v4().to_string();
         crate::db::memory_queries::insert_chunk(
             &self.db, &id, content, &vec_str, source, false, &lang, "private", agent_id,
-            kind, importance, lineage.as_deref(),
+            kind, importance, lineage.as_deref(), valence,
         ).await?;
         Ok(id)
     }
@@ -453,7 +464,7 @@ impl MemoryStore {
             let id = uuid::Uuid::new_v4().to_string();
             crate::db::memory_queries::insert_chunk_tx(
                 &mut tx, &id, &item.content, &vec_str, &item.source, false, &lang,
-                "private", agent_id, &item.kind, item.importance, item.lineage.as_deref(),
+                "private", agent_id, &item.kind, item.importance, item.lineage.as_deref(), item.valence,
             ).await?;
             ids.push(id);
         }

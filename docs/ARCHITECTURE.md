@@ -492,6 +492,63 @@ Migration m023 adds a PostgreSQL trigger that calls `pg_notify('memory_tasks_new
 
 ---
 
+## Soul / Autobiographical Memory
+
+The soul layer gives an agent a persistent autobiographical memory and an in-core reflection cycle. It is **opt-in per agent** via `[agent.soul] enabled = true` in `config/agents/{Name}.toml` (default off). Design spec: `docs/superpowers/specs/2026-07-09-agent-soul-foundation-design.md`.
+
+### Storage: `memory_chunks` soul columns (m076)
+
+Soul memory reuses the `memory_chunks` table with three extra columns:
+
+| Column | Meaning |
+|--------|---------|
+| `kind` | `fact` \| `event` \| `reflection` |
+| `importance` | 0..1 saliency weight for retrieval |
+| `lineage` | `uuid[]` provenance — which chunks a reflection was derived from |
+
+Generic memory paths (search / write / decay / hard-delete) filter on `kind='fact'`, so an agent's biography (`event` / `reflection` rows) never surfaces through — or is purged by — the plain `memory` tool. The agent-facing `memory(delete)` tool and every UI/API mutation route are fail-closed guards that REFUSE to touch `event` / `reflection` chunks (immutability / anti-spoofing). Deliberate biography removal is a raw-SQL runbook only (`docs/runbooks/soul-quarantine.md`).
+
+### Reflection cycle → SELF.md
+
+`agent/soul/reflection.rs` periodically summarizes recent `event` rows into `reflection` chunks and re-serializes `SELF.md` (the agent's self-narrative). `SELF.md` is written ONLY by the reflection engine — it is write-protected from `workspace_write` / `workspace_edit` and rename-guarded. Reflection is transactional with backoff and fail-closed on the SELF.md checkpoint. Retrieval for the soul context block (`soul_retrieve`) scores candidates by recency × importance × relevance (recency from `created_at`, not `accessed_at`).
+
+**Mood → retrieval salience** (research §5): event chunks store the session's appraised `valence` (`memory_chunks.valence`, m094; NULL for facts / reflections / legacy). `MemoryStore::soul_retrieve` reads the agent's current mood and passes it to `score_and_select`, which folds in a bounded mood-congruence term (`MOOD_CONGRUENCE_WEIGHT × mood_valence × chunk_valence`) so a sad agent better remembers negative events and a glad one positive. Neutral mood or a NULL chunk valence contributes nothing (no-op); the bias is active only for agents that have a mood (i.e. emotion-enabled).
+
+**Topic-anchored reflection** (research §4): `maybe_reflect(..., anchor: Option<String>)` accepts an explicit topic. When `Some`, the cycle reflects on that single sanitized anchor (used directly as the retrieval-grounded question — a focused deep-dive) and BYPASSES the importance/cooldown trigger gate (an anchored reflection is deliberate, not accumulation-driven). The auto path passes `None`. The anchor is carried in the `reflection_cycle` timeline payload. Triggered on demand via `POST /api/agents/{name}/reflect` (`{"anchor": "..."}`, returns 202 + a synthetic system `session_id` for the timeline event; UI button on the agent Plan page).
+
+### Emotion layer (v1)
+
+Design spec: `docs/superpowers/specs/2026-07-14-agent-soul-emotion-layer-v1-design.md`. Gated by `[agent.emotion] enabled = true` (requires soul enabled).
+
+- **Appraisal** (OCC model): the knowledge extractor appraises each finished session along valence, intensity, agency, novelty, controllability, desirability, likelihood. Values are clamped + whitelisted in Rust.
+- **Mood**: `agent_emotion_state` table (m083) holds the current mood (`valence` CHECK-clamped to [-1, 1] since m093, plus a bucketed `label`). Decay-on-read, intensity-weighted blend-on-write.
+- **Coping** (`[agent.emotion] coping = true`): appraisal biases the reflection trigger threshold (a strong negative emotion → reflect sooner). Uses only controllability / valence / intensity — NOT the M4-risk agency/desirability vector. Exposed in the GET DTO and the UI agent editor.
+- **Prompt rendering** (`render_to_prompt = true`): surfaces the bucketed mood as an observation in the system prompt.
+- **Chain-of-emotion** (`chain = true`, research §7): the mood block is rendered in its *expressive* framing — instead of a passive "observation, don't copy", the prompt invites the model to let the accumulated mood naturally color its tone, so the agent sounds emotionally engaged. Same safety envelope (bucketed valence, whitelist-only label, keep-character guard).
+- **SeekSupport action** (`seek_support = true`, requires `coping`): when appraisal selects the `SeekSupport` strategy (negative + low controllability + very high intensity), the agent proactively messages its owner "I need help with X" (LLM-generated from the whitelist label + the agent's sanitized `current_focus`, then sanitized again). Rate-limited to once per session via a `seek_support_sent` timeline marker.
+- **Mood → day-plan** (`bias_day_plan = true`, research §2): a non-neutral mood biases day-plan intent priorities (подавленное → срочное/завершающее; приподнятое → амбициозное), framed as data-not-instruction.
+
+### Drift & ECP
+
+- **Drift probe** (`[agent.drift]`): LOO z-score over assistant-turn embeddings detects semantic drift from a baseline; may inject an anchor block.
+- **ECP** (Egocentric Context Projection, `[agent.drift] ecp = true`): reframes recent user turns to separate the interlocutor's perspective from agent identity.
+
+### Initiative & day-plan
+
+`agent/initiative/` — gated proposal generation (`initiative_tick`, runs after reflection) and B-wide morning day-plans (`day_plan_tick`, runs on heartbeat). Backed by the `agent_plans` table. Surfaces via notifications + channel actions; silent skips are traced at debug level. Proposals also land in `session_timeline` (`initiative_proposal`).
+
+**Durable re-drive** (research §7): when generating a proposal, `initiative_tick` surfaces the agent's own recently *stalled* initiative goals (`session_goals` with `status='paused'`, `origin='initiative'`, not day-plan-managed — via `list_stalled_goal_texts_by_agent`) into the proposal prompt as data-not-instruction context, so the agent can reformulate an idea it started but couldn't finish. Owner-*dismissed* proposals are deliberately NOT re-surfaced (respecting the owner's decision and avoiding re-injection); goal text is re-sanitized before entering the prompt.
+
+### Knowledge extraction
+
+`agent/knowledge_extractor.rs` extracts facts / events / open-threads (and, when emotion is on, the appraisal) from finished sessions, piggybacking the appraisal on a single extraction LLM call. Extraction is batched by a per-session watermark (`sessions.last_extracted_at`) and minimum-message gates. **Forced final extraction** (research §6): on a terminal `failed` / `interrupted` finalize, extraction is forced past the message-count gates so a short aborted session never loses its tail (normal `done` runs stay incrementally batched to avoid a per-turn LLM call).
+
+### Observability
+
+Soul events land in `session_timeline` (fail-soft): `reflection_cycle` (carries `anchor` when anchored), `emotion_appraised`, `coping_decided`, `drift_probe`, `ecp_applied`, `initiative_proposal`, `seek_support_sent`. The `drift_probe` / `emotion_appraised` / `ecp_applied` payloads carry an `agent` field for per-agent Timeline filtering.
+
+---
+
 ## Tool System
 
 ### Tool Types
@@ -746,7 +803,7 @@ run_once, run_at, tool_policy (JSONB override)
 
 PostgreSQL 17 + pgvector. Migrations in `migrations/*.sql` (sqlx). Auto-run on startup. No ORM — raw sqlx queries in `crates/opex-core/src/db/`.
 
-**Current migration state:** m001 through m051 (latest migration in `migrations/`); some numbers in the sequence were never committed (count of `.sql` files is the source of truth).
+**Current migration state:** m001 through m093 (latest migration in `migrations/`); some numbers in the sequence were never committed (count of `.sql` files is the source of truth).
 
 ### Key Tables
 
@@ -756,7 +813,9 @@ PostgreSQL 17 + pgvector. Migrations in `migrations/*.sql` (sqlx). Auto-run on s
 | `messages` | Individual messages | `id`, `session_id`, `role`, `content`, `parent_message_id`, `branch_from_message_id`, `is_mirror` (bool) |
 | `session_timeline` | chronological lifecycle log | `session_id`, `event_type` (running/tool_start/tool_end/done/failed), `created_at` |
 | `session_failures` | Terminal failure log | `session_id`, `failure_kind`, `error_message`, `last_tool_name`, `llm_provider`, `llm_model`, `iteration_count` |
-| `memory_chunks` | Vector memory | `id`, `agent_id`, `scope` (agent name/'shared'), `content`, `embedding` (halfvec), `fts_vector` (tsvector), `relevance_score`, `pinned`, `accessed_at` |
+| `memory_chunks` | Vector memory | `id`, `agent_id`, `scope` (agent name/'shared'), `content`, `embedding` (halfvec), `fts_vector` (tsvector), `relevance_score`, `pinned`, `accessed_at`, `kind` (fact/event/reflection), `importance`, `lineage` (uuid[]) |
+| `agent_emotion_state` | Per-agent transient mood | `agent_id` (PK), `valence` (REAL, CHECK [-1,1]), `label`, `updated_at` |
+| `agent_plans` | Initiative focus + proposals + day-plan | `agent_id` (PK), `current_focus`, `proposals` (JSONB), `last_proposal_at`, `proposals_today`, `proposal_day`, `day_plan` (JSONB), `day_plan_current`, `day_plan_date`, `day_plan_status` |
 | `memory_tasks` | Worker task queue | `id`, `task_type`, `status` (pending/processing/done/failed), `payload` (JSONB) |
 | `secrets` | Encrypted secrets | `name`, `scope`, `encrypted_value` (bytea), `nonce` (bytea 12 bytes) |
 | `providers` | LLM provider configs | `name`, `provider_type`, `base_url`, `default_model`, `api_key_env` |

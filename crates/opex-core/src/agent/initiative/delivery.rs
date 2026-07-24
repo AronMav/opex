@@ -39,7 +39,22 @@ pub async fn send_proposal_to_channel(
     }
 }
 
-/// Pure: numbered list of all N intents for the owner's approval message.
+/// Deliver a plain proactive text message to the owner's channel (e.g. a
+/// SeekSupport help request). Fire-and-forget with a bounded wait — matches the
+/// fail-soft posture of the other delivery helpers.
+pub async fn send_owner_text(router: &ChannelActionRouter, channel: &str, chat_id: i64, text: &str) {
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    let action = ChannelAction {
+        name: "send_message".to_string(),
+        params: serde_json::json!({ "text": text }),
+        context: serde_json::json!({ "channel": channel, "chat_id": chat_id }),
+        reply: reply_tx,
+        target_channel: Some(channel.to_string()),
+    };
+    if router.send(action).await.is_ok() {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), reply_rx).await;
+    }
+}
 pub(crate) fn day_plan_body(intents: &[String]) -> String {
     intents.iter().enumerate().map(|(i, t)| format!("{}. {t}", i + 1)).collect::<Vec<_>>().join("\n")
 }

@@ -159,6 +159,10 @@ impl AgentDetailDto {
                 blend_rate: a.emotion.blend_rate,
                 decay_half_life_hours: a.emotion.decay_half_life_hours,
                 render_to_prompt: a.emotion.render_to_prompt,
+                coping: a.emotion.coping,
+                chain: a.emotion.chain,
+                seek_support: a.emotion.seek_support,
+                bias_day_plan: a.emotion.bias_day_plan,
             },
             approval: a.approval.as_ref().map(|ap| AgentDetailApprovalDto {
                 enabled: ap.enabled,

@@ -352,6 +352,12 @@ export const cancelGoal = (agent: string, sessionId: string) =>
     {},
   );
 
+export const reflectAgent = (agent: string, anchor: string) =>
+  apiPost<{ ok: boolean; queued?: boolean; session_id?: string }>(
+    `/api/agents/${encodeURIComponent(agent)}/reflect`,
+    { anchor },
+  );
+
 // ── Workspace API helpers ─────────────────────────────────────────────────────
 
 export function isBinaryFile(

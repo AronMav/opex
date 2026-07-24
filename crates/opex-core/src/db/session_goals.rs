@@ -327,6 +327,36 @@ pub async fn list_active_by_agent_and_origin(
         .collect())
 }
 
+/// Recent STALLED initiative goals for an agent (`status='paused'`, not
+/// day-plan-managed), most recent first, capped at `limit`. Used by the
+/// initiative tick to remind the agent of ideas it started but couldn't
+/// complete so it can reformulate them with fresh context (feature #7, durable
+/// re-drive). Owner-dismissed PROPOSALS are deliberately excluded — only
+/// operationally-stalled goals (budget/judge) surface. The returned `goal_text`
+/// is re-sanitized before it reaches the proposal prompt (injection barrier).
+pub async fn list_stalled_goal_texts_by_agent(
+    db: &PgPool,
+    agent_id: &str,
+    limit: i64,
+) -> Result<Vec<String>> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT g.goal_text
+         FROM session_goals g
+         JOIN sessions s ON s.id = g.session_id
+         WHERE s.agent_id = $1
+           AND g.origin = 'initiative'
+           AND g.status = 'paused'
+           AND NOT g.day_plan_managed
+         ORDER BY g.updated_at DESC
+         LIMIT $2",
+    )
+    .bind(agent_id)
+    .bind(limit)
+    .fetch_all(db)
+    .await?;
+    Ok(rows.into_iter().map(|(t,)| t).collect())
+}
+
 /// Set the resumer backoff gate: this goal will not be re-driven again until
 /// `secs` from now. Applied after each re-drive attempt so a crash-looping goal
 /// backs off instead of being retried on every boot.
@@ -473,7 +503,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
-    async fn list_redrivable_selects_only_crashed_cron_goals(pool: PgPool) -> sqlx::Result<()> {
+    async fn list_redrivable_selects_crashed_cron_and_initiative_goals(pool: PgPool) -> sqlx::Result<()> {
         async fn seed(pool: &PgPool, run_status: &str, origin: &str, retry: i32, age_secs: i64) -> Uuid {
             let sid = Uuid::new_v4();
             sqlx::query(

@@ -41,7 +41,23 @@ export type AgentDetailEmotionDto = { enabled: boolean, intensity_importance_k: 
 /**
  * v2: surface the bucketed mood as an observation in the system prompt.
  */
-render_to_prompt: boolean, };
+render_to_prompt: boolean, 
+/**
+ * Phase 2 coping: appraisal biases the reflection trigger.
+ */
+coping: boolean, 
+/**
+ * Chain-of-emotion: render the mood block in its expressive framing.
+ */
+chain: boolean, 
+/**
+ * SeekSupport coping action: agent messages the owner when in high distress.
+ */
+seek_support: boolean, 
+/**
+ * Mood → day-plan priority bias.
+ */
+bias_day_plan: boolean, };
 
 export type AgentDetailHeartbeatDto = { cron: string, timezone: string | null, announce_to: string | null, };
 

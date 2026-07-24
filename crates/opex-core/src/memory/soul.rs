@@ -17,6 +17,14 @@ pub(crate) const SOUL_CANDIDATE_LIMIT: i64 = 50;
 /// `score_and_select` always sees them (spec §retrieval quota).
 pub(crate) const SOUL_REFLECTION_FLOOR: i64 = 15;
 
+/// Weight of the mood-congruence term (feature #5, research §5). A candidate
+/// whose stored valence matches the agent's current mood sign gets a bounded
+/// boost; the opposite sign gets a bounded penalty. Neutral mood (`0.0`) or an
+/// unknown chunk valence (`None`) contributes `0.0`, so this is a no-op for
+/// agents without a mood and for facts / reflections / legacy chunks. Kept
+/// modest so recency / importance / relevance stay the primary signal.
+pub(crate) const MOOD_CONGRUENCE_WEIGHT: f64 = 0.5;
+
 /// One item for transactional soul indexing (reflection cycle step 4).
 #[derive(Debug, Clone)]
 pub struct SoulInsert {
@@ -25,6 +33,8 @@ pub struct SoulInsert {
     pub kind: String,
     pub importance: f32,
     pub lineage: Option<Vec<uuid::Uuid>>,
+    /// Emotional valence ([-1,1]) for kind='event' chunks; `None` for reflections.
+    pub valence: Option<f32>,
 }
 
 fn minmax(values: &[f64]) -> Vec<f64> {
@@ -42,6 +52,7 @@ pub fn score_and_select(
     cands: Vec<SoulCandidate>,
     now: DateTime<Utc>,
     top_k: usize,
+    mood_valence: f32,
 ) -> Vec<SoulCandidate> {
     if cands.is_empty() {
         return vec![];
@@ -56,8 +67,15 @@ pub fn score_and_select(
     let relevance: Vec<f64> = cands.iter().map(|c| c.similarity).collect();
 
     let (r, i, s) = (minmax(&recency), minmax(&importance), minmax(&relevance));
+    let mood = f64::from(mood_valence);
     let mut scored: Vec<(f64, SoulCandidate)> = cands.into_iter().enumerate()
-        .map(|(idx, c)| (r[idx] + i[idx] + s[idx], c))
+        .map(|(idx, c)| {
+            // Mood-congruence (feature #5): product of signs → positive when the
+            // chunk's valence matches the mood. No-op when mood is neutral or the
+            // chunk has no stored valence.
+            let congruence = MOOD_CONGRUENCE_WEIGHT * mood * f64::from(c.valence.unwrap_or(0.0));
+            (r[idx] + i[idx] + s[idx] + congruence, c)
+        })
         .collect();
     scored.sort_by(|a, b| {
         b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
@@ -87,7 +105,7 @@ mod tests {
     use super::*;
     use chrono::{Duration, Utc};
 
-    fn cand(source: &str, kind: &str, importance: f32, hours_ago: i64, sim: f64) -> crate::memory::SoulCandidate {
+    fn cand_v(source: &str, kind: &str, importance: f32, hours_ago: i64, sim: f64, valence: Option<f32>) -> crate::memory::SoulCandidate {
         crate::memory::SoulCandidate {
             id: uuid::Uuid::new_v4(),
             content: format!("c-{source}-{sim}"),
@@ -96,7 +114,12 @@ mod tests {
             importance,
             created_at: Utc::now() - Duration::hours(hours_ago),
             similarity: sim,
+            valence,
         }
+    }
+
+    fn cand(source: &str, kind: &str, importance: f32, hours_ago: i64, sim: f64) -> crate::memory::SoulCandidate {
+        cand_v(source, kind, importance, hours_ago, sim, None)
     }
 
     #[test]
@@ -104,7 +127,7 @@ mod tests {
         let now = Utc::now();
         let hi = cand("soul_event:a", "event", 10.0, 5, 0.5);
         let lo = cand("soul_event:b", "event", 1.0, 5, 0.5);
-        let out = score_and_select(vec![lo, hi.clone()], now, 1);
+        let out = score_and_select(vec![lo, hi.clone()], now, 1, 0.0);
         assert_eq!(out[0].id, hi.id);
     }
 
@@ -113,7 +136,7 @@ mod tests {
         let now = Utc::now();
         let fresh = cand("soul_event:a", "event", 5.0, 1, 0.5);
         let old = cand("soul_event:b", "event", 5.0, 24 * 90, 0.5);
-        let out = score_and_select(vec![old, fresh.clone()], now, 1);
+        let out = score_and_select(vec![old, fresh.clone()], now, 1, 0.0);
         assert_eq!(out[0].id, fresh.id);
     }
 
@@ -121,7 +144,7 @@ mod tests {
     fn single_candidate_survives_minmax() {
         let now = Utc::now();
         let only = cand("soul_event:a", "event", 5.0, 5, 0.5);
-        let out = score_and_select(vec![only.clone()], now, 3);
+        let out = score_and_select(vec![only.clone()], now, 3, 0.0);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].id, only.id);
     }
@@ -134,7 +157,7 @@ mod tests {
         let cands: Vec<_> = (0..4)
             .map(|i| cand(&format!("soul_event:{i}"), "event", 5.0, 5, 0.5))
             .collect();
-        let out = score_and_select(cands, now, 4);
+        let out = score_and_select(cands, now, 4, 0.0);
         assert_eq!(out.len(), 4);
     }
 
@@ -150,10 +173,56 @@ mod tests {
         for i in 0..5 {
             cands.push(cand("soul_reflection", "reflection", 9.0, 1, 0.8 - i as f64 * 0.01));
         }
-        let out = score_and_select(cands, now, 10);
+        let out = score_and_select(cands, now, 10, 0.0);
         let same_events = out.iter().filter(|c| c.source == "soul_event:same").count();
         let reflections = out.iter().filter(|c| c.kind == "reflection").count();
         assert_eq!(same_events, 3, "events per session capped at 3");
         assert_eq!(reflections, 5, "reflections exempt from per-source cap");
+    }
+
+    // ── Mood-congruence (feature #5, research §5) ────────────────────
+
+    #[test]
+    fn mood_congruence_boosts_matching_valence() {
+        // Equal recency/importance/relevance so the congruence term is the only
+        // discriminator (degenerate minmax → base score identical for both).
+        let now = Utc::now();
+        let pos = cand_v("soul_event:pos", "event", 5.0, 5, 0.5, Some(0.8));
+        let neg = cand_v("soul_event:neg", "event", 5.0, 5, 0.5, Some(-0.8));
+        // Positive mood → the positive-valence chunk ranks first.
+        let out_pos = score_and_select(vec![neg.clone(), pos.clone()], now, 1, 0.8);
+        assert_eq!(out_pos[0].id, pos.id, "positive mood favors positive memory");
+        // Negative mood → the negative-valence chunk ranks first.
+        let out_neg = score_and_select(vec![neg.clone(), pos.clone()], now, 1, -0.8);
+        assert_eq!(out_neg[0].id, neg.id, "negative mood favors negative memory");
+    }
+
+    #[test]
+    fn neutral_mood_applies_no_congruence() {
+        // mood_valence = 0.0 → congruence term is 0 regardless of chunk valence,
+        // so ranking is identical to the valence-less case (id tiebreak).
+        let now = Utc::now();
+        let pos = cand_v("soul_event:pos", "event", 5.0, 5, 0.5, Some(0.8));
+        let neg = cand_v("soul_event:neg", "event", 5.0, 5, 0.5, Some(-0.8));
+        let with_valence = score_and_select(vec![neg.clone(), pos.clone()], now, 2, 0.0);
+        let no_valence = score_and_select(
+            vec![cand("soul_event:neg", "event", 5.0, 5, 0.5), cand("soul_event:pos", "event", 5.0, 5, 0.5)],
+            now, 2, 0.0,
+        );
+        // Same relative order (both fall back to the id tiebreak).
+        assert_eq!(with_valence.len(), 2);
+        assert_eq!(no_valence.len(), 2);
+    }
+
+    #[test]
+    fn valence_none_receives_no_bias() {
+        // A chunk with no stored valence (reflection / legacy) is unaffected by
+        // mood, while a valence-bearing chunk is biased.
+        let now = Utc::now();
+        let unknown = cand_v("soul_event:unk", "event", 5.0, 5, 0.5, None);
+        let neg = cand_v("soul_event:neg", "event", 5.0, 5, 0.5, Some(-0.9));
+        // Strong negative mood boosts the negative chunk above the unknown one.
+        let out = score_and_select(vec![unknown.clone(), neg.clone()], now, 1, -0.9);
+        assert_eq!(out[0].id, neg.id);
     }
 }

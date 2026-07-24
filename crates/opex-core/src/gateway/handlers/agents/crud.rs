@@ -898,6 +898,15 @@ pub(crate) async fn api_update_agent(
             if e.coping.is_none() {
                 e.coping = Some(a.emotion.coping);
             }
+            if e.chain.is_none() {
+                e.chain = Some(a.emotion.chain);
+            }
+            if e.seek_support.is_none() {
+                e.seek_support = Some(a.emotion.seek_support);
+            }
+            if e.bias_day_plan.is_none() {
+                e.bias_day_plan = Some(a.emotion.bias_day_plan);
+            }
         }
         // compaction: protect_first_n / summary_target_ratio / anti_thrash_min_savings /
         // anti_thrash_max_skips / extract_to_memory are operator knobs not rendered in

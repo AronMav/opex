@@ -613,6 +613,7 @@ pub async fn finalize<S: EventSink>(
                 ctx.message_count,
                 ctx.soul_deps.clone(),
                 ctx.initiative.clone(),
+                false,
                 &ctx.bg_tasks,
             );
             if let Some(sr_cfg) = &ctx.skill_review
@@ -734,6 +735,18 @@ pub async fn finalize<S: EventSink>(
                         &ctx.bg_tasks,
                     );
                 }
+            spawn_knowledge_extraction(
+                ctx.db.clone(),
+                ctx.session_id,
+                ctx.agent_name.clone(),
+                ctx.provider.clone(),
+                ctx.memory_store.clone(),
+                ctx.message_count,
+                ctx.soul_deps.clone(),
+                ctx.initiative.clone(),
+                true, // force: flush even a short failed session so nothing is lost
+                &ctx.bg_tasks,
+            );
             partial.clone()
         }
         FinalizeOutcome::Interrupted { partial, reason } => {
@@ -785,6 +798,18 @@ pub async fn finalize<S: EventSink>(
                         &ctx.bg_tasks,
                     );
                 }
+            spawn_knowledge_extraction(
+                ctx.db.clone(),
+                ctx.session_id,
+                ctx.agent_name.clone(),
+                ctx.provider.clone(),
+                ctx.memory_store.clone(),
+                ctx.message_count,
+                ctx.soul_deps.clone(),
+                ctx.initiative.clone(),
+                true, // force: flush even a short interrupted session so nothing is lost
+                &ctx.bg_tasks,
+            );
             partial.clone()
         }
     };
@@ -873,12 +898,15 @@ pub(crate) fn spawn_knowledge_extraction(
     message_count: usize,
     soul_deps: crate::agent::soul::reflection::SoulDeps,
     initiative: Option<crate::agent::initiative::tick::InitiativeDeps>,
+    force: bool,
     tracker: &TaskTracker,
 ) {
-    if message_count >= 2 {
+    // Forced (terminal failed/interrupted) extraction flushes even a short
+    // session; normal Done runs keep the message_count gate + incremental batch.
+    if force || message_count >= 2 {
         tracker.spawn(async move {
             crate::agent::knowledge_extractor::extract_and_save(
-                db, session_id, agent_name, provider, memory_store, soul_deps, initiative,
+                db, session_id, agent_name, provider, memory_store, soul_deps, initiative, force,
             )
             .await;
         });
