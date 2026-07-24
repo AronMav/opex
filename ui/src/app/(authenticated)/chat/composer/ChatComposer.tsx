@@ -63,7 +63,7 @@ export function ChatComposer() {
     "sessionId" in messageSource ? (messageSource as { mode: string; sessionId: string }).sessionId : null;
   const connectionPhase = useChatStore((s) => s.agents[s.currentAgent]?.connectionPhase ?? "idle");
   const isStreaming = isActivePhase(connectionPhase);
-  const pendingMessage = useChatStore((s) => s.agents[s.currentAgent]?.pendingMessage ?? null);
+  const pendingMessage = useChatStore((s) => s.agents[s.currentAgent]?.pendingMessage ?? []);
   const hasMessages = messageSource.mode !== "new-chat";
 
   // ── Slash-command registry (server-backed autocomplete) ───────────────────
@@ -497,13 +497,13 @@ export function ChatComposer() {
   return (
     <div className="shrink-0 w-full p-3 md:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-border/50 bg-background/80 backdrop-blur-sm">
       <div className="mx-auto max-w-4xl">
-        {(pendingMessage?.voice || voiceReplyActive || ttsPlaying) && (
+        {(pendingMessage.some((m) => m.voice) || voiceReplyActive || ttsPlaying) && (
           <div
             role="status"
             aria-live="polite"
             className="mb-2 flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-1.5 text-xs font-medium text-primary"
           >
-            {pendingMessage?.voice ? (
+            {pendingMessage.some((m) => m.voice) ? (
               <>
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 {t("chat.voice_queued")}
@@ -589,10 +589,10 @@ export function ChatComposer() {
               </div>
             );
           })}
-          {pendingMessage && (
+          {pendingMessage.length > 0 && (
             <div className="flex items-center gap-2 px-4 pt-2 pb-1 text-xs text-muted-foreground border-b border-border/30">
               <span className="flex-1 min-w-0 truncate">
-                {t("chat.queue_prefix", { content: `${pendingMessage.content.slice(0, 60)}${pendingMessage.content.length > 60 ? "…" : ""}` })}
+                {t("chat.queue_prefix", { count: pendingMessage.length, content: pendingMessage.map((m) => m.content.slice(0, 40)).join(" · ") })}
               </span>
               <Button
                 type="button"

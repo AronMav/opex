@@ -182,7 +182,7 @@ describe("processSSEStream", () => {
     // equal activeSessionId) sees a match instead of false-discarding it.
     const session = streamSessionManager.start("Arty");
     useChatStore.setState((draft: any) => {
-      draft.agents.Arty.pendingMessage = { content: "queued before session id", sessionId: null, agent: "Arty" };
+      draft.agents.Arty.pendingMessage = [{ content: "queued before session id", sessionId: null, agent: "Arty" }];
     });
     const frames = [
       `data: ${JSON.stringify({ type: "data-session-id", data: { sessionId: "s1" } })}\n\n`,
@@ -193,7 +193,7 @@ describe("processSSEStream", () => {
     });
     const state = useChatStore.getState().agents.Arty;
     expect(state.activeSessionId).toBe("s1");
-    expect(state.pendingMessage?.sessionId).toBe("s1");
+    expect(state.pendingMessage?.[0]?.sessionId).toBe("s1");
   });
 
   it("Fix H: does NOT touch a pendingMessage already stamped with a concrete sessionId (genuine later switch)", async () => {
@@ -203,7 +203,7 @@ describe("processSSEStream", () => {
     // catch, not a same-turn assignment to sync.
     const session = streamSessionManager.start("Arty");
     useChatStore.setState((draft: any) => {
-      draft.agents.Arty.pendingMessage = { content: "queued for S0", sessionId: "S0", agent: "Arty" };
+      draft.agents.Arty.pendingMessage = [{ content: "queued for S0", sessionId: "S0", agent: "Arty" }];
     });
     const frames = [
       `data: ${JSON.stringify({ type: "data-session-id", data: { sessionId: "s1" } })}\n\n`,
@@ -214,7 +214,7 @@ describe("processSSEStream", () => {
     });
     const state = useChatStore.getState().agents.Arty;
     expect(state.activeSessionId).toBe("s1");
-    expect(state.pendingMessage?.sessionId).toBe("S0");
+    expect(state.pendingMessage?.[0]?.sessionId).toBe("S0");
   });
 
   it("finish event leaves the finished assistant message with status \"complete\" (caret must not render)", async () => {

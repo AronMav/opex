@@ -61,9 +61,10 @@ describe("Fix H — queueMessage stamps session + agent", () => {
   it("stamps the current agent's activeSessionId and agent name", () => {
     useChatStore.getState().queueMessage("hi");
     const pending = useChatStore.getState().agents[A]?.pendingMessage;
-    expect(pending?.content).toBe("hi");
-    expect(pending?.sessionId).toBe("S1");
-    expect(pending?.agent).toBe(A);
+    expect(pending).toHaveLength(1);
+    expect(pending?.[0]?.content).toBe("hi");
+    expect(pending?.[0]?.sessionId).toBe("S1");
+    expect(pending?.[0]?.agent).toBe(A);
   });
 
   it("stamps sessionId=null when there is no active session", () => {
@@ -73,9 +74,9 @@ describe("Fix H — queueMessage stamps session + agent", () => {
     });
     useChatStore.getState().queueMessage("hi", undefined, { voice: true });
     const pending = useChatStore.getState().agents[A]?.pendingMessage;
-    expect(pending?.sessionId).toBeNull();
-    expect(pending?.agent).toBe(A);
-    expect(pending?.voice).toBe(true);
+    expect(pending?.[0]?.sessionId).toBeNull();
+    expect(pending?.[0]?.agent).toBe(A);
+    expect(pending?.[0]?.voice).toBe(true);
   });
 });
 

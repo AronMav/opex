@@ -175,28 +175,26 @@ export function ChatThread({
   useScrollMemoryRestore(activeSessionId, isStreaming);
 
   // ── Pending message queue drain ────────────────────────────────────────────
-  // When connectionPhase transitions to 'idle' (clean success), drain the
-  // single-slot pending queue set by queueMessage (Shift+Enter while streaming).
-  // On 'error', discard the pending message.
-  const pendingMessage = useChatStore((s) => s.agents[s.currentAgent]?.pendingMessage ?? null);
+  // When connectionPhase transitions to 'idle', drain the FIFO queue of
+  // messages accumulated while the model was working. All queued messages
+  // are combined into a single turn (joined with \n) and sent at once.
+  // On 'error', discard the queue.
+  const pendingMessage = useChatStore((s) => s.agents[s.currentAgent]?.pendingMessage ?? []);
   const prevPhaseRef = useRef<string>(connectionPhase);
   useEffect(() => {
     const prevPhase = prevPhaseRef.current;
     prevPhaseRef.current = connectionPhase;
 
-    if (!pendingMessage) return;
+    if (!pendingMessage || pendingMessage.length === 0) return;
 
-    // Fix H: the message may have been queued for a DIFFERENT agent/session
-    // (user switched agent or picked another session before the turn ended).
-    // Sending it now would misdeliver into the wrong session; leaving it would
-    // silently strand it. Verify the stamp, and on mismatch clear it with a
-    // visible notice. The stamp is optional so legacy/test fixtures without one
-    // keep the old "always deliver" behaviour.
-    const stamped = pendingMessage.sessionId !== undefined || pendingMessage.agent !== undefined;
+    // Verify the first entry's stamp matches current agent/session —
+    // if the user switched context while messages were queued, discard.
+    const first = pendingMessage[0];
+    const stamped = first.sessionId !== undefined || first.agent !== undefined;
     const targetMismatch =
       stamped &&
-      ((pendingMessage.agent != null && pendingMessage.agent !== currentAgent) ||
-        (pendingMessage.sessionId ?? null) !== (activeSessionId ?? null));
+      ((first.agent != null && first.agent !== currentAgent) ||
+        (first.sessionId ?? null) !== (activeSessionId ?? null));
     if (targetMismatch) {
       useChatStore.getState().clearPending(currentAgent);
       void import("sonner").then(({ toast }) =>
@@ -206,17 +204,16 @@ export function ChatThread({
     }
 
     if (connectionPhase === "idle" && prevPhase !== "idle") {
-      // Clean transition to idle — drain queue. If the queued message was a
-      // voice submit made while streaming, arm voiceTurnPending BEFORE starting
-      // the drained turn so ChatComposer's spoken-reply effect (which reads
-      // this store flag on turn-end) speaks the reply once it completes.
-      if (pendingMessage.voice) {
+      // Clean transition to idle — drain entire queue as one combined turn.
+      const combined = pendingMessage.map((m) => m.content).join("\n\n");
+      const allAttachments = pendingMessage.flatMap((m) => m.attachments ?? []);
+      const anyVoice = pendingMessage.some((m) => m.voice);
+      if (anyVoice) {
         useChatStore.getState().setVoiceTurnPending(true, currentAgent);
       }
-      useChatStore.getState().sendMessage(pendingMessage.content, pendingMessage.attachments);
+      useChatStore.getState().sendMessage(combined, allAttachments.length > 0 ? allAttachments : undefined);
       useChatStore.getState().clearPending(currentAgent);
     } else if (connectionPhase === "error") {
-      // Stream ended in error — discard queue so user sees the error first.
       useChatStore.getState().clearPending(currentAgent);
     }
   }, [connectionPhase, pendingMessage, currentAgent, activeSessionId, t]);

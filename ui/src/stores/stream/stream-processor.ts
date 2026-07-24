@@ -176,8 +176,10 @@ export async function processSSEStream(
                 // stamped with a concrete sessionId (queued while resumed into an
                 // existing session) is left untouched: that's a genuine
                 // later-switch case the drain effect must still catch.
-                if (agentDraft.pendingMessage && agentDraft.pendingMessage.sessionId == null) {
-                  agentDraft.pendingMessage.sessionId = sid;
+                if (agentDraft.pendingMessage) {
+                  for (const entry of agentDraft.pendingMessage) {
+                    if (entry.sessionId == null) entry.sessionId = sid;
+                  }
                 }
               });
               // Persist so the value survives page refresh (restored on agent init).

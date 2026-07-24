@@ -156,20 +156,17 @@ export function createStreamActions(deps: ActionDeps) {
       const agent = store.currentAgent;
       const st = store.agents[agent] ?? emptyAgentState();
 
-      // An interrupt is already in flight for this agent — queue this message
-      // into pendingMessage (drained by ChatThread when the phase reaches idle)
-      // instead of racing a fresh sendTurn (F085).
-      if (interrupting.has(agent)) {
+      // If streaming is active, queue the message instead of interrupting.
+      // Multiple messages accumulate in FIFO order; when the model finishes,
+      // ChatThread's drain combines them into one turn and sends it.
+      if (isActivePhase(st.connectionPhase)) {
         get().queueMessage(text, attachments);
         return;
       }
 
-      // If streaming is active, interrupt and send instead of silently dropping the message.
-      if (isActivePhase(st.connectionPhase)) {
-        // Fire-and-forget: interruptAndSend is async but sendMessage is sync by interface.
-        // We call it without awaiting — the caller can use interruptAndSend directly for
-        // explicit async control.
-        get().interruptAndSend(text, attachments);
+      // An interrupt is already in flight for this agent — also queue.
+      if (interrupting.has(agent)) {
+        get().queueMessage(text, attachments);
         return;
       }
 
@@ -221,47 +218,26 @@ export function createStreamActions(deps: ActionDeps) {
 
     queueMessage: (text: string, attachments?: Array<MessageAttachment>, opts?: { voice?: boolean }) => {
       const agent = get().currentAgent;
-      const prev = get().agents[agent]?.pendingMessage ?? null;
       const isVoice = opts?.voice === true;
-      // H6 fix: detect "this typed call overwrites a prior typed queued
-      // message" before the set() runs, and surface a toast afterwards. The
-      // slot is single-occupancy, so without this the user got zero signal
-      // that their earlier queued text was discarded in favour of the new one.
-      const replacedTyped = !!prev && !prev.voice && !isVoice;
 
       set((draft) => {
         if (!draft.agents[agent]) draft.agents[agent] = emptyAgentState();
-        // If a previous voice message is already queued and this one is also
-        // voice, append with "\n" — the user spoke several phrases during the
-        // same turn instead of replacing the earlier one. A NON-voice queue call
-        // (e.g. Shift+Enter, or the F085 interrupt-race path) must NOT inherit a
-        // prior pending voice flag — a typed message supersedes a queued voice
-        // one and must not be read aloud once sent.
-        const content = prev?.voice && isVoice ? `${prev.content}\n${text}` : text;
-        // Fix H: stamp the target session + agent so the ChatThread drain can
-        // verify the context still matches before sending (no silent loss / no
-        // misdelivery on agent- or session-switch).
-        draft.agents[agent].pendingMessage = {
-          content,
+        // FIFO append — multiple messages accumulate while the model works.
+        draft.agents[agent].pendingMessage.push({
+          content: text,
           attachments,
           voice: isVoice,
           sessionId: draft.agents[agent].activeSessionId ?? null,
           agent,
-        };
-      });
-
-      if (replacedTyped) {
-        void import("sonner").then(({ toast }) => {
-          toast.info("Предыдущее сообщение в очереди заменено новым.");
         });
-      }
+      });
     },
 
     clearPending: (agent?: string) => {
       const targetAgent = agent ?? get().currentAgent;
       set((draft) => {
         if (draft.agents[targetAgent]) {
-          draft.agents[targetAgent].pendingMessage = null;
+          draft.agents[targetAgent].pendingMessage = [];
         }
       });
     },
@@ -281,6 +257,10 @@ export function createStreamActions(deps: ActionDeps) {
       // abortLocalOnly here was a bug (H1): the backend kept processing after the
       // user pressed Stop, wasting LLM tokens and keeping run_status='running'.
       renderer.abortActiveStream(agent);
+      // Note: if there are queued messages, ChatThread's drain effect fires
+      // automatically when the phase transitions to idle after the abort —
+      // no explicit drain needed here. The user's Stop interrupts the current
+      // task, and the queue picks up immediately after.
     },
 
     // Refresh / mount / drop-recovery all re-enter through the SAME single

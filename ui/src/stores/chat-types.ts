@@ -160,6 +160,15 @@ export interface ChatMessage {
   bookmarkedAt?: string | null;
 }
 
+/** A single entry in the pending message FIFO queue. */
+export interface PendingMessageEntry {
+  content: string;
+  attachments?: Array<MessageAttachment>;
+  voice?: boolean;
+  sessionId?: string | null;
+  agent?: string;
+}
+
 // ── Connection phase FSM (FSM-01) ────────────────────────────────────────────
 
 /**
@@ -261,16 +270,10 @@ export interface AgentState {
    * agent/session before sending — otherwise it clears the item with a visible
    * notice, so a queued message is never silently lost NOR sent into the wrong
    * session (e.g. after switching agents or picking a different session).
-   * Optional so hand-built test fixtures without a stamp keep the legacy
-   * "always deliver" behaviour; `queueMessage` always writes both.
+   * FIFO array — multiple messages accumulate while the model works, then
+   * drain as a single combined turn when the model reaches idle.
    */
-  pendingMessage: {
-    content: string;
-    attachments?: Array<MessageAttachment>;
-    voice?: boolean;
-    sessionId?: string | null;
-    agent?: string;
-  } | null;
+  pendingMessage: PendingMessageEntry[];
   /**
    * Single source of truth for "the turn that is about to start / just started
    * was voice-initiated" — set by a direct voice submit (ChatComposer, while
@@ -386,7 +389,7 @@ export function emptyAgentState(): AgentState {
     isLlmReconnecting: false,
     transportReconnectAttempt: 0,
     selectedBranches: {},
-    pendingMessage: null,
+    pendingMessage: [],
     voiceTurnPending: false,
     contextTokens: null,
     contextOutputTokens: null,
