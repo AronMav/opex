@@ -236,6 +236,7 @@ function convertHistoryImpl(rows: MessageRow[], isAgentStreaming?: boolean, sele
                 type: "file",
                 url: meta.url,
                 mediaType: meta.mediaType || "application/octet-stream",
+                filename: typeof meta.filename === "string" ? meta.filename : undefined,
               });
             }
           } catch { /* ignore */ }

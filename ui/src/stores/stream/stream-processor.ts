@@ -390,6 +390,7 @@ export async function processSSEStream(
               type: "file",
               url: event.url,
               mediaType: event.mediaType || "application/octet-stream",
+              filename: event.filename ?? undefined,
             });
             maybeScheduleCommit();
             break;

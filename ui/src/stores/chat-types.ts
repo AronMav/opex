@@ -51,8 +51,11 @@ export interface FilePart {
   type: "file";
   url: string;
   mediaType: string;
-  /** Original filename when known (user uploads). Absent for assistant-generated
-   *  artifacts (tool outputs, __file__: markers) — UI falls back to a MIME-based label. */
+  /** Display filename when known. Set for user uploads and for assistant-generated
+   *  artifacts — the backend now synthesises a name (e.g. "image.png") for tool
+   *  outputs and threads it through the `__file__:` marker / SSE `file` event.
+   *  The UI falls back to a MIME-based label only when absent (legacy messages
+   *  predating the field). */
   filename?: string;
 }
 
