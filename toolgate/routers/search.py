@@ -1,4 +1,5 @@
 """Web search endpoint — resolves a websearch provider (body.provider override or active)."""
+import json
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 import logging
@@ -8,7 +9,12 @@ router = APIRouter()
 
 @router.post("/v1/search")
 async def web_search(request: Request):
-    body = await request.json()
+    # request.body() + json.loads() — see embedding.py for the BaseHTTPMiddleware rationale.
+    try:
+        raw = await request.body()
+        body = json.loads(raw) if raw else {}
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": f"invalid JSON body: {e}"})
     query = body.get("query")
     try:
         max_results = int(body.get("max_results") or 5)
