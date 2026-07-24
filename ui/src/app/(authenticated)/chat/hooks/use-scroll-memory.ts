@@ -109,6 +109,11 @@ export function useScrollMemoryWrite(
   const prevShouldFollowRef = useRef(shouldFollow);
 
   // Return-to-bottom: clear the stored entry once the user is following again.
+  // NOTE: the prevShouldFollowRef transition detection is unreliable on
+  // component remount (the ref re-initializes to the current value), so the
+  // clear may not fire. This is cosmetic — a stale scroll-restore entry
+  // lingers but causes no functional issue. The clear fires on the next
+  // genuine false→true transition within the same mount.
   useEffect(() => {
     if (shouldFollow && !prevShouldFollowRef.current && sessionId) {
       if (timerRef.current) {

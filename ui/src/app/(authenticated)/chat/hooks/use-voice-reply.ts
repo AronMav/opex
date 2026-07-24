@@ -246,7 +246,9 @@ export function useVoiceReply({
   }, [currentAgent, playBlob, setVoiceReplyActive]);
 
   // New turn (rising edge of streaming): stop any leftover speech.
-  const prevStreamingRisingRef = useRef(false);
+  // Initialize ref to the actual isStreaming value — a hard-coded false
+  // causes a spurious rising-edge fire on remount-during-stream.
+  const prevStreamingRisingRef = useRef(isStreaming);
   useEffect(() => {
     const was = prevStreamingRisingRef.current;
     prevStreamingRisingRef.current = isStreaming;

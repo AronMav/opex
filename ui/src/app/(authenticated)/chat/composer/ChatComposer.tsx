@@ -193,17 +193,19 @@ export function ChatComposer() {
   // the switch — confusing and irreversible. Stopping here drops any partial
   // audio without sending a transcript; the user can re-record on the new
   // agent if they wish.
-  const prevAgentRef = useRef(currentAgent);
+  // H11 fix: stop voice recording when the agent switches. ChatThread is
+  // keyed by currentAgent, so switching agents unmounts ChatComposer —
+  // this cleanup fires on unmount, stopping any active recording and
+  // releasing the microphone. The old prevAgentRef approach was dead code
+  // because the remount re-initialized the ref to the new agent.
   useEffect(() => {
-    if (prevAgentRef.current !== currentAgent) {
-      prevAgentRef.current = currentAgent;
+    return () => {
       if (voice.state === "recording" || voice.state === "transcribing") {
-        // Fire-and-forget — the returned transcript is intentionally
-        // discarded on an agent-switch abort.
         void voice.stop();
       }
-    }
-  }, [currentAgent, voice]);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Auto-resize textarea — use "0px" reset instead of "auto" to prevent flicker on paste
   const autoResize = useCallback(() => {
