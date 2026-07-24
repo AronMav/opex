@@ -119,7 +119,7 @@ pub async fn clear_embeddings(db: &PgPool) -> Result<()> {
 }
 
 /// Drop the embedding index (HNSW or IVFFlat).
-pub async fn drop_hnsw_index(db: &PgPool) -> Result<()> {
+pub async fn drop_vector_index(db: &PgPool) -> Result<()> {
     sqlx::query("DROP INDEX IF EXISTS idx_memory_embedding_hnsw")
         .execute(db)
         .await?;
@@ -131,7 +131,7 @@ pub async fn drop_hnsw_index(db: &PgPool) -> Result<()> {
 
 /// Create IVFFlat index if it doesn't exist.
 /// IVFFlat supports any dimension (unlike HNSW which caps at 4000 for halfvec).
-pub async fn ensure_hnsw_index(db: &PgPool, dim: u32) -> Result<()> {
+pub async fn ensure_vector_index(db: &PgPool, dim: u32) -> Result<()> {
     // Drop old HNSW index if present (may fail on >4000 dims)
     if let Err(e) = sqlx::query("DROP INDEX IF EXISTS idx_memory_embedding_hnsw")
         .execute(db)
@@ -634,11 +634,16 @@ pub async fn delete_chunk(db: &PgPool, chunk_id: &str) -> Result<bool> {
 }
 
 /// Delete all chunks with a given source (e.g. filename).
+/// F-09: guard with `kind='fact' OR kind IS NULL` so this 5th hard-delete path
+/// can never purge a soul biography row (event/reflection) that happened to
+/// share a source string — consistent with the other 4 documented paths.
 pub async fn delete_by_source(db: &PgPool, source: &str) -> Result<u64> {
-    let result = sqlx::query("DELETE FROM memory_chunks WHERE source = $1")
-        .bind(source)
-        .execute(db)
-        .await?;
+    let result = sqlx::query(
+        "DELETE FROM memory_chunks WHERE source = $1 AND (kind = 'fact' OR kind IS NULL)",
+    )
+    .bind(source)
+    .execute(db)
+    .await?;
     Ok(result.rows_affected())
 }
 
@@ -716,7 +721,7 @@ pub async fn soul_candidates(
            WHERE embedding IS NOT NULL
              AND agent_id = $2
              AND kind = 'event'
-             AND ($3::text IS NULL OR source <> $3)
+             AND ($3::text IS NULL OR $3::text = '' OR source <> $3)
            ORDER BY embedding <=> $1::vector
            LIMIT $4)
           UNION ALL
@@ -727,7 +732,7 @@ pub async fn soul_candidates(
            WHERE embedding IS NOT NULL
              AND agent_id = $2
              AND kind = 'reflection'
-             AND ($3::text IS NULL OR source <> $3)
+             AND ($3::text IS NULL OR $3::text = '' OR source <> $3)
            ORDER BY embedding <=> $1::vector
            LIMIT $5)",
     )

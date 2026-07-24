@@ -444,8 +444,8 @@ async fn run_reindex(
     sqlx::query("DELETE FROM memory_chunks WHERE scope = 'shared'")
         .execute(db)
         .await?;
-    memory_queries::drop_hnsw_index(db).await?;
-    memory_queries::ensure_hnsw_index(db, new_dim).await?;
+    memory_queries::drop_vector_index(db).await?;
+    memory_queries::ensure_vector_index(db, new_dim).await?;
 
     // 3. Enumerate workspace sources (for response feedback only — worker
     //    re-walks the workspace itself inside its bulk handler).

@@ -839,19 +839,28 @@ pub(crate) async fn api_update_agent(
         }
         // error_break_threshold is not exposed in AgentDetailDto and will be absent on
         // round-trips from the UI; restore it from the existing config to avoid data loss.
-        if let Some(Some(ref mut tl)) = payload.tool_loop
-            && tl.error_break_threshold.is_none()
-        {
-            tl.error_break_threshold = a.tool_loop.as_ref().and_then(|t| t.error_break_threshold);
+        // Also restore the DTO-orphan tool-loop fields (max_consecutive_failures /
+        // max_loop_nudges / ngram_cycle_length) — they are in the GET DTO but have no UI
+        // control, so a UI round-trip would otherwise reset them to schema defaults
+        // (3 / 3 / 6). max_consecutive_failures notably governs fallback-provider
+        // switching, so resetting it silently changes runtime behaviour. (Audit F-04.)
+        if let Some(Some(ref mut tl)) = payload.tool_loop {
+            if tl.error_break_threshold.is_none() {
+                tl.error_break_threshold = a.tool_loop.as_ref().and_then(|t| t.error_break_threshold);
+            }
+            if tl.max_consecutive_failures.is_none() {
+                tl.max_consecutive_failures = a.tool_loop.as_ref().map(|t| t.max_consecutive_failures);
+            }
+            if tl.max_loop_nudges.is_none() {
+                tl.max_loop_nudges = a.tool_loop.as_ref().map(|t| t.max_loop_nudges);
+            }
+            if tl.ngram_cycle_length.is_none() {
+                tl.ngram_cycle_length = a.tool_loop.as_ref().map(|t| t.ngram_cycle_length);
+            }
         }
-        // drift.z_fire / drift.z_release ARE now carried by the UI (exposed in
-        // AgentDetailDriftDto + sent by formToPayload). This per-field preserve
-        // remains as defense for NON-UI API clients that PUT a drift section while
-        // omitting the z-fields: restore them from the existing config so an
-        // omission never silently resets a hand-tuned value to the schema default
-        // (2.5 / 1.0). Unlike the whole-section presence gate in
-        // `merge_soul_sections`, this is per-field; a caller that DOES send the
-        // z-fields replaces them as expected.
+        // drift.z_fire / drift.z_release ARE now carried by the UI. This per-field
+        // preserve remains as defense for NON-UI API clients that PUT a drift section
+        // while omitting the z-fields. (Audit F-04.)
         if let Some(Some(ref mut d)) = payload.drift {
             if d.z_fire.is_none() {
                 d.z_fire = Some(a.drift.z_fire);
@@ -859,10 +868,8 @@ pub(crate) async fn api_update_agent(
             if d.z_release.is_none() {
                 d.z_release = Some(a.drift.z_release);
             }
-            // ecp / ecp_recent_turns are operator knobs not yet carried by the
-            // UI form: restore from existing config on omission (same defense
-            // as the z-fields above) so a UI round-trip never silently resets a
-            // hand-tuned TOML value to the schema default.
+            // ecp / ecp_recent_turns are carried by the UI form; this remains as
+            // defense for non-UI API clients (audit F-04).
             if d.ecp.is_none() {
                 d.ecp = Some(a.drift.ecp);
             }
@@ -870,15 +877,48 @@ pub(crate) async fn api_update_agent(
                 d.ecp_recent_turns = Some(a.drift.ecp_recent_turns);
             }
         }
-        // emotion.render_to_prompt / coping: operator knobs not carried by the
-        // UI form — restore from existing config on omission (same defense as
-        // the drift z-fields) so a UI round-trip never resets a hand-tuned value.
+        // emotion.render_to_prompt is carried by the UI form; coping is TOML-only.
+        // Both restored from existing config on omission (audit F-04).
         if let Some(Some(ref mut e)) = payload.emotion {
             if e.render_to_prompt.is_none() {
                 e.render_to_prompt = Some(a.emotion.render_to_prompt);
             }
             if e.coping.is_none() {
                 e.coping = Some(a.emotion.coping);
+            }
+        }
+        // compaction: protect_first_n / summary_target_ratio / anti_thrash_min_savings /
+        // anti_thrash_max_skips / extract_to_memory are operator knobs not rendered in
+        // the UI — restore from existing config so a UI save never resets them. (Audit F-04.)
+        if let Some(Some(ref mut c)) = payload.compaction
+            && let Some(existing) = a.compaction.as_ref()
+        {
+            if c.protect_first_n.is_none() {
+                c.protect_first_n = Some(existing.protect_first_n);
+            }
+            if c.summary_target_ratio.is_none() {
+                c.summary_target_ratio = Some(existing.summary_target_ratio);
+            }
+            if c.anti_thrash_min_savings.is_none() {
+                c.anti_thrash_min_savings = Some(existing.anti_thrash_min_savings);
+            }
+            if c.anti_thrash_max_skips.is_none() {
+                c.anti_thrash_max_skips = Some(existing.anti_thrash_max_skips);
+            }
+            if c.extract_to_memory.is_none() {
+                c.extract_to_memory = Some(existing.extract_to_memory);
+            }
+        }
+        // hooks: total_webhook_timeout_ms / on_chain_timeout — operator knobs not in
+        // the UI form. Restore from existing config on omission. (Audit F-04.)
+        if let Some(Some(ref mut h)) = payload.hooks
+            && let Some(existing) = a.hooks.as_ref()
+        {
+            if h.total_webhook_timeout_ms.is_none() {
+                h.total_webhook_timeout_ms = existing.total_webhook_timeout_ms;
+            }
+            if h.on_chain_timeout.is_none() {
+                h.on_chain_timeout = Some(existing.on_chain_timeout);
             }
         }
     }

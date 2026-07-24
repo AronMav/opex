@@ -99,7 +99,7 @@ impl MemoryStore {
         }
 
         let (mut results, mode) = if !self.is_available() || self.embedder.dim_mismatch() {
-            let fts = self.search_fts(query, limit, agent_id).await?;
+            let fts = self.search_fts(query, limit, agent_id, true).await?;
             let mode_str = if self.embedder.dim_mismatch() {
                 "fts-degraded"
             } else {
@@ -111,7 +111,7 @@ impl MemoryStore {
             match self.search_hybrid(query, limit, agent_id).await {
                 Ok(results) if !results.is_empty() => (results, "hybrid"),
                 Ok(_) => {
-                    let fts = self.search_fts(query, limit, agent_id).await?;
+                    let fts = self.search_fts(query, limit, agent_id, true).await?;
                     if fts.is_empty() {
                         // Last-resort fallback: AND-mode FTS returned nothing
                         // (multi-word queries where the document doesn't contain
@@ -128,7 +128,7 @@ impl MemoryStore {
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "hybrid search failed, falling back to FTS");
-                    let fts = self.search_fts(query, limit, agent_id).await?;
+                    let fts = self.search_fts(query, limit, agent_id, true).await?;
                     (fts, "fts")
                 }
             }
@@ -147,8 +147,8 @@ impl MemoryStore {
         use std::collections::HashMap;
 
         let (sem_result, fts_result, trgm_result) = tokio::join!(
-            self.search_semantic(query, limit * 2, agent_id),
-            self.search_fts(query, limit * 2, agent_id),
+            self.search_semantic(query, limit * 2, agent_id, false),
+            self.search_fts(query, limit * 2, agent_id, false),
             crate::db::memory_queries::search_trigram(
                 &self.db, query, (limit * 2) as i64,
                 TRGM_SIMILARITY_THRESHOLD, agent_id,
@@ -207,11 +207,22 @@ impl MemoryStore {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.1.id.cmp(&b.1.id))
         });
-        Ok(scored.into_iter().take(limit).map(|(_, r)| r).collect())
+        let final_results: Vec<MemoryResult> = scored.into_iter().take(limit).map(|(_, r)| r).collect();
+        // F-11: touch ONLY the final RRF-selected chunks, not the 2×limit candidates
+        // each branch considered (which would otherwise keep marginal chunks' decay
+        // timer reset and prevent them from aging out).
+        let ids: Vec<uuid::Uuid> = final_results.iter().filter_map(|r| r.id.parse().ok()).collect();
+        crate::db::memory_queries::touch_accessed(&self.db, &ids).await;
+        Ok(final_results)
     }
 
     /// Semantic similarity search with MMR reranking (lambda=0.75).
-    async fn search_semantic(&self, query: &str, limit: usize, agent_id: &str) -> Result<Vec<MemoryResult>> {
+    ///
+    /// `touch`: when true, bump `accessed_at` for the returned chunks. The hybrid
+    /// combiner passes `false` and touches only the final RRF-selected IDs (F-11:
+    /// otherwise discarded candidates kept their decay timer reset and aged out
+    /// far slower than intended).
+    async fn search_semantic(&self, query: &str, limit: usize, agent_id: &str, touch: bool) -> Result<Vec<MemoryResult>> {
         let embedding = self.embedder.embed(query).await?;
         let vec_str = fmt_vec(&embedding);
         let candidate_limit = (limit * 6) as i64;
@@ -248,9 +259,11 @@ impl MemoryStore {
             results.push(selected);
         }
 
-        // Update accessed_at for returned chunks
-        let ids: Vec<uuid::Uuid> = results.iter().filter_map(|r| r.id.parse().ok()).collect();
-        crate::db::memory_queries::touch_accessed(&self.db, &ids).await;
+        // Update accessed_at for returned chunks (gated — see fn doc, F-11).
+        if touch {
+            let ids: Vec<uuid::Uuid> = results.iter().filter_map(|r| r.id.parse().ok()).collect();
+            crate::db::memory_queries::touch_accessed(&self.db, &ids).await;
+        }
 
         Ok(results)
     }
@@ -258,7 +271,8 @@ impl MemoryStore {
     /// Full-text search using `PostgreSQL` tsvector/tsquery with morphological stemming.
     /// Used as fallback when embedding endpoint is unavailable.
     /// `agent_id`: filter results to this agent's chunks plus shared chunks. Pass `""` to search all.
-    pub async fn search_fts(&self, query: &str, limit: usize, agent_id: &str) -> Result<Vec<MemoryResult>> {
+    /// `touch`: see `search_semantic` (F-11).
+    pub async fn search_fts(&self, query: &str, limit: usize, agent_id: &str, touch: bool) -> Result<Vec<MemoryResult>> {
         if query.trim().is_empty() {
             return Ok(vec![]);
         }
@@ -270,9 +284,11 @@ impl MemoryStore {
         )
         .await?;
 
-        // Update accessed_at
-        let ids: Vec<uuid::Uuid> = results.iter().filter_map(|r| r.id.parse().ok()).collect();
-        crate::db::memory_queries::touch_accessed(&self.db, &ids).await;
+        // Update accessed_at (gated — see fn doc, F-11).
+        if touch {
+            let ids: Vec<uuid::Uuid> = results.iter().filter_map(|r| r.id.parse().ok()).collect();
+            crate::db::memory_queries::touch_accessed(&self.db, &ids).await;
+        }
 
         Ok(results)
     }

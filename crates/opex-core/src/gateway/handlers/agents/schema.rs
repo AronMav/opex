@@ -91,6 +91,11 @@ pub(crate) struct HooksPayload {
     pub log_all_tool_calls: Option<bool>,
     pub block_tools: Option<Vec<String>>,
     pub webhooks: Option<Vec<crate::config::WebhookConfig>>,
+    /// Operator knobs NOT rendered in the UI form — kept in the payload so they
+    /// can be preserved on a UI round-trip (F-04 audit: previously absent, so
+    /// they silently reset to defaults on every UI save).
+    pub total_webhook_timeout_ms: Option<u64>,
+    pub on_chain_timeout: Option<crate::config::FailureMode>,
 }
 
 #[derive(Deserialize)]
@@ -367,7 +372,11 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
                 log_all_tool_calls: h.log_all_tool_calls.unwrap_or(false),
                 block_tools: h.block_tools.unwrap_or_default(),
                 webhooks: h.webhooks.unwrap_or_default(),
-                ..Default::default()
+                // F-04 audit: these two operator knobs are no longer clobbered
+                // to defaults on every UI save (HooksPayload carries them now
+                // + api_update_agent restores them from existing config).
+                total_webhook_timeout_ms: h.total_webhook_timeout_ms,
+                on_chain_timeout: h.on_chain_timeout.unwrap_or_default(),
             }),
             daily_budget_tokens: p.daily_budget_tokens.unwrap_or(0),
             // Default 3 matches the `#[serde(default)]` on AgentSettings.

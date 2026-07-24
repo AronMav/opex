@@ -638,14 +638,16 @@ impl Scheduler {
     }
 
     /// Add memory chunks decay cleanup job (daily at 08:00 UTC).
-    /// Removes very old, low-score, non-pinned chunks.
-    pub async fn add_memory_decay_cleanup(&self, db: PgPool) -> Result<()> {
-        tracing::info!("scheduling memory decay cleanup (daily 08:00 UTC)");
+    /// Removes very old, low-score, non-pinned chunks. `fact_age_days` comes
+    /// from `[memory] compression_age_days`.
+    pub async fn add_memory_decay_cleanup(&self, db: PgPool, fact_age_days: i64) -> Result<()> {
+        tracing::info!(fact_age_days, "scheduling memory decay cleanup (daily 08:00 UTC)");
 
         let job = Job::new_async("0 0 8 * * *", move |_uuid, _lock| {
             let db = db.clone();
+            let fact_age_days = fact_age_days;
             Box::pin(async move {
-                match run_memory_decay_cleanup(&db).await {
+                match run_memory_decay_cleanup(&db, fact_age_days).await {
                     Ok(deleted) => if deleted > 0 {
                         tracing::info!(deleted, "memory_chunks decay cleanup");
                     },
@@ -1708,9 +1710,11 @@ const EVENT_MAX_AGE_DAYS: i64 = 180;
 /// even though the source files still exist on disk.
 async fn run_memory_decay(db: &PgPool) -> Result<(u64, u64)> {
     // Exponential decay: score *= exp(-0.693 / 30 * days_since_access)
+    // F-13: COALESCE on relevance_score — legacy NULL rows made `NULL*x=NULL` and
+    // `NULL<0.05` falsy, so they were neither decayed nor deleted (immortal).
     let decay_result = sqlx::query(
         "UPDATE memory_chunks \
-         SET relevance_score = relevance_score * exp(-0.693 / 30.0 * \
+         SET relevance_score = COALESCE(relevance_score, 1.0) * exp(-0.693 / 30.0 * \
              EXTRACT(EPOCH FROM (now() - accessed_at)) / 86400.0) \
          WHERE pinned = false \
            AND scope != 'shared' \
@@ -1725,7 +1729,8 @@ async fn run_memory_decay(db: &PgPool) -> Result<(u64, u64)> {
     // by importance-based retrieval, not access-recency decay (spec §1).
     let delete_result = sqlx::query(
         "DELETE FROM memory_chunks \
-         WHERE pinned = false AND scope != 'shared' AND relevance_score < 0.05 \
+         WHERE pinned = false AND scope != 'shared' \
+           AND COALESCE(relevance_score, 1.0) < 0.05 \
            AND kind = 'fact'",
     )
     .execute(db)
@@ -1741,12 +1746,25 @@ async fn run_memory_decay(db: &PgPool) -> Result<(u64, u64)> {
 /// plus soul `event` chunks that have aged past their importance-weighted
 /// retention window (spec §3). `reflection` chunks are always exempt —
 /// permanent durable biography. Returns the combined row count.
-pub(crate) async fn run_memory_decay_cleanup(db: &PgPool) -> Result<u64> {
-    // Facts: very old, low-score (unchanged).
+/// Free function behind the memory-decay-cleanup cron job (extracted so the
+/// soul-guard sqlx test can call the production path directly instead of a
+/// copy of the SQL). Deletes very old, low-score, non-pinned `fact` chunks,
+/// plus soul `event` chunks that have aged past their importance-weighted
+/// retention window (spec §3). `reflection` chunks are always exempt —
+/// permanent durable biography. Returns the combined row count.
+///
+/// `fact_age_days` is the retention window for stale facts, sourced from
+/// `[memory] compression_age_days` (F-06 — previously a dead config field;
+/// the sweep was hardcoded to 180 days). Returns the combined row count.
+pub(crate) async fn run_memory_decay_cleanup(db: &PgPool, fact_age_days: i64) -> Result<u64> {
+    // Facts: very old, low-score. F-13: COALESCE so NULL relevance_score rows
+    // (legacy) are also eligible instead of being immortal.
     let facts = sqlx::query(
-        "DELETE FROM memory_chunks WHERE pinned = false AND relevance_score < 0.1 \
-         AND accessed_at < now() - interval '180 days' AND kind = 'fact'",
+        "DELETE FROM memory_chunks WHERE pinned = false \
+          AND COALESCE(relevance_score, 1.0) < 0.1 \
+          AND accessed_at < now() - make_interval(days => $1::int) AND kind = 'fact'",
     )
+    .bind(fact_age_days)
     .execute(db)
     .await?
     .rows_affected();
@@ -1803,7 +1821,7 @@ mod soul_guard_tests {
         // reflection, ancient + low score → ALWAYS spared.
         ins(&db, "refl-ancient", "reflection", 3.0, 300).await;
 
-        run_memory_decay_cleanup(&db).await.unwrap();
+        run_memory_decay_cleanup(&db, 180).await.unwrap();
 
         async fn exists(db: &PgPool, tag: &str) -> bool {
             let n: i64 = sqlx::query_scalar("SELECT count(*) FROM memory_chunks WHERE content = $1")

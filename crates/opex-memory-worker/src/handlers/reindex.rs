@@ -60,7 +60,7 @@ pub async fn handle(
             .to_string_lossy()
             .to_string();
 
-        match embed_and_insert(db, client, &content, &source, fts_language, agent_id).await {
+        match embed_and_insert(db, client, &content, &source, fts_language, agent_id, "shared").await {
             Ok(()) => indexed += 1,
             Err(e) => {
                 tracing::warn!(source = %source, error = %e, "index failed");
@@ -76,6 +76,47 @@ pub async fn handle(
         }
     }
 
+    // F-04: index this agent's OWN workspace (workspace/agents/{agent_id}/) —
+    // notably MEMORY.md. The shared walk above correctly EXCLUDES `agents/`
+    // (those files are per-agent, not shared knowledge), but that left no path
+    // reindexing per-agent MEMORY.md despite CLAUDE.md documenting one. Walk the
+    // agent dir as scope='private' (skip noisy volatile subdirs).
+    let mut agent_files_indexed = 0u32;
+    if !agent_id.is_empty() {
+        let agent_dir = workspace_root.join("agents").join(agent_id);
+        if agent_dir.is_dir() {
+            const AGENT_EXCLUDE: &[&str] = &["cron_output", "checkpoints"];
+            match collect_workspace_files(&agent_dir, AGENT_EXCLUDE).await {
+                Ok(agent_files) => {
+                    for path in &agent_files {
+                        let content = match tokio::fs::read_to_string(path).await {
+                            Ok(c) if c.len() > 50 => c,
+                            Ok(_) => continue,
+                            Err(e) => {
+                                tracing::warn!(path = ?path, error = %e, "agent-scoped read failed");
+                                errors += 1;
+                                continue;
+                            }
+                        };
+                        let source = path
+                            .strip_prefix(workspace_root)
+                            .unwrap_or(path)
+                            .to_string_lossy()
+                            .to_string();
+                        match embed_and_insert(db, client, &content, &source, fts_language, agent_id, "private").await {
+                            Ok(()) => agent_files_indexed += 1,
+                            Err(e) => {
+                                tracing::warn!(source = %source, error = %e, "agent-scoped index failed");
+                                errors += 1;
+                            }
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "agent-scoped file collection failed"),
+            }
+        }
+    }
+
     // Index session transcripts
     let mut session_indexed = 0u32;
     if include_sessions && !agent_id.is_empty() {
@@ -87,7 +128,7 @@ pub async fn handle(
             .inspect_err(|e| tracing::warn!(error = %e, "session transcript indexing failed"))?;
     }
 
-    tracing::info!(indexed, errors, total_files, session_indexed, "universal reindex complete");
+    tracing::info!(indexed, errors, total_files, agent_files_indexed, session_indexed, "universal reindex complete");
     // Treat "every file failed" as a task failure so the worker auto-retry
     // mechanism picks it up (catches transient toolgate-down races where the
     // first attempt fires before /v1/embeddings is ready). Partial successes
@@ -199,9 +240,12 @@ async fn index_sessions(
     agent_id: &str,
 ) -> anyhow::Result<u32> {
     // IMPORTANT: sessions table uses started_at, not created_at
+    // F-10: cap at 200 most-recent sessions — without a LIMIT a chatty agent can
+    // queue hundreds of per-session embed calls and starve the single-threaded
+    // worker for many minutes.
     let sessions: Vec<(uuid::Uuid,)> = sqlx::query_as(
         "SELECT id FROM sessions WHERE agent_id = $1 \
-         AND started_at > now() - interval '90 days' ORDER BY started_at DESC",
+         AND started_at > now() - interval '90 days' ORDER BY started_at DESC LIMIT 200",
     )
     .bind(agent_id)
     .fetch_all(db)
@@ -237,7 +281,7 @@ async fn index_sessions(
             continue;
         }
 
-        match embed_and_insert(db, client, &transcript, &source, fts_language, agent_id).await {
+        match embed_and_insert(db, client, &transcript, &source, fts_language, agent_id, "private").await {
             Ok(()) => indexed += 1,
             Err(e) => tracing::debug!(session = %session_id, error = %e, "session index failed"),
         }
@@ -246,6 +290,12 @@ async fn index_sessions(
 }
 
 /// Embed content and insert into `memory_chunks` (transactional replace).
+///
+/// `scope`: `"shared"` for workspace files (visible to all agents via the
+/// `scope='shared'` search predicate), `"private"` for agent-scoped data
+/// (session transcripts, per-agent MEMORY.md) so it is NOT leaked across
+/// agents. F-01: session transcripts used to be inserted as `shared`, letting
+/// agent B's search read agent A's private conversations.
 async fn embed_and_insert(
     db: &PgPool,
     client: &ToolgateClient,
@@ -253,6 +303,7 @@ async fn embed_and_insert(
     source: &str,
     fts_language: &str,
     agent_id: &str,
+    scope: &str,
 ) -> anyhow::Result<()> {
     // Embed via shared ToolgateClient (retry policy + tracing applied automatically).
     let emb = client.embed_one(content).await?;
@@ -263,26 +314,36 @@ async fn embed_and_insert(
     );
 
     // Transaction: delete old + insert new.
+    // F-09: guard the DELETE with `kind='fact' OR kind IS NULL` so a reindex of
+    // a workspace file can never purge a soul biography row that happened to
+    // share a source string (defense-in-depth; soul sources are disjoint anyway).
     let mut tx = db.begin().await?;
-    sqlx::query("DELETE FROM memory_chunks WHERE source = $1")
+    sqlx::query("DELETE FROM memory_chunks WHERE source = $1 AND (kind = 'fact' OR kind IS NULL)")
         .bind(source)
         .execute(&mut *tx)
         .await?;
 
     let id = uuid::Uuid::new_v4().to_string();
-    // fts_language is configurable per-deployment (e.g. 'russian', 'english') instead of hardcoded
-    let insert_sql = format!(
-        "INSERT INTO memory_chunks (id, content, embedding, source, pinned, relevance_score, tsv, agent_id, scope)
-         VALUES ($1::uuid, $2, $3::halfvec, $4, false, 1.0, to_tsvector('{fts_language}', $2), $5, 'shared')"
-    );
-    sqlx::query(&insert_sql)
-        .bind(&id)        // $1
-        .bind(content)    // $2
-        .bind(&vec_str)   // $3 (embedding)
-        .bind(source)     // $4
-        .bind(agent_id)   // $5
-        .execute(&mut *tx)
-        .await?;
+    // F-02: cast `::vector` (the column type) — the previous `$3::halfvec`
+    // silently rounded every component to fp16, storing reindexed embeddings at
+    // half precision while the Core path stored full precision → inconsistent
+    // cosine rankings. F-08: bind `fts_language` as `$6::regconfig` instead of
+    // interpolating it into SQL (the Core path binds regconfig; only a fixed
+    // allowlist value ever reaches here today, but binding removes the
+    // defense-in-depth divergence).
+    sqlx::query(
+        "INSERT INTO memory_chunks (id, content, embedding, source, pinned, relevance_score, tsv, agent_id, scope) \
+         VALUES ($1::uuid, $2, $3::vector, $4, false, 1.0, to_tsvector($6::regconfig, $2), $5, $7)",
+    )
+    .bind(&id)            // $1
+    .bind(content)        // $2
+    .bind(&vec_str)       // $3 (embedding)
+    .bind(source)         // $4
+    .bind(agent_id)       // $5
+    .bind(fts_language)   // $6::regconfig
+    .bind(scope)          // $7
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(())
 }

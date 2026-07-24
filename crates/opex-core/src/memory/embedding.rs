@@ -202,7 +202,7 @@ impl ToolgateEmbedder {
         }
 
         // 4. Ensure index (non-fatal — sequential scan works).
-        if let Err(e) = opex_db::memory_queries::ensure_hnsw_index(&self.db, dim).await {
+        if let Err(e) = opex_db::memory_queries::ensure_vector_index(&self.db, dim).await {
             tracing::info!(dim, error = %e, "vector index not created — using sequential scan");
         }
 
@@ -229,7 +229,7 @@ impl ToolgateEmbedder {
             );
             let _ = sys_flags::upsert(&self.db, "memory.embed_dim", json!(detected_dim)).await;
             if let Err(e) =
-                opex_db::memory_queries::ensure_hnsw_index(&self.db, detected_dim).await
+                opex_db::memory_queries::ensure_vector_index(&self.db, detected_dim).await
             {
                 tracing::warn!(error = %e, "failed to create HNSW index during lazy init");
             }

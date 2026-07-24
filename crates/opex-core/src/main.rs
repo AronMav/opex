@@ -493,7 +493,18 @@ async fn main() -> Result<()> {
                     false
                 }
             };
-            if !has_shared {
+            // F-07: also skip if a non-terminal reindex task already exists, so a
+            // restart before the first reindex completes does NOT enqueue a
+            // duplicate (the original check only gated on shared-chunk presence,
+            // which stays false until that first reindex commits).
+            let reindex_inflight: bool = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM memory_tasks \
+                 WHERE task_type = 'reindex' AND status IN ('pending','processing'))",
+            )
+            .fetch_one(&bootstrap_pool)
+            .await
+            .unwrap_or(false);
+            if !has_shared && !reindex_inflight {
                 match db::memory_queries::enqueue_reindex_task(
                     &bootstrap_pool,
                     serde_json::json!({"agent_id": "", "include_sessions": false}),
@@ -509,6 +520,8 @@ async fn main() -> Result<()> {
                         "failed to enqueue initial workspace reindex"
                     ),
                 }
+            } else if reindex_inflight {
+                tracing::info!("memory bootstrap: reindex already in flight — skipping enqueue");
             }
         });
     } else {
@@ -1545,7 +1558,12 @@ async fn schedule_periodic_jobs(
     if let Err(e) = sched.add_usage_log_cleanup(db.clone()).await {
         tracing::warn!(error = %e, job = "usage_log_cleanup", "failed to register cron job");
     }
-    if let Err(e) = sched.add_memory_decay_cleanup(db.clone()).await {
+    // F-06: compression_age_days (previously a dead config field; the sweep was
+    // hardcoded to 180 days). Read the live shared config so hot-reloaded
+    // changes take effect on the next daily run.
+    let memory_compression_age_days =
+        state.config.shared_config.read().await.memory.compression_age_days as i64;
+    if let Err(e) = sched.add_memory_decay_cleanup(db.clone(), memory_compression_age_days).await {
         tracing::warn!(error = %e, job = "memory_decay_cleanup", "failed to register cron job");
     }
     if let Err(e) = sched.add_notifications_cleanup(db.clone()).await {

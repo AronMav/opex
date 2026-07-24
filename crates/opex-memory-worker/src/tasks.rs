@@ -13,15 +13,23 @@ pub struct MemoryTask {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub attempts: i32,
 }
 
+/// Max retries before a poison task is moved to terminal status `'dead'`
+/// (F-03 — previously `claim_next` retried failed tasks forever, starving the
+/// queue). 5 gives a genuine transient-flake budget while bounding poison loops.
+const MAX_ATTEMPTS: i32 = 5;
+
 /// Claim next pending task atomically (FOR UPDATE SKIP LOCKED).
-/// When no pending tasks remain, retries failed tasks automatically.
+/// When no pending tasks remain, retries failed tasks — BUT only those below
+/// `MAX_ATTEMPTS`; exhausted tasks flip to terminal status `'dead'` so they stop
+/// being reclaimed (F-03).
 pub async fn claim_next(db: &PgPool) -> anyhow::Result<Option<MemoryTask>> {
-    // Try pending first
+    // Try pending first (bump attempts when a (re)claim starts processing).
     let task = sqlx::query_as::<_, MemoryTask>(
         "UPDATE memory_tasks
-         SET status = 'processing', started_at = now()
+         SET status = 'processing', started_at = now(), attempts = attempts + 1
          WHERE id = (
              SELECT id FROM memory_tasks
              WHERE status = 'pending'
@@ -37,10 +45,23 @@ pub async fn claim_next(db: &PgPool) -> anyhow::Result<Option<MemoryTask>> {
         return Ok(task);
     }
 
-    // No pending — retry oldest failed task
+    // No pending — retire poison tasks (attempts exhausted) to terminal 'dead',
+    // then retry the oldest retryable failed task.
+    let retired = sqlx::query(
+        "UPDATE memory_tasks SET status = 'dead'
+         WHERE status = 'failed' AND attempts >= $1::int",
+    )
+    .bind(MAX_ATTEMPTS)
+    .execute(db)
+    .await?;
+    if retired.rows_affected() > 0 {
+        tracing::warn!(count = retired.rows_affected(), max_attempts = MAX_ATTEMPTS,
+            "retired poison memory_tasks to 'dead' (exceeded retry budget)");
+    }
+
     let retry = sqlx::query_as::<_, MemoryTask>(
         "UPDATE memory_tasks
-         SET status = 'processing', started_at = now(), error = NULL
+         SET status = 'processing', started_at = now(), error = NULL, attempts = attempts + 1
          WHERE id = (
              SELECT id FROM memory_tasks
              WHERE status = 'failed'
@@ -53,7 +74,7 @@ pub async fn claim_next(db: &PgPool) -> anyhow::Result<Option<MemoryTask>> {
     .await?;
 
     if let Some(ref t) = retry {
-        tracing::info!(id = %t.id, task_type = %t.task_type, "retrying failed task");
+        tracing::info!(id = %t.id, task_type = %t.task_type, attempts = t.attempts, "retrying failed task");
     }
 
     Ok(retry)
