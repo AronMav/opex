@@ -79,7 +79,7 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
         className="cursor-zoom-in h-auto w-auto p-0 hover:bg-transparent"
         aria-label={t("chat.lightbox_open")}
       >
-        <img src={src} alt={alt} className={cn("max-w-[min(28rem,100%)] rounded-xl border border-border", className)} loading="lazy" />
+        <img src={src} alt={alt} className={cn("max-w-[min(28rem,100%)] rounded-xl border border-border shadow-[var(--elevation-2)] transition-shadow duration-200 hover:shadow-[var(--elevation-4)]", className)} loading="lazy" />
       </Button>
 
       {open && (
