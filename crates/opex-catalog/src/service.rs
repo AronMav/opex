@@ -24,7 +24,7 @@ pub struct CatalogConfig {
 /// Spawn the background catalog loader. No-op when disabled. The host passes a
 /// pre-built `reqwest::Client` (e.g. an SSRF-guarded one) — the crate never
 /// builds its own, so URL/network policy stays with the host.
-pub fn spawn(cfg: CatalogConfig, client: reqwest::Client) {
+pub fn spawn(cfg: CatalogConfig, client: reqwest::Client, shutdown: tokio_util::sync::CancellationToken) {
     if !cfg.enabled {
         tracing::info!("model catalog disabled via config");
         return;
@@ -66,7 +66,10 @@ pub fn spawn(cfg: CatalogConfig, client: reqwest::Client) {
                 retry_backoff = (retry_backoff * 2).min(period);
                 d
             };
-            tokio::time::sleep(sleep_for).await;
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = tokio::time::sleep(sleep_for) => {}
+            }
         }
     });
 }

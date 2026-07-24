@@ -292,6 +292,10 @@ async fn main() -> Result<()> {
     // stage). Core no longer writes unit files at runtime — that was a
     // hot-path side effect that belonged to the installer.
 
+    // Shutdown token — created early so all background spawns (catalog,
+    // tool registry, container reaper, etc.) can select on it.
+    let bg_shutdown = tokio_util::sync::CancellationToken::new();
+
     // Model metadata catalog (context windows from models.dev/…): background
     // load + refresh into the process-global catalog. No-op when disabled.
     // The SSRF-guarded client is built here (host policy) and handed to the crate.
@@ -305,6 +309,7 @@ async fn main() -> Result<()> {
                 openrouter_url: mc.openrouter_url.clone(),
             },
             crate::net::ssrf::ssrf_http_client(std::time::Duration::from_secs(20)),
+            bg_shutdown.clone(),
         );
     }
 
@@ -513,12 +518,11 @@ async fn main() -> Result<()> {
     // Shutdown token: cancelled once axum::serve returns (i.e. after SIGTERM/Ctrl-C).
     // Background tasks select on this token so they exit promptly instead of
     // completing their current DB-query round-trip first (Bug 24).
-    // Created here (before init_container_manager) so the idle-reaper task (Bug 14)
-    // can select on it from the moment it is spawned.
-    let bg_shutdown = tokio_util::sync::CancellationToken::new();
+    // bg_shutdown was created earlier (before the catalog spawn) so all
+    // background tasks can select on it.
 
     // Tool registry — load service endpoints from workspace/tools/*.yaml
-    let tool_registry = init_tool_registry().await;
+    let tool_registry = init_tool_registry(bg_shutdown.clone()).await;
 
     // Container Manager (Docker lifecycle for on-demand MCP servers)
     let container_manager = init_container_manager(bg_shutdown.clone()).await;
@@ -1178,30 +1182,38 @@ fn get_master_key() -> String {
 }
 
 /// Initialize the tool registry by loading service endpoints from the workspace.
-async fn init_tool_registry() -> tools::ToolRegistry {
+async fn init_tool_registry(shutdown: tokio_util::sync::CancellationToken) -> tools::ToolRegistry {
     let service_map = tools::service_registry::load_service_map(config::WORKSPACE_DIR).await;
     let tool_registry = tools::ToolRegistry::from_config(&service_map);
     tracing::info!(tools = tool_registry.len().await, "tool registry loaded from workspace");
 
     // Spawn periodic health check for external tools
     let registry = tool_registry.clone();
+    let health_shutdown = shutdown.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
-            interval.tick().await;
-            registry.health_check().await;
+            tokio::select! {
+                _ = health_shutdown.cancelled() => break,
+                _ = interval.tick() => registry.health_check().await,
+            }
         }
     });
 
     // Periodic upload cleanup (every hour, delete files older than 7 days)
+    let cleanup_shutdown = shutdown.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
         loop {
-            interval.tick().await;
-            agent::cleanup_stale_uploads(
-                config::WORKSPACE_DIR,
-                std::time::Duration::from_secs(7 * 86400),
-            ).await;
+            tokio::select! {
+                _ = cleanup_shutdown.cancelled() => break,
+                _ = interval.tick() => {
+                    agent::cleanup_stale_uploads(
+                        config::WORKSPACE_DIR,
+                        std::time::Duration::from_secs(7 * 86400),
+                    ).await;
+                }
+            }
         }
     });
 
