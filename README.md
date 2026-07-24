@@ -1,5 +1,5 @@
 ﻿<h1 align="center">
-  <img src="docs/assets/opex-banner.png" alt="OPEX — a self-hosted AI gateway built like infrastructure" width="820">
+  <img src="docs/assets/opex-banner.png" alt="OPEX — a self-hosted AI agent platform with long-term memory, reflection and identity" width="820">
 </h1>
 
 <p align="center">

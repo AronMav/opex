@@ -1,5 +1,5 @@
 ﻿<h1 align="center">
-  <img src="docs/assets/opex-banner.png" alt="OPEX — самостоятельно развёртываемый AI-шлюз, построенный как инфраструктура" width="820">
+  <img src="docs/assets/opex-banner.png" alt="OPEX — самостоятельно развёртываемая платформа AI-агентов с долгосрочной памятью, рефлексией и идентичностью" width="820">
 </h1>
 
 <p align="center">
