@@ -4,11 +4,19 @@
 use std::sync::Arc;
 use anyhow::Result;
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::agent::memory_service::MemoryService;
 use crate::agent::providers::LlmProvider;
 use crate::config::SoulConfig;
 use crate::memory::soul::SoulInsert;
+
+/// What `run_cycle` produced on success — needed for the `reflection_cycle`
+/// timeline event payload (observability: how many insights, SELF.md updates).
+pub(crate) struct CycleOutcome {
+    pub insights: usize,
+    pub self_md_updates: usize,
+}
 
 pub(crate) const SESSION_CONTRIBUTION_CAP: f64 = 30.0;
 pub(crate) const REFLECTION_WINDOW: i64 = 100;
@@ -82,6 +90,7 @@ async fn should_reflect(db: &PgPool, agent: &str, cfg: &SoulConfig, threshold_bi
 pub async fn maybe_reflect(
     db: &PgPool,
     agent: &str,
+    session_id: Uuid,
     provider: &Arc<dyn LlmProvider>,
     memory_store: &Arc<dyn MemoryService>,
     deps: &SoulDeps,
@@ -111,22 +120,41 @@ pub async fn maybe_reflect(
             return;
         }
     }
-    let cycle_result = match tokio::time::timeout(
+    let (cycle_result, status): (Result<CycleOutcome>, &str) = match tokio::time::timeout(
         CYCLE_TIMEOUT,
         run_cycle(db, agent, provider, memory_store, deps),
     )
     .await
     {
-        Ok(r) => r,
-        Err(_elapsed) => Err(anyhow::anyhow!("reflection cycle timed out after {CYCLE_TIMEOUT:?}")),
+        Ok(r) => (r, "success"),
+        Err(_elapsed) => (Err(anyhow::anyhow!("reflection cycle timed out after {CYCLE_TIMEOUT:?}")), "timeout"),
     };
     match cycle_result {
-        Ok(()) => {
+        Ok(outcome) => {
             *deps.runtime.backoff.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = (0, None);
             tracing::info!(agent, "reflection cycle complete");
+            let payload = serde_json::json!({
+                "status": status,
+                "insights": outcome.insights,
+                "self_md_updates": outcome.self_md_updates,
+                "threshold_bias": threshold_bias,
+            });
+            if let Err(e) = opex_db::session_timeline::log_event(
+                db, session_id, "reflection_cycle", Some(&payload),
+            ).await {
+                tracing::warn!(agent, error = %e, "reflection_cycle timeline write failed");
+            }
         }
         Err(e) => {
             tracing::warn!(agent, error = %e, "reflection cycle failed");
+            let payload = serde_json::json!({
+                "status": status,
+                "error": e.to_string(),
+                "threshold_bias": threshold_bias,
+            });
+            let _ = opex_db::session_timeline::log_event(
+                db, session_id, "reflection_cycle", Some(&payload),
+            ).await;
             let paused = {
                 let mut bo = deps.runtime.backoff.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 bo.0 += 1;
@@ -173,7 +201,7 @@ async fn run_cycle(
     provider: &Arc<dyn LlmProvider>,
     memory_store: &Arc<dyn MemoryService>,
     deps: &SoulDeps,
-) -> Result<()> {
+) -> Result<CycleOutcome> {
     // Step 1: window (≤3 events per session; reflections exempt — spec §3.1)
     let window = crate::db::memory_queries::recent_soul_chunks(db, agent, REFLECTION_WINDOW * 2).await?;
     let mut per: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -260,7 +288,7 @@ async fn run_cycle(
     let _ = crate::db::tool_audit::record_tool_execution(
         db, agent, None, "soul_reflection", Some(&params), "applied", None, None,
     ).await;
-    Ok(())
+    Ok(CycleOutcome { insights: inserts.len(), self_md_updates: applied })
 }
 
 /// Returns the number of applied updates (0 = nothing to change).
@@ -384,7 +412,7 @@ mod tests {
         let store: std::sync::Arc<dyn crate::agent::memory_service::MemoryService> =
             std::sync::Arc::new(crate::agent::memory_service::mock::MockMemoryService::available());
         // должен вернуться сразу (try_lock занят), НЕ дойдя до провайдера
-        super::maybe_reflect(&db, "A", &provider, &store, &deps, 0.0).await;
+        super::maybe_reflect(&db, "A", uuid::Uuid::nil(), &provider, &store, &deps, 0.0).await;
     }
 
     /// Backoff pause (spec §3): a future `paused_until` short-circuits BEFORE any
@@ -407,6 +435,6 @@ mod tests {
         let store: std::sync::Arc<dyn crate::agent::memory_service::MemoryService> =
             std::sync::Arc::new(crate::agent::memory_service::mock::MockMemoryService::available());
         let db = sqlx::PgPool::connect_lazy("postgres://u:p@127.0.0.1:1/db").unwrap();
-        super::maybe_reflect(&db, "A", &provider, &store, &deps, 0.0).await;
+        super::maybe_reflect(&db, "A", uuid::Uuid::nil(), &provider, &store, &deps, 0.0).await;
     }
 }

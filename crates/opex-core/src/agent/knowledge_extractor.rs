@@ -319,7 +319,7 @@ async fn extract_and_save_inner(
             0.0
         };
         crate::agent::soul::reflection::maybe_reflect(
-            db, agent_name, provider, memory_store, soul_deps, threshold_bias,
+            db, agent_name, session_id, provider, memory_store, soul_deps, threshold_bias,
         )
         .await;
 
