@@ -41,10 +41,10 @@ export function createNavigationActions(deps: ActionDeps) {
       // effect watches for is never observed; returning later inits the effect's
       // ref to an already-idle phase and it never fires → silently stuck forever.
       // Clear it with a visible notice: no silent loss, no misdelivery.
-      if (get().agents[prev]?.pendingMessage) {
+      if (get().agents[prev]?.pendingMessage && get().agents[prev]!.pendingMessage!.length > 0) {
         set((draft) => {
           const s = draft.agents[prev];
-          if (s) s.pendingMessage = null;
+          if (s) s.pendingMessage = [];
         });
         void import("sonner").then(({ toast }) => {
           const translations = getTranslations(useLanguageStore.getState().locale);
