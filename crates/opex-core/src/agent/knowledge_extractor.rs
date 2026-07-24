@@ -23,8 +23,13 @@ const MAX_CONTEXT_MESSAGES: usize = 20;
 /// before an extraction run fires. Batches extraction so overlapping windows
 /// are not re-summarized every turn (spec §2.1).
 const MIN_NEW_MESSAGES: usize = 4;
-/// LLM call timeout.
-const EXTRACTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// LLM call timeout. Extraction runs DETACHED in the background (never blocks a
+/// user turn) on the agent's primary provider — for large-context sessions +
+/// reasoning models the call has high latency variance (~85% succeed within 60s,
+/// the tail needs ~2–3 min). 180s absorbs that tail while still bounding a hung
+/// provider. Raising this is safe precisely because it's best-effort background
+/// work; the cost of waiting is one idle bg task slot.
+const EXTRACTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
 /// Cap on characters for a single soul event (spec §2).
 pub(crate) const EVENT_MAX_CHARS: usize = 300;
@@ -177,12 +182,29 @@ async fn extract_and_save_inner(
         },
     ];
 
+    let extract_start = std::time::Instant::now();
     let response = tokio::time::timeout(
         EXTRACTION_TIMEOUT,
         provider.chat(&messages, &[], crate::agent::providers::CallOptions::default()),
     )
     .await
-    .map_err(|_| anyhow::anyhow!("extraction LLM call timed out"))??;
+    .map_err(|_| {
+        let elapsed = extract_start.elapsed().as_secs();
+        tracing::warn!(
+            agent = agent_name,
+            session_id = %session_id,
+            elapsed_secs = elapsed,
+            timeout_secs = EXTRACTION_TIMEOUT.as_secs(),
+            "extraction LLM call timed out (tail-latency — runs in background, no user impact)",
+        );
+        anyhow::anyhow!("extraction LLM call timed out after {elapsed}s")
+    })??;
+    tracing::info!(
+        agent = agent_name,
+        session_id = %session_id,
+        elapsed_ms = extract_start.elapsed().as_millis() as u64,
+        "extraction LLM call completed",
+    );
 
     // 5. Parse JSON from response
     let mut extracted = parse_extraction(&response.content)?;
