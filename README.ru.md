@@ -1,4 +1,4 @@
-<h1 align="center">
+﻿<h1 align="center">
   <img src="docs/assets/opex-banner.png" alt="OPEX — самостоятельно развёртываемый AI-шлюз, построенный как инфраструктура" width="820">
 </h1>
 
