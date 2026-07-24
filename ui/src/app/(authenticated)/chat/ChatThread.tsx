@@ -175,20 +175,23 @@ export function ChatThread({
   useScrollMemoryRestore(activeSessionId, isStreaming);
 
   // ── Pending message queue drain ────────────────────────────────────────────
-  // When connectionPhase transitions to 'idle', drain the FIFO queue of
-  // messages accumulated while the model was working. All queued messages
-  // are combined into a single turn (joined with \n) and sent at once.
-  // On 'error', discard the queue.
+  // When the model is idle and there are queued messages, drain the FIFO queue.
+  // All queued messages are combined into a single turn (joined with \n\n) and
+  // sent at once. Uses a ref flag to prevent double-draining within the same
+  // idle period — more robust than phase-transition detection (prevPhaseRef
+  // breaks on component remount, causing the drain to silently never fire).
   const pendingMessage = useChatStore((s) => s.agents[s.currentAgent]?.pendingMessage ?? []);
-  const prevPhaseRef = useRef<string>(connectionPhase);
+  const drainedRef = useRef(false);
   useEffect(() => {
-    const prevPhase = prevPhaseRef.current;
-    prevPhaseRef.current = connectionPhase;
+    if (!pendingMessage || pendingMessage.length === 0) {
+      drainedRef.current = false;
+      return;
+    }
 
-    if (!pendingMessage || pendingMessage.length === 0) return;
+    // Already drained this batch — wait for queue to clear before draining again.
+    if (drainedRef.current) return;
 
-    // Verify the first entry's stamp matches current agent/session —
-    // if the user switched context while messages were queued, discard.
+    // Verify the first entry's stamp matches current agent/session.
     const first = pendingMessage[0];
     const stamped = first.sessionId !== undefined || first.agent !== undefined;
     const targetMismatch =
@@ -203,8 +206,8 @@ export function ChatThread({
       return;
     }
 
-    if (connectionPhase === "idle" && prevPhase !== "idle") {
-      // Clean transition to idle — drain entire queue as one combined turn.
+    if (connectionPhase === "idle") {
+      drainedRef.current = true;
       const combined = pendingMessage.map((m) => m.content).join("\n\n");
       const allAttachments = pendingMessage.flatMap((m) => m.attachments ?? []);
       const anyVoice = pendingMessage.some((m) => m.voice);
