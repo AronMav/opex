@@ -64,7 +64,7 @@ struct ChatCompletionResponse {
     created: i64,
     model: String,
     choices: Vec<ChatResponseChoice>,
-    usage: Option<ChatResponseUsage>,
+    usage: ChatResponseUsage,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools_used: Vec<String>,
     iterations: u32,
@@ -83,7 +83,7 @@ struct ChatResponseMessage {
     content: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 struct ChatResponseUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
@@ -217,10 +217,15 @@ pub(crate) async fn chat_completions(
     // Non-streaming: pass full message history to handle_openai
     match engine.handle_openai(&req.messages, None).await {
         Ok(llm_resp) => {
-            let usage = llm_resp.usage.map(|u| ChatResponseUsage {
-                prompt_tokens: u.input_tokens,
-                completion_tokens: u.output_tokens,
-                total_tokens: u.input_tokens + u.output_tokens,
+            // OpenAI always returns a `usage` object — emit a zero-filled one
+            // when the provider didn't report token counts (was `null` before,
+            // which strict OpenAI clients/SDKs choke on).
+            let usage = llm_resp.usage.map_or_else(ChatResponseUsage::default, |u| {
+                ChatResponseUsage {
+                    prompt_tokens: u.input_tokens,
+                    completion_tokens: u.output_tokens,
+                    total_tokens: u.input_tokens + u.output_tokens,
+                }
             });
             let resp = ChatCompletionResponse {
                 id: completion_id,

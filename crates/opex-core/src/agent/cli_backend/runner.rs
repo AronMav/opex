@@ -45,16 +45,20 @@ impl CliRunner {
     /// Check if context hash changed; if so, clear stored session for this agent.
     /// Returns true if session was invalidated.
     pub async fn check_and_invalidate_session(&self, agent_name: &str, context_hash: u64) -> bool {
-        let mut hashes = self.session_hashes.write().await;
-        let prev = hashes.insert(agent_name.to_string(), context_hash);
-        if let Some(prev_hash) = prev
-            && prev_hash != context_hash {
-                // Context changed -- invalidate session
-                self.sessions.write().await.remove(agent_name);
-                tracing::info!(agent = %agent_name, "CLI session invalidated: context hash changed");
-                return true;
-            }
-        false
+        // Decide invalidation under `session_hashes`, then DROP it before
+        // taking the `sessions` write lock — never hold both across an await
+        // (avoids a lock-ordering hazard and stops blocking concurrent
+        // hash-checkers for the duration of the sessions write).
+        let invalidate = {
+            let mut hashes = self.session_hashes.write().await;
+            let prev = hashes.insert(agent_name.to_string(), context_hash);
+            prev.is_some_and(|prev_hash| prev_hash != context_hash)
+        };
+        if invalidate {
+            self.sessions.write().await.remove(agent_name);
+            tracing::info!(agent = %agent_name, "CLI session invalidated: context hash changed");
+        }
+        invalidate
     }
 
     /// Execute CLI with prompt, returning parsed response.

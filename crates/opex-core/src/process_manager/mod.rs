@@ -356,32 +356,40 @@ impl ProcessManager {
         // F024: flip the shutdown flag FIRST so the monitor/health loops (and
         // any in-flight restart) stop respawning what we're about to kill.
         self.shutting_down.store(true, std::sync::atomic::Ordering::SeqCst);
-        // Phase 1: send SIGTERM to all running processes
-        {
+        // Phase 1: send SIGTERM to all running processes.
+        // Snapshot (name, pid) under the lock, then DROP it before spawning
+        // the external `kill` awaits — a slow kill must not hold the `states`
+        // mutex (which guards status/restart/kill/monitor/health callers) for
+        // the cumulative duration of N kill invocations. Mirrors health_loop's
+        // "HTTP GET outside the lock" discipline.
+        let targets: Vec<(String, u32)> = {
             let states = self.states.lock().await;
-            for (name, ps) in states.iter() {
-                if let Some(ref child) = ps.child
-                    && let Some(pid) = child.id() {
-                        tracing::info!(process = %name, pid = pid, "sending SIGTERM");
-                        #[cfg(unix)]
-                        {
-                            // Negative PID sends signal to the entire process group
-                            // (matches process_group(0) set during spawn).
-                            // F127: capture the result + reap the helper — the old
-                            // fire-and-forget `let _ = ...spawn()` silently skipped
-                            // graceful termination if `kill` failed to launch and
-                            // left a short-lived zombie.
-                            match tokio::process::Command::new("kill")
-                                .args(["-TERM", &format!("-{}", pid)])
-                                .status()
-                                .await
-                            {
-                                Ok(s) if s.success() => {}
-                                Ok(s) => tracing::warn!(process = %name, pid, code = ?s.code(), "SIGTERM (kill) returned non-zero"),
-                                Err(e) => tracing::warn!(process = %name, pid, error = %e, "failed to send SIGTERM (kill spawn failed)"),
-                            }
-                        }
-                    }
+            states
+                .iter()
+                .filter_map(|(name, ps)| {
+                    ps.child.as_ref().and_then(|c| c.id()).map(|pid| (name.clone(), pid))
+                })
+                .collect()
+        };
+        for (name, pid) in targets {
+            tracing::info!(process = %name, pid = pid, "sending SIGTERM");
+            #[cfg(unix)]
+            {
+                // Negative PID sends signal to the entire process group
+                // (matches process_group(0) set during spawn).
+                // F127: capture the result + reap the helper — the old
+                // fire-and-forget `let _ = ...spawn()` silently skipped
+                // graceful termination if `kill` failed to launch and
+                // left a short-lived zombie.
+                match tokio::process::Command::new("kill")
+                    .args(["-TERM", &format!("-{}", pid)])
+                    .status()
+                    .await
+                {
+                    Ok(s) if s.success() => {}
+                    Ok(s) => tracing::warn!(process = %name, pid, code = ?s.code(), "SIGTERM (kill) returned non-zero"),
+                    Err(e) => tracing::warn!(process = %name, pid, error = %e, "failed to send SIGTERM (kill spawn failed)"),
+                }
             }
         }
 

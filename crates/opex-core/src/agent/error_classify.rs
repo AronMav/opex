@@ -117,12 +117,6 @@ pub fn cooldown_duration(class: &LlmErrorClass) -> std::time::Duration {
     }
 }
 
-/// User-friendly message for each error class.
-/// Language defaults to Russian when not specified.
-pub fn user_message(class: &LlmErrorClass) -> &'static str {
-    user_message_lang(class, "ru")
-}
-
 /// User-friendly message for each error class with explicit language.
 pub fn user_message_lang(class: &LlmErrorClass, language: &str) -> &'static str {
     let e = super::localization::get_error_strings(language);
@@ -139,10 +133,13 @@ pub fn user_message_lang(class: &LlmErrorClass, language: &str) -> &'static str 
     }
 }
 
-/// Format error for user display: classify + user message with warning emoji.
-/// Language defaults to Russian. Use `format_user_error_lang` for explicit language.
-pub fn format_user_error(error: &anyhow::Error) -> String {
-    format!("⚠️ {}", user_message(&classify(error)))
+/// Format an error for user display: classify + localized user message with a
+/// warning emoji. Callers pass the agent's configured language so English
+/// agents don't get Russian banners. There is deliberately NO language-default
+/// wrapper — defaulting to Russian regardless of `agent.language` was the bug
+/// this replaces.
+pub fn format_user_error_lang(error: &anyhow::Error, language: &str) -> String {
+    format!("⚠️ {}", user_message_lang(&classify(error), language))
 }
 
 /// Whether the error class is worth retrying at the engine level.
@@ -188,13 +185,6 @@ pub fn is_failover_worthy(class: &LlmErrorClass) -> bool {
             | LlmErrorClass::CallTimeout
             | LlmErrorClass::Unknown
     )
-}
-
-/// Asserts that CallTimeout is not included in the retryable set.
-fn _assert_call_timeout_not_retryable() {
-    // Compile-time assertion: if CallTimeout becomes retryable, this would need updating.
-    let ct = LlmErrorClass::CallTimeout;
-    assert!(!is_retryable(&ct), "CallTimeout must NOT be retryable by inner transient retry loop");
 }
 
 // ── RetryConfig ──────────────────────────────────────────────────────────────
@@ -493,8 +483,14 @@ mod tests {
             LlmErrorClass::AuthPermanent, LlmErrorClass::Billing,
             LlmErrorClass::Overloaded, LlmErrorClass::CallTimeout, LlmErrorClass::Unknown,
         ];
-        for class in &classes {
-            assert!(!user_message(class).is_empty(), "empty message for {:?}", class);
+        for lang in ["ru", "en"] {
+            for class in &classes {
+                assert!(
+                    !user_message_lang(class, lang).is_empty(),
+                    "empty message for {:?} ({lang})",
+                    class
+                );
+            }
         }
     }
 }

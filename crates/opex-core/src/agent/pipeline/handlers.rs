@@ -46,7 +46,7 @@ pub async fn handle_workspace_write(
             let key = secrets.get_upload_hmac_key();
             let url = crate::uploads::mint_workspace_file_url(&rel_for_url, &key, ttl_secs);
             let mime = crate::uploads::guess_mime_from_extension(filename);
-            let marker_json = serde_json::json!({"url": url, "mediaType": mime}).to_string();
+            let marker_json = serde_json::json!({"url": url, "mediaType": mime, "filename": filename}).to_string();
             let sec_note = crate::tools::code_smell::warning_for(filename, &content);
             format!(
                 "Successfully updated {} ({}B){}\n{}{}",
@@ -161,7 +161,7 @@ pub async fn handle_workspace_edit(
             let key = secrets.get_upload_hmac_key();
             let url = crate::uploads::mint_workspace_file_url(&rel_for_url, &key, ttl_secs);
             let mime = crate::uploads::guess_mime_from_extension(filename);
-            let marker_json = serde_json::json!({"url": url, "mediaType": mime}).to_string();
+            let marker_json = serde_json::json!({"url": url, "mediaType": mime, "filename": filename}).to_string();
             let sec_note = crate::tools::code_smell::warning_for(filename, new_text);
             format!(
                 "Successfully edited '{}'{}\n{}{}",
@@ -361,11 +361,15 @@ pub async fn save_binary_to_uploads(
     hint: &str,
     upload_key: &[u8; 32],
     base_url: &str,
-) -> Result<(String, String)> {
+) -> Result<(String, String, String)> {
     use crate::uploads::mint_uploads_url;
 
     // Detect media type from magic bytes (existing helper in this module).
-    let (_, media_type) = detect_media_type(data, hint);
+    // The extension was previously discarded here (`let (_, media_type) = …`);
+    // keep it to synthesise a display filename so the UI can show e.g.
+    // "image.png" instead of a bare media-type label with no name.
+    let (ext, media_type) = detect_media_type(data, hint);
+    let filename = generated_filename(&media_type, ext);
 
     let id = crate::db::uploads::insert_with_retention(
         pool,
@@ -374,7 +378,7 @@ pub async fn save_binary_to_uploads(
         &media_type,
         data,
         retention_days,
-        None, // no original filename for tool outputs
+        Some(&filename),
     )
     .await?;
 
@@ -386,11 +390,31 @@ pub async fn save_binary_to_uploads(
     tracing::info!(
         url = %url,
         media_type = %media_type,
+        filename = %filename,
         bytes = data.len(),
         retention_days = retention_days,
         "saved media to uploads (DB)"
     );
-    Ok((url, media_type))
+    Ok((url, media_type, filename))
+}
+
+/// Synthesise a display filename for a tool-produced binary that has no
+/// inherent name (generated image, TTS audio, extracted video frame, …).
+/// Combines a media-kind base with the detected extension, e.g. `image.png`,
+/// `audio.ogg`, `video.mp4`, `document.pdf`, `file.bin`.
+fn generated_filename(media_type: &str, ext: &str) -> String {
+    let base = if media_type.starts_with("image/") {
+        "image"
+    } else if media_type.starts_with("audio/") {
+        "audio"
+    } else if media_type.starts_with("video/") {
+        "video"
+    } else if media_type == "application/pdf" {
+        "document"
+    } else {
+        "file"
+    };
+    format!("{base}.{ext}")
 }
 
 /// Detect media type from magic bytes, returning (extension, mime_type).

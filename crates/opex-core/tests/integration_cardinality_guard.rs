@@ -13,10 +13,11 @@
 //!   3. `adding_session_id_label_panics` — public `assert_label_allowed`
 //!      panics on a key outside the allowlist. Pins the runtime safety net
 //!      that prevents `session_id`/`user_id` from being used as labels.
-//!   4. `synthetic_10k_sessions_stay_under_50mb_and_guard_trips_above` —
+//!   4. `synthetic_10k_sessions_stay_capped_and_guard_degrades_gracefully` —
 //!      bounded 4k unique series stays green; a 10k+1 synthetic run on a
-//!      child thread MUST panic (verified via `JoinHandle::join().is_err()`)
-//!      via `MAX_UNIQUE_SERIES` cardinality guard.
+//!      child thread MUST NOT panic — the `MAX_UNIQUE_SERIES` cardinality
+//!      guard refuses new series and bumps `series_overflow` instead
+//!      (telemetry must never crash the request path).
 //!   5. `atomic_counters_always_on_regardless_of_feature` — the always-on
 //!      AtomicU64 summary records values whether or not the `otel` feature
 //!      is active. The test binary is built WITHOUT `--features otel` by
@@ -97,11 +98,11 @@ fn adding_session_id_label_panics() {
 }
 
 #[test]
-fn synthetic_10k_sessions_stay_under_50mb_and_guard_trips_above() {
+fn synthetic_10k_sessions_stay_capped_and_guard_degrades_gracefully() {
     use std::thread;
 
     // Phase 1: bounded cross-product under the cap (5 * 20 * 4 * 5 * 2 = 4000).
-    // MUST NOT panic — the cardinality guard stays silent within budget.
+    // MUST NOT trip the guard — the cardinality counter stays within budget.
     let reg = Arc::new(MetricsRegistry::new());
     for ai in 0..5 {
         for ti in 0..20 {
@@ -120,16 +121,22 @@ fn synthetic_10k_sessions_stay_under_50mb_and_guard_trips_above() {
         }
     }
     // Under the cap we expect at most (5 * 20 * 2) = 200 unique tool_latency
-    // keys (provider × model do not apply to tool_latency). Just assert
-    // we're below the panic ceiling.
+    // keys (provider × model do not apply to tool_latency). Assert we're
+    // below the cap and nothing was refused.
     assert!(
         reg.unique_series_count() < MAX_UNIQUE_SERIES as u64,
         "bounded 4k-combination phase must stay under MAX_UNIQUE_SERIES; got {}",
         reg.unique_series_count()
     );
+    assert_eq!(
+        reg.series_overflow_count(),
+        0,
+        "no series may be refused while under the cap"
+    );
 
-    // Phase 2: push past the cap on a child thread. The panic is CAUGHT by
-    // the thread boundary — `.join()` returns Err(Any).
+    // Phase 2: push past the cap on a child thread. The guard MUST degrade
+    // gracefully — refuse new series + bump `series_overflow` — and MUST NOT
+    // panic (telemetry can never crash the request path). `.join()` succeeds.
     let reg2 = reg.clone();
     let h = thread::spawn(move || {
         // 10_005 distinct tool names ⇒ each is a new series. Combined with
@@ -143,14 +150,32 @@ fn synthetic_10k_sessions_stay_under_50mb_and_guard_trips_above() {
             );
         }
     });
-    let join_result = h.join();
+    h.join().expect(
+        "cardinality guard must NOT panic past MAX_UNIQUE_SERIES — it degrades gracefully",
+    );
+
+    // The counter settles at the cap (only ACCEPTED series are counted) and
+    // the excess is recorded as overflow.
     assert!(
-        join_result.is_err(),
-        "cardinality guard MUST panic past MAX_UNIQUE_SERIES = {MAX_UNIQUE_SERIES}"
+        reg.unique_series_count() <= MAX_UNIQUE_SERIES as u64,
+        "series counter must settle at the cap; got {}",
+        reg.unique_series_count()
+    );
+    assert!(
+        reg.series_overflow_count() > 0,
+        "excess series past the cap must be counted in series_overflow; got {}",
+        reg.series_overflow_count()
+    );
+
+    // The summary map itself stays bounded — new series were refused, not
+    // inserted, so it can never grow past the cap.
+    assert!(
+        reg.snapshot_tool_latency_summary().len() <= MAX_UNIQUE_SERIES,
+        "summary map must not grow past the cap"
     );
 
     // Cross-platform RSS probe: best-effort on Linux, informational on
-    // non-Linux. The hard contract is the panic above; RSS is an
+    // non-Linux. The hard contract is the graceful cap above; RSS is an
     // operational check.
     #[cfg(target_os = "linux")]
     {

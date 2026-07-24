@@ -13,7 +13,7 @@ make lint               # cargo clippy --all-targets -- -D warnings
 make audit              # cargo audit (RustSec advisories — see .cargo/audit.toml)
 cargo test test_name -- --nocapture  # single test
 
-# 8 tests under #[sqlx::test] need a live Postgres + DATABASE_URL.
+# 263 tests under #[sqlx::test] need a live Postgres + DATABASE_URL.
 # `cargo test` without DB will fail them with "EnvVar(NotPresent)" — that's
 # expected; use `make test-db` (or set DATABASE_URL) to run the full suite.
 
@@ -150,7 +150,7 @@ Unified pipeline lives in [src/agent/pipeline/](crates/opex-core/src/agent/pipel
 
 ### Gateway (`src/gateway/`)
 
-Axum HTTP API on port 18789. **Sub-router pattern:** 31 handler modules each export `pub(crate) fn routes() -> Router<AppState>`; `mod.rs` composes them via `.merge()`. Key handlers:
+Axum HTTP API on port 18789. **Sub-router pattern:** 46 handler modules each export `pub(crate) fn routes() -> Router<AppState>`; `mod.rs` composes them via `.merge()`. Key handlers:
 
 - `agents.rs` — CRUD for agent configs; sorts base agents first
 - `chat/` — SSE streaming chat split by route family. `chat/mod.rs` (`routes()` only) merges:
@@ -793,7 +793,7 @@ OPEX — Rust-based AI gateway (аналог OpenClaw с более безопа
 - Session ID: Opaque UUID, returned first in SSE (data-session-id event)
 - WebSocket Ticket: One-time ticket issued by POST `/api/auth/ws-ticket`, consumed by WS connection
 - Channel OAuth: Separate OAuth2 flow in `oauth.rs` for Telegram, Discord, etc.
-- Per-minute limit: Configured in `limits.config.max_requests_per_minute` (default 100)
+- Per-minute limit: Configured in `limits.config.max_requests_per_minute` (default 300)
 - Tool concurrency: Semaphore in engine limits concurrent tool execution (default 10, configurable)
 - Request timeout: Global timeout per request (default 180 seconds, configurable)
 <!-- GSD:architecture-end -->

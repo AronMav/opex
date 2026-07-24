@@ -46,12 +46,15 @@ fn is_constant_member(name: &str) -> bool {
     FSE_DEFAULT_ALLOWLIST.contains(&name)
 }
 
-/// Dispatch-time re-check, run before ANY 0-click auto-run (design §4.6:
-/// "the constant is re-checked before any auto-run, so even a forged DB row
-/// cannot 0-click-run a non-built-in action"). Fail-closed: an empty toggle
-/// or a non-member yields `false` and the dispatcher must resolve to
-/// `ScenarioStatus::Unsupported`.
-#[allow(dead_code)] // Phase 5+: called by FSE dispatcher before every 0-click auto-run
+/// Dispatch-time re-check for 0-click auto-run (design §4.6: "the constant is
+/// re-checked before any auto-run, so even a forged DB row cannot 0-click-run a
+/// non-built-in action"). Fail-closed: an empty toggle or a non-member yields
+/// `false` and the caller must treat the action as unsupported.
+///
+/// Live via the handler-admin allowlist surface (`handlers_admin.rs`), which
+/// uses it to decide which builtin handlers are auto-runnable. (The original
+/// in-core FSE dispatcher that this was written for has been retired — the
+/// toolgate-handler allowlist is the current consumer.)
 pub fn is_allowed_for_autorun(action_ref: &str, enabled_allowlist: &[String]) -> bool {
     is_constant_member(action_ref) && enabled_allowlist.iter().any(|m| m == action_ref)
 }

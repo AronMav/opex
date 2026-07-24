@@ -199,8 +199,14 @@ async fn channel_ws_loop(
                     Ok(qid) => {
                         let mut g = action_oids.lock().await;
                         if g.len() > 1000 {
-                            g.clear();
-                            tracing::warn!("outbound_ids overflow, cleared");
+                            // M-1 fix: drop the oldest 25% rather than the whole
+                            // map so a single overflow doesn't lose ack-tracking
+                            // for every in-flight action at once (a full clear()
+                            // here would duplicate-deliver them on reconnect).
+                            let drop_count = g.len() / 4;
+                            let keys: Vec<String> = g.keys().take(drop_count).cloned().collect();
+                            for k in keys { g.remove(&k); }
+                            tracing::warn!(dropped = drop_count, "outbound_ids overflow, partial eviction");
                         }
                         g.insert(action_id.clone(), qid);
                         Some(qid)

@@ -247,10 +247,16 @@ pub(crate) async fn auth_middleware(
     tracing::debug!(ip = %client_ip, path = %path, loopback = is_loopback(&client_ip), "auth middleware");
 
     // ── Loopback-only paths (internal service calls) ─────────────────
-    // /api/channels/notify — watchdog/internal alerts
-    // /api/media/upload    — toolgate media uploads
     // /api/vision/analyze  — vision proxy called by the analyze_image capability tool
     // /api/uploads/*       — DB-backed binary read endpoint
+    //
+    // NOTE: /api/channels/notify and /api/media/upload are intentionally NOT
+    // free-passed here (audit 2026-07-24). Both are sensitive — notify pushes
+    // messages out via any configured channel, upload writes arbitrary bytes
+    // into the DB — so any local RCE / SSRF-to-localhost could abuse them if
+    // they were open. Their legitimate callers (the watchdog alerter and the
+    // TypeScript channel adapter) already send the bearer token, so they now
+    // go through the normal auth check below without breaking anything.
     //
     // /ws* is intentionally NOT free-passed here even on loopback. Audit
     // 2026-05-08 found that any local process (toolgate, MCP container with
@@ -261,8 +267,6 @@ pub(crate) async fn auth_middleware(
     if is_loopback(&client_ip) {
         const LOOPBACK_EXACT: &[&str] = &[
             "/health",
-            "/api/channels/notify",
-            "/api/media/upload",
             "/api/vision/analyze",
             "/api/internal/infra-event",
             // Codemode (tools-as-code): sandbox scripts call back into core to
@@ -309,28 +313,33 @@ pub(crate) async fn auth_middleware(
             return next.run(req).await;
         }
 
-    // Only block fully unauthenticated requests (no header at all) from locked IPs.
-    // If the request HAS an Authorization header (even invalid), return 401 not 429 —
-    // the frontend will redirect to login, and the next valid-token request clears lockout.
-    if !exempt_from_lockout && rate_limiter.is_locked(&client_ip).await && auth_header.is_none() {
-        tracing::warn!(ip = %client_ip, path = %path, "auth rate limit: locked (no auth header)");
-        return (StatusCode::TOO_MANY_REQUESTS, "Too many failed attempts. Try again later.").into_response();
-    }
-
-    // For WebSocket paths, also accept ?ticket= (one-time) or ?token= (legacy) query parameter
-    // (browser WebSocket API cannot set custom headers)
+    // For WebSocket paths, also accept a ?ticket= one-time query parameter
+    // (the browser WebSocket API cannot set custom headers). Checked BEFORE the
+    // lockout: a ticket is an unguessable one-time credential minted via the
+    // authenticated POST /api/auth/ws-ticket, so honouring it for a locked IP
+    // cannot aid a brute-forcer but keeps legitimate reconnects working.
     if path.starts_with("/ws")
         && let Some(query) = req.uri().query() {
             for pair in query.split('&') {
-                // One-time ticket (preferred — avoids exposing static token in URL/logs)
                 if let Some(val) = pair.strip_prefix("ticket=")
                     && crate::gateway::handlers::auth::validate_ws_ticket(&ws_tickets, val).await {
                         rate_limiter.record_success(&client_ip).await;
                         return next.run(req).await;
                     }
-                // Legacy token= removed — use ticket= instead
             }
         }
+
+    // Block ALL unauthenticated requests from locked IPs — with OR without an
+    // Authorization header. The valid-token case already returned above (and
+    // cleared the lock via record_success), so anything reaching here failed
+    // authentication. The old `&& auth_header.is_none()` gate let an attacker
+    // bypass the lockout entirely by sending a wrong Bearer token on every
+    // request: endless 401s, never the 429, defeating the named brute-force
+    // control.
+    if !exempt_from_lockout && rate_limiter.is_locked(&client_ip).await {
+        tracing::warn!(ip = %client_ip, path = %path, "auth rate limit: locked");
+        return (StatusCode::TOO_MANY_REQUESTS, "Too many failed attempts. Try again later.").into_response();
+    }
 
     // Don't lock loopback — internal services must not be locked out.
     // Don't count static asset failures — browsers preflight these without tokens.
@@ -469,6 +478,212 @@ mod tests {
                 .unwrap();
             assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
             assert_eq!(body_string(resp).await, r#"{"degraded":true}"#);
+        }
+    }
+
+    // ── auth_middleware decision-branch tests ───────────────────────────
+    // The single most security-critical function previously had ZERO direct
+    // coverage (audit 2026-07-24). These pin every decision branch: valid /
+    // invalid token, public paths, the lockout (with AND without an
+    // Authorization header — the latter is the regression for the
+    // lockout-bypass fix), the loopback gate (channels/notify + media/upload
+    // now require a token), and valid-token-clears-lockout.
+    mod auth_mw {
+        use super::super::auth_middleware;
+        use super::super::AuthRateLimiter;
+        use axum::Router;
+        use axum::body::Body;
+        use axum::extract::ConnectInfo;
+        use axum::http::{Request, StatusCode};
+        use axum::middleware::from_fn;
+        use axum::routing::{get, post};
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+        use tokio::sync::Mutex;
+        use tower::ServiceExt;
+
+        const TOKEN: &str = "s3cret-token";
+        const PUBLIC_IP: [u8; 4] = [8, 8, 8, 8];
+        const LOOPBACK_IP: [u8; 4] = [127, 0, 0, 1];
+
+        fn routes() -> Router {
+            Router::new()
+                .route("/api/test", get(|| async { "ok" }))
+                .route("/health", get(|| async { "health" }))
+                .route("/api/uploads/x", get(|| async { "upload" }))
+                .route("/api/channels/notify", post(|| async { "notify" }))
+                .route("/api/media/upload", post(|| async { "media" }))
+        }
+
+        fn app() -> Router {
+            app_with_limiter(Arc::new(AuthRateLimiter::new(500, 30)))
+        }
+
+        /// Build an app whose rate limiter is shared so the test can pre-lock
+        /// an IP via the `__test_insert` backdoor.
+        fn app_with_limiter(limiter: Arc<AuthRateLimiter>) -> Router {
+            let token: Arc<str> = Arc::from(TOKEN);
+            let ws_tickets = Arc::new(Mutex::new(std::collections::HashMap::new()));
+            routes().route_layer(from_fn(move |req, next| {
+                let token = token.clone();
+                let limiter = limiter.clone();
+                let ws_tickets = ws_tickets.clone();
+                async move { auth_middleware(req, next, token, limiter, ws_tickets).await }
+            }))
+        }
+
+        fn req(method: &str, uri: &str, ip: [u8; 4], token: Option<&str>) -> Request<Body> {
+            let mut b = Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap();
+            b.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3])),
+                0,
+            )));
+            if let Some(t) = token {
+                b.headers_mut()
+                    .insert("authorization", format!("Bearer {t}").parse().unwrap());
+            }
+            b
+        }
+
+        #[tokio::test]
+        async fn valid_token_passes() {
+            let resp = app()
+                .oneshot(req("GET", "/api/test", PUBLIC_IP, Some(TOKEN)))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+
+        #[tokio::test]
+        async fn wrong_token_401() {
+            let resp = app()
+                .oneshot(req("GET", "/api/test", PUBLIC_IP, Some("wrong")))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        #[tokio::test]
+        async fn no_token_401() {
+            let resp = app()
+                .oneshot(req("GET", "/api/test", PUBLIC_IP, None))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        #[tokio::test]
+        async fn public_exact_path_needs_no_token() {
+            let resp = app()
+                .oneshot(req("GET", "/health", PUBLIC_IP, None))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+
+        #[tokio::test]
+        async fn public_prefix_path_needs_no_token() {
+            let resp = app()
+                .oneshot(req("GET", "/api/uploads/x", PUBLIC_IP, None))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+
+        // ── Lockout regression ──
+        // The OLD code only locked IPs that sent NO Authorization header, so
+        // an attacker sending a wrong Bearer token on every request got
+        // endless 401s and never the 429. Both shapes must now be limited.
+
+        #[tokio::test]
+        async fn locked_ip_no_header_429() {
+            let limiter = Arc::new(AuthRateLimiter::new(500, 30));
+            limiter
+                .__test_insert("8.8.8.8", Instant::now(), Some(Instant::now() + Duration::from_secs(30)))
+                .await;
+            let resp = app_with_limiter(limiter)
+                .oneshot(req("GET", "/api/test", PUBLIC_IP, None))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        }
+
+        #[tokio::test]
+        async fn locked_ip_wrong_header_429_not_401() {
+            // THE regression: a locked IP sending a (wrong) Bearer token must
+            // get 429, not slip through to an endless 401 stream.
+            let limiter = Arc::new(AuthRateLimiter::new(500, 30));
+            limiter
+                .__test_insert("8.8.8.8", Instant::now(), Some(Instant::now() + Duration::from_secs(30)))
+                .await;
+            let resp = app_with_limiter(limiter)
+                .oneshot(req("GET", "/api/test", PUBLIC_IP, Some("wrong")))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        }
+
+        #[tokio::test]
+        async fn valid_token_clears_lockout() {
+            let limiter = Arc::new(AuthRateLimiter::new(500, 30));
+            limiter
+                .__test_insert("8.8.8.8", Instant::now(), Some(Instant::now() + Duration::from_secs(30)))
+                .await;
+            let resp = app_with_limiter(limiter.clone())
+                .oneshot(req("GET", "/api/test", PUBLIC_IP, Some(TOKEN)))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            assert!(
+                !limiter.is_locked("8.8.8.8").await,
+                "valid token must clear the lockout"
+            );
+        }
+
+        // ── Loopback gate regression (audit 2026-07-24) ──
+        // channels/notify and media/upload were loopback-exempt; any local RCE
+        // could abuse them. They now require the bearer token on loopback too.
+
+        #[tokio::test]
+        async fn loopback_channels_notify_requires_token() {
+            let resp = app()
+                .oneshot(req("POST", "/api/channels/notify", LOOPBACK_IP, None))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        #[tokio::test]
+        async fn loopback_media_upload_requires_token() {
+            let resp = app()
+                .oneshot(req("POST", "/api/media/upload", LOOPBACK_IP, None))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        #[tokio::test]
+        async fn loopback_channels_notify_with_token_passes() {
+            let resp = app()
+                .oneshot(req("POST", "/api/channels/notify", LOOPBACK_IP, Some(TOKEN)))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+
+        #[tokio::test]
+        async fn loopback_health_still_open() {
+            // Sanity: genuinely public loopback paths stay open (no over-restriction).
+            let resp = app()
+                .oneshot(req("GET", "/health", LOOPBACK_IP, None))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
         }
     }
 

@@ -133,6 +133,7 @@ fn sse_file_fixture() {
     let ev = SseEvent::File {
         url: "/uploads/x.png".to_string(),
         media_type: "image/png".to_string(),
+        filename: None,
     };
     write_fixture("file", &ev);
 }

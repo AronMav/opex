@@ -272,7 +272,7 @@ mod tests {
             },
             StreamEvent::StepFinish { step_id: "st1".into(), finish_reason: "stop".into() },
             StreamEvent::RichCard { card_type: "table".into(), data: serde_json::json!({}) },
-            StreamEvent::File { url: "u".into(), media_type: "image/png".into() },
+            StreamEvent::File { url: "u".into(), media_type: "image/png".into(), filename: None },
             StreamEvent::AgentSwitch { agent_name: "a".into() },
             StreamEvent::ApprovalNeeded {
                 approval_id: opex_types::ids::ApprovalId::from(uuid::Uuid::nil()),

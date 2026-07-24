@@ -8,6 +8,7 @@ use axum::{
 use serde_json::json;
 
 use super::super::AppState;
+use crate::gateway::ApiError;
 use crate::gateway::clusters::{AuthServices, ConfigServices, InfraServices};
 
 pub(crate) fn routes() -> Router<AppState> {
@@ -152,7 +153,7 @@ pub(crate) async fn api_media_upload(
                 size = data.len(),
                 "media upload: db insert failed"
             );
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::Internal("media upload failed".to_string()).into_response();
         }
     };
 

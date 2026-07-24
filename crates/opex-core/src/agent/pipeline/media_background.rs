@@ -701,7 +701,7 @@ impl BackgroundMediaTask {
         use crate::agent::pipeline::handlers::save_binary_to_uploads;
         use crate::gateway::notify;
 
-        let (_url, _media_type) = match save_binary_to_uploads(
+        let (_url, _media_type, _filename) = match save_binary_to_uploads(
             &self.db,
             self.retention_days,
             &bytes,
@@ -788,7 +788,7 @@ async fn persist_channel_media_inline(
 ) {
     use crate::agent::pipeline::handlers::save_binary_to_uploads;
 
-    let (url, media_type) = match save_binary_to_uploads(
+    let (url, media_type, filename) = match save_binary_to_uploads(
         db,
         retention_days,
         bytes,
@@ -798,7 +798,7 @@ async fn persist_channel_media_inline(
     )
     .await
     {
-        Ok(pair) => pair,
+        Ok(triple) => triple,
         Err(e) => {
             tracing::warn!(
                 agent = %agent_name, kind = ?kind, error = %e,
@@ -809,7 +809,7 @@ async fn persist_channel_media_inline(
     };
 
     if let Some(id) = tool_message_id {
-        let marker_json = serde_json::json!({"url": &url, "mediaType": &media_type}).to_string();
+        let marker_json = serde_json::json!({"url": &url, "mediaType": &media_type, "filename": &filename}).to_string();
         let prefix = format!("{}{marker_json}\n", crate::agent::engine::FILE_PREFIX);
         if let Err(e) = crate::db::sessions::prepend_message_content(db, id, &prefix).await {
             // Don't return — the bell ping is still useful even if the inline

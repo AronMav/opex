@@ -47,6 +47,10 @@ pub struct ErrorStrings {
     pub overloaded: &'static str,
     pub call_timeout: &'static str,
     pub unknown: &'static str,
+    /// User-visible banner emitted when the pipeline switches to a fallback
+    /// provider mid-turn. `{}` is replaced with the classified error reason
+    /// (already localized via `user_message_lang`).
+    pub fallback_switch: &'static str,
 }
 
 const RU: CommandStrings = CommandStrings {
@@ -131,6 +135,7 @@ const RU_ERR: ErrorStrings = ErrorStrings {
     overloaded: "Сервер перегружен. Попробуйте позже.",
     call_timeout: "Провайдер не отвечает. Переключаюсь на резервного…",
     unknown: "Произошла ошибка. Попробуйте ещё раз.",
+    fallback_switch: "\n\n⚠️ _Первичный провайдер недоступен ({}), переключаюсь на резервного…_\n",
 };
 
 const EN_ERR: ErrorStrings = ErrorStrings {
@@ -143,6 +148,7 @@ const EN_ERR: ErrorStrings = ErrorStrings {
     overloaded: "Server is overloaded. Please try later.",
     call_timeout: "Provider not responding. Switching to fallback…",
     unknown: "An error occurred. Please try again.",
+    fallback_switch: "\n\n⚠️ _Primary provider unavailable ({}), switching to fallback…_\n",
 };
 
 pub fn get_strings(language: &str) -> &'static CommandStrings {

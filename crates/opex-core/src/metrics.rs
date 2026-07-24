@@ -74,11 +74,15 @@ pub const ALLOWED_LABEL_KEYS: &[&str] = &[
 ];
 
 /// Phase 65 OBS-03: hard cap on unique (tool_name × agent_id × provider ×
-/// model × result) tuples. Past this, the registry panics — caught by the
-/// `integration_cardinality_guard.rs` 10k synthetic-session test. The
-/// ceiling is large enough for realistic combinations (5 agents × 20 tools
-/// × 4 providers × 5 models × 2 results = 4000) but tight enough to catch
-/// label explosion from session_id / user_id slipping through.
+/// model × result) tuples. Past this, the registry REFUSES new series and
+/// bumps `series_overflow` — graceful degradation, because telemetry must
+/// never be able to crash request processing (the old behaviour `panic!`ed
+/// here, aborting the process on a user-influenced label such as a YAML/MCP
+/// tool name). Pinned by the `integration_cardinality_guard.rs`
+/// synthetic-session test. The ceiling is large enough for realistic
+/// combinations (5 agents × 20 tools × 4 providers × 5 models × 2 results
+/// = 4000) but tight enough to catch label explosion from session_id /
+/// user_id slipping through.
 pub const MAX_UNIQUE_SERIES: usize = 10_000;
 
 /// Tri-string key used by `tool_latency` and `llm_call_duration` histograms.
@@ -125,6 +129,11 @@ pub struct MetricsRegistry {
     /// Running count of unique series inserted across all three histograms.
     /// Checked against [`MAX_UNIQUE_SERIES`] on every new-key insert.
     unique_series: AtomicU64,
+    /// Number of new series REFUSED because the cardinality cap
+    /// ([`MAX_UNIQUE_SERIES`]) was reached. A non-zero value signals label
+    /// explosion (e.g. session_id / user_id leaking into labels) and should
+    /// trigger operator attention — mirrors `csp_violations_overflow`.
+    series_overflow: AtomicU64,
 
     /// (provider, kind) → counter. `kind` ∈
     /// {"connect","request","inactivity","max_duration"}. Incremented by
@@ -167,6 +176,7 @@ impl MetricsRegistry {
             db_query_duration: RwLock::new(HashMap::new()),
             llm_tokens_total: RwLock::new(HashMap::new()),
             unique_series: AtomicU64::new(0),
+            series_overflow: AtomicU64::new(0),
             llm_timeout_total: RwLock::new(HashMap::new()),
             llm_failover_total: RwLock::new(HashMap::new()),
             redrive_events: RwLock::new(HashMap::new()),
@@ -379,20 +389,44 @@ impl MetricsRegistry {
         self.unique_series.load(Ordering::Relaxed)
     }
 
-    /// Cardinality guard. Called on every new-key insert across the three
-    /// histograms. Panics if the running count exceeds [`MAX_UNIQUE_SERIES`].
+    /// Number of new series refused after the cardinality cap was reached.
+    /// Operator-facing signal of label explosion (mirrors
+    /// `csp_violations_overflow_count`).
+    pub fn series_overflow_count(&self) -> u64 {
+        self.series_overflow.load(Ordering::Relaxed)
+    }
+
+    /// Cardinality guard. Called on every new-key insert across the
+    /// histograms. Returns `false` once the running count exceeds
+    /// [`MAX_UNIQUE_SERIES`] so the caller DROPS the new series instead of
+    /// growing the map without bound.
     ///
-    /// The diagnostic message includes the hit count, the ceiling, and the
-    /// allowlist — operators get immediate context about what to check.
-    fn bump_series_or_panic(&self) {
+    /// Telemetry must degrade gracefully — it must never be able to crash
+    /// request processing. The old behaviour `panic!`ed here, which could
+    /// abort the process on a user-influenced label (a YAML/MCP tool name is
+    /// operator-controlled cardinality). Overflow is counted in
+    /// `series_overflow` and warn-logged (sampled) for operator attention.
+    fn try_reserve_series(&self) -> bool {
         let n = self.unique_series.fetch_add(1, Ordering::Relaxed) + 1;
-        if (n as usize) > MAX_UNIQUE_SERIES {
-            panic!(
-                "metrics cardinality guard: {n} unique series exceeds MAX_UNIQUE_SERIES={MAX_UNIQUE_SERIES}. \
-                 Check that no code path is passing session_id / user_id / request_id as a label. \
-                 Allowed keys: {ALLOWED_LABEL_KEYS:?}"
+        if (n as usize) <= MAX_UNIQUE_SERIES {
+            return true;
+        }
+        // Over the cap — undo the reservation so `unique_series` keeps
+        // counting only ACCEPTED series (stays ≤ cap), then record the
+        // refusal for operator visibility.
+        self.unique_series.fetch_sub(1, Ordering::Relaxed);
+        let dropped = self.series_overflow.fetch_add(1, Ordering::Relaxed) + 1;
+        if dropped == 1 || dropped.is_multiple_of(DROP_WARN_SAMPLE_RATE) {
+            tracing::warn!(
+                series = n,
+                cap = MAX_UNIQUE_SERIES,
+                dropped_total = dropped,
+                allowed_labels = ?ALLOWED_LABEL_KEYS,
+                "metrics cardinality cap reached — refusing new series \
+                 (check that no code path passes session_id / user_id / request_id as a label)"
             );
         }
+        false
     }
 
     /// Record tool latency. `result` SHOULD be a bounded-cardinality value
@@ -438,7 +472,9 @@ impl MetricsRegistry {
             self.record_tool_latency_otel(tool_name, agent_id, result, d);
             return;
         }
-        self.bump_series_or_panic();
+        if !self.try_reserve_series() {
+            return;
+        }
         write.insert(key, (AtomicU64::new(1), AtomicU64::new(micros)));
         drop(write);
         self.record_tool_latency_otel(tool_name, agent_id, result, d);
@@ -485,7 +521,9 @@ impl MetricsRegistry {
             self.record_llm_call_duration_otel(provider, model, result, d);
             return;
         }
-        self.bump_series_or_panic();
+        if !self.try_reserve_series() {
+            return;
+        }
         write.insert(key, (AtomicU64::new(1), AtomicU64::new(micros)));
         drop(write);
         self.record_llm_call_duration_otel(provider, model, result, d);
@@ -521,7 +559,9 @@ impl MetricsRegistry {
             self.record_db_query_duration_otel(result, d);
             return;
         }
-        self.bump_series_or_panic();
+        if !self.try_reserve_series() {
+            return;
+        }
         write.insert(key, (AtomicU64::new(1), AtomicU64::new(micros)));
         drop(write);
         self.record_db_query_duration_otel(result, d);
@@ -562,7 +602,9 @@ impl MetricsRegistry {
         // llm_tokens_total shares the unique-series budget — each new
         // direction is a new series. Bounded to 2 in practice (prompt,
         // completion) but we count it for safety.
-        self.bump_series_or_panic();
+        if !self.try_reserve_series() {
+            return;
+        }
         write.insert(key, AtomicU64::new(n));
         drop(write);
         self.record_llm_tokens_otel(n, direction);
@@ -921,6 +963,7 @@ pub fn build_dashboard_body(registry: &MetricsRegistry) -> serde_json::Value {
         "sse_events_dropped_total": by_agent,
         "csp_violations": csp_violations,
         "csp_violations_overflow": registry.csp_violations_overflow_count(),
+        "series_overflow": registry.series_overflow_count(),
     })
 }
 
@@ -1070,6 +1113,7 @@ pub fn build_dashboard_body_with_snapshot(
         "sse_events_dropped_total": by_agent,
         "csp_violations": csp_violations,
         "csp_violations_overflow": registry.csp_violations_overflow_count(),
+        "series_overflow": registry.series_overflow_count(),
         "llm_timeout_total": llm_timeouts,
         "llm_failover_total": llm_failovers,
         "redrive_events_total": redrive_events,

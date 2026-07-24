@@ -305,6 +305,7 @@ async fn menu_run_core(
                 opex_types::ws::WsEvent::File {
                     url: artifact.clone(),
                     media_type: upload_meta.mime.clone(),
+                    filename: upload_meta.filename.clone(),
                 }
                 .to_json(),
             );

@@ -113,6 +113,9 @@ pub enum SseEvent {
         url: String,
         #[serde(rename = "mediaType")]
         media_type: String,
+        /// Optional display name (e.g. "image.png"); omitted when unknown.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
     },
     /// Rich-card payload. Newtype variant — discriminator `cardType` lives
     /// at top level alongside `type`.

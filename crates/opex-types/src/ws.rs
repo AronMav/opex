@@ -97,6 +97,9 @@ pub enum WsEvent {
         url: String,
         #[serde(rename = "mediaType")]
         media_type: String,
+        /// Optional display name (e.g. "transcript.txt"); omitted when unknown.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
     },
     /// `agent/pipeline/canvas.rs:35` (present/push_data — `content_type` +
     /// `content` + `title` all present, `title` possibly explicit `null`)

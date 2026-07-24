@@ -378,8 +378,8 @@ pub(super) async fn run_converter(
                 let _ = send_and_buffer!(frame);
                 continue;
             }
-            StreamEvent::File { url, media_type } => {
-                let frame = writer.build_pure(StreamEvent::File { url, media_type });
+            StreamEvent::File { url, media_type, filename } => {
+                let frame = writer.build_pure(StreamEvent::File { url, media_type, filename });
                 let _ = send_and_buffer!(frame);
                 continue;
             }

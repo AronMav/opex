@@ -1191,6 +1191,16 @@ impl AgentEngine {
         force_new_session: bool,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Result<String> {
+        // R-DRAIN: register the pipeline cancel token so graceful shutdown's
+        // `cancel_all_requests` propagates into this turn's `execute()` and
+        // `wait_drain` blocks for it. The other three entry points
+        // (handle_sse / handle_with_status / handle_streaming) already do
+        // this; the isolated RPC path (cron one-shot + `/goal` turns) was
+        // missing it, so in-flight cron/goal turns were invisible to shutdown
+        // — they kept running while toolgate/DB were torn down underneath
+        // them, and a `cron_runs` row could stick in 'running' forever.
+        let _req_guard = self.state.register_request_guarded(cancel.clone());
+
         let mut s = sink::NoopSink::new();
 
         let boot = match tokio::time::timeout(

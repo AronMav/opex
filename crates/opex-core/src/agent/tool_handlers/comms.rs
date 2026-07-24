@@ -362,10 +362,17 @@ impl SystemToolHandler for SendMediaHandler {
             .get("media_type")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let marker = serde_json::json!({
+        let mut marker = serde_json::json!({
             "url": url,
             "mediaType": media_type,
         });
+        if let Some(fname) = args
+            .get("filename")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            marker["filename"] = serde_json::json!(fname);
+        }
         format!(
             "{}{}\nMedia displayed inline.",
             crate::agent::engine::FILE_PREFIX,

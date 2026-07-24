@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::super::AppState;
+use crate::gateway::ApiError;
 use crate::gateway::clusters::{AgentCore, AuthServices, InfraServices};
 
 pub(crate) fn routes() -> Router<AppState> {
@@ -189,16 +190,18 @@ pub(crate) async fn gmail_push_handler(
         || !bool::from(provided_token.as_bytes().ct_eq(expected_token.as_bytes()))
     {
         tracing::warn!("gmail push: rejected request (missing or invalid token)");
-        return StatusCode::UNAUTHORIZED.into_response();
+        return ApiError::Unauthorized("missing or invalid token".to_string()).into_response();
     }
 
     let raw = match base64::engine::general_purpose::STANDARD.decode(&body.message.data) {
         Ok(r) => r,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+        Err(_) => {
+            return ApiError::BadRequest("invalid base64 payload".to_string()).into_response()
+        }
     };
     let notification: serde_json::Value = match serde_json::from_slice(&raw) {
         Ok(v) => v,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+        Err(_) => return ApiError::BadRequest("invalid JSON payload".to_string()).into_response(),
     };
 
     let email = notification["emailAddress"]
@@ -433,10 +436,10 @@ pub(crate) async fn api_delete_gmail_trigger(
     {
         Ok(Some(r)) => r,
         Ok(None) => {
-            return (StatusCode::NOT_FOUND, "trigger not found").into_response()
+            return ApiError::NotFound("trigger not found".to_string()).into_response()
         }
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+            return ApiError::Internal(e.to_string()).into_response()
         }
     };
 
@@ -451,8 +454,8 @@ pub(crate) async fn api_delete_gmail_trigger(
         .await
     {
         Ok(r) if r.rows_affected() > 0 => StatusCode::NO_CONTENT.into_response(),
-        Ok(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => ApiError::NotFound("trigger not found".to_string()).into_response(),
+        Err(e) => ApiError::Internal(e.to_string()).into_response(),
     }
 }
 

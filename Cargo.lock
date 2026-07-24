@@ -2044,7 +2044,7 @@ dependencies = [
 
 [[package]]
 name = "opex-catalog"
-version = "0.36.0"
+version = "0.36.1"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -2057,7 +2057,7 @@ dependencies = [
 
 [[package]]
 name = "opex-core"
-version = "0.36.0"
+version = "0.36.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2137,7 +2137,7 @@ dependencies = [
 
 [[package]]
 name = "opex-db"
-version = "0.36.0"
+version = "0.36.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2154,7 +2154,7 @@ dependencies = [
 
 [[package]]
 name = "opex-embedding"
-version = "0.36.0"
+version = "0.36.1"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -2167,7 +2167,7 @@ dependencies = [
 
 [[package]]
 name = "opex-gateway-util"
-version = "0.36.0"
+version = "0.36.1"
 dependencies = [
  "axum",
  "dashmap",
@@ -2184,7 +2184,7 @@ dependencies = [
 
 [[package]]
 name = "opex-memory-worker"
-version = "0.36.0"
+version = "0.36.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2210,7 +2210,7 @@ dependencies = [
 
 [[package]]
 name = "opex-types"
-version = "0.36.0"
+version = "0.36.1"
 dependencies = [
  "chrono",
  "serde",
@@ -2222,7 +2222,7 @@ dependencies = [
 
 [[package]]
 name = "opex-watchdog"
-version = "0.36.0"
+version = "0.36.1"
 dependencies = [
  "anyhow",
  "chrono",

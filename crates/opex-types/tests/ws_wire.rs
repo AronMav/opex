@@ -136,6 +136,7 @@ fn ws_file_fixture() {
     let ev = WsEvent::File {
         url: "/api/uploads/77777777-7777-7777-7777-777777777777?sig=abc&exp=123".to_string(),
         media_type: "image/png".to_string(),
+        filename: None,
     };
     write_fixture("file", &ev);
 }

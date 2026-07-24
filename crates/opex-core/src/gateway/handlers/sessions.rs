@@ -283,7 +283,7 @@ pub(crate) async fn api_get_session(
             }))
             .into_response()
         }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => ApiError::NotFound("session not found".to_string()).into_response(),
         Err(e) => ApiError::Internal(e.to_string()).into_response(),
     }
 }

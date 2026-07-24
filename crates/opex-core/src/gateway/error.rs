@@ -15,6 +15,9 @@ pub enum ApiError {
     BadRequest(String),
     Conflict(String),
     Forbidden(String),
+    Unauthorized(String),
+    PayloadTooLarge(String),
+    UnsupportedMediaType(String),
     Internal(String),
 }
 
@@ -25,6 +28,9 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             ApiError::Conflict(msg) => (StatusCode::CONFLICT, msg),
             ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
+            ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
+            ApiError::PayloadTooLarge(msg) => (StatusCode::PAYLOAD_TOO_LARGE, msg),
+            ApiError::UnsupportedMediaType(msg) => (StatusCode::UNSUPPORTED_MEDIA_TYPE, msg),
             ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
         (status, Json(json!({"error": message}))).into_response()

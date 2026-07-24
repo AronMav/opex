@@ -255,7 +255,7 @@ impl LspClient {
             let mut guard = self
                 .opened
                 .lock()
-                .expect("opened set lock poisoned");
+                .unwrap_or_else(|e| e.into_inner());
             guard.insert(uri.to_owned())
         };
 

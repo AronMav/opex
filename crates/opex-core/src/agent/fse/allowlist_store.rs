@@ -35,7 +35,7 @@ static ALLOWLIST_CACHE: Mutex<Option<(Instant, Arc<Vec<String>>)>> = Mutex::new(
 pub async fn get_enabled_allowlist(db: &PgPool) -> Vec<String> {
     // Check cache first (fast path — no DB query)
     {
-        let cache = ALLOWLIST_CACHE.lock().unwrap();
+        let cache = ALLOWLIST_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((fetched_at, cached)) = cache.as_ref()
             && fetched_at.elapsed() < ALLOWLIST_CACHE_TTL
         {
@@ -57,7 +57,7 @@ pub async fn get_enabled_allowlist(db: &PgPool) -> Vec<String> {
 
     // Update cache
     {
-        let mut cache = ALLOWLIST_CACHE.lock().unwrap();
+        let mut cache = ALLOWLIST_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         *cache = Some((Instant::now(), Arc::new(result.clone())));
     }
 
@@ -67,7 +67,7 @@ pub async fn get_enabled_allowlist(db: &PgPool) -> Vec<String> {
 /// Invalidate the allowlist cache. Called after writes (set_enabled_allowlist*)
 /// so the next read picks up the change immediately.
 pub fn invalidate_allowlist_cache() {
-    let mut cache = ALLOWLIST_CACHE.lock().unwrap();
+    let mut cache = ALLOWLIST_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     *cache = None;
 }
 

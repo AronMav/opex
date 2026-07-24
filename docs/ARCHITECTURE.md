@@ -350,7 +350,7 @@ background: knowledge extraction (≥5 messages)
 
 ### Sub-Router Pattern
 
-`crates/opex-core/src/gateway/mod.rs` composes the router via `.merge()` of 31 handler modules. Each handler module exports `pub(crate) fn routes() -> Router<AppState>`.
+`crates/opex-core/src/gateway/mod.rs` composes the router via `.merge()` of 46 handler modules. Each handler module exports `pub(crate) fn routes() -> Router<AppState>`.
 
 **Current handler modules** (`src/gateway/handlers/`):
 

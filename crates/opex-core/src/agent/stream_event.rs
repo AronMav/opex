@@ -70,6 +70,9 @@ pub enum StreamEvent {
     File {
         url: String,
         media_type: String,
+        /// Display name for the attachment (e.g. "image.png"). Present when
+        /// the producer knows it; the UI falls back to a media-type label.
+        filename: Option<String>,
     },
     Finish {
         finish_reason: String,

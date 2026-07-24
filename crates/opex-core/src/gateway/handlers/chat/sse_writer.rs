@@ -37,7 +37,7 @@ impl From<StreamEvent> for SseEvent {
                 tool_call_id: id,
                 output: result,
             },
-            StreamEvent::File { url, media_type } => SseEvent::File { url, media_type },
+            StreamEvent::File { url, media_type, filename } => SseEvent::File { url, media_type, filename },
             StreamEvent::ClarifyNeeded {
                 clarify_id,
                 question,
@@ -348,11 +348,26 @@ mod tests {
         let stream = StreamEvent::File {
             url: "/uploads/x.png".to_string(),
             media_type: "image/png".to_string(),
+            filename: None,
         };
         let json = serde_json::to_string(&SseEvent::from(stream)).unwrap();
         assert_eq!(
             json,
             r#"{"type":"file","url":"/uploads/x.png","mediaType":"image/png"}"#
+        );
+    }
+
+    #[test]
+    fn from_file_with_filename_includes_it() {
+        let stream = StreamEvent::File {
+            url: "/api/uploads/abc?sig=x&exp=1".to_string(),
+            media_type: "image/png".to_string(),
+            filename: Some("image.png".to_string()),
+        };
+        let json = serde_json::to_string(&SseEvent::from(stream)).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"file","url":"/api/uploads/abc?sig=x&exp=1","mediaType":"image/png","filename":"image.png"}"#
         );
     }
 

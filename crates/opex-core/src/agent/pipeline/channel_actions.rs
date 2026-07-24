@@ -269,7 +269,7 @@ async fn execute_inline_for_ui(
     };
 
     let upload_key = ctx.tex.secrets.get_upload_hmac_key();
-    let (url, media_type) = match save_binary_to_uploads(
+    let (url, media_type, filename) = match save_binary_to_uploads(
         &ctx.cfg.db,
         ctx.cfg.app_config.cleanup.uploads_retention_days,
         &bytes,
@@ -279,7 +279,7 @@ async fn execute_inline_for_ui(
     )
     .await
     {
-        Ok(pair) => pair,
+        Ok(triple) => triple,
         Err(e) => {
             tracing::warn!(tool = %tool.name, kind = ?kind, error = %e, "inline media save failed");
             return format!("Error: save_to_uploads failed: {e}");
@@ -291,6 +291,7 @@ async fn execute_inline_for_ui(
         "inline media delivered to web UI"
     );
 
-    let marker_json = serde_json::json!({"url": url, "mediaType": media_type}).to_string();
+    let marker_json =
+        serde_json::json!({"url": url, "mediaType": media_type, "filename": filename}).to_string();
     kind.inline_tool_result(&marker_json)
 }

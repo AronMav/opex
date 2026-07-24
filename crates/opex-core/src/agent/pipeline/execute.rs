@@ -170,6 +170,10 @@ pub async fn execute<S: EventSink>(
     // can reconstruct the full turn, not just user → final assistant.
     let sm = crate::agent::session_manager::SessionManager::new(engine.cfg().db.clone());
     let agent_name = engine.cfg().agent.name.clone();
+    // Agent language for user-visible error banners (i18n) — read once, used
+    // by the failover notification and the error-path TextDeltas below so
+    // English agents don't get Russian messages.
+    let language = engine.cfg().agent.language.clone();
     let mut last_msg_id: uuid::Uuid = user_message_id;
 
     // Bail early if cancel was already signalled before we start.
@@ -673,12 +677,18 @@ pub async fn execute<S: EventSink>(
                             // provider was engaged. Without this the spinner
                             // just keeps spinning and the user has no idea
                             // the primary hit a rate limit or stalled.
+                            let fallback_banner = {
+                                let es = crate::agent::localization::get_error_strings(&language);
+                                es.fallback_switch.replace(
+                                    "{}",
+                                    crate::agent::error_classify::user_message_lang(
+                                        &err_class, &language,
+                                    ),
+                                )
+                            };
                             let _ = sink
                                 .emit(PipelineEvent::Stream(StreamEvent::TextDelta(
-                                    format!(
-                                        "\n\n⚠️ _Первичный провайдер недоступен ({reason}), переключаюсь на резервного…_\n",
-                                        reason = crate::agent::error_classify::user_message(&err_class),
-                                    ),
+                                    fallback_banner,
                                 )))
                                 .await;
                             // Emit StepFinish for the failed step so the
@@ -700,7 +710,7 @@ pub async fn execute<S: EventSink>(
                 tracing::error!(error = %e, iteration, "pipeline LLM call failed");
                 let reason = format!("LLM call failed: {e}");
                 // Emit the error text as TextDelta so the UI shows it
-                let user_msg = crate::agent::error_classify::format_user_error(&e);
+                let user_msg = crate::agent::error_classify::format_user_error_lang(&e, &language);
                 match sink
                     .emit(PipelineEvent::Stream(StreamEvent::TextDelta(user_msg.clone())))
                     .await
@@ -1325,7 +1335,8 @@ pub async fn execute<S: EventSink>(
                     }
                     Err(e) => {
                         tracing::error!(error = %e, "forced final LLM call after loop-break failed");
-                        final_text = crate::agent::error_classify::format_user_error(&e);
+                        final_text =
+                            crate::agent::error_classify::format_user_error_lang(&e, &language);
                         (ExecuteStatus::Done, "loop_detected")
                     }
                 }
@@ -1411,7 +1422,7 @@ pub async fn execute<S: EventSink>(
             }
             Err(e) => {
                 tracing::error!(error = %e, "forced final LLM call failed");
-                final_text = crate::agent::error_classify::format_user_error(&e);
+                final_text = crate::agent::error_classify::format_user_error_lang(&e, &language);
             }
         }
     }
@@ -1508,6 +1519,10 @@ async fn extract_tool_result_events<S: EventSink>(
                         .get("mediaType")
                         .and_then(|v| v.as_str())
                         .unwrap_or("application/octet-stream");
+                    let filename = meta
+                        .get("filename")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     // F042: only honor a File marker whose URL is a signed
                     // local upload path (`/api/uploads/…`, what
                     // save_binary_to_uploads produces). An untrusted tool
@@ -1522,6 +1537,7 @@ async fn extract_tool_result_events<S: EventSink>(
                             .emit(PipelineEvent::Stream(StreamEvent::File {
                                 url: url.to_string(),
                                 media_type: media_type.to_string(),
+                                filename,
                             }))
                             .await;
                     } else if !url.is_empty() {
@@ -2091,6 +2107,54 @@ mod tests {
         // The marker line is still removed from the display text.
         assert!(!parts.display_result.contains("__file__"));
         assert!(!parts.display_result.contains("evil.example"));
+    }
+
+    #[tokio::test]
+    async fn tool_result_file_threads_filename_from_marker() {
+        // The backend now embeds a synthesised filename in the __file__ marker
+        // (save_binary_to_uploads). It must reach the emitted StreamEvent::File
+        // so the UI can show e.g. "image.jpg" instead of a bare MIME label.
+        let mut sink = MockSink::new();
+        let file_json =
+            r#"{"url":"/api/uploads/img.jpg?sig=x&exp=9","mediaType":"image/jpeg","filename":"image.jpg"}"#;
+        let payload = format!("__file__:{}", file_json);
+        let _ = extract_tool_result_events(&payload, &mut sink).await;
+        let filename = sink
+            .events
+            .iter()
+            .find_map(|e| match e {
+                PipelineEvent::Stream(StreamEvent::File { filename, .. }) => Some(filename.clone()),
+                _ => None,
+            })
+            .expect("expected a File event");
+        assert_eq!(
+            filename.as_deref(),
+            Some("image.jpg"),
+            "filename from the marker must be threaded into StreamEvent::File"
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_result_file_without_filename_is_none() {
+        // Legacy markers (predating the filename field) must still work — the
+        // emitted File event carries filename: None and the UI falls back to a
+        // MIME-based label.
+        let mut sink = MockSink::new();
+        let file_json = r#"{"url":"/api/uploads/img.jpg?sig=x&exp=9","mediaType":"image/jpeg"}"#;
+        let payload = format!("__file__:{}", file_json);
+        let _ = extract_tool_result_events(&payload, &mut sink).await;
+        let filename = sink
+            .events
+            .iter()
+            .find_map(|e| match e {
+                PipelineEvent::Stream(StreamEvent::File { filename, .. }) => Some(filename.clone()),
+                _ => None,
+            })
+            .expect("expected a File event");
+        assert!(
+            filename.is_none(),
+            "legacy marker without filename must yield filename: None"
+        );
     }
 }
 

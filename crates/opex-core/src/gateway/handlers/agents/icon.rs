@@ -11,6 +11,7 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use serde::{Deserialize, Serialize};
 
+use crate::gateway::ApiError;
 use crate::gateway::clusters::{AgentCore, AuthServices, InfraServices};
 use crate::gateway::state::AppState;
 use crate::uploads::{HISTORICAL_URL_TTL_SECS, mint_uploads_url};
@@ -65,28 +66,28 @@ async fn store_icon(
     data: &[u8],
 ) -> axum::response::Response {
     if data.is_empty() {
-        return (StatusCode::BAD_REQUEST, "empty image payload").into_response();
+        return ApiError::BadRequest("empty image payload".to_string()).into_response();
     }
     if data.len() > MAX_BYTES {
-        return (
-            StatusCode::PAYLOAD_TOO_LARGE,
-            format!("icon must be <= {} bytes, got {}", MAX_BYTES, data.len()),
-        )
-            .into_response();
+        return ApiError::PayloadTooLarge(format!(
+            "icon must be <= {} bytes, got {}",
+            MAX_BYTES,
+            data.len()
+        ))
+        .into_response();
     }
     if !ALLOWED_MIME.contains(&mime) {
-        return (
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            format!("MIME {mime} not allowed; expected one of {ALLOWED_MIME:?}"),
-        )
-            .into_response();
+        return ApiError::UnsupportedMediaType(format!(
+            "MIME {mime} not allowed; expected one of {ALLOWED_MIME:?}"
+        ))
+        .into_response();
     }
 
     let id = match crate::db::uploads::upsert_agent_icon(&infra.db, agent_name, mime, data).await {
         Ok(id) => id,
         Err(e) => {
             tracing::warn!(error = %e, agent = %agent_name, "icon upsert failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::Internal("icon upsert failed".to_string()).into_response();
         }
     };
 
@@ -111,7 +112,7 @@ pub(crate) async fn api_put_agent_icon(
 ) -> axum::response::Response {
     let known_agents = agents.agent_names().await;
     if !known_agents.iter().any(|n| n == &name) {
-        return (StatusCode::NOT_FOUND, format!("agent '{name}' not found")).into_response();
+        return ApiError::NotFound(format!("agent '{name}' not found")).into_response();
     }
 
     let mut data: Option<Vec<u8>> = None;
@@ -124,11 +125,7 @@ pub(crate) async fn api_put_agent_icon(
         match field.bytes().await {
             Ok(bytes) => data = Some(bytes.to_vec()),
             Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    format!("multipart read failed: {e}"),
-                )
-                    .into_response();
+                return ApiError::BadRequest(format!("multipart read failed: {e}")).into_response();
             }
         }
         break;
@@ -136,7 +133,7 @@ pub(crate) async fn api_put_agent_icon(
 
     let data = match data {
         Some(d) => d,
-        None => return (StatusCode::BAD_REQUEST, "missing 'image' field").into_response(),
+        None => return ApiError::BadRequest("missing 'image' field".to_string()).into_response(),
     };
     let mime = mime.unwrap_or_else(|| "application/octet-stream".to_string());
     store_icon(&infra, &auth, &name, &mime, &data).await
@@ -154,17 +151,13 @@ pub(crate) async fn api_post_agent_icon_json(
 ) -> axum::response::Response {
     let known_agents = agents.agent_names().await;
     if !known_agents.iter().any(|n| n == &name) {
-        return (StatusCode::NOT_FOUND, format!("agent '{name}' not found")).into_response();
+        return ApiError::NotFound(format!("agent '{name}' not found")).into_response();
     }
 
     let data = match B64.decode(payload.data_base64.as_bytes()) {
         Ok(b) => b,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("data_base64 decode failed: {e}"),
-            )
-                .into_response();
+            return ApiError::BadRequest(format!("data_base64 decode failed: {e}")).into_response();
         }
     };
     store_icon(&infra, &auth, &name, &payload.mime, &data).await

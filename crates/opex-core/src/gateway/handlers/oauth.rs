@@ -8,6 +8,7 @@ use axum::{
 use serde::Deserialize;
 use std::collections::HashMap;
 use crate::gateway::AppState;
+use crate::gateway::ApiError;
 use crate::gateway::clusters::{AuthServices, InfraServices};
 
 pub(crate) fn routes() -> Router<AppState> {
@@ -27,7 +28,7 @@ pub(crate) fn routes() -> Router<AppState> {
 
 fn parse_uuid(id: &str) -> Result<sqlx::types::Uuid, impl IntoResponse> {
     id.parse::<sqlx::types::Uuid>()
-        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid UUID".to_string()))
+        .map_err(|_| ApiError::BadRequest("invalid UUID".to_string()))
 }
 
 /// Restart sandbox containers for agents affected by an OAuth change.

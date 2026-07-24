@@ -202,19 +202,6 @@ pub(super) const TABLES_HISTORY_AGENT_ID: &[&str] = &[
     "usage_log",
 ];
 
-/// Deprecated tables pending the m090 DROP. Excluded from every operation;
-/// tolerated by the drift test until the migration lands, then vestigial.
-///
-/// `#[allow(dead_code)]`: production code has no reason to reference a
-/// deprecated table; referenced today only by the drift test below.
-#[allow(dead_code)]
-pub(super) const TABLES_DROP_RIPE: &[&str] = &[
-    "pending_messages",
-    "video_jobs",
-    "file_scenarios",
-    "file_scenario_outcomes",
-];
-
 /// Tables allowlisted out of the `agent_table_classification` doctor check
 /// even though they are neither classified above nor auto-exempted. Currently
 /// just `eventbak_prune` — a known one-off backup table unrelated to the
@@ -225,8 +212,8 @@ const UNCLASSIFIED_TABLE_ALLOWLIST: &[&str] = &["eventbak_prune"];
 /// (as introspected from `information_schema.columns` in production), return
 /// those NOT covered by any of the classification constants above
 /// (`TABLES_TO_DELETE_BY_AGENT_ID`, `TABLES_WITH_AGENT_NAME`,
-/// `TABLES_HISTORY_AGENT_ID`, `TABLES_WITH_AGENT_ID_NULLABLE`,
-/// `TABLES_DROP_RIPE`), the `memory_chunks` special case, or the allowlist.
+/// `TABLES_HISTORY_AGENT_ID`, `TABLES_WITH_AGENT_ID_NULLABLE`),
+/// the `memory_chunks` special case, or the allowlist.
 ///
 /// Pure and DB-free by design — mirrors the classification set asserted by
 /// `test_every_agent_binding_is_classified` (which runs the same query
@@ -247,7 +234,6 @@ pub(crate) fn unclassified_agent_tables(schema_tables: &[String]) -> Vec<String>
         .chain(TABLES_HISTORY_AGENT_ID)
         .chain(TABLES_WITH_AGENT_ID_NULLABLE) // messages
         .chain(TABLES_WITH_AGENT_NAME)
-        .chain(TABLES_DROP_RIPE)
         .copied()
         .chain(std::iter::once("memory_chunks")) // §3.3 special case
         .chain(UNCLASSIFIED_TABLE_ALLOWLIST.iter().copied())
@@ -1891,9 +1877,9 @@ mod tests {
     /// Every table with an `agent_id` or `agent_name` column must be
     /// classified into exactly one of Ephemeral(agent_id)
     /// (`TABLES_TO_DELETE_BY_AGENT_ID`), History (`TABLES_HISTORY_AGENT_ID`),
-    /// nullable (`TABLES_WITH_AGENT_ID_NULLABLE`, i.e. `messages`),
-    /// agent_name-keyed (`TABLES_WITH_AGENT_NAME`), DropRipe
-    /// (`TABLES_DROP_RIPE`), or the `memory_chunks` special case. Adding a
+    /// nullable (`TABLES_WITH_AGENT_ID_NULLABLE`, i.e. `messages`), or
+    /// agent_name-keyed (`TABLES_WITH_AGENT_NAME`), or the `memory_chunks`
+    /// special case. Adding a
     /// migration with a new agent binding and forgetting to classify it here
     /// fails this test instead of silently leaking through deletion/rename.
     #[sqlx::test(migrations = "../../migrations")]
@@ -1907,7 +1893,6 @@ mod tests {
             .chain(super::TABLES_HISTORY_AGENT_ID)
             .chain(super::TABLES_WITH_AGENT_ID_NULLABLE)   // messages
             .chain(super::TABLES_WITH_AGENT_NAME)
-            .chain(super::TABLES_DROP_RIPE)
             .copied()
             .chain(std::iter::once("memory_chunks")) // §3.3 special case
             .collect();
@@ -1916,13 +1901,13 @@ mod tests {
             assert!(
                 classified.contains(table.as_str()),
                 "table {table} (column {col}) has an agent binding but no AgentDataClass — \
-                 classify it in crud.rs (Ephemeral/History/DropRipe) before merging"
+                 classify it in crud.rs (Ephemeral/History) before merging"
             );
         }
         // No table may be in two classes.
         let total = super::TABLES_TO_DELETE_BY_AGENT_ID.len() + super::TABLES_HISTORY_AGENT_ID.len()
             + super::TABLES_WITH_AGENT_ID_NULLABLE.len() + super::TABLES_WITH_AGENT_NAME.len()
-            + super::TABLES_DROP_RIPE.len() + 1;
+            + 1;
         assert_eq!(classified.len(), total, "a table is classified twice");
     }
 
@@ -1954,7 +1939,6 @@ mod tests {
             "agent_channels".into(),         // TABLES_WITH_AGENT_NAME
             "sessions".into(),               // TABLES_HISTORY_AGENT_ID
             "messages".into(),               // TABLES_WITH_AGENT_ID_NULLABLE
-            "video_jobs".into(),             // TABLES_DROP_RIPE
             "memory_chunks".into(),          // special case
             "eventbak_prune".into(),         // allowlist
         ];
